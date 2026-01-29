@@ -1168,6 +1168,9 @@ fn parse_u32(input: &mut &str) -> PResult<u32> {
 
 fn parse_u32_or_quoted(input: &mut &str) -> PResult<u32> {
     let s = parse_quoted_or_unquoted.parse_next(input)?;
+    if s.is_empty() {
+        return Err(winnow::error::ErrMode::Backtrack(winnow::error::ContextError::default()));
+    }
     s.parse()
         .map_err(|_| winnow::error::ErrMode::Cut(winnow::error::ContextError::default()))
 }
@@ -1224,6 +1227,9 @@ fn parse_f64(input: &mut &str) -> PResult<f64> {
 
 fn parse_f64_or_quoted(input: &mut &str) -> PResult<f64> {
     let s = parse_quoted_or_unquoted.parse_next(input)?;
+    if s.is_empty() {
+        return Err(winnow::error::ErrMode::Backtrack(winnow::error::ContextError::default()));
+    }
     s.parse()
         .map_err(|_| winnow::error::ErrMode::Cut(winnow::error::ContextError::default()))
 }
@@ -1243,6 +1249,7 @@ fn parse_bool_or_quoted(input: &mut &str) -> PResult<bool> {
     match s.as_str() {
         "0" => Ok(false),
         "1" => Ok(true),
+        "" => Err(winnow::error::ErrMode::Backtrack(winnow::error::ContextError::default())),
         _ => Err(winnow::error::ErrMode::Cut(winnow::error::ContextError::default())),
     }
 }
