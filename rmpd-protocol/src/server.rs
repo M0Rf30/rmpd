@@ -170,6 +170,37 @@ async fn handle_command(cmd: Command, state: &AppState) -> String {
             // For now, return empty list
             ResponseBuilder::new().ok()
         }
+        // Playback commands
+        Command::Play { position } => {
+            handle_play_command(state, position).await
+        }
+        Command::Pause { state: pause_state } => {
+            handle_pause_command(state, pause_state).await
+        }
+        Command::Stop => {
+            handle_stop_command(state).await
+        }
+        Command::Next => {
+            handle_next_command(state).await
+        }
+        Command::Previous => {
+            handle_previous_command(state).await
+        }
+        Command::Seek { position, time } => {
+            handle_seek_command(state, position, time).await
+        }
+        Command::SetVol { volume } => {
+            handle_setvol_command(state, volume).await
+        }
+        Command::Add { uri } => {
+            handle_add_command(state, &uri).await
+        }
+        Command::Clear => {
+            handle_clear_command(state).await
+        }
+        Command::Delete { position } => {
+            handle_delete_command(state, position).await
+        }
         Command::Unknown(cmd) => {
             ResponseBuilder::error(5, 0, &cmd, "unknown command")
         }
@@ -297,4 +328,212 @@ async fn handle_count_command(state: &AppState, tag: &str, value: &str) -> Strin
     resp.field("songs", songs.len());
     resp.field("playtime", total_duration);
     resp.ok()
+}
+
+async fn handle_play_command(state: &AppState, position: Option<u32>) -> String {
+    let queue = state.queue.read().await;
+
+    // Get song to play
+    let song = if let Some(pos) = position {
+        // Play specific position
+        if let Some(item) = queue.get(pos) {
+            item.song.clone()
+        } else {
+            return ResponseBuilder::error(50, 0, "play", "No such song");
+        }
+    } else {
+        // Resume or play first song
+        let current_song = state.engine.read().await.get_current_song().await;
+        if let Some(song) = current_song {
+            song
+        } else if let Some(item) = queue.get(0) {
+            item.song.clone()
+        } else {
+            return ResponseBuilder::error(50, 0, "play", "No songs in queue");
+        }
+    };
+
+    drop(queue);
+
+    // Start playback
+    match state.engine.write().await.play(song).await {
+        Ok(_) => {
+            // Update status
+            let mut status = state.status.write().await;
+            status.state = rmpd_core::state::PlayerState::Play;
+            if let Some(pos) = position {
+                status.current_song = Some(rmpd_core::state::QueuePosition {
+                    position: pos,
+                    id: state.queue.read().await.get(pos).map(|i| i.id).unwrap_or(0),
+                });
+            }
+            ResponseBuilder::new().ok()
+        }
+        Err(e) => ResponseBuilder::error(50, 0, "play", &format!("Playback error: {}", e)),
+    }
+}
+
+async fn handle_pause_command(state: &AppState, pause_state: Option<bool>) -> String {
+    let mut engine = state.engine.write().await;
+    let current_state = engine.get_state().await;
+
+    let should_pause = pause_state.unwrap_or_else(|| current_state == rmpd_core::state::PlayerState::Play);
+
+    match engine.pause().await {
+        Ok(_) => {
+            let mut status = state.status.write().await;
+            status.state = if should_pause {
+                rmpd_core::state::PlayerState::Pause
+            } else {
+                rmpd_core::state::PlayerState::Play
+            };
+            ResponseBuilder::new().ok()
+        }
+        Err(e) => ResponseBuilder::error(50, 0, "pause", &format!("Pause error: {}", e)),
+    }
+}
+
+async fn handle_stop_command(state: &AppState) -> String {
+    match state.engine.write().await.stop().await {
+        Ok(_) => {
+            let mut status = state.status.write().await;
+            status.state = rmpd_core::state::PlayerState::Stop;
+            status.current_song = None;
+            ResponseBuilder::new().ok()
+        }
+        Err(e) => ResponseBuilder::error(50, 0, "stop", &format!("Stop error: {}", e)),
+    }
+}
+
+async fn handle_next_command(state: &AppState) -> String {
+    let queue = state.queue.read().await;
+    let status = state.status.read().await;
+
+    let next_pos = if let Some(current) = status.current_song {
+        current.position + 1
+    } else {
+        0
+    };
+
+    if let Some(item) = queue.get(next_pos) {
+        let song = item.song.clone();
+        let item_id = item.id;
+        drop(queue);
+        drop(status);
+
+        match state.engine.write().await.play(song).await {
+            Ok(_) => {
+                let mut status = state.status.write().await;
+                status.current_song = Some(rmpd_core::state::QueuePosition {
+                    position: next_pos,
+                    id: item_id,
+                });
+                ResponseBuilder::new().ok()
+            }
+            Err(e) => ResponseBuilder::error(50, 0, "next", &format!("Playback error: {}", e)),
+        }
+    } else {
+        ResponseBuilder::error(50, 0, "next", "No next song")
+    }
+}
+
+async fn handle_previous_command(state: &AppState) -> String {
+    let queue = state.queue.read().await;
+    let status = state.status.read().await;
+
+    let prev_pos = if let Some(current) = status.current_song {
+        if current.position > 0 {
+            current.position - 1
+        } else {
+            return ResponseBuilder::error(50, 0, "previous", "Already at first song");
+        }
+    } else {
+        0
+    };
+
+    if let Some(item) = queue.get(prev_pos) {
+        let song = item.song.clone();
+        let item_id = item.id;
+        drop(queue);
+        drop(status);
+
+        match state.engine.write().await.play(song).await {
+            Ok(_) => {
+                let mut status = state.status.write().await;
+                status.current_song = Some(rmpd_core::state::QueuePosition {
+                    position: prev_pos,
+                    id: item_id,
+                });
+                ResponseBuilder::new().ok()
+            }
+            Err(e) => ResponseBuilder::error(50, 0, "previous", &format!("Playback error: {}", e)),
+        }
+    } else {
+        ResponseBuilder::error(50, 0, "previous", "No previous song")
+    }
+}
+
+async fn handle_seek_command(_state: &AppState, _position: u32, _time: f64) -> String {
+    // Seek not yet implemented in engine
+    ResponseBuilder::error(5, 0, "seek", "not yet implemented")
+}
+
+async fn handle_setvol_command(state: &AppState, volume: u8) -> String {
+    match state.engine.write().await.set_volume(volume).await {
+        Ok(_) => {
+            let mut status = state.status.write().await;
+            status.volume = volume;
+            ResponseBuilder::new().ok()
+        }
+        Err(e) => ResponseBuilder::error(50, 0, "setvol", &format!("Volume error: {}", e)),
+    }
+}
+
+async fn handle_add_command(state: &AppState, uri: &str) -> String {
+    // Get song from database
+    let db_path = match &state.db_path {
+        Some(p) => p,
+        None => return ResponseBuilder::error(50, 0, "add", "database not configured"),
+    };
+
+    let db = match rmpd_library::Database::open(db_path) {
+        Ok(d) => d,
+        Err(e) => return ResponseBuilder::error(50, 0, "add", &format!("database error: {}", e)),
+    };
+
+    let song = match db.get_song_by_path(uri) {
+        Ok(Some(s)) => s,
+        Ok(None) => return ResponseBuilder::error(50, 0, "add", "song not found in database"),
+        Err(e) => return ResponseBuilder::error(50, 0, "add", &format!("query error: {}", e)),
+    };
+
+    // Add to queue
+    let id = state.queue.write().await.add(song);
+
+    let mut resp = ResponseBuilder::new();
+    resp.field("Id", id);
+    resp.ok()
+}
+
+async fn handle_clear_command(state: &AppState) -> String {
+    state.queue.write().await.clear();
+    state.engine.write().await.stop().await.ok();
+
+    let mut status = state.status.write().await;
+    status.playlist_version += 1;
+    status.playlist_length = 0;
+    status.current_song = None;
+
+    ResponseBuilder::new().ok()
+}
+
+async fn handle_delete_command(state: &AppState, position: u32) -> String {
+    if state.queue.write().await.delete(position).is_some() {
+        let mut status = state.status.write().await;
+        status.playlist_version += 1;
+        status.playlist_length = state.queue.read().await.len() as u32;
+        ResponseBuilder::new().ok()
+    } else {
+        ResponseBuilder::error(50, 0, "delete", "No such song")
+    }
 }

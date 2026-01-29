@@ -1,4 +1,3 @@
-use bytes::BytesMut;
 use rmpd_core::song::Song;
 use rmpd_core::state::PlayerStatus;
 use std::fmt::Write as FmtWrite;

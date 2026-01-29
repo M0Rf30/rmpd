@@ -1,7 +1,7 @@
 use winnow::prelude::*;
 use winnow::token::{take_till, take_while};
-use winnow::combinator::{alt, opt, separated};
-use winnow::ascii::{space0, newline};
+use winnow::combinator::opt;
+use winnow::ascii::space0;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {

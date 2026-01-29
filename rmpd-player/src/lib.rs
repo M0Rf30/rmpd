@@ -1,6 +1,8 @@
-// Audio player engine - to be implemented
+// Audio player engine
 pub mod decoder;
 pub mod output;
+pub mod engine;
 
-pub use decoder::Decoder;
-pub use output::AudioOutput;
+pub use decoder::{Decoder, SymphoniaDecoder};
+pub use output::{AudioOutput, CpalOutput};
+pub use engine::PlaybackEngine;

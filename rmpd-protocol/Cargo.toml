@@ -9,6 +9,7 @@ repository.workspace = true
 [dependencies]
 rmpd-core.workspace = true
 rmpd-library.workspace = true
+rmpd-player.workspace = true
 tokio.workspace = true
 winnow.workspace = true
 thiserror.workspace = true
