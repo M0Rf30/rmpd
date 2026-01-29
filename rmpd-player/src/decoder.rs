@@ -15,7 +15,7 @@ pub struct SymphoniaDecoder {
     decoder: Box<dyn symphonia::core::codecs::Decoder>,
     track_id: u32,
     sample_rate: u32,
-    channels: u8,
+    channels: Option<u8>,
     total_duration: Option<f64>,
     current_frame: u64,
     sample_buf: Option<symphonia::core::audio::SampleBuffer<f32>>,
@@ -57,10 +57,10 @@ impl SymphoniaDecoder {
             .sample_rate
             .ok_or_else(|| RmpdError::Player("Sample rate not available".to_string()))?;
 
+        // Channels might not be available until after decoding starts
         let channels = codec_params
             .channels
-            .ok_or_else(|| RmpdError::Player("Channel info not available".to_string()))?
-            .count() as u8;
+            .map(|ch| ch.count() as u8);
 
         // Calculate total duration
         let total_duration = if let (Some(n_frames), Some(tb)) = (codec_params.n_frames, codec_params.time_base) {
@@ -154,6 +154,11 @@ impl SymphoniaDecoder {
             let spec = *decoded.spec();
             let duration = decoded.capacity() as u64;
 
+            // Update channels if not yet known
+            if self.channels.is_none() {
+                self.channels = Some(spec.channels.count() as u8);
+            }
+
             let mut new_sample_buf = symphonia::core::audio::SampleBuffer::<f32>::new(duration, spec);
             new_sample_buf.copy_interleaved_ref(decoded);
 
@@ -191,7 +196,7 @@ impl SymphoniaDecoder {
     pub fn format(&self) -> AudioFormat {
         AudioFormat {
             sample_rate: self.sample_rate,
-            channels: self.channels,
+            channels: self.channels.unwrap_or(2), // Default to stereo if not yet known
             bits_per_sample: 16, // Symphonia decodes to f32, we report 16-bit for MPD compatibility
         }
     }
@@ -205,7 +210,7 @@ impl SymphoniaDecoder {
     }
 
     pub fn channels(&self) -> u8 {
-        self.channels
+        self.channels.unwrap_or(2) // Default to stereo if not yet known
     }
 }
 
