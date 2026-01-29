@@ -318,8 +318,8 @@ async fn handle_command(cmd: Command, state: &AppState) -> String {
         Command::Search { tag, value } => {
             handle_search_command(state, &tag, &value).await
         }
-        Command::List { tag, group: _ } => {
-            handle_list_command(state, &tag).await
+        Command::List { tag, filter_tag, filter_value, group: _ } => {
+            handle_list_command(state, &tag, filter_tag.as_deref(), filter_value.as_deref()).await
         }
         Command::Count { tag, value } => {
             handle_count_command(state, &tag, &value).await
@@ -674,9 +674,24 @@ async fn handle_find_command(state: &AppState, tag: &str, value: &str) -> String
         Err(e) => return ResponseBuilder::error(50, 0, "find", &format!("database error: {}", e)),
     };
 
-    let songs = match db.find_songs(tag, value) {
-        Ok(s) => s,
-        Err(e) => return ResponseBuilder::error(50, 0, "find", &format!("query error: {}", e)),
+    // Check if this is a filter expression (starts with '(')
+    let songs = if tag.starts_with('(') {
+        // Parse as filter expression
+        match rmpd_core::filter::FilterExpression::parse(tag) {
+            Ok(filter) => {
+                match db.find_songs_filter(&filter) {
+                    Ok(s) => s,
+                    Err(e) => return ResponseBuilder::error(50, 0, "find", &format!("query error: {}", e)),
+                }
+            }
+            Err(e) => return ResponseBuilder::error(2, 0, "find", &format!("filter parse error: {}", e)),
+        }
+    } else {
+        // Simple tag/value search
+        match db.find_songs(tag, value) {
+            Ok(s) => s,
+            Err(e) => return ResponseBuilder::error(50, 0, "find", &format!("query error: {}", e)),
+        }
     };
 
     let mut resp = ResponseBuilder::new();
@@ -697,8 +712,20 @@ async fn handle_search_command(state: &AppState, tag: &str, value: &str) -> Stri
         Err(e) => return ResponseBuilder::error(50, 0, "search", &format!("database error: {}", e)),
     };
 
-    // For search, use FTS if tag is "any", otherwise use find
-    let songs = if tag.eq_ignore_ascii_case("any") {
+    // Check if this is a filter expression (starts with '(')
+    let songs = if tag.starts_with('(') {
+        // Parse as filter expression
+        match rmpd_core::filter::FilterExpression::parse(tag) {
+            Ok(filter) => {
+                match db.find_songs_filter(&filter) {
+                    Ok(s) => s,
+                    Err(e) => return ResponseBuilder::error(50, 0, "search", &format!("query error: {}", e)),
+                }
+            }
+            Err(e) => return ResponseBuilder::error(2, 0, "search", &format!("filter parse error: {}", e)),
+        }
+    } else if tag.eq_ignore_ascii_case("any") {
+        // Use FTS for "any" tag
         match db.search_songs(value) {
             Ok(s) => s,
             Err(e) => return ResponseBuilder::error(50, 0, "search", &format!("search error: {}", e)),
@@ -718,7 +745,7 @@ async fn handle_search_command(state: &AppState, tag: &str, value: &str) -> Stri
     resp.ok()
 }
 
-async fn handle_list_command(state: &AppState, tag: &str) -> String {
+async fn handle_list_command(state: &AppState, tag: &str, filter_tag: Option<&str>, filter_value: Option<&str>) -> String {
     let db_path = match &state.db_path {
         Some(p) => p,
         None => return ResponseBuilder::error(50, 0, "list", "database not configured"),
@@ -729,22 +756,33 @@ async fn handle_list_command(state: &AppState, tag: &str) -> String {
         Err(e) => return ResponseBuilder::error(50, 0, "list", &format!("database error: {}", e)),
     };
 
-    let values = match tag.to_lowercase().as_str() {
-        "artist" => db.list_artists(),
-        "album" => db.list_albums(),
-        "genre" => db.list_genres(),
-        _ => return ResponseBuilder::error(2, 0, "list", &format!("unsupported tag: {}", tag)),
-    };
+    // If filter is provided, get filtered results
+    let values = if let (Some(ft), Some(fv)) = (filter_tag, filter_value) {
+        match db.list_filtered(tag, ft, fv) {
+            Ok(v) => v,
+            Err(e) => return ResponseBuilder::error(50, 0, "list", &format!("query error: {}", e)),
+        }
+    } else {
+        // No filter, list all values
+        let result = match tag.to_lowercase().as_str() {
+            "artist" => db.list_artists(),
+            "album" => db.list_albums(),
+            "albumartist" => db.list_album_artists(),
+            "genre" => db.list_genres(),
+            _ => return ResponseBuilder::error(2, 0, "list", &format!("unsupported tag: {}", tag)),
+        };
 
-    let values = match values {
-        Ok(v) => v,
-        Err(e) => return ResponseBuilder::error(50, 0, "list", &format!("query error: {}", e)),
+        match result {
+            Ok(v) => v,
+            Err(e) => return ResponseBuilder::error(50, 0, "list", &format!("query error: {}", e)),
+        }
     };
 
     let mut resp = ResponseBuilder::new();
     let tag_key = match tag.to_lowercase().as_str() {
         "artist" => "Artist",
         "album" => "Album",
+        "albumartist" => "AlbumArtist",
         "genre" => "Genre",
         _ => tag,
     };

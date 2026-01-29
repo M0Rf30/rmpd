@@ -17,6 +17,9 @@ pub enum RmpdError {
     #[error("Protocol error: {0}")]
     Protocol(String),
 
+    #[error("Parse error: {0}")]
+    ParseError(String),
+
     #[error("Library error: {0}")]
     Library(String),
 

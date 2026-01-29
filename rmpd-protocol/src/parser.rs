@@ -76,7 +76,7 @@ pub enum Command {
     Rescan { path: Option<String> },
     Find { tag: String, value: String },
     Search { tag: String, value: String },
-    List { tag: String, group: Option<String> },
+    List { tag: String, filter_tag: Option<String>, filter_value: Option<String>, group: Option<String> },
     ListAll { path: Option<String> },
     ListAllInfo { path: Option<String> },
     LsInfo { path: Option<String> },
@@ -304,28 +304,42 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
             Ok(Command::PlaylistSearch { tag, value })
         }
         "setvol" => {
-            let volume = parse_u8.parse_next(input)?;
+            let val_str = parse_quoted_or_unquoted.parse_next(input)?;
+            let volume = val_str.parse::<u8>()
+                .map_err(|_| winnow::error::ErrMode::Cut(winnow::error::ContextError::default()))?;
             Ok(Command::SetVol { volume })
         }
         "volume" => {
-            let change = parse_i8.parse_next(input)?;
+            let val_str = parse_quoted_or_unquoted.parse_next(input)?;
+            let change = val_str.parse::<i8>()
+                .map_err(|_| winnow::error::ErrMode::Cut(winnow::error::ContextError::default()))?;
             Ok(Command::Volume { change })
         }
         "getvol" => Ok(Command::GetVol),
         "repeat" => {
-            let enabled = parse_bool.parse_next(input)?;
+            let val = parse_quoted_or_unquoted.parse_next(input)?;
+            let enabled = match val.as_str() {
+                "0" => false,
+                "1" => true,
+                _ => return Err(winnow::error::ErrMode::Cut(winnow::error::ContextError::default())),
+            };
             Ok(Command::Repeat { enabled })
         }
         "random" => {
-            let enabled = parse_bool.parse_next(input)?;
+            let val = parse_quoted_or_unquoted.parse_next(input)?;
+            let enabled = match val.as_str() {
+                "0" => false,
+                "1" => true,
+                _ => return Err(winnow::error::ErrMode::Cut(winnow::error::ContextError::default())),
+            };
             Ok(Command::Random { enabled })
         }
         "single" => {
-            let mode = parse_string.parse_next(input)?;
+            let mode = parse_quoted_or_unquoted.parse_next(input)?;
             Ok(Command::Single { mode })
         }
         "consume" => {
-            let mode = parse_string.parse_next(input)?;
+            let mode = parse_quoted_or_unquoted.parse_next(input)?;
             Ok(Command::Consume { mode })
         }
         "crossfade" => {
@@ -367,22 +381,62 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
             Ok(Command::Rescan { path })
         }
         "find" => {
-            let tag = parse_string.parse_next(input)?;
+            let tag = parse_quoted_or_unquoted.parse_next(input)?;
             let _ = space0.parse_next(input)?;
-            let value = parse_quoted_or_unquoted.parse_next(input)?;
+            // Second parameter is optional for filter expressions
+            let value = opt(parse_quoted_or_unquoted).parse_next(input)?.unwrap_or_default();
             Ok(Command::Find { tag, value })
         }
         "search" => {
-            let tag = parse_string.parse_next(input)?;
+            let tag = parse_quoted_or_unquoted.parse_next(input)?;
             let _ = space0.parse_next(input)?;
-            let value = parse_quoted_or_unquoted.parse_next(input)?;
+            // Second parameter is optional for filter expressions
+            let value = opt(parse_quoted_or_unquoted).parse_next(input)?.unwrap_or_default();
             Ok(Command::Search { tag, value })
         }
         "list" => {
-            let tag = parse_string.parse_next(input)?;
+            let tag = parse_quoted_or_unquoted.parse_next(input)?;
             let _ = space0.parse_next(input)?;
-            let group = opt(parse_string).parse_next(input)?;
-            Ok(Command::List { tag, group })
+
+            // Try to parse optional filter or group
+            let saved_input = *input;
+            let next_token = opt(parse_quoted_or_unquoted).parse_next(input)?
+                .filter(|s| !s.is_empty());  // Filter out empty strings
+
+            let (filter_tag, filter_value, group) = if next_token.as_deref() == Some("group") {
+                // Format: list TAG group GROUPTYPE
+                let _ = space0.parse_next(input)?;
+                let group_type = opt(parse_quoted_or_unquoted).parse_next(input)?
+                    .filter(|s| !s.is_empty());
+                (None, None, group_type)
+            } else if let Some(ft) = next_token {
+                // Format: list TAG FILTER_TAG FILTER_VALUE [group GROUPTYPE]
+                let _ = space0.parse_next(input)?;
+                let fv = parse_quoted_or_unquoted.parse_next(input)?;
+                let _ = space0.parse_next(input)?;
+
+                // Check for optional "group" keyword
+                let saved_input2 = *input;
+                let group_keyword = opt(parse_quoted_or_unquoted).parse_next(input)?
+                    .filter(|s| !s.is_empty());
+
+                let group_type = if group_keyword.as_deref() == Some("group") {
+                    let _ = space0.parse_next(input)?;
+                    opt(parse_quoted_or_unquoted).parse_next(input)?
+                        .filter(|s| !s.is_empty())
+                } else {
+                    *input = saved_input2;
+                    None
+                };
+
+                (Some(ft), Some(fv), group_type)
+            } else {
+                // Format: list TAG
+                *input = saved_input;
+                (None, None, None)
+            };
+
+            Ok(Command::List { tag, filter_tag, filter_value, group })
         }
         "listall" => {
             let path = opt(parse_string).parse_next(input)?;

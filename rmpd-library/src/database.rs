@@ -502,6 +502,61 @@ impl Database {
         Ok(genres)
     }
 
+    pub fn list_album_artists(&self) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT album_artist FROM songs WHERE album_artist IS NOT NULL ORDER BY album_artist COLLATE NOCASE"
+        ).map_err(|e| RmpdError::Database(e.to_string()))?;
+
+        let album_artists = stmt.query_map([], |row| row.get(0))
+            .map_err(|e| RmpdError::Database(e.to_string()))?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|e| RmpdError::Database(e.to_string()))?;
+
+        Ok(album_artists)
+    }
+
+    pub fn list_filtered(&self, tag: &str, filter_tag: &str, filter_value: &str) -> Result<Vec<String>> {
+        // Map tag names to column names
+        let tag_col = match tag.to_lowercase().as_str() {
+            "artist" => "artist",
+            "album" => "album",
+            "albumartist" => "album_artist",
+            "genre" => "genre",
+            "date" => "date",
+            "title" => "title",
+            "composer" => "composer",
+            "performer" => "performer",
+            _ => return Err(RmpdError::Database(format!("unsupported tag: {}", tag))),
+        };
+
+        let filter_col = match filter_tag.to_lowercase().as_str() {
+            "artist" => "artist",
+            "album" => "album",
+            "albumartist" => "album_artist",
+            "genre" => "genre",
+            "date" => "date",
+            "title" => "title",
+            "composer" => "composer",
+            "performer" => "performer",
+            _ => return Err(RmpdError::Database(format!("unsupported filter tag: {}", filter_tag))),
+        };
+
+        let query = format!(
+            "SELECT DISTINCT {} FROM songs WHERE {} = ? AND {} IS NOT NULL ORDER BY {} COLLATE NOCASE",
+            tag_col, filter_col, tag_col, tag_col
+        );
+
+        let mut stmt = self.conn.prepare(&query)
+            .map_err(|e| RmpdError::Database(e.to_string()))?;
+
+        let values = stmt.query_map([filter_value], |row| row.get(0))
+            .map_err(|e| RmpdError::Database(e.to_string()))?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|e| RmpdError::Database(e.to_string()))?;
+
+        Ok(values)
+    }
+
     pub fn find_songs(&self, tag: &str, value: &str) -> Result<Vec<Song>> {
         let query = match tag.to_lowercase().as_str() {
             "artist" => "SELECT id, path, mtime, duration,
@@ -532,6 +587,62 @@ impl Database {
             .map_err(|e| RmpdError::Database(e.to_string()))?;
 
         let songs = stmt.query_map(params![value], |row| {
+            Ok(Song {
+                id: row.get(0)?,
+                path: row.get::<_, String>(1)?.into(),
+                duration: row.get::<_, Option<f64>>(3)?.map(Duration::from_secs_f64),
+                title: row.get(4)?,
+                artist: row.get(5)?,
+                album: row.get(6)?,
+                album_artist: row.get(7)?,
+                track: row.get(8)?,
+                disc: row.get(9)?,
+                date: row.get(10)?,
+                genre: row.get(11)?,
+                composer: row.get(12)?,
+                performer: row.get(13)?,
+                comment: row.get(14)?,
+                sample_rate: row.get(15)?,
+                channels: row.get(16)?,
+                bits_per_sample: row.get(17)?,
+                bitrate: row.get(18)?,
+                replay_gain_track_gain: row.get(19)?,
+                replay_gain_track_peak: row.get(20)?,
+                replay_gain_album_gain: row.get(21)?,
+                replay_gain_album_peak: row.get(22)?,
+                added_at: row.get(23)?,
+                last_modified: row.get(24)?,
+            })
+        })
+        .map_err(|e| RmpdError::Database(e.to_string()))?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|e| RmpdError::Database(e.to_string()))?;
+
+        Ok(songs)
+    }
+
+    /// Find songs using filter expression
+    pub fn find_songs_filter(&self, filter_expr: &rmpd_core::filter::FilterExpression) -> Result<Vec<Song>> {
+        let (where_clause, params) = filter_expr.to_sql();
+
+        let query = format!(
+            "SELECT id, path, mtime, duration,
+                    title, artist, album, album_artist, track, disc, date, genre, composer, performer, comment,
+                    sample_rate, channels, bits_per_sample, bitrate,
+                    replay_gain_track_gain, replay_gain_track_peak,
+                    replay_gain_album_gain, replay_gain_album_peak,
+                    added_at, last_modified
+             FROM songs WHERE {} ORDER BY album, track",
+            where_clause
+        );
+
+        let mut stmt = self.conn.prepare(&query)
+            .map_err(|e| RmpdError::Database(e.to_string()))?;
+
+        // Convert Vec<String> to params that rusqlite can use
+        let params_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+
+        let songs = stmt.query_map(params_refs.as_slice(), |row| {
             Ok(Song {
                 id: row.get(0)?,
                 path: row.get::<_, String>(1)?.into(),
