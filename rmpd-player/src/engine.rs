@@ -7,12 +7,18 @@ use rmpd_core::state::PlayerState;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::mpsc;
 use std::thread;
 use std::time::Duration as StdDuration;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info};
 
 const BUFFER_SIZE: usize = 4096;
+
+/// Commands that can be sent to the playback thread
+enum PlaybackCommand {
+    Seek(f64),
+}
 
 /// Main playback engine
 pub struct PlaybackEngine {
@@ -22,6 +28,7 @@ pub struct PlaybackEngine {
     playback_thread: Option<thread::JoinHandle<()>>,
     current_song: Arc<RwLock<Option<Song>>>,
     volume: Arc<RwLock<u8>>,
+    command_tx: Option<mpsc::Sender<PlaybackCommand>>,
 }
 
 impl PlaybackEngine {
@@ -33,6 +40,17 @@ impl PlaybackEngine {
             playback_thread: None,
             current_song: Arc::new(RwLock::new(None)),
             volume: Arc::new(RwLock::new(100)),
+            command_tx: None,
+        }
+    }
+
+    pub async fn seek(&self, position: f64) -> Result<()> {
+        if let Some(ref tx) = self.command_tx {
+            tx.send(PlaybackCommand::Seek(position))
+                .map_err(|_| rmpd_core::error::RmpdError::Player("Failed to send seek command".to_string()))?;
+            Ok(())
+        } else {
+            Err(rmpd_core::error::RmpdError::Player("No active playback".to_string()))
         }
     }
 
@@ -48,6 +66,10 @@ impl PlaybackEngine {
         // Reset stop flag
         self.stop_flag.store(false, Ordering::SeqCst);
 
+        // Create command channel
+        let (command_tx, command_rx) = mpsc::channel();
+        self.command_tx = Some(command_tx);
+
         // Spawn playback thread
         let song_path = song.path.clone();
         let state = self.state.clone();
@@ -56,7 +78,7 @@ impl PlaybackEngine {
         let volume = self.volume.clone();
 
         let handle = thread::spawn(move || {
-            if let Err(e) = Self::playback_thread(song_path.as_std_path(), state, event_bus, stop_flag, volume) {
+            if let Err(e) = Self::playback_thread(song_path.as_std_path(), state, event_bus, stop_flag, volume, command_rx) {
                 error!("Playback error: {}", e);
             }
         });
@@ -93,6 +115,9 @@ impl PlaybackEngine {
 
         // Set stop flag
         self.stop_flag.store(true, Ordering::SeqCst);
+
+        // Clear command channel
+        self.command_tx = None;
 
         // Wait for playback thread to finish
         if let Some(handle) = self.playback_thread.take() {
@@ -132,6 +157,7 @@ impl PlaybackEngine {
         event_bus: EventBus,
         stop_flag: Arc<AtomicBool>,
         volume: Arc<RwLock<u8>>,
+        command_rx: mpsc::Receiver<PlaybackCommand>,
     ) -> Result<()> {
         // Open decoder
         let mut decoder = SymphoniaDecoder::open(path)?;
@@ -154,6 +180,25 @@ impl PlaybackEngine {
         let samples_per_second = format.sample_rate as u64 * format.channels as u64;
 
         while !stop_flag.load(Ordering::SeqCst) {
+            // Check for commands (non-blocking)
+            if let Ok(cmd) = command_rx.try_recv() {
+                match cmd {
+                    PlaybackCommand::Seek(position) => {
+                        debug!("Seeking to position: {:.2}s", position);
+                        if let Err(e) = decoder.seek(position) {
+                            error!("Seek failed: {}", e);
+                        } else {
+                            // Reset sample counter after seek
+                            total_samples_played = (position * samples_per_second as f64) as u64;
+                            // Emit position change event
+                            event_bus.emit(Event::PositionChanged(
+                                std::time::Duration::from_secs_f64(position)
+                            ));
+                        }
+                    }
+                }
+            }
+
             // Check if paused
             {
                 let current_state = futures::executor::block_on(state.read());

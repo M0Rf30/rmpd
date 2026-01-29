@@ -1057,7 +1057,7 @@ async fn handle_previous_command(state: &AppState) -> String {
     }
 }
 
-async fn handle_seek_command(state: &AppState, position: u32, _time: f64) -> String {
+async fn handle_seek_command(state: &AppState, position: u32, time: f64) -> String {
     // Get song at position
     let queue = state.queue.read().await;
     let status = state.status.read().await;
@@ -1068,9 +1068,14 @@ async fn handle_seek_command(state: &AppState, position: u32, _time: f64) -> Str
             drop(queue);
             drop(status);
             // Seek in current song
-            // TODO: Implement actual seeking in engine
-            // For now, just acknowledge
-            ResponseBuilder::new().ok()
+            match state.engine.read().await.seek(time).await {
+                Ok(_) => {
+                    // Update status elapsed time
+                    state.status.write().await.elapsed = Some(std::time::Duration::from_secs_f64(time));
+                    ResponseBuilder::new().ok()
+                }
+                Err(e) => ResponseBuilder::error(50, 0, "seek", &format!("Seek failed: {}", e)),
+            }
         } else {
             ResponseBuilder::error(50, 0, "seek", "Can only seek in current song")
         }
@@ -1079,7 +1084,7 @@ async fn handle_seek_command(state: &AppState, position: u32, _time: f64) -> Str
     }
 }
 
-async fn handle_seekid_command(state: &AppState, id: u32, _time: f64) -> String {
+async fn handle_seekid_command(state: &AppState, id: u32, time: f64) -> String {
     let status = state.status.read().await;
 
     // Check if this is the current song
@@ -1087,8 +1092,14 @@ async fn handle_seekid_command(state: &AppState, id: u32, _time: f64) -> String 
         if current.id == id {
             drop(status);
             // Seek in current song
-            // TODO: Implement actual seeking in engine
-            ResponseBuilder::new().ok()
+            match state.engine.read().await.seek(time).await {
+                Ok(_) => {
+                    // Update status elapsed time
+                    state.status.write().await.elapsed = Some(std::time::Duration::from_secs_f64(time));
+                    ResponseBuilder::new().ok()
+                }
+                Err(e) => ResponseBuilder::error(50, 0, "seekid", &format!("Seek failed: {}", e)),
+            }
         } else {
             ResponseBuilder::error(50, 0, "seekid", "Can only seek in current song")
         }
@@ -1097,14 +1108,31 @@ async fn handle_seekid_command(state: &AppState, id: u32, _time: f64) -> String 
     }
 }
 
-async fn handle_seekcur_command(state: &AppState, _time: f64, _relative: bool) -> String {
+async fn handle_seekcur_command(state: &AppState, time: f64, relative: bool) -> String {
     let status = state.status.read().await;
 
     if status.current_song.is_some() {
+        let current_elapsed = status.elapsed.unwrap_or(std::time::Duration::ZERO).as_secs_f64();
         drop(status);
+
+        // Calculate actual seek position
+        let seek_position = if relative {
+            // Relative seek: add to current position
+            (current_elapsed + time).max(0.0)
+        } else {
+            // Absolute seek
+            time.max(0.0)
+        };
+
         // Seek in current song
-        // TODO: Implement actual seeking in engine with relative support
-        ResponseBuilder::new().ok()
+        match state.engine.read().await.seek(seek_position).await {
+            Ok(_) => {
+                // Update status elapsed time
+                state.status.write().await.elapsed = Some(std::time::Duration::from_secs_f64(seek_position));
+                ResponseBuilder::new().ok()
+            }
+            Err(e) => ResponseBuilder::error(50, 0, "seekcur", &format!("Seek failed: {}", e)),
+        }
     } else {
         ResponseBuilder::error(50, 0, "seekcur", "Not playing")
     }
