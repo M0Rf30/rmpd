@@ -91,6 +91,12 @@ impl ResponseBuilder {
         self
     }
 
+    /// Add a blank line to separate entities in the response
+    pub fn blank_line(&mut self) -> &mut Self {
+        self.buffer.push('\n');
+        self
+    }
+
     pub fn status(&mut self, status: &PlayerStatus) -> &mut Self {
         self.field("volume", status.volume);
         self.field("repeat", if status.repeat { 1 } else { 0 });

@@ -1977,11 +1977,15 @@ async fn handle_outputs_command(state: &AppState) -> String {
     let outputs = state.outputs.read().await;
     let mut resp = ResponseBuilder::new();
 
-    for output in outputs.iter() {
+    for (i, output) in outputs.iter().enumerate() {
         resp.field("outputid", output.id);
         resp.field("outputname", &output.name);
         resp.field("plugin", &output.plugin);
         resp.field("outputenabled", if output.enabled { "1" } else { "0" });
+        // Add blank line between outputs, but not after the last one
+        if i < outputs.len() - 1 {
+            resp.blank_line();
+        }
     }
 
     resp.ok()
@@ -2253,33 +2257,40 @@ async fn handle_decoders_command() -> String {
     let mut resp = ResponseBuilder::new();
 
     // All decoders provided by Symphonia
+    // Each plugin is a separate entity and needs blank line separator
     resp.field("plugin", "flac");
     resp.field("suffix", "flac");
     resp.field("mime_type", "audio/flac");
+    resp.blank_line();
 
     resp.field("plugin", "mp3");
     resp.field("suffix", "mp3");
     resp.field("mime_type", "audio/mpeg");
+    resp.blank_line();
 
     resp.field("plugin", "vorbis");
     resp.field("suffix", "ogg");
     resp.field("suffix", "oga");
     resp.field("mime_type", "audio/ogg");
     resp.field("mime_type", "audio/vorbis");
+    resp.blank_line();
 
     resp.field("plugin", "opus");
     resp.field("suffix", "opus");
     resp.field("mime_type", "audio/opus");
+    resp.blank_line();
 
     resp.field("plugin", "aac");
     resp.field("suffix", "aac");
     resp.field("suffix", "m4a");
     resp.field("mime_type", "audio/aac");
     resp.field("mime_type", "audio/mp4");
+    resp.blank_line();
 
     resp.field("plugin", "wav");
     resp.field("suffix", "wav");
     resp.field("mime_type", "audio/wav");
+    // No blank line after last decoder
 
     resp.ok()
 }
