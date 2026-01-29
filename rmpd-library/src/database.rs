@@ -285,10 +285,10 @@ impl Database {
                     replay_gain_album_gain, replay_gain_album_peak,
                     added_at, last_modified
              FROM songs WHERE id = ?1",
-            params![id],
+            params![id as i64],
             |row| {
                 Ok(Song {
-                    id: row.get(0)?,
+                    id: row.get::<_, i64>(0)? as u64,
                     path: row.get::<_, String>(1)?.into(),
                     duration: row.get::<_, Option<f64>>(3)?.map(Duration::from_secs_f64),
                     title: row.get(4)?,
@@ -331,7 +331,7 @@ impl Database {
             params![path],
             |row| {
                 Ok(Song {
-                    id: row.get(0)?,
+                    id: row.get::<_, i64>(0)? as u64,
                     path: row.get::<_, String>(1)?.into(),
                     duration: row.get::<_, Option<f64>>(3)?.map(Duration::from_secs_f64),
                     title: row.get(4)?,
@@ -430,7 +430,7 @@ impl Database {
 
         let songs = stmt.query_map(params![query], |row| {
             Ok(Song {
-                id: row.get(0)?,
+                id: row.get::<_, i64>(0)? as u64,
                 path: row.get::<_, String>(1)?.into(),
                 duration: row.get::<_, Option<f64>>(3)?.map(Duration::from_secs_f64),
                 title: row.get(4)?,
@@ -588,7 +588,7 @@ impl Database {
 
         let songs = stmt.query_map(params![value], |row| {
             Ok(Song {
-                id: row.get(0)?,
+                id: row.get::<_, i64>(0)? as u64,
                 path: row.get::<_, String>(1)?.into(),
                 duration: row.get::<_, Option<f64>>(3)?.map(Duration::from_secs_f64),
                 title: row.get(4)?,
@@ -644,7 +644,7 @@ impl Database {
 
         let songs = stmt.query_map(params_refs.as_slice(), |row| {
             Ok(Song {
-                id: row.get(0)?,
+                id: row.get::<_, i64>(0)? as u64,
                 path: row.get::<_, String>(1)?.into(),
                 duration: row.get::<_, Option<f64>>(3)?.map(Duration::from_secs_f64),
                 title: row.get(4)?,
@@ -691,7 +691,7 @@ impl Database {
 
         let songs = stmt.query_map([], |row| {
             Ok(Song {
-                id: row.get(0)?,
+                id: row.get::<_, i64>(0)? as u64,
                 path: row.get::<_, String>(1)?.into(),
                 duration: row.get::<_, Option<f64>>(3)?.map(Duration::from_secs_f64),
                 title: row.get(4)?,

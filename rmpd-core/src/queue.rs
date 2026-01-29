@@ -88,9 +88,9 @@ impl Queue {
 
     pub fn shuffle(&mut self) {
         use rand::seq::SliceRandom;
-        use rand::thread_rng;
+        use rand::rng;
 
-        self.items.shuffle(&mut thread_rng());
+        self.items.shuffle(&mut rng());
         self.reindex();
         self.version += 1;
     }

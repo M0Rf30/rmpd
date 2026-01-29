@@ -27,32 +27,32 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Audio stack
 symphonia = { version = "0.5.5", features = ["all"] }
-cpal = "0.15"
-rubato = "0.15"
-lofty = "0.21"
+cpal = "0.17"
+rubato = "1.0"
+lofty = "0.22"
 
 # Networking & Protocol
-reqwest = { version = "0.12", features = ["stream"] }
-winnow = "0.6"
+reqwest = { version = "0.13", features = ["stream"] }
+winnow = "0.7"
 
 # Database & Storage
-rusqlite = { version = "0.32", features = ["bundled"] }
-tantivy = "0.22"
-toml = "0.8"
+rusqlite = { version = "0.38", features = ["bundled"] }
+tantivy = "0.25"
+toml = "0.9"
 
 # Plugin System
-libloading = "0.8"
+libloading = "0.9"
 abi_stable = "0.11"
 
 # Utilities
 clap = { version = "4", features = ["derive"] }
-notify = "6"
-notify-debouncer-full = "0.3"
+notify = "8"
+notify-debouncer-full = "0.7"
 camino = "1"
 serde = { version = "1", features = ["derive"] }
 bytes = "1"
-rand = "0.8"
-dirs = "5"
+rand = "0.9"
+dirs = "6"
 sha2 = "0.10"
 
 # Shared workspace crates

@@ -12,5 +12,5 @@ serde.workspace = true
 tokio.workspace = true
 camino = { workspace = true, features = ["serde1"] }
 toml.workspace = true
-rand = "0.8"
-dirs = "5"
+rand = "0.9"
+dirs = "6"

@@ -1,5 +1,5 @@
-use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher as NotifyWatcher};
-use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, FileIdMap};
+use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode};
+use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, NoCache};
 use rmpd_core::error::{Result, RmpdError};
 use rmpd_core::event::{Event as RmpdEvent, EventBus};
 use std::path::{Path, PathBuf};
@@ -18,7 +18,7 @@ pub struct FilesystemWatcher {
     music_dir: PathBuf,
     db: Arc<Mutex<Database>>,
     event_bus: EventBus,
-    debouncer: Option<Debouncer<RecommendedWatcher, FileIdMap>>,
+    debouncer: Option<Debouncer<RecommendedWatcher, NoCache>>,
 }
 
 impl FilesystemWatcher {
@@ -58,7 +58,6 @@ impl FilesystemWatcher {
         // Watch the music directory recursively
         let mut watcher = debouncer;
         watcher
-            .watcher()
             .watch(&self.music_dir, RecursiveMode::Recursive)
             .map_err(|e| RmpdError::Library(format!("Failed to watch directory: {}", e)))?;
 

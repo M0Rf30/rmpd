@@ -2,6 +2,10 @@ use winnow::prelude::*;
 use winnow::token::{take_till, take_while};
 use winnow::combinator::opt;
 use winnow::ascii::space0;
+use winnow::error::{ContextError, ErrMode};
+
+// Type alias for parser results (winnow 0.7 compatibility)
+type PResult<O> = Result<O, ErrMode<ContextError>>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
@@ -1000,22 +1004,8 @@ fn parse_u32(input: &mut &str) -> PResult<u32> {
         .map_err(|_| winnow::error::ErrMode::Cut(winnow::error::ContextError::default()))
 }
 
-fn parse_usize(input: &mut &str) -> PResult<usize> {
-    take_while(1.., |c: char| c.is_ascii_digit())
-        .parse_next(input)?
-        .parse()
-        .map_err(|_| winnow::error::ErrMode::Cut(winnow::error::ContextError::default()))
-}
-
 fn parse_u8(input: &mut &str) -> PResult<u8> {
     take_while(1.., |c: char| c.is_ascii_digit())
-        .parse_next(input)?
-        .parse()
-        .map_err(|_| winnow::error::ErrMode::Cut(winnow::error::ContextError::default()))
-}
-
-fn parse_i8(input: &mut &str) -> PResult<i8> {
-    take_while(1.., |c: char| c.is_ascii_digit() || c == '-' || c == '+')
         .parse_next(input)?
         .parse()
         .map_err(|_| winnow::error::ErrMode::Cut(winnow::error::ContextError::default()))
