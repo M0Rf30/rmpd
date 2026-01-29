@@ -17,12 +17,12 @@ pub enum Command {
     SeekCur { time: f64, relative: bool },
 
     // Queue management
-    Add { uri: String },
+    Add { uri: String, position: Option<u32> },
     AddId { uri: String, position: Option<u32> },
-    Delete { position: u32 },
+    Delete { target: DeleteTarget },
     DeleteId { id: u32 },
     Clear,
-    Move { from: u32, to: u32 },
+    Move { from: MoveFrom, to: u32 },
     MoveId { id: u32, to: u32 },
     Shuffle { range: Option<(u32, u32)> },
     Swap { pos1: u32, pos2: u32 },
@@ -62,7 +62,7 @@ pub enum Command {
     Ping,
     Password { password: String },
     BinaryLimit { size: u32 },
-    Protocol { min_version: Option<String>, max_version: Option<String> },
+    Protocol { subcommand: Option<ProtocolSubcommand> },
 
     // Reflection
     Commands,
@@ -185,6 +185,27 @@ pub enum TagTypesSubcommand {
     Reset { tags: Vec<String> },
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum ProtocolSubcommand {
+    All,
+    Clear,
+    Enable { features: Vec<String> },
+    Disable { features: Vec<String> },
+    Available,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum DeleteTarget {
+    Position(u32),
+    Range(u32, u32),  // START:END (exclusive end)
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum MoveFrom {
+    Position(u32),
+    Range(u32, u32),  // START:END (exclusive end)
+}
+
 pub fn parse_command(input: &str) -> Result<Command, String> {
     let input = input.trim();
     if input.is_empty() {
@@ -241,7 +262,9 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
         }
         "add" => {
             let uri = parse_quoted_or_unquoted.parse_next(input)?;
-            Ok(Command::Add { uri })
+            let _ = space0.parse_next(input)?;
+            let position = opt(parse_u32).parse_next(input)?;
+            Ok(Command::Add { uri, position })
         }
         "addid" => {
             let uri = parse_quoted_or_unquoted.parse_next(input)?;
@@ -250,8 +273,8 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
             Ok(Command::AddId { uri, position })
         }
         "delete" => {
-            let position = parse_u32.parse_next(input)?;
-            Ok(Command::Delete { position })
+            let target = parse_delete_target.parse_next(input)?;
+            Ok(Command::Delete { target })
         }
         "deleteid" => {
             let id = parse_u32.parse_next(input)?;
@@ -259,7 +282,7 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
         }
         "clear" => Ok(Command::Clear),
         "move" => {
-            let from = parse_u32.parse_next(input)?;
+            let from = parse_move_from.parse_next(input)?;
             let _ = space0.parse_next(input)?;
             let to = parse_u32.parse_next(input)?;
             Ok(Command::Move { from, to })
@@ -372,10 +395,48 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
             Ok(Command::BinaryLimit { size })
         }
         "protocol" => {
-            let min = opt(parse_string).parse_next(input)?;
-            let _ = space0.parse_next(input)?;
-            let max = opt(parse_string).parse_next(input)?;
-            Ok(Command::Protocol { min_version: min, max_version: max })
+            // Check for subcommand
+            if input.is_empty() {
+                Ok(Command::Protocol { subcommand: None })
+            } else {
+                let subcommand_str = take_while(1.., |c: char| c.is_ascii_alphabetic()).parse_next(input)?;
+                let _ = space0.parse_next(input)?;
+
+                match subcommand_str {
+                    "all" => Ok(Command::Protocol {
+                        subcommand: Some(ProtocolSubcommand::All)
+                    }),
+                    "clear" => Ok(Command::Protocol {
+                        subcommand: Some(ProtocolSubcommand::Clear)
+                    }),
+                    "available" => Ok(Command::Protocol {
+                        subcommand: Some(ProtocolSubcommand::Available)
+                    }),
+                    "enable" => {
+                        let mut features = Vec::new();
+                        while !input.is_empty() {
+                            let feature = parse_quoted_or_unquoted.parse_next(input)?;
+                            features.push(feature);
+                            let _ = space0.parse_next(input)?;
+                        }
+                        Ok(Command::Protocol {
+                            subcommand: Some(ProtocolSubcommand::Enable { features })
+                        })
+                    },
+                    "disable" => {
+                        let mut features = Vec::new();
+                        while !input.is_empty() {
+                            let feature = parse_quoted_or_unquoted.parse_next(input)?;
+                            features.push(feature);
+                            let _ = space0.parse_next(input)?;
+                        }
+                        Ok(Command::Protocol {
+                            subcommand: Some(ProtocolSubcommand::Disable { features })
+                        })
+                    },
+                    _ => Ok(Command::Unknown(format!("protocol {}", subcommand_str)))
+                }
+            }
         }
         "commands" => Ok(Command::Commands),
         "notcommands" => Ok(Command::NotCommands),
@@ -929,6 +990,34 @@ fn parse_i8(input: &mut &str) -> PResult<i8> {
         .map_err(|_| winnow::error::ErrMode::Cut(winnow::error::ContextError::default()))
 }
 
+fn parse_delete_target(input: &mut &str) -> PResult<DeleteTarget> {
+    // Try to parse as range first (e.g., "5:10")
+    let start = parse_u32.parse_next(input)?;
+
+    // Check if there's a colon for range syntax
+    if input.starts_with(':') {
+        let _ = winnow::token::one_of(':').parse_next(input)?;
+        let end = parse_u32.parse_next(input)?;
+        Ok(DeleteTarget::Range(start, end))
+    } else {
+        Ok(DeleteTarget::Position(start))
+    }
+}
+
+fn parse_move_from(input: &mut &str) -> PResult<MoveFrom> {
+    // Try to parse as range first (e.g., "5:10")
+    let start = parse_u32.parse_next(input)?;
+
+    // Check if there's a colon for range syntax
+    if input.starts_with(':') {
+        let _ = winnow::token::one_of(':').parse_next(input)?;
+        let end = parse_u32.parse_next(input)?;
+        Ok(MoveFrom::Range(start, end))
+    } else {
+        Ok(MoveFrom::Position(start))
+    }
+}
+
 fn parse_f64(input: &mut &str) -> PResult<f64> {
     take_while(1.., |c: char| c.is_ascii_digit() || c == '.' || c == '-' || c == '+')
         .parse_next(input)?
@@ -993,7 +1082,7 @@ mod tests {
     fn test_add_command() {
         assert_eq!(
             parse_command("add song.mp3").unwrap(),
-            Command::Add { uri: "song.mp3".to_string() }
+            Command::Add { uri: "song.mp3".to_string(), position: None }
         );
     }
 
@@ -1001,7 +1090,7 @@ mod tests {
     fn test_add_command_with_quotes() {
         assert_eq!(
             parse_command(r#"add "/home/user/song with spaces.mp3""#).unwrap(),
-            Command::Add { uri: "/home/user/song with spaces.mp3".to_string() }
+            Command::Add { uri: "/home/user/song with spaces.mp3".to_string(), position: None }
         );
     }
 
@@ -1009,7 +1098,7 @@ mod tests {
     fn test_add_command_with_path() {
         assert_eq!(
             parse_command("add /home/user/song.mp3").unwrap(),
-            Command::Add { uri: "/home/user/song.mp3".to_string() }
+            Command::Add { uri: "/home/user/song.mp3".to_string(), position: None }
         );
     }
 

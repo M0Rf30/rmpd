@@ -405,14 +405,14 @@ async fn handle_command(cmd: Command, state: &AppState) -> Response {
         Command::SetVol { volume } => {
             handle_setvol_command(state, volume).await
         }
-        Command::Add { uri } => {
-            handle_add_command(state, &uri).await
+        Command::Add { uri, position } => {
+            handle_add_command(state, &uri, position).await
         }
         Command::Clear => {
             handle_clear_command(state).await
         }
-        Command::Delete { position } => {
-            handle_delete_command(state, position).await
+        Command::Delete { target } => {
+            handle_delete_command(state, target).await
         }
         Command::DeleteId { id } => {
             handle_deleteid_command(state, id).await
@@ -488,10 +488,8 @@ async fn handle_command(cmd: Command, state: &AppState) -> Response {
             let _ = size;
             ResponseBuilder::new().ok()
         }
-        Command::Protocol { min_version, max_version } => {
-            // Protocol negotiation - for now just acknowledge
-            let _ = (min_version, max_version);
-            ResponseBuilder::new().ok()
+        Command::Protocol { subcommand } => {
+            handle_protocol_command(subcommand).await
         }
         // Stored playlists
         Command::Save { name } => {
@@ -1150,7 +1148,7 @@ async fn handle_setvol_command(state: &AppState, volume: u8) -> String {
     }
 }
 
-async fn handle_add_command(state: &AppState, uri: &str) -> String {
+async fn handle_add_command(state: &AppState, uri: &str, position: Option<u32>) -> String {
     debug!("Add command received with URI: [{}]", uri);
     // Get song from database
     let db_path = match &state.db_path {
@@ -1169,8 +1167,8 @@ async fn handle_add_command(state: &AppState, uri: &str) -> String {
         Err(e) => return ResponseBuilder::error(50, 0, "add", &format!("query error: {}", e)),
     };
 
-    // Add to queue
-    let id = state.queue.write().await.add(song);
+    // Add to queue at specified position or at end
+    let id = state.queue.write().await.add_at(song, position);
 
     let mut resp = ResponseBuilder::new();
     resp.field("Id", id);
@@ -1189,14 +1187,41 @@ async fn handle_clear_command(state: &AppState) -> String {
     ResponseBuilder::new().ok()
 }
 
-async fn handle_delete_command(state: &AppState, position: u32) -> String {
-    if state.queue.write().await.delete(position).is_some() {
-        let mut status = state.status.write().await;
-        status.playlist_version += 1;
-        status.playlist_length = state.queue.read().await.len() as u32;
-        ResponseBuilder::new().ok()
-    } else {
-        ResponseBuilder::error(50, 0, "delete", "No such song")
+async fn handle_delete_command(state: &AppState, target: crate::parser::DeleteTarget) -> String {
+    use crate::parser::DeleteTarget;
+
+    match target {
+        DeleteTarget::Position(position) => {
+            if state.queue.write().await.delete(position).is_some() {
+                let mut status = state.status.write().await;
+                status.playlist_version += 1;
+                status.playlist_length = state.queue.read().await.len() as u32;
+                ResponseBuilder::new().ok()
+            } else {
+                ResponseBuilder::error(50, 0, "delete", "No such song")
+            }
+        }
+        DeleteTarget::Range(start, end) => {
+            // Delete songs in range [start, end) (exclusive end)
+            let mut queue = state.queue.write().await;
+            let mut deleted_count = 0;
+
+            // Delete from highest to lowest to avoid position shifts
+            for pos in (start..end).rev() {
+                if queue.delete(pos).is_some() {
+                    deleted_count += 1;
+                }
+            }
+
+            if deleted_count > 0 {
+                let mut status = state.status.write().await;
+                status.playlist_version += 1;
+                status.playlist_length = queue.len() as u32;
+                ResponseBuilder::new().ok()
+            } else {
+                ResponseBuilder::error(50, 0, "delete", "No such songs in range")
+            }
+        }
     }
 }
 
@@ -1379,13 +1404,54 @@ async fn handle_moveid_command(state: &AppState, id: u32, to: u32) -> String {
     }
 }
 
-async fn handle_move_command(state: &AppState, from: u32, to: u32) -> String {
-    if state.queue.write().await.move_item(from, to) {
-        let mut status = state.status.write().await;
-        status.playlist_version += 1;
-        ResponseBuilder::new().ok()
-    } else {
-        ResponseBuilder::error(50, 0, "move", "Invalid position")
+async fn handle_move_command(state: &AppState, from: crate::parser::MoveFrom, to: u32) -> String {
+    use crate::parser::MoveFrom;
+
+    match from {
+        MoveFrom::Position(from_pos) => {
+            if state.queue.write().await.move_item(from_pos, to) {
+                let mut status = state.status.write().await;
+                status.playlist_version += 1;
+                ResponseBuilder::new().ok()
+            } else {
+                ResponseBuilder::error(50, 0, "move", "Invalid position")
+            }
+        }
+        MoveFrom::Range(start, end) => {
+            // Move range of songs [start, end) to position
+            // MPD semantics: move each song individually to maintain order
+            let mut queue = state.queue.write().await;
+
+            if start >= end || start >= queue.len() as u32 {
+                return ResponseBuilder::error(50, 0, "move", "Invalid range");
+            }
+
+            let range_size = end.saturating_sub(start);
+
+            // Move songs one by one
+            // If moving to a position before the range, move from start to end
+            // If moving to a position after the range, move from end-1 to start
+            if to <= start {
+                // Moving up in the queue
+                for i in 0..range_size.min(queue.len() as u32 - start) {
+                    if !queue.move_item(start, to + i) {
+                        return ResponseBuilder::error(50, 0, "move", "Invalid position");
+                    }
+                }
+            } else {
+                // Moving down in the queue
+                let actual_end = end.min(queue.len() as u32);
+                for _ in 0..(actual_end - start) {
+                    if !queue.move_item(start, to.saturating_sub(1)) {
+                        return ResponseBuilder::error(50, 0, "move", "Invalid position");
+                    }
+                }
+            }
+
+            let mut status = state.status.write().await;
+            status.playlist_version += 1;
+            ResponseBuilder::new().ok()
+        }
     }
 }
 
@@ -2048,6 +2114,46 @@ async fn handle_tagtypes_command(subcommand: Option<crate::parser::TagTypesSubco
         Some(TagTypesSubcommand::Reset { tags: _ }) => {
             // Reset specific tags to default state for this client
             // TODO: Store per-client tag mask in connection state
+            // For now, just return OK
+        }
+    }
+
+    resp.ok()
+}
+
+async fn handle_protocol_command(subcommand: Option<crate::parser::ProtocolSubcommand>) -> String {
+    use crate::parser::ProtocolSubcommand;
+
+    let mut resp = ResponseBuilder::new();
+
+    match subcommand {
+        None | Some(ProtocolSubcommand::Available) => {
+            // List all available protocol features
+            // Based on MPD 0.24.x protocol features
+            resp.field("feature", "binary");          // Binary responses
+            resp.field("feature", "command_list_ok"); // Command lists with OK markers
+            resp.field("feature", "idle");            // Idle notifications
+            resp.field("feature", "ranges");          // Range syntax (START:END)
+            resp.field("feature", "tags");            // Tag type negotiation
+        }
+        Some(ProtocolSubcommand::All) => {
+            // Enable all protocol features for this client
+            // TODO: Store per-client protocol features in connection state
+            // For now, just return OK as all features are enabled by default
+        }
+        Some(ProtocolSubcommand::Clear) => {
+            // Disable all protocol features for this client
+            // TODO: Store per-client protocol features in connection state
+            // For now, just return OK
+        }
+        Some(ProtocolSubcommand::Enable { features: _ }) => {
+            // Enable specific protocol features for this client
+            // TODO: Store per-client protocol features in connection state
+            // For now, just return OK as all features are enabled by default
+        }
+        Some(ProtocolSubcommand::Disable { features: _ }) => {
+            // Disable specific protocol features for this client
+            // TODO: Store per-client protocol features in connection state
             // For now, just return OK
         }
     }
