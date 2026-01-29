@@ -71,6 +71,10 @@ pub enum Command {
     LsInfo { path: Option<String> },
     Count { tag: String, value: String },
 
+    // Album art
+    AlbumArt { uri: String, offset: usize },
+    ReadPicture { uri: String, offset: usize },
+
     // Unknown/Invalid
     Unknown(String),
 }
@@ -264,11 +268,30 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
             let value = parse_quoted_or_unquoted.parse_next(input)?;
             Ok(Command::Count { tag, value })
         }
+        "albumart" => {
+            let uri = parse_quoted_or_unquoted.parse_next(input)?;
+            let _ = space0.parse_next(input)?;
+            let offset = parse_usize.parse_next(input)?;
+            Ok(Command::AlbumArt { uri, offset })
+        }
+        "readpicture" => {
+            let uri = parse_quoted_or_unquoted.parse_next(input)?;
+            let _ = space0.parse_next(input)?;
+            let offset = parse_usize.parse_next(input)?;
+            Ok(Command::ReadPicture { uri, offset })
+        }
         _ => Ok(Command::Unknown(cmd.to_string())),
     }
 }
 
 fn parse_u32(input: &mut &str) -> PResult<u32> {
+    take_while(1.., |c: char| c.is_ascii_digit())
+        .parse_next(input)?
+        .parse()
+        .map_err(|_| winnow::error::ErrMode::Cut(winnow::error::ContextError::default()))
+}
+
+fn parse_usize(input: &mut &str) -> PResult<usize> {
     take_while(1.., |c: char| c.is_ascii_digit())
         .parse_next(input)?
         .parse()

@@ -36,6 +36,13 @@ pub enum Event {
 
     // Partition events
     PartitionChanged(String),
+
+    // Filesystem watcher events
+    FilesystemWatchStarted,
+    FilesystemWatchStopped,
+    SongAdded(Song),
+    SongUpdated(Song),
+    SongDeleted { path: String },
 }
 
 /// Maps to MPD's idle subsystems
@@ -61,15 +68,18 @@ impl Event {
     pub fn subsystems(&self) -> &'static [Subsystem] {
         match self {
             Event::PlayerStateChanged(_) | Event::SongChanged(_) |
-            Event::PositionChanged(_) => &[Subsystem::Player],
+            Event::PositionChanged(_) | Event::SongFinished => &[Subsystem::Player],
             Event::VolumeChanged(_) => &[Subsystem::Mixer],
             Event::QueueChanged => &[Subsystem::Playlist],
             Event::QueueOptionsChanged => &[Subsystem::Options],
             Event::DatabaseUpdateStarted | Event::DatabaseUpdateProgress { .. } =>
                 &[Subsystem::Update],
             Event::DatabaseUpdateFinished => &[Subsystem::Database, Subsystem::Update],
+            Event::SongAdded(_) | Event::SongUpdated(_) | Event::SongDeleted { .. } =>
+                &[Subsystem::Database],
             Event::OutputsChanged => &[Subsystem::Output],
             Event::PartitionChanged(_) => &[Subsystem::Partition],
+            Event::FilesystemWatchStarted | Event::FilesystemWatchStopped => &[],
             _ => &[],
         }
     }

@@ -204,6 +204,12 @@ async fn handle_command(cmd: Command, state: &AppState) -> String {
         Command::Delete { position } => {
             handle_delete_command(state, position).await
         }
+        Command::AlbumArt { uri, offset } => {
+            handle_albumart_command(state, &uri, offset).await
+        }
+        Command::ReadPicture { uri, offset } => {
+            handle_readpicture_command(state, &uri, offset).await
+        }
         Command::Unknown(cmd) => {
             ResponseBuilder::error(5, 0, &cmd, "unknown command")
         }
@@ -584,4 +590,42 @@ async fn handle_update_command(state: &AppState, _path: Option<&str>) -> String 
     let mut resp = ResponseBuilder::new();
     resp.field("updating_db", 1);
     resp.ok()
+}
+
+async fn handle_albumart_command(state: &AppState, uri: &str, offset: usize) -> String {
+    let db_path = match &state.db_path {
+        Some(p) => p,
+        None => return ResponseBuilder::error(50, 0, "albumart", "database not configured"),
+    };
+
+    let db = match rmpd_library::Database::open(db_path) {
+        Ok(d) => d,
+        Err(e) => return ResponseBuilder::error(50, 0, "albumart", &format!("database error: {}", e)),
+    };
+
+    let extractor = rmpd_library::AlbumArtExtractor::new(db);
+
+    match extractor.get_artwork(uri, offset) {
+        Ok(Some(artwork)) => {
+            // Binary response - for now just return metadata
+            // TODO: Implement full binary response support with actual binary data
+            let mut resp = ResponseBuilder::new();
+            resp.field("size", artwork.total_size);
+            resp.field("type", &artwork.mime_type);
+            resp.binary_field("binary", &artwork.data);
+            // Convert to bytes which includes the binary data
+            // For now, we'll just return text response until binary protocol is fully implemented
+            String::from_utf8(resp.to_bytes()).unwrap_or_else(|_| {
+                ResponseBuilder::error(50, 0, "albumart", "Encoding error")
+            })
+        }
+        Ok(None) => ResponseBuilder::error(50, 0, "albumart", "No album art found"),
+        Err(e) => ResponseBuilder::error(50, 0, "albumart", &format!("Error: {}", e)),
+    }
+}
+
+async fn handle_readpicture_command(state: &AppState, uri: &str, offset: usize) -> String {
+    // readpicture is similar to albumart but returns any embedded picture
+    // For now, we'll use the same implementation
+    handle_albumart_command(state, uri, offset).await
 }

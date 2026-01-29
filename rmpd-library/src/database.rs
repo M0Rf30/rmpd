@@ -136,6 +136,23 @@ impl Database {
             [],
         ).map_err(|e| RmpdError::Database(e.to_string()))?;
 
+        // Artwork table (album art cache)
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS artwork (
+                id INTEGER PRIMARY KEY,
+                song_path TEXT NOT NULL,
+                picture_type TEXT NOT NULL,
+                mime_type TEXT NOT NULL,
+                data BLOB NOT NULL,
+                size INTEGER NOT NULL,
+                hash TEXT NOT NULL,
+
+                UNIQUE(song_path, picture_type),
+                FOREIGN KEY (song_path) REFERENCES songs(path) ON DELETE CASCADE
+            )",
+            [],
+        ).map_err(|e| RmpdError::Database(e.to_string()))?;
+
         // Full-text search using FTS5
         self.conn.execute(
             "CREATE VIRTUAL TABLE IF NOT EXISTS songs_fts USING fts5(
@@ -169,6 +186,16 @@ impl Database {
 
         self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_directories_parent ON directories(parent_id)",
+            [],
+        ).map_err(|e| RmpdError::Database(e.to_string()))?;
+
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_artwork_path ON artwork(song_path)",
+            [],
+        ).map_err(|e| RmpdError::Database(e.to_string()))?;
+
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_artwork_hash ON artwork(hash)",
             [],
         ).map_err(|e| RmpdError::Database(e.to_string()))?;
 
@@ -584,5 +611,49 @@ impl Database {
         .map_err(|e| RmpdError::Database(e.to_string()))?;
 
         Ok(songs)
+    }
+
+    pub fn delete_song_by_path(&self, path: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM songs WHERE path = ?1",
+            params![path],
+        ).map_err(|e| RmpdError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    // Artwork methods
+    pub fn get_artwork(&self, path: &str, picture_type: &str) -> Result<Option<Vec<u8>>> {
+        self.conn.query_row(
+            "SELECT data FROM artwork WHERE song_path = ?1 AND picture_type = ?2",
+            params![path, picture_type],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| RmpdError::Database(e.to_string()))
+    }
+
+    pub fn store_artwork(
+        &self,
+        path: &str,
+        picture_type: &str,
+        mime_type: &str,
+        data: &[u8],
+        hash: &str,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO artwork (song_path, picture_type, mime_type, data, size, hash)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![path, picture_type, mime_type, data, data.len() as i64, hash],
+        ).map_err(|e| RmpdError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    pub fn has_artwork(&self, path: &str, picture_type: &str) -> Result<bool> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM artwork WHERE song_path = ?1 AND picture_type = ?2",
+            params![path, picture_type],
+            |row| row.get(0),
+        ).map_err(|e| RmpdError::Database(e.to_string()))?;
+        Ok(count > 0)
     }
 }

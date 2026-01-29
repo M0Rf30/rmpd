@@ -4,18 +4,39 @@ use std::fmt::Write as FmtWrite;
 
 pub struct ResponseBuilder {
     buffer: String,
+    binary_data: Option<Vec<u8>>,
 }
 
 impl ResponseBuilder {
     pub fn new() -> Self {
         Self {
             buffer: String::new(),
+            binary_data: None,
         }
     }
 
     pub fn ok(mut self) -> String {
+        // If we have binary data, we need to handle it differently
+        // For now, just append OK (binary handling will need special treatment)
         self.buffer.push_str("OK\n");
         self.buffer
+    }
+
+    pub fn binary_field(&mut self, key: &str, data: &[u8]) -> &mut Self {
+        // Store binary data for later
+        // The actual binary response format is: "binary: <length>\n<data>OK\n"
+        writeln!(self.buffer, "{}: {}", key, data.len()).unwrap();
+        self.binary_data = Some(data.to_vec());
+        self
+    }
+
+    pub fn to_bytes(mut self) -> Vec<u8> {
+        let mut result = self.buffer.into_bytes();
+        if let Some(binary) = self.binary_data {
+            result.extend_from_slice(&binary);
+        }
+        result.push(b'\n');
+        result
     }
 
     pub fn error(code: i32, command_list_num: i32, command: &str, message: &str) -> String {

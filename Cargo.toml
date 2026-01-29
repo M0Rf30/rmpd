@@ -47,11 +47,13 @@ abi_stable = "0.11"
 # Utilities
 clap = { version = "4", features = ["derive"] }
 notify = "6"
+notify-debouncer-full = "0.3"
 camino = "1"
 serde = { version = "1", features = ["derive"] }
 bytes = "1"
 rand = "0.8"
 dirs = "5"
+sha2 = "0.10"
 
 # Shared workspace crates
 rmpd-core = { path = "rmpd-core" }
