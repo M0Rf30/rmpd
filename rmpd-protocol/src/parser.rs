@@ -358,6 +358,22 @@ mod tests {
     }
 
     #[test]
+    fn test_add_command_with_quotes() {
+        assert_eq!(
+            parse_command(r#"add "/home/user/song with spaces.mp3""#).unwrap(),
+            Command::Add { uri: "/home/user/song with spaces.mp3".to_string() }
+        );
+    }
+
+    #[test]
+    fn test_add_command_with_path() {
+        assert_eq!(
+            parse_command("add /home/user/song.mp3").unwrap(),
+            Command::Add { uri: "/home/user/song.mp3".to_string() }
+        );
+    }
+
+    #[test]
     fn test_status_command() {
         assert_eq!(parse_command("status").unwrap(), Command::Status);
     }

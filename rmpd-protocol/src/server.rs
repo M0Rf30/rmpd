@@ -493,7 +493,7 @@ async fn handle_setvol_command(state: &AppState, volume: u8) -> String {
 }
 
 async fn handle_add_command(state: &AppState, uri: &str) -> String {
-    debug!("Add command received with URI: {:?}", uri);
+    debug!("Add command received with URI: [{}]", uri);
     // Get song from database
     let db_path = match &state.db_path {
         Some(p) => p,

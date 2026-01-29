@@ -89,11 +89,16 @@ impl SymphoniaDecoder {
 
     pub fn read(&mut self, buffer: &mut [f32]) -> Result<usize> {
         let mut samples_written = 0;
+        let mut packets_read = 0;
 
         while samples_written < buffer.len() {
             // If we have samples in the buffer, copy them
             if let Some(ref sample_buf) = self.sample_buf {
-                let samples_available = sample_buf.len() - (self.current_frame as usize);
+                // sample_buf.samples() returns interleaved samples
+                // sample_buf.len() returns number of frames
+                // For stereo, samples().len() == len() * 2
+                let total_samples = sample_buf.samples().len();
+                let samples_available = total_samples - (self.current_frame as usize);
                 let samples_to_copy = (buffer.len() - samples_written).min(samples_available);
 
                 if samples_to_copy > 0 {
@@ -106,7 +111,7 @@ impl SymphoniaDecoder {
                 }
 
                 // If buffer is exhausted, clear it
-                if self.current_frame >= sample_buf.len() as u64 {
+                if self.current_frame >= total_samples as u64 {
                     self.sample_buf = None;
                     self.current_frame = 0;
                 }
@@ -118,17 +123,23 @@ impl SymphoniaDecoder {
 
             // Read next packet
             let packet = match self.reader.next_packet() {
-                Ok(packet) => packet,
+                Ok(packet) => {
+                    packets_read += 1;
+                    packet
+                }
                 Err(SymphoniaError::IoError(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
                     // End of stream
+                    tracing::debug!("EOF reached after {} packets, samples_written: {}", packets_read, samples_written);
                     break;
                 }
                 Err(SymphoniaError::ResetRequired) => {
                     // Decoder needs reset
+                    tracing::debug!("Decoder reset required");
                     self.decoder.reset();
                     continue;
                 }
                 Err(e) => {
+                    tracing::error!("Failed to read packet: {}", e);
                     return Err(RmpdError::Player(format!("Failed to read packet: {}", e)));
                 }
             };

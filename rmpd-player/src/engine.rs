@@ -171,9 +171,13 @@ impl PlaybackEngine {
 
             if samples_read == 0 {
                 // End of stream
-                debug!("End of stream reached");
+                debug!("End of stream reached, total samples decoded");
                 event_bus.emit(Event::SongFinished);
                 break;
+            }
+
+            if samples_read < buffer.len() {
+                debug!("Partial read: {} samples (buffer size: {})", samples_read, buffer.len());
             }
 
             // Apply volume
