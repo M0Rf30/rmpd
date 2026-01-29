@@ -493,15 +493,15 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
             Ok(Command::List { tag, filter_tag, filter_value, group })
         }
         "listall" => {
-            let path = opt(parse_string).parse_next(input)?;
+            let path = opt(parse_quoted_or_unquoted).parse_next(input)?;
             Ok(Command::ListAll { path })
         }
         "listallinfo" => {
-            let path = opt(parse_string).parse_next(input)?;
+            let path = opt(parse_quoted_or_unquoted).parse_next(input)?;
             Ok(Command::ListAllInfo { path })
         }
         "lsinfo" => {
-            let path = opt(parse_string).parse_next(input)?;
+            let path = opt(parse_quoted_or_unquoted).parse_next(input)?;
             Ok(Command::LsInfo { path })
         }
         "count" => {

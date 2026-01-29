@@ -5,7 +5,7 @@ use anyhow::Result;
 
 use crate::parser::{parse_command, Command};
 use crate::queue_playback::QueuePlaybackManager;
-use crate::response::ResponseBuilder;
+use crate::response::{Response, ResponseBuilder};
 use crate::state::AppState;
 
 const PROTOCOL_VERSION: &str = "0.24.0";
@@ -106,7 +106,7 @@ async fn handle_client(mut stream: TcpStream, state: AppState) -> Result<()> {
             }
             Ok(Command::CommandListEnd) => {
                 if !batch_mode {
-                    ResponseBuilder::error(5, 0, "command_list_end", "not in command list")
+                    Response::Text(ResponseBuilder::error(5, 0, "command_list_end", "not in command list"))
                 } else {
                     let response = execute_command_list(&batch_commands, &state, batch_ok_mode).await;
                     batch_mode = false;
@@ -116,7 +116,7 @@ async fn handle_client(mut stream: TcpStream, state: AppState) -> Result<()> {
                 }
             }
             Ok(Command::Idle { subsystems }) if !batch_mode => {
-                handle_idle(&mut reader, &mut event_rx, subsystems).await
+                Response::Text(handle_idle(&mut reader, &mut event_rx, subsystems).await)
             }
             Ok(cmd) if batch_mode => {
                 // Accumulate commands in batch
@@ -124,7 +124,7 @@ async fn handle_client(mut stream: TcpStream, state: AppState) -> Result<()> {
                 continue; // Don't send response yet
             }
             Ok(cmd) => handle_command(cmd, &state).await,
-            Err(e) => ResponseBuilder::error(5, 0, trimmed, &e),
+            Err(e) => Response::Text(ResponseBuilder::error(5, 0, trimmed, &e)),
         };
 
         writer.write_all(response.as_bytes()).await?;
@@ -133,7 +133,7 @@ async fn handle_client(mut stream: TcpStream, state: AppState) -> Result<()> {
     Ok(())
 }
 
-async fn execute_command_list(commands: &[String], state: &AppState, ok_mode: bool) -> String {
+async fn execute_command_list(commands: &[String], state: &AppState, ok_mode: bool) -> Response {
     let mut response = String::new();
 
     for (index, cmd_str) in commands.iter().enumerate() {
@@ -141,10 +141,20 @@ async fn execute_command_list(commands: &[String], state: &AppState, ok_mode: bo
             Ok(cmd) => {
                 let cmd_response = handle_command(cmd, state).await;
 
+                // Convert response to string for batching (binary commands not allowed in batch)
+                let cmd_response_str = match cmd_response {
+                    Response::Text(s) => s,
+                    Response::Binary(_) => {
+                        return Response::Text(ResponseBuilder::error(
+                            5, index as i32, cmd_str, "binary commands not allowed in command list"
+                        ));
+                    }
+                };
+
                 // Check for errors
-                if cmd_response.starts_with("ACK") {
+                if cmd_response_str.starts_with("ACK") {
                     // Return error with command list index
-                    return cmd_response.replace("ACK [", &format!("ACK [{}@", index));
+                    return Response::Text(cmd_response_str.replace("ACK [", &format!("ACK [{}@", index)));
                 }
 
                 if ok_mode {
@@ -154,14 +164,14 @@ async fn execute_command_list(commands: &[String], state: &AppState, ok_mode: bo
             }
             Err(e) => {
                 // Parse error - return ACK with index
-                return ResponseBuilder::error(5, index as i32, cmd_str, &e);
+                return Response::Text(ResponseBuilder::error(5, index as i32, cmd_str, &e));
             }
         }
     }
 
     // All commands succeeded
     response.push_str("OK\n");
-    response
+    Response::Text(response)
 }
 
 async fn handle_idle(
@@ -255,8 +265,20 @@ fn subsystem_to_string(subsystem: rmpd_core::event::Subsystem) -> &'static str {
     }
 }
 
-async fn handle_command(cmd: Command, state: &AppState) -> String {
+async fn handle_command(cmd: Command, state: &AppState) -> Response {
+    // Special handling for binary commands
     match cmd {
+        Command::AlbumArt { uri, offset } => {
+            return handle_albumart_command(state, &uri, offset).await;
+        }
+        Command::ReadPicture { uri, offset } => {
+            return handle_readpicture_command(state, &uri, offset).await;
+        }
+        _ => {}
+    }
+
+    // All other commands return text responses
+    let response_str = match cmd {
         Command::Ping => ResponseBuilder::new().ok(),
         Command::Close => {
             // Connection will be closed by the handler
@@ -423,11 +445,9 @@ async fn handle_command(cmd: Command, state: &AppState) -> String {
             // No password protection implemented yet
             ResponseBuilder::new().ok()
         }
-        Command::AlbumArt { uri, offset } => {
-            handle_albumart_command(state, &uri, offset).await
-        }
-        Command::ReadPicture { uri, offset } => {
-            handle_readpicture_command(state, &uri, offset).await
+        Command::AlbumArt { .. } | Command::ReadPicture { .. } => {
+            // Already handled at the beginning of the function
+            unreachable!()
         }
         Command::Unknown(cmd) => {
             ResponseBuilder::error(5, 0, &cmd, "unknown command")
@@ -660,7 +680,9 @@ async fn handle_command(cmd: Command, state: &AppState) -> String {
             // Unimplemented commands
             ResponseBuilder::error(5, 0, "command", "not yet implemented")
         }
-    }
+    };
+
+    Response::Text(response_str)
 }
 
 async fn handle_find_command(state: &AppState, filters: &[(String, String)]) -> String {
@@ -1181,39 +1203,34 @@ async fn handle_update_command(state: &AppState, _path: Option<&str>) -> String 
     resp.ok()
 }
 
-async fn handle_albumart_command(state: &AppState, uri: &str, offset: usize) -> String {
+async fn handle_albumart_command(state: &AppState, uri: &str, offset: usize) -> Response {
     let db_path = match &state.db_path {
         Some(p) => p,
-        None => return ResponseBuilder::error(50, 0, "albumart", "database not configured"),
+        None => return Response::Text(ResponseBuilder::error(50, 0, "albumart", "database not configured")),
     };
 
     let db = match rmpd_library::Database::open(db_path) {
         Ok(d) => d,
-        Err(e) => return ResponseBuilder::error(50, 0, "albumart", &format!("database error: {}", e)),
+        Err(e) => return Response::Text(ResponseBuilder::error(50, 0, "albumart", &format!("database error: {}", e))),
     };
 
     let extractor = rmpd_library::AlbumArtExtractor::new(db);
 
     match extractor.get_artwork(uri, offset) {
         Ok(Some(artwork)) => {
-            // Binary response - for now just return metadata
-            // TODO: Implement full binary response support with actual binary data
+            // Binary response with proper format
             let mut resp = ResponseBuilder::new();
             resp.field("size", artwork.total_size);
             resp.field("type", &artwork.mime_type);
             resp.binary_field("binary", &artwork.data);
-            // Convert to bytes which includes the binary data
-            // For now, we'll just return text response until binary protocol is fully implemented
-            String::from_utf8(resp.to_bytes()).unwrap_or_else(|_| {
-                ResponseBuilder::error(50, 0, "albumart", "Encoding error")
-            })
+            Response::Binary(resp.to_binary_response())
         }
-        Ok(None) => ResponseBuilder::error(50, 0, "albumart", "No album art found"),
-        Err(e) => ResponseBuilder::error(50, 0, "albumart", &format!("Error: {}", e)),
+        Ok(None) => Response::Text(ResponseBuilder::error(50, 0, "albumart", "No album art found")),
+        Err(e) => Response::Text(ResponseBuilder::error(50, 0, "albumart", &format!("Error: {}", e))),
     }
 }
 
-async fn handle_readpicture_command(state: &AppState, uri: &str, offset: usize) -> String {
+async fn handle_readpicture_command(state: &AppState, uri: &str, offset: usize) -> Response {
     // readpicture is similar to albumart but returns any embedded picture
     // For now, we'll use the same implementation
     handle_albumart_command(state, uri, offset).await

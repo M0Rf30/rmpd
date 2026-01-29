@@ -2,6 +2,33 @@ use rmpd_core::song::Song;
 use rmpd_core::state::PlayerStatus;
 use std::fmt::Write as FmtWrite;
 
+/// Response type that can be either text or binary
+pub enum Response {
+    Text(String),
+    Binary(Vec<u8>),
+}
+
+impl Response {
+    pub fn as_bytes(&self) -> &[u8] {
+        match self {
+            Response::Text(s) => s.as_bytes(),
+            Response::Binary(b) => b.as_slice(),
+        }
+    }
+}
+
+impl From<String> for Response {
+    fn from(s: String) -> Self {
+        Response::Text(s)
+    }
+}
+
+impl From<Vec<u8>> for Response {
+    fn from(b: Vec<u8>) -> Self {
+        Response::Binary(b)
+    }
+}
+
 pub struct ResponseBuilder {
     buffer: String,
     binary_data: Option<Vec<u8>>,
@@ -30,12 +57,21 @@ impl ResponseBuilder {
         self
     }
 
-    pub fn to_bytes(mut self) -> Vec<u8> {
+    pub fn to_bytes(self) -> Vec<u8> {
         let mut result = self.buffer.into_bytes();
         if let Some(binary) = self.binary_data {
             result.extend_from_slice(&binary);
         }
-        result.push(b'\n');
+        // Don't add extra newline here - it's handled by ok() or caller
+        result
+    }
+
+    pub fn to_binary_response(self) -> Vec<u8> {
+        let mut result = self.buffer.into_bytes();
+        if let Some(binary) = self.binary_data {
+            result.extend_from_slice(&binary);
+        }
+        result.extend_from_slice(b"\nOK\n");
         result
     }
 
