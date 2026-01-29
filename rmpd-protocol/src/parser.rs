@@ -185,7 +185,7 @@ pub fn parse_command(input: &str) -> Result<Command, String> {
 }
 
 fn command_parser(input: &mut &str) -> PResult<Command> {
-    let cmd = take_while(1.., |c: char| c.is_ascii_alphabetic()).parse_next(input)?;
+    let cmd = take_while(1.., |c: char| c.is_ascii_alphabetic() || c == '_').parse_next(input)?;
     let _ = space0.parse_next(input)?;
 
     match cmd {
