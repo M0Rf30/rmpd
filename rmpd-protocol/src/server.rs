@@ -823,11 +823,11 @@ async fn handle_count_command(state: &AppState, tag: &str, value: &str) -> Strin
 async fn handle_play_command(state: &AppState, position: Option<u32>) -> String {
     let queue = state.queue.read().await;
 
-    // Get song to play
-    let song = if let Some(pos) = position {
+    // Get song to play and track the actual position
+    let (song, actual_position) = if let Some(pos) = position {
         // Play specific position
         if let Some(item) = queue.get(pos) {
-            item.song.clone()
+            (item.song.clone(), Some((pos, item.id)))
         } else {
             return ResponseBuilder::error(50, 0, "play", "No such song");
         }
@@ -835,9 +835,12 @@ async fn handle_play_command(state: &AppState, position: Option<u32>) -> String 
         // Resume or play first song
         let current_song = state.engine.read().await.get_current_song().await;
         if let Some(song) = current_song {
-            song
+            // Resuming - keep existing position if set
+            let pos = state.status.read().await.current_song;
+            (song, pos.map(|p| (p.position, p.id)))
         } else if let Some(item) = queue.get(0) {
-            item.song.clone()
+            // Play first song
+            (item.song.clone(), Some((0, item.id)))
         } else {
             return ResponseBuilder::error(50, 0, "play", "No songs in queue");
         }
@@ -851,10 +854,10 @@ async fn handle_play_command(state: &AppState, position: Option<u32>) -> String 
             // Update status
             let mut status = state.status.write().await;
             status.state = rmpd_core::state::PlayerState::Play;
-            if let Some(pos) = position {
+            if let Some((pos, id)) = actual_position {
                 status.current_song = Some(rmpd_core::state::QueuePosition {
                     position: pos,
-                    id: state.queue.read().await.get(pos).map(|i| i.id).unwrap_or(0),
+                    id,
                 });
             }
             ResponseBuilder::new().ok()
