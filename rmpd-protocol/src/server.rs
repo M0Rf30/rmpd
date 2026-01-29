@@ -10,6 +10,91 @@ use crate::state::AppState;
 
 const PROTOCOL_VERSION: &str = "0.24.0";
 
+/// Strip music directory prefix from absolute path
+fn strip_music_dir_prefix<'a>(path: &'a str, music_dir: Option<&str>) -> &'a str {
+    if let Some(music_dir) = music_dir {
+        // Normalize music_dir to end with /
+        let music_dir_with_slash = if music_dir.ends_with('/') {
+            music_dir
+        } else {
+            // Need to handle this case by checking both variants
+            if let Some(stripped) = path.strip_prefix(music_dir) {
+                return stripped.trim_start_matches('/');
+            }
+            music_dir
+        };
+
+        if let Some(stripped) = path.strip_prefix(music_dir_with_slash) {
+            return stripped;
+        }
+    }
+    path
+}
+
+/// Resolve relative path to absolute path using music_directory
+/// If path is already absolute, return as-is
+fn resolve_path(rel_path: &str, music_dir: Option<&str>) -> String {
+    // If path is already absolute, return as-is
+    if rel_path.starts_with('/') {
+        return rel_path.to_string();
+    }
+
+    // Otherwise, prepend music_directory
+    if let Some(music_dir) = music_dir {
+        let music_dir = music_dir.trim_end_matches('/');
+        format!("{}/{}", music_dir, rel_path)
+    } else {
+        // Fallback: return as-is if no music_dir
+        rel_path.to_string()
+    }
+}
+
+/// Convert Unix timestamp to ISO 8601 format (RFC 3339)
+fn format_iso8601_timestamp(timestamp: i64) -> String {
+    const SECONDS_PER_MINUTE: i64 = 60;
+    const SECONDS_PER_HOUR: i64 = 3600;
+    const SECONDS_PER_DAY: i64 = 86400;
+
+    let mut days = timestamp / SECONDS_PER_DAY;
+    let remaining = timestamp % SECONDS_PER_DAY;
+    let hours = remaining / SECONDS_PER_HOUR;
+    let minutes = (remaining % SECONDS_PER_HOUR) / SECONDS_PER_MINUTE;
+    let seconds = remaining % SECONDS_PER_MINUTE;
+
+    // Calculate year starting from 1970
+    let mut year = 1970;
+    loop {
+        let leap_year = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+        let days_in_year = if leap_year { 366 } else { 365 };
+        if days < days_in_year {
+            break;
+        }
+        days -= days_in_year;
+        year += 1;
+    }
+
+    // Calculate month and day
+    let leap_year = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+    let days_in_month = if leap_year {
+        [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    } else {
+        [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    };
+
+    let mut month = 1;
+    for &dim in &days_in_month {
+        if days < dim {
+            break;
+        }
+        days -= dim;
+        month += 1;
+    }
+    let day = days + 1;
+
+    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+            year, month, day, hours, minutes, seconds)
+}
+
 pub struct MpdServer {
     bind_address: String,
     state: AppState,
@@ -308,22 +393,27 @@ async fn handle_command(cmd: Command, state: &AppState) -> Response {
         }
         Command::Stats => {
             // Get stats from database if available
-            let (songs, artists, albums) = if let Some(ref db_path) = state.db_path {
+            let (songs, artists, albums, db_playtime, db_update) = if let Some(ref db_path) = state.db_path {
                 if let Ok(db) = rmpd_library::Database::open(db_path) {
-                    (
-                        db.count_songs().unwrap_or(0),
-                        db.count_artists().unwrap_or(0),
-                        db.count_albums().unwrap_or(0),
-                    )
+                    let songs = db.count_songs().unwrap_or(0);
+                    let artists = db.count_artists().unwrap_or(0);
+                    let albums = db.count_albums().unwrap_or(0);
+                    let db_playtime = db.get_db_playtime().unwrap_or(0);
+                    let db_update = db.get_db_update().unwrap_or(0);
+
+                    (songs, artists, albums, db_playtime, db_update)
                 } else {
-                    (0, 0, 0)
+                    (0, 0, 0, 0, 0)
                 }
             } else {
-                (0, 0, 0)
+                (0, 0, 0, 0, 0)
             };
 
+            // Calculate uptime in seconds
+            let uptime = state.start_time.elapsed().as_secs();
+
             let mut resp = ResponseBuilder::new();
-            resp.stats(artists, albums, songs, 0, 0, 0, 0);
+            resp.stats(artists, albums, songs, uptime, db_playtime, db_update, 0);
             resp.ok()
         }
         Command::ClearError => {
@@ -1052,8 +1142,13 @@ async fn handle_play_command(state: &AppState, position: Option<u32>) -> String 
 
     drop(queue);
 
-    // Start playback
-    match state.engine.write().await.play(song.clone()).await {
+    // Resolve relative path to absolute for playback
+    let mut playback_song = song.clone();
+    let absolute_path = resolve_path(song.path.as_str(), state.music_dir.as_deref());
+    playback_song.path = absolute_path.into();
+
+    // Start playback with resolved path
+    match state.engine.write().await.play(playback_song).await {
         Ok(_) => {
             // Update status
             let mut status = state.status.write().await;
@@ -1076,6 +1171,17 @@ async fn handle_play_command(state: &AppState, position: Option<u32>) -> String 
                     position: pos,
                     id,
                 });
+
+                // Set next_song for UI (e.g., Cantata's next button)
+                let queue = state.queue.read().await;
+                if let Some(next_item) = queue.get(pos + 1) {
+                    status.next_song = Some(rmpd_core::state::QueuePosition {
+                        position: pos + 1,
+                        id: next_item.id,
+                    });
+                } else {
+                    status.next_song = None;
+                }
             }
             ResponseBuilder::new().ok()
         }
@@ -1109,6 +1215,7 @@ async fn handle_stop_command(state: &AppState) -> String {
             let mut status = state.status.write().await;
             status.state = rmpd_core::state::PlayerState::Stop;
             status.current_song = None;
+            status.next_song = None;
             ResponseBuilder::new().ok()
         }
         Err(e) => ResponseBuilder::error(50, 0, "stop", &format!("Stop error: {}", e)),
@@ -1131,13 +1238,30 @@ async fn handle_next_command(state: &AppState) -> String {
         drop(queue);
         drop(status);
 
-        match state.engine.write().await.play(song).await {
+        // Resolve relative path to absolute for playback
+        let mut playback_song = song.clone();
+        let absolute_path = resolve_path(song.path.as_str(), state.music_dir.as_deref());
+        playback_song.path = absolute_path.into();
+
+        match state.engine.write().await.play(playback_song).await {
             Ok(_) => {
                 let mut status = state.status.write().await;
                 status.current_song = Some(rmpd_core::state::QueuePosition {
                     position: next_pos,
                     id: item_id,
                 });
+
+                // Set next_song for UI (e.g., Cantata's next button)
+                let queue = state.queue.read().await;
+                if let Some(next_item) = queue.get(next_pos + 1) {
+                    status.next_song = Some(rmpd_core::state::QueuePosition {
+                        position: next_pos + 1,
+                        id: next_item.id,
+                    });
+                } else {
+                    status.next_song = None;
+                }
+
                 ResponseBuilder::new().ok()
             }
             Err(e) => ResponseBuilder::error(50, 0, "next", &format!("Playback error: {}", e)),
@@ -1167,13 +1291,30 @@ async fn handle_previous_command(state: &AppState) -> String {
         drop(queue);
         drop(status);
 
-        match state.engine.write().await.play(song).await {
+        // Resolve relative path to absolute for playback
+        let mut playback_song = song.clone();
+        let absolute_path = resolve_path(song.path.as_str(), state.music_dir.as_deref());
+        playback_song.path = absolute_path.into();
+
+        match state.engine.write().await.play(playback_song).await {
             Ok(_) => {
                 let mut status = state.status.write().await;
                 status.current_song = Some(rmpd_core::state::QueuePosition {
                     position: prev_pos,
                     id: item_id,
                 });
+
+                // Set next_song for UI (e.g., Cantata's next button)
+                let queue = state.queue.read().await;
+                if let Some(next_item) = queue.get(prev_pos + 1) {
+                    status.next_song = Some(rmpd_core::state::QueuePosition {
+                        position: prev_pos + 1,
+                        id: next_item.id,
+                    });
+                } else {
+                    status.next_song = None;
+                }
+
                 ResponseBuilder::new().ok()
             }
             Err(e) => ResponseBuilder::error(50, 0, "previous", &format!("Playback error: {}", e)),
@@ -1316,6 +1457,7 @@ async fn handle_clear_command(state: &AppState) -> String {
     status.playlist_version += 1;
     status.playlist_length = 0;
     status.current_song = None;
+    status.next_song = None;
 
     ResponseBuilder::new().ok()
 }
@@ -1434,7 +1576,8 @@ async fn handle_albumart_command(state: &AppState, uri: &str, offset: usize) -> 
 
     let extractor = rmpd_library::AlbumArtExtractor::new(db);
 
-    match extractor.get_artwork(&absolute_path, offset) {
+    // Pass both: relative URI for cache key, absolute path for file reading
+    match extractor.get_artwork(uri, &absolute_path, offset) {
         Ok(Some(artwork)) => {
             // Binary response with proper format
             let mut resp = ResponseBuilder::new();
@@ -1506,7 +1649,12 @@ async fn handle_playid_command(state: &AppState, id: Option<u32>) -> String {
             let position = item.position;
             drop(queue);
 
-            match state.engine.write().await.play(song).await {
+            // Resolve relative path to absolute for playback
+            let mut playback_song = song.clone();
+            let absolute_path = resolve_path(song.path.as_str(), state.music_dir.as_deref());
+            playback_song.path = absolute_path.into();
+
+            match state.engine.write().await.play(playback_song).await {
                 Ok(_) => {
                     let mut status = state.status.write().await;
                     status.state = rmpd_core::state::PlayerState::Play;
@@ -1514,6 +1662,18 @@ async fn handle_playid_command(state: &AppState, id: Option<u32>) -> String {
                         position,
                         id: song_id,
                     });
+
+                    // Set next_song for UI (e.g., Cantata's next button)
+                    let queue = state.queue.read().await;
+                    if let Some(next_item) = queue.get(position + 1) {
+                        status.next_song = Some(rmpd_core::state::QueuePosition {
+                            position: position + 1,
+                            id: next_item.id,
+                        });
+                    } else {
+                        status.next_song = None;
+                    }
+
                     ResponseBuilder::new().ok()
                 }
                 Err(e) => ResponseBuilder::error(50, 0, "playid", &format!("Playback error: {}", e)),
@@ -1751,15 +1911,32 @@ async fn handle_lsinfo_command(state: &AppState, path: Option<&str>) -> String {
     match db.list_directory(path_str) {
         Ok(listing) => {
             let mut resp = ResponseBuilder::new();
+            let music_dir = state.music_dir.as_deref();
 
             // List subdirectories first
             for dir in &listing.directories {
-                resp.field("directory", dir);
+                let display_dir = strip_music_dir_prefix(dir, music_dir);
+                resp.field("directory", display_dir);
             }
 
             // Then list songs
             for song in &listing.songs {
-                resp.song(song, None, None);
+                // Create a modified song with stripped path for display
+                let display_path = strip_music_dir_prefix(song.path.as_str(), music_dir);
+                let mut display_song = song.clone();
+                display_song.path = display_path.into();
+                resp.song(&display_song, None, None);
+            }
+
+            // For root directory, also list playlists
+            if path_str.is_empty() || path_str == "/" {
+                if let Ok(playlists) = db.list_playlists() {
+                    for playlist in &playlists {
+                        resp.field("playlist", &playlist.name);
+                        let timestamp_str = format_iso8601_timestamp(playlist.last_modified);
+                        resp.field("Last-Modified", &timestamp_str);
+                    }
+                }
             }
 
             resp.ok()
@@ -1961,7 +2138,8 @@ async fn handle_listplaylists_command(state: &AppState) -> String {
             let mut resp = ResponseBuilder::new();
             for playlist in &playlists {
                 resp.field("playlist", &playlist.name);
-                resp.field("Last-Modified", &playlist.last_modified);
+                let timestamp_str = format_iso8601_timestamp(playlist.last_modified);
+                resp.field("Last-Modified", &timestamp_str);
             }
             resp.ok()
         }

@@ -18,15 +18,17 @@ impl AlbumArtExtractor {
     }
 
     /// Extract album art from a file and cache it
-    pub fn extract_and_cache(&self, path: &str) -> Result<Option<Vec<u8>>> {
-        // Check cache first
-        if let Some(data) = self.db.get_artwork(path, "front")? {
+    /// `cache_key`: relative path for cache lookup (e.g., "01.m4a")
+    /// `file_path`: absolute path for file reading (e.g., "/home/user/Music/01.m4a")
+    pub fn extract_and_cache(&self, cache_key: &str, file_path: &str) -> Result<Option<Vec<u8>>> {
+        // Check cache first using relative path as key
+        if let Some(data) = self.db.get_artwork(cache_key, "front")? {
             return Ok(Some(data));
         }
 
-        // Not in cache, extract from file
-        let file_path = Path::new(path);
-        let tagged_file = lofty::read_from_path(file_path)
+        // Not in cache, extract from file using absolute path
+        let abs_path = Path::new(file_path);
+        let tagged_file = lofty::read_from_path(abs_path)
             .map_err(|e| RmpdError::Library(format!("Failed to read file: {}", e)))?;
 
         // Try to find front cover
@@ -69,9 +71,9 @@ impl AlbumArtExtractor {
                 }
             });
 
-            // Store in cache
+            // Store in cache using relative path as key
             self.db.store_artwork(
-                path,
+                cache_key,
                 "front",
                 &mime_type,
                 data,
@@ -85,8 +87,10 @@ impl AlbumArtExtractor {
     }
 
     /// Get album art from cache or extract if not cached
-    pub fn get_artwork(&self, path: &str, offset: usize) -> Result<Option<ArtworkData>> {
-        let data = match self.extract_and_cache(path)? {
+    /// `cache_key`: relative path for cache lookup (e.g., "01.m4a")
+    /// `file_path`: absolute path for file reading (e.g., "/home/user/Music/01.m4a")
+    pub fn get_artwork(&self, cache_key: &str, file_path: &str, offset: usize) -> Result<Option<ArtworkData>> {
+        let data = match self.extract_and_cache(cache_key, file_path)? {
             Some(data) => data,
             None => return Ok(None),
         };

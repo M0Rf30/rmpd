@@ -3,6 +3,7 @@ use rmpd_core::queue::Queue;
 use rmpd_core::state::PlayerStatus;
 use rmpd_player::PlaybackEngine;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::RwLock;
 
 /// Output device information
@@ -24,6 +25,7 @@ pub struct AppState {
     pub db_path: Option<String>,
     pub music_dir: Option<String>,
     pub outputs: Arc<RwLock<Vec<OutputInfo>>>,
+    pub start_time: Instant,
 }
 
 impl AppState {
@@ -47,6 +49,7 @@ impl AppState {
             db_path: None,
             music_dir: None,
             outputs: Arc::new(RwLock::new(vec![default_output])),
+            start_time: Instant::now(),
         }
     }
 
@@ -70,6 +73,7 @@ impl AppState {
             db_path: Some(db_path),
             music_dir: Some(music_dir),
             outputs: Arc::new(RwLock::new(vec![default_output])),
+            start_time: Instant::now(),
         }
     }
 }

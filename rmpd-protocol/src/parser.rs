@@ -232,30 +232,30 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
 
     match cmd {
         "play" => {
-            let pos = opt(parse_u32).parse_next(input)?;
+            let pos = opt(parse_u32_or_quoted).parse_next(input)?;
             Ok(Command::Play { position: pos })
         }
         "playid" => {
-            let id = opt(parse_u32).parse_next(input)?;
+            let id = opt(parse_u32_or_quoted).parse_next(input)?;
             Ok(Command::PlayId { id })
         }
         "pause" => {
-            let state = opt(parse_bool).parse_next(input)?;
+            let state = opt(parse_bool_or_quoted).parse_next(input)?;
             Ok(Command::Pause { state })
         }
         "stop" => Ok(Command::Stop),
         "next" => Ok(Command::Next),
         "previous" => Ok(Command::Previous),
         "seek" => {
-            let position = parse_u32.parse_next(input)?;
+            let position = parse_u32_or_quoted.parse_next(input)?;
             let _ = space0.parse_next(input)?;
-            let time = parse_f64.parse_next(input)?;
+            let time = parse_f64_or_quoted.parse_next(input)?;
             Ok(Command::Seek { position, time })
         }
         "seekid" => {
-            let id = parse_u32.parse_next(input)?;
+            let id = parse_u32_or_quoted.parse_next(input)?;
             let _ = space0.parse_next(input)?;
-            let time = parse_f64.parse_next(input)?;
+            let time = parse_f64_or_quoted.parse_next(input)?;
             Ok(Command::SeekId { id, time })
         }
         "seekcur" => {
@@ -280,7 +280,7 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
         "addid" => {
             let uri = parse_quoted_or_unquoted.parse_next(input)?;
             let _ = space0.parse_next(input)?;
-            let position = opt(parse_u32).parse_next(input)?;
+            let position = opt(parse_u32_or_quoted).parse_next(input)?;
             Ok(Command::AddId { uri, position })
         }
         "delete" => {
@@ -288,7 +288,7 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
             Ok(Command::Delete { target })
         }
         "deleteid" => {
-            let id = parse_u32.parse_next(input)?;
+            let id = parse_u32_or_quoted.parse_next(input)?;
             Ok(Command::DeleteId { id })
         }
         "clear" => Ok(Command::Clear),
@@ -299,9 +299,9 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
             Ok(Command::Move { from, to })
         }
         "moveid" => {
-            let id = parse_u32.parse_next(input)?;
+            let id = parse_u32_or_quoted.parse_next(input)?;
             let _ = space0.parse_next(input)?;
-            let to = parse_u32.parse_next(input)?;
+            let to = parse_u32_or_quoted.parse_next(input)?;
             Ok(Command::MoveId { id, to })
         }
         "shuffle" => {
@@ -917,19 +917,19 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
         "noidle" => Ok(Command::NoIdle),
         "outputs" => Ok(Command::Outputs),
         "enableoutput" => {
-            let id = parse_u32.parse_next(input)?;
+            let id = parse_u32_or_quoted.parse_next(input)?;
             Ok(Command::EnableOutput { id })
         }
         "disableoutput" => {
-            let id = parse_u32.parse_next(input)?;
+            let id = parse_u32_or_quoted.parse_next(input)?;
             Ok(Command::DisableOutput { id })
         }
         "toggleoutput" => {
-            let id = parse_u32.parse_next(input)?;
+            let id = parse_u32_or_quoted.parse_next(input)?;
             Ok(Command::ToggleOutput { id })
         }
         "outputset" => {
-            let id = parse_u32.parse_next(input)?;
+            let id = parse_u32_or_quoted.parse_next(input)?;
             let _ = space0.parse_next(input)?;
             let name = parse_quoted_or_unquoted.parse_next(input)?;
             let _ = space0.parse_next(input)?;
@@ -1222,10 +1222,25 @@ fn parse_f64(input: &mut &str) -> PResult<f64> {
         .map_err(|_| winnow::error::ErrMode::Cut(winnow::error::ContextError::default()))
 }
 
+fn parse_f64_or_quoted(input: &mut &str) -> PResult<f64> {
+    let s = parse_quoted_or_unquoted.parse_next(input)?;
+    s.parse()
+        .map_err(|_| winnow::error::ErrMode::Cut(winnow::error::ContextError::default()))
+}
+
 fn parse_bool(input: &mut &str) -> PResult<bool> {
     let val = take_while(1.., |c: char| c.is_ascii_digit())
         .parse_next(input)?;
     match val {
+        "0" => Ok(false),
+        "1" => Ok(true),
+        _ => Err(winnow::error::ErrMode::Cut(winnow::error::ContextError::default())),
+    }
+}
+
+fn parse_bool_or_quoted(input: &mut &str) -> PResult<bool> {
+    let s = parse_quoted_or_unquoted.parse_next(input)?;
+    match s.as_str() {
         "0" => Ok(false),
         "1" => Ok(true),
         _ => Err(winnow::error::ErrMode::Cut(winnow::error::ContextError::default())),

@@ -10,11 +10,15 @@ use crate::metadata::MetadataExtractor;
 
 pub struct Scanner {
     event_bus: EventBus,
+    music_directory: Option<Utf8PathBuf>,
 }
 
 impl Scanner {
     pub fn new(event_bus: EventBus) -> Self {
-        Self { event_bus }
+        Self {
+            event_bus,
+            music_directory: None,
+        }
     }
 
     pub fn scan_directory(&self, db: &Database, root_path: &Path) -> Result<ScanStats> {
@@ -23,7 +27,17 @@ impl Scanner {
 
         let mut stats = ScanStats::default();
 
-        self.scan_recursive(db, root_path, &mut stats)?;
+        // Store music directory for relative path conversion
+        let music_dir = Utf8PathBuf::try_from(root_path.to_path_buf())
+            .map_err(|_| RmpdError::Library("Music directory path is not valid UTF-8".into()))?;
+
+        // Create a scanner with music_directory set
+        let scanner_with_dir = Scanner {
+            event_bus: self.event_bus.clone(),
+            music_directory: Some(music_dir),
+        };
+
+        scanner_with_dir.scan_recursive(db, root_path, &mut stats)?;
 
         info!(
             "Scan complete: {} files scanned, {} added, {} updated, {} errors",
@@ -33,6 +47,19 @@ impl Scanner {
         self.event_bus.emit(Event::DatabaseUpdateFinished);
 
         Ok(stats)
+    }
+
+    /// Convert absolute path to relative path (relative to music_directory)
+    fn make_relative_path(&self, abs_path: &Utf8PathBuf) -> Result<Utf8PathBuf> {
+        if let Some(music_dir) = &self.music_directory {
+            // Strip music directory prefix
+            if let Some(relative) = abs_path.as_str().strip_prefix(music_dir.as_str()) {
+                let relative = relative.trim_start_matches('/');
+                return Ok(Utf8PathBuf::from(relative));
+            }
+        }
+        // Fallback: return as-is if we can't make it relative
+        Ok(abs_path.clone())
     }
 
     fn scan_recursive(&self, db: &Database, path: &Path, stats: &mut ScanStats) -> Result<()> {
@@ -52,13 +79,10 @@ impl Scanner {
             let entry_path = entry.path();
 
             // Skip hidden files and directories
-            if entry_path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .map(|n| n.starts_with('.'))
-                .unwrap_or(false)
-            {
-                continue;
+            if let Some(file_name) = entry_path.file_name().and_then(|n| n.to_str()) {
+                if file_name.starts_with('.') {
+                    continue;
+                }
             }
 
             let metadata = match entry.metadata() {
@@ -102,11 +126,21 @@ impl Scanner {
                     });
                 }
 
-                // Check if file already exists in database
-                let existing = match db.get_song_by_path(utf8_path.as_str()) {
+                // Convert to relative path for database storage
+                let relative_path = match self.make_relative_path(&utf8_path) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        warn!("Failed to convert path to relative: {}", e);
+                        stats.errors += 1;
+                        continue;
+                    }
+                };
+
+                // Check if file already exists in database (using relative path)
+                let existing = match db.get_song_by_path(relative_path.as_str()) {
                     Ok(s) => s,
                     Err(e) => {
-                        warn!("Database error checking {}: {}", utf8_path, e);
+                        warn!("Database error checking {}: {}", relative_path, e);
                         stats.errors += 1;
                         continue;
                     }
@@ -122,7 +156,7 @@ impl Scanner {
                 // Skip if file hasn't been modified
                 let is_update = if let Some(ref existing_song) = existing {
                     if existing_song.last_modified >= mtime {
-                        debug!("Skipping unchanged file: {}", utf8_path);
+                        debug!("Skipping unchanged file: {}", relative_path);
                         continue;
                     }
                     true
@@ -130,27 +164,30 @@ impl Scanner {
                     false
                 };
 
-                // Extract metadata and add/update in database
+                // Extract metadata using absolute path for reading, but store relative path
                 match MetadataExtractor::extract_from_file(&utf8_path) {
-                    Ok(song) => {
+                    Ok(mut song) => {
+                        // Replace absolute path with relative path for storage
+                        song.path = relative_path.clone();
+
                         match db.add_song(&song) {
                             Ok(_) => {
                                 if is_update {
-                                    debug!("Updated: {}", utf8_path);
+                                    debug!("Updated: {}", relative_path);
                                     stats.updated += 1;
                                 } else {
-                                    debug!("Added: {}", utf8_path);
+                                    debug!("Added: {}", relative_path);
                                     stats.added += 1;
                                 }
                             }
                             Err(e) => {
-                                warn!("Failed to add {} to database: {}", utf8_path, e);
+                                warn!("Failed to add {} to database: {}", relative_path, e);
                                 stats.errors += 1;
                             }
                         }
                     }
                     Err(e) => {
-                        warn!("Failed to extract metadata from {}: {}", utf8_path, e);
+                        warn!("Failed to extract metadata from {}: {}", relative_path, e);
                         stats.errors += 1;
                     }
                 }
