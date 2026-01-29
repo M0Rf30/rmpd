@@ -2257,40 +2257,34 @@ async fn handle_decoders_command() -> String {
     let mut resp = ResponseBuilder::new();
 
     // All decoders provided by Symphonia
-    // Each plugin is a separate entity and needs blank line separator
+    // Note: Unlike outputs, decoders are NOT separate entities - no blank lines between them
     resp.field("plugin", "flac");
     resp.field("suffix", "flac");
     resp.field("mime_type", "audio/flac");
-    resp.blank_line();
 
     resp.field("plugin", "mp3");
     resp.field("suffix", "mp3");
     resp.field("mime_type", "audio/mpeg");
-    resp.blank_line();
 
     resp.field("plugin", "vorbis");
     resp.field("suffix", "ogg");
     resp.field("suffix", "oga");
     resp.field("mime_type", "audio/ogg");
     resp.field("mime_type", "audio/vorbis");
-    resp.blank_line();
 
     resp.field("plugin", "opus");
     resp.field("suffix", "opus");
     resp.field("mime_type", "audio/opus");
-    resp.blank_line();
 
     resp.field("plugin", "aac");
     resp.field("suffix", "aac");
     resp.field("suffix", "m4a");
     resp.field("mime_type", "audio/aac");
     resp.field("mime_type", "audio/mp4");
-    resp.blank_line();
 
     resp.field("plugin", "wav");
     resp.field("suffix", "wav");
     resp.field("mime_type", "audio/wav");
-    // No blank line after last decoder
 
     resp.ok()
 }
