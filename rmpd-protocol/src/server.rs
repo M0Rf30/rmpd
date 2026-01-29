@@ -69,6 +69,11 @@ async fn handle_client(mut stream: TcpStream, state: AppState) -> Result<()> {
     // Subscribe to event bus for idle notifications
     let mut event_rx = state.event_bus.subscribe();
 
+    // Command batching state
+    let mut batch_mode = false;
+    let mut batch_ok_mode = false;
+    let mut batch_commands: Vec<String> = Vec::new();
+
     loop {
         line.clear();
         let bytes_read = reader.read_line(&mut line).await?;
@@ -85,9 +90,38 @@ async fn handle_client(mut stream: TcpStream, state: AppState) -> Result<()> {
 
         debug!("Received command: {}", trimmed);
 
+        // Handle command batching
         let response = match parse_command(trimmed) {
-            Ok(Command::Idle { subsystems }) => {
+            Ok(Command::CommandListBegin) => {
+                batch_mode = true;
+                batch_ok_mode = false;
+                batch_commands.clear();
+                continue; // Don't send response yet
+            }
+            Ok(Command::CommandListOkBegin) => {
+                batch_mode = true;
+                batch_ok_mode = true;
+                batch_commands.clear();
+                continue; // Don't send response yet
+            }
+            Ok(Command::CommandListEnd) => {
+                if !batch_mode {
+                    ResponseBuilder::error(5, 0, "command_list_end", "not in command list")
+                } else {
+                    let response = execute_command_list(&batch_commands, &state, batch_ok_mode).await;
+                    batch_mode = false;
+                    batch_ok_mode = false;
+                    batch_commands.clear();
+                    response
+                }
+            }
+            Ok(Command::Idle { subsystems }) if !batch_mode => {
                 handle_idle(&mut reader, &mut event_rx, subsystems).await
+            }
+            Ok(cmd) if batch_mode => {
+                // Accumulate commands in batch
+                batch_commands.push(trimmed.to_string());
+                continue; // Don't send response yet
             }
             Ok(cmd) => handle_command(cmd, &state).await,
             Err(e) => ResponseBuilder::error(5, 0, trimmed, &e),
@@ -97,6 +131,37 @@ async fn handle_client(mut stream: TcpStream, state: AppState) -> Result<()> {
     }
 
     Ok(())
+}
+
+async fn execute_command_list(commands: &[String], state: &AppState, ok_mode: bool) -> String {
+    let mut response = String::new();
+
+    for (index, cmd_str) in commands.iter().enumerate() {
+        match parse_command(cmd_str) {
+            Ok(cmd) => {
+                let cmd_response = handle_command(cmd, state).await;
+
+                // Check for errors
+                if cmd_response.starts_with("ACK") {
+                    // Return error with command list index
+                    return cmd_response.replace("ACK [", &format!("ACK [{}@", index));
+                }
+
+                if ok_mode {
+                    // In OK mode, append list_OK after each successful command
+                    response.push_str("list_OK\n");
+                }
+            }
+            Err(e) => {
+                // Parse error - return ACK with index
+                return ResponseBuilder::error(5, index as i32, cmd_str, &e);
+            }
+        }
+    }
+
+    // All commands succeeded
+    response.push_str("OK\n");
+    response
 }
 
 async fn handle_idle(
@@ -198,31 +263,19 @@ async fn handle_command(cmd: Command, state: &AppState) -> String {
             ResponseBuilder::new().ok()
         }
         Command::Commands => {
-            let mut resp = ResponseBuilder::new();
-            // List all supported commands
-            resp.field("command", "play");
-            resp.field("command", "pause");
-            resp.field("command", "stop");
-            resp.field("command", "next");
-            resp.field("command", "previous");
-            resp.field("command", "status");
-            resp.field("command", "currentsong");
-            resp.field("command", "stats");
-            resp.field("command", "add");
-            resp.field("command", "clear");
-            resp.field("command", "delete");
-            resp.field("command", "ping");
-            resp.field("command", "close");
-            resp.field("command", "update");
-            resp.field("command", "rescan");
-            resp.field("command", "find");
-            resp.field("command", "search");
-            resp.field("command", "list");
-            resp.field("command", "listall");
-            resp.field("command", "listallinfo");
-            resp.field("command", "lsinfo");
-            resp.field("command", "count");
-            resp.ok()
+            handle_commands_command().await
+        }
+        Command::NotCommands => {
+            handle_notcommands_command().await
+        }
+        Command::TagTypes => {
+            handle_tagtypes_command().await
+        }
+        Command::UrlHandlers => {
+            handle_urlhandlers_command().await
+        }
+        Command::Decoders => {
+            handle_decoders_command().await
         }
         Command::Status => {
             // Return status from state
@@ -339,6 +392,16 @@ async fn handle_command(cmd: Command, state: &AppState) -> String {
         Command::Move { from, to } => {
             handle_move_command(state, from, to).await
         }
+        Command::Shuffle { range: _ } => {
+            handle_shuffle_command(state).await
+        }
+        Command::PlaylistId { id } => {
+            handle_playlistid_command(state, id).await
+        }
+        Command::Password { password: _ } => {
+            // No password protection implemented yet
+            ResponseBuilder::new().ok()
+        }
         Command::AlbumArt { uri, offset } => {
             handle_albumart_command(state, &uri, offset).await
         }
@@ -399,6 +462,22 @@ async fn handle_command(cmd: Command, state: &AppState) -> String {
         }
         Command::Rename { from, to } => {
             handle_rename_command(state, &from, &to).await
+        }
+        // Output control
+        Command::Outputs => {
+            handle_outputs_command(state).await
+        }
+        Command::EnableOutput { id } => {
+            handle_enableoutput_command(state, id).await
+        }
+        Command::DisableOutput { id } => {
+            handle_disableoutput_command(state, id).await
+        }
+        Command::ToggleOutput { id } => {
+            handle_toggleoutput_command(state, id).await
+        }
+        Command::OutputSet { id, name, value } => {
+            handle_outputset_command(state, id, &name, &value).await
         }
         _ => {
             // Unimplemented commands
@@ -974,6 +1053,34 @@ async fn handle_swapid_command(state: &AppState, id1: u32, id2: u32) -> String {
     }
 }
 
+async fn handle_shuffle_command(state: &AppState) -> String {
+    state.queue.write().await.shuffle();
+    let mut status = state.status.write().await;
+    status.playlist_version += 1;
+    ResponseBuilder::new().ok()
+}
+
+async fn handle_playlistid_command(state: &AppState, id: Option<u32>) -> String {
+    let queue = state.queue.read().await;
+    let mut resp = ResponseBuilder::new();
+
+    if let Some(song_id) = id {
+        // Get specific song by ID
+        if let Some(item) = queue.get_by_id(song_id) {
+            resp.song(&item.song, Some(item.position), Some(item.id));
+        } else {
+            return ResponseBuilder::error(50, 0, "playlistid", "No such song");
+        }
+    } else {
+        // Get all songs with IDs
+        for item in queue.items() {
+            resp.song(&item.song, Some(item.position), Some(item.id));
+        }
+    }
+
+    resp.ok()
+}
+
 // Playback options
 async fn handle_repeat_command(state: &AppState, enabled: bool) -> String {
     state.status.write().await.repeat = enabled;
@@ -1363,4 +1470,245 @@ async fn handle_rename_command(state: &AppState, from: &str, to: &str) -> String
         Ok(_) => ResponseBuilder::new().ok(),
         Err(e) => ResponseBuilder::error(50, 0, "rename", &format!("Error: {}", e)),
     }
+}
+
+// Output control commands
+async fn handle_outputs_command(state: &AppState) -> String {
+    let outputs = state.outputs.read().await;
+    let mut resp = ResponseBuilder::new();
+
+    for output in outputs.iter() {
+        resp.field("outputid", output.id);
+        resp.field("outputname", &output.name);
+        resp.field("plugin", &output.plugin);
+        resp.field("outputenabled", if output.enabled { "1" } else { "0" });
+    }
+
+    resp.ok()
+}
+
+async fn handle_enableoutput_command(state: &AppState, id: u32) -> String {
+    let mut outputs = state.outputs.write().await;
+
+    if let Some(output) = outputs.iter_mut().find(|o| o.id == id) {
+        output.enabled = true;
+        state.event_bus.emit(rmpd_core::event::Event::OutputsChanged);
+        ResponseBuilder::new().ok()
+    } else {
+        ResponseBuilder::error(50, 0, "enableoutput", "No such output")
+    }
+}
+
+async fn handle_disableoutput_command(state: &AppState, id: u32) -> String {
+    let mut outputs = state.outputs.write().await;
+
+    if let Some(output) = outputs.iter_mut().find(|o| o.id == id) {
+        output.enabled = false;
+        state.event_bus.emit(rmpd_core::event::Event::OutputsChanged);
+        ResponseBuilder::new().ok()
+    } else {
+        ResponseBuilder::error(50, 0, "disableoutput", "No such output")
+    }
+}
+
+async fn handle_toggleoutput_command(state: &AppState, id: u32) -> String {
+    let mut outputs = state.outputs.write().await;
+
+    if let Some(output) = outputs.iter_mut().find(|o| o.id == id) {
+        output.enabled = !output.enabled;
+        state.event_bus.emit(rmpd_core::event::Event::OutputsChanged);
+        ResponseBuilder::new().ok()
+    } else {
+        ResponseBuilder::error(50, 0, "toggleoutput", "No such output")
+    }
+}
+
+async fn handle_outputset_command(state: &AppState, id: u32, _name: &str, _value: &str) -> String {
+    // Verify output exists
+    let outputs = state.outputs.read().await;
+    if outputs.iter().any(|o| o.id == id) {
+        // For now, just acknowledge - actual attribute setting would be implemented
+        // when we have configurable output properties
+        ResponseBuilder::new().ok()
+    } else {
+        ResponseBuilder::error(50, 0, "outputset", "No such output")
+    }
+}
+
+// Reflection commands
+async fn handle_commands_command() -> String {
+    let mut resp = ResponseBuilder::new();
+
+    // Playback control
+    resp.field("command", "play");
+    resp.field("command", "playid");
+    resp.field("command", "pause");
+    resp.field("command", "stop");
+    resp.field("command", "next");
+    resp.field("command", "previous");
+    resp.field("command", "seek");
+    resp.field("command", "seekid");
+    resp.field("command", "seekcur");
+
+    // Queue management
+    resp.field("command", "add");
+    resp.field("command", "addid");
+    resp.field("command", "delete");
+    resp.field("command", "deleteid");
+    resp.field("command", "clear");
+    resp.field("command", "move");
+    resp.field("command", "moveid");
+    resp.field("command", "swap");
+    resp.field("command", "swapid");
+    resp.field("command", "shuffle");
+    resp.field("command", "playlistid");
+
+    // Status & inspection
+    resp.field("command", "status");
+    resp.field("command", "currentsong");
+    resp.field("command", "stats");
+    resp.field("command", "playlistinfo");
+    resp.field("command", "playlistid");
+
+    // Volume
+    resp.field("command", "setvol");
+    resp.field("command", "volume");
+
+    // Options
+    resp.field("command", "repeat");
+    resp.field("command", "random");
+    resp.field("command", "single");
+    resp.field("command", "consume");
+    resp.field("command", "crossfade");
+
+    // Connection
+    resp.field("command", "close");
+    resp.field("command", "ping");
+    resp.field("command", "password");
+
+    // Reflection
+    resp.field("command", "commands");
+    resp.field("command", "notcommands");
+    resp.field("command", "tagtypes");
+    resp.field("command", "urlhandlers");
+    resp.field("command", "decoders");
+
+    // Database
+    resp.field("command", "update");
+    resp.field("command", "rescan");
+    resp.field("command", "find");
+    resp.field("command", "search");
+    resp.field("command", "list");
+    resp.field("command", "listall");
+    resp.field("command", "listallinfo");
+    resp.field("command", "lsinfo");
+    resp.field("command", "count");
+
+    // Album art
+    resp.field("command", "albumart");
+    resp.field("command", "readpicture");
+
+    // Stored playlists
+    resp.field("command", "save");
+    resp.field("command", "load");
+    resp.field("command", "listplaylists");
+    resp.field("command", "listplaylist");
+    resp.field("command", "listplaylistinfo");
+    resp.field("command", "playlistadd");
+    resp.field("command", "playlistclear");
+    resp.field("command", "playlistdelete");
+    resp.field("command", "playlistmove");
+    resp.field("command", "rm");
+    resp.field("command", "rename");
+
+    // Idle
+    resp.field("command", "idle");
+    resp.field("command", "noidle");
+
+    // Outputs
+    resp.field("command", "outputs");
+    resp.field("command", "enableoutput");
+    resp.field("command", "disableoutput");
+    resp.field("command", "toggleoutput");
+    resp.field("command", "outputset");
+
+    // Command batching
+    resp.field("command", "command_list_begin");
+    resp.field("command", "command_list_ok_begin");
+    resp.field("command", "command_list_end");
+
+    resp.ok()
+}
+
+async fn handle_notcommands_command() -> String {
+    // Return empty list - no password-protected commands yet
+    ResponseBuilder::new().ok()
+}
+
+async fn handle_tagtypes_command() -> String {
+    let mut resp = ResponseBuilder::new();
+
+    // All supported metadata tags
+    resp.field("tagtype", "Artist");
+    resp.field("tagtype", "ArtistSort");
+    resp.field("tagtype", "Album");
+    resp.field("tagtype", "AlbumSort");
+    resp.field("tagtype", "AlbumArtist");
+    resp.field("tagtype", "AlbumArtistSort");
+    resp.field("tagtype", "Title");
+    resp.field("tagtype", "Track");
+    resp.field("tagtype", "Name");
+    resp.field("tagtype", "Genre");
+    resp.field("tagtype", "Date");
+    resp.field("tagtype", "Composer");
+    resp.field("tagtype", "Performer");
+    resp.field("tagtype", "Comment");
+    resp.field("tagtype", "Disc");
+
+    resp.ok()
+}
+
+async fn handle_urlhandlers_command() -> String {
+    let mut resp = ResponseBuilder::new();
+
+    // Supported URL schemes
+    resp.field("handler", "file://");
+    // Future: http://, https://, etc.
+
+    resp.ok()
+}
+
+async fn handle_decoders_command() -> String {
+    let mut resp = ResponseBuilder::new();
+
+    // All decoders provided by Symphonia
+    resp.field("plugin", "flac");
+    resp.field("suffix", "flac");
+    resp.field("mime_type", "audio/flac");
+
+    resp.field("plugin", "mp3");
+    resp.field("suffix", "mp3");
+    resp.field("mime_type", "audio/mpeg");
+
+    resp.field("plugin", "vorbis");
+    resp.field("suffix", "ogg");
+    resp.field("suffix", "oga");
+    resp.field("mime_type", "audio/ogg");
+    resp.field("mime_type", "audio/vorbis");
+
+    resp.field("plugin", "opus");
+    resp.field("suffix", "opus");
+    resp.field("mime_type", "audio/opus");
+
+    resp.field("plugin", "aac");
+    resp.field("suffix", "aac");
+    resp.field("suffix", "m4a");
+    resp.field("mime_type", "audio/aac");
+    resp.field("mime_type", "audio/mp4");
+
+    resp.field("plugin", "wav");
+    resp.field("suffix", "wav");
+    resp.field("mime_type", "audio/wav");
+
+    resp.ok()
 }

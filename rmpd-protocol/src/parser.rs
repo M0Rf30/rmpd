@@ -92,6 +92,18 @@ pub enum Command {
     Idle { subsystems: Vec<String> },
     NoIdle,
 
+    // Output control
+    Outputs,
+    EnableOutput { id: u32 },
+    DisableOutput { id: u32 },
+    ToggleOutput { id: u32 },
+    OutputSet { id: u32, name: String, value: String },
+
+    // Command batching
+    CommandListBegin,
+    CommandListOkBegin,
+    CommandListEnd,
+
     // Unknown/Invalid
     Unknown(String),
 }
@@ -364,6 +376,30 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
             Ok(Command::Idle { subsystems })
         }
         "noidle" => Ok(Command::NoIdle),
+        "outputs" => Ok(Command::Outputs),
+        "enableoutput" => {
+            let id = parse_u32.parse_next(input)?;
+            Ok(Command::EnableOutput { id })
+        }
+        "disableoutput" => {
+            let id = parse_u32.parse_next(input)?;
+            Ok(Command::DisableOutput { id })
+        }
+        "toggleoutput" => {
+            let id = parse_u32.parse_next(input)?;
+            Ok(Command::ToggleOutput { id })
+        }
+        "outputset" => {
+            let id = parse_u32.parse_next(input)?;
+            let _ = space0.parse_next(input)?;
+            let name = parse_quoted_or_unquoted.parse_next(input)?;
+            let _ = space0.parse_next(input)?;
+            let value = parse_quoted_or_unquoted.parse_next(input)?;
+            Ok(Command::OutputSet { id, name, value })
+        }
+        "command_list_begin" => Ok(Command::CommandListBegin),
+        "command_list_ok_begin" => Ok(Command::CommandListOkBegin),
+        "command_list_end" => Ok(Command::CommandListEnd),
         _ => Ok(Command::Unknown(cmd.to_string())),
     }
 }
