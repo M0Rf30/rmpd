@@ -126,14 +126,15 @@ impl ResponseBuilder {
             self.field("songid", pos.id);
         }
 
+        // Show time and elapsed fields
         if let Some(elapsed) = status.elapsed {
             if let Some(duration) = status.duration {
                 self.field("time", format!("{}:{}",
                     elapsed.as_secs(),
                     duration.as_secs()
                 ));
-                self.field("elapsed", format!("{:.3}", elapsed.as_secs_f64()));
             }
+            self.field("elapsed", format!("{:.3}", elapsed.as_secs_f64()));
         }
 
         self.optional_field("duration", status.duration.map(|d| format!("{:.3}", d.as_secs_f64())));

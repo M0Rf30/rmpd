@@ -935,6 +935,7 @@ async fn handle_play_command(state: &AppState, position: Option<u32>) -> String 
             status.state = rmpd_core::state::PlayerState::Play;
             status.elapsed = Some(std::time::Duration::ZERO);
             status.duration = song.duration;
+            status.bitrate = song.bitrate;
 
             // Set audio format if available
             if let (Some(sr), Some(ch), Some(bps)) = (song.sample_rate, song.channels, song.bits_per_sample) {
@@ -1244,7 +1245,7 @@ async fn handle_update_command(state: &AppState, _path: Option<&str>) -> String 
 }
 
 async fn handle_albumart_command(state: &AppState, uri: &str, offset: usize) -> Response {
-    debug!("AlbumArt command: uri=[{}], offset={}", uri, offset);
+    info!("AlbumArt command: uri=[{}], offset={}", uri, offset);
 
     let db_path = match &state.db_path {
         Some(p) => p,
@@ -1284,7 +1285,11 @@ async fn handle_albumart_command(state: &AppState, uri: &str, offset: usize) -> 
             resp.binary_field("binary", &artwork.data);
             Response::Binary(resp.to_binary_response())
         }
-        Ok(None) => Response::Text(ResponseBuilder::error(50, 0, "albumart", "No album art found")),
+        Ok(None) => {
+            // When offset is past the end of data, return OK (not an error)
+            // This is the correct MPD protocol behavior for chunked transfers
+            Response::Text(ResponseBuilder::new().ok())
+        }
         Err(e) => Response::Text(ResponseBuilder::error(50, 0, "albumart", &format!("Error: {}", e))),
     }
 }

@@ -529,13 +529,19 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
         "albumart" => {
             let uri = parse_quoted_or_unquoted.parse_next(input)?;
             let _ = space0.parse_next(input)?;
-            let offset = parse_usize.parse_next(input)?;
+            let offset_str = parse_quoted_or_unquoted.parse_next(input)?;
+            let offset = offset_str.parse::<usize>().map_err(|_| {
+                winnow::error::ErrMode::Cut(winnow::error::ContextError::default())
+            })?;
             Ok(Command::AlbumArt { uri, offset })
         }
         "readpicture" => {
             let uri = parse_quoted_or_unquoted.parse_next(input)?;
             let _ = space0.parse_next(input)?;
-            let offset = parse_usize.parse_next(input)?;
+            let offset_str = parse_quoted_or_unquoted.parse_next(input)?;
+            let offset = offset_str.parse::<usize>().map_err(|_| {
+                winnow::error::ErrMode::Cut(winnow::error::ContextError::default())
+            })?;
             Ok(Command::ReadPicture { uri, offset })
         }
         "save" => {

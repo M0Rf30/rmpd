@@ -91,13 +91,6 @@ impl AlbumArtExtractor {
             None => return Ok(None),
         };
 
-        // Handle offset for chunked transfer
-        if offset >= data.len() {
-            return Ok(None);
-        }
-
-        let chunk = &data[offset..];
-
         // Infer MIME type from data
         let mime_type = if data.starts_with(b"\xFF\xD8\xFF") {
             "image/jpeg"
@@ -107,10 +100,23 @@ impl AlbumArtExtractor {
             "application/octet-stream"
         };
 
+        // Handle offset for chunked transfer
+        // MPD protocol uses 8KB (8192 byte) chunks
+        const CHUNK_SIZE: usize = 8192;
+
+        let chunk = if offset >= data.len() {
+            // Return empty chunk when offset is past the end
+            // This is needed for proper MPD protocol compliance
+            Vec::new()
+        } else {
+            let end = (offset + CHUNK_SIZE).min(data.len());
+            data[offset..end].to_vec()
+        };
+
         Ok(Some(ArtworkData {
             mime_type: mime_type.to_string(),
             total_size: data.len(),
-            data: chunk.to_vec(),
+            data: chunk,
         }))
     }
 
