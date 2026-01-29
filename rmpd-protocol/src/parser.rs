@@ -104,6 +104,52 @@ pub enum Command {
     CommandListOkBegin,
     CommandListEnd,
 
+    // Advanced database
+    SearchAdd { tag: String, value: String },
+    SearchAddPl { name: String, tag: String, value: String },
+    FindAdd { tag: String, value: String },
+    ListFiles { uri: Option<String> },
+
+    // Sticker database
+    StickerGet { uri: String, name: String },
+    StickerSet { uri: String, name: String, value: String },
+    StickerDelete { uri: String, name: Option<String> },
+    StickerList { uri: String },
+    StickerFind { uri: String, name: String, value: Option<String> },
+
+    // Partitions
+    Partition { name: String },
+    ListPartitions,
+    NewPartition { name: String },
+    DelPartition { name: String },
+    MoveOutput { name: String },
+
+    // Mounts
+    Mount { path: String, uri: String },
+    Unmount { path: String },
+    ListMounts,
+    ListNeighbors,
+
+    // Client-to-client messaging
+    Subscribe { channel: String },
+    Unsubscribe { channel: String },
+    Channels,
+    ReadMessages,
+    SendMessage { channel: String, message: String },
+
+    // Advanced queue operations
+    Prio { priority: u8, range: (u32, u32) },
+    PrioId { priority: u8, id: u32 },
+    RangeId { id: u32, range: (f64, f64) },
+    AddTagId { id: u32, tag: String, value: String },
+    ClearTagId { id: u32, tag: Option<String> },
+
+    // Miscellaneous
+    Config,
+    Kill,
+    MixRampDb { decibels: f32 },
+    MixRampDelay { seconds: f32 },
+
     // Unknown/Invalid
     Unknown(String),
 }
@@ -400,6 +446,163 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
         "command_list_begin" => Ok(Command::CommandListBegin),
         "command_list_ok_begin" => Ok(Command::CommandListOkBegin),
         "command_list_end" => Ok(Command::CommandListEnd),
+        // Advanced database
+        "searchadd" => {
+            let tag = parse_string.parse_next(input)?;
+            let _ = space0.parse_next(input)?;
+            let value = parse_quoted_or_unquoted.parse_next(input)?;
+            Ok(Command::SearchAdd { tag, value })
+        }
+        "searchaddpl" => {
+            let name = parse_quoted_or_unquoted.parse_next(input)?;
+            let _ = space0.parse_next(input)?;
+            let tag = parse_string.parse_next(input)?;
+            let _ = space0.parse_next(input)?;
+            let value = parse_quoted_or_unquoted.parse_next(input)?;
+            Ok(Command::SearchAddPl { name, tag, value })
+        }
+        "findadd" => {
+            let tag = parse_string.parse_next(input)?;
+            let _ = space0.parse_next(input)?;
+            let value = parse_quoted_or_unquoted.parse_next(input)?;
+            Ok(Command::FindAdd { tag, value })
+        }
+        "listfiles" => {
+            let uri = opt(parse_string).parse_next(input)?;
+            Ok(Command::ListFiles { uri })
+        }
+        // Stickers
+        "sticker" => {
+            let operation = parse_string.parse_next(input)?;
+            let _ = space0.parse_next(input)?;
+            let type_str = parse_string.parse_next(input)?; // "song" for now
+            let _ = space0.parse_next(input)?;
+            let uri = parse_quoted_or_unquoted.parse_next(input)?;
+            let _ = space0.parse_next(input)?;
+
+            match operation.as_str() {
+                "get" => {
+                    let name = parse_string.parse_next(input)?;
+                    Ok(Command::StickerGet { uri, name })
+                }
+                "set" => {
+                    let name = parse_string.parse_next(input)?;
+                    let _ = space0.parse_next(input)?;
+                    let value = parse_quoted_or_unquoted.parse_next(input)?;
+                    Ok(Command::StickerSet { uri, name, value })
+                }
+                "delete" => {
+                    let name = opt(parse_string).parse_next(input)?;
+                    Ok(Command::StickerDelete { uri, name })
+                }
+                "list" => {
+                    Ok(Command::StickerList { uri })
+                }
+                "find" => {
+                    let name = parse_string.parse_next(input)?;
+                    let _ = space0.parse_next(input)?;
+                    let value = opt(parse_quoted_or_unquoted).parse_next(input)?;
+                    Ok(Command::StickerFind { uri, name, value })
+                }
+                _ => Ok(Command::Unknown(format!("sticker {}", operation))),
+            }
+        }
+        // Partitions
+        "partition" => {
+            let name = parse_quoted_or_unquoted.parse_next(input)?;
+            Ok(Command::Partition { name })
+        }
+        "listpartitions" => Ok(Command::ListPartitions),
+        "newpartition" => {
+            let name = parse_quoted_or_unquoted.parse_next(input)?;
+            Ok(Command::NewPartition { name })
+        }
+        "delpartition" => {
+            let name = parse_quoted_or_unquoted.parse_next(input)?;
+            Ok(Command::DelPartition { name })
+        }
+        "moveoutput" => {
+            let name = parse_quoted_or_unquoted.parse_next(input)?;
+            Ok(Command::MoveOutput { name })
+        }
+        // Mounts
+        "mount" => {
+            let path = parse_quoted_or_unquoted.parse_next(input)?;
+            let _ = space0.parse_next(input)?;
+            let uri = parse_quoted_or_unquoted.parse_next(input)?;
+            Ok(Command::Mount { path, uri })
+        }
+        "unmount" => {
+            let path = parse_quoted_or_unquoted.parse_next(input)?;
+            Ok(Command::Unmount { path })
+        }
+        "listmounts" => Ok(Command::ListMounts),
+        "listneighbors" => Ok(Command::ListNeighbors),
+        // Client messaging
+        "subscribe" => {
+            let channel = parse_quoted_or_unquoted.parse_next(input)?;
+            Ok(Command::Subscribe { channel })
+        }
+        "unsubscribe" => {
+            let channel = parse_quoted_or_unquoted.parse_next(input)?;
+            Ok(Command::Unsubscribe { channel })
+        }
+        "channels" => Ok(Command::Channels),
+        "readmessages" => Ok(Command::ReadMessages),
+        "sendmessage" => {
+            let channel = parse_quoted_or_unquoted.parse_next(input)?;
+            let _ = space0.parse_next(input)?;
+            let message = parse_quoted_or_unquoted.parse_next(input)?;
+            Ok(Command::SendMessage { channel, message })
+        }
+        // Advanced queue
+        "prio" => {
+            let priority = parse_u8.parse_next(input)?;
+            let _ = space0.parse_next(input)?;
+            let start = parse_u32.parse_next(input)?;
+            let _ = space0.parse_next(input)?;
+            let end = parse_u32.parse_next(input)?;
+            Ok(Command::Prio { priority, range: (start, end) })
+        }
+        "prioid" => {
+            let priority = parse_u8.parse_next(input)?;
+            let _ = space0.parse_next(input)?;
+            let id = parse_u32.parse_next(input)?;
+            Ok(Command::PrioId { priority, id })
+        }
+        "rangeid" => {
+            let id = parse_u32.parse_next(input)?;
+            let _ = space0.parse_next(input)?;
+            let start = parse_f64.parse_next(input)?;
+            let _ = space0.parse_next(input)?;
+            let end = parse_f64.parse_next(input)?;
+            Ok(Command::RangeId { id, range: (start, end) })
+        }
+        "addtagid" => {
+            let id = parse_u32.parse_next(input)?;
+            let _ = space0.parse_next(input)?;
+            let tag = parse_string.parse_next(input)?;
+            let _ = space0.parse_next(input)?;
+            let value = parse_quoted_or_unquoted.parse_next(input)?;
+            Ok(Command::AddTagId { id, tag, value })
+        }
+        "cleartagid" => {
+            let id = parse_u32.parse_next(input)?;
+            let _ = space0.parse_next(input)?;
+            let tag = opt(parse_string).parse_next(input)?;
+            Ok(Command::ClearTagId { id, tag })
+        }
+        // Miscellaneous
+        "config" => Ok(Command::Config),
+        "kill" => Ok(Command::Kill),
+        "mixrampdb" => {
+            let decibels = parse_f64.parse_next(input)? as f32;
+            Ok(Command::MixRampDb { decibels })
+        }
+        "mixrampdelay" => {
+            let seconds = parse_f64.parse_next(input)? as f32;
+            Ok(Command::MixRampDelay { seconds })
+        }
         _ => Ok(Command::Unknown(cmd.to_string())),
     }
 }

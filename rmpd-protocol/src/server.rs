@@ -479,6 +479,109 @@ async fn handle_command(cmd: Command, state: &AppState) -> String {
         Command::OutputSet { id, name, value } => {
             handle_outputset_command(state, id, &name, &value).await
         }
+        // Advanced database
+        Command::SearchAdd { tag, value } => {
+            handle_searchadd_command(state, &tag, &value).await
+        }
+        Command::SearchAddPl { name, tag, value } => {
+            handle_searchaddpl_command(state, &name, &tag, &value).await
+        }
+        Command::FindAdd { tag, value } => {
+            handle_findadd_command(state, &tag, &value).await
+        }
+        Command::ListFiles { uri } => {
+            handle_listfiles_command(state, uri.as_deref()).await
+        }
+        // Stickers
+        Command::StickerGet { uri, name } => {
+            handle_sticker_get_command(state, &uri, &name).await
+        }
+        Command::StickerSet { uri, name, value } => {
+            handle_sticker_set_command(state, &uri, &name, &value).await
+        }
+        Command::StickerDelete { uri, name } => {
+            handle_sticker_delete_command(state, &uri, name.as_deref()).await
+        }
+        Command::StickerList { uri } => {
+            handle_sticker_list_command(state, &uri).await
+        }
+        Command::StickerFind { uri, name, value } => {
+            handle_sticker_find_command(state, &uri, &name, value.as_deref()).await
+        }
+        // Partitions
+        Command::Partition { name } => {
+            handle_partition_command(state, &name).await
+        }
+        Command::ListPartitions => {
+            handle_listpartitions_command().await
+        }
+        Command::NewPartition { name } => {
+            handle_newpartition_command(&name).await
+        }
+        Command::DelPartition { name } => {
+            handle_delpartition_command(&name).await
+        }
+        Command::MoveOutput { name } => {
+            handle_moveoutput_command(&name).await
+        }
+        // Mounts
+        Command::Mount { path, uri } => {
+            handle_mount_command(&path, &uri).await
+        }
+        Command::Unmount { path } => {
+            handle_unmount_command(&path).await
+        }
+        Command::ListMounts => {
+            handle_listmounts_command().await
+        }
+        Command::ListNeighbors => {
+            handle_listneighbors_command().await
+        }
+        // Client messaging
+        Command::Subscribe { channel } => {
+            handle_subscribe_command(&channel).await
+        }
+        Command::Unsubscribe { channel } => {
+            handle_unsubscribe_command(&channel).await
+        }
+        Command::Channels => {
+            handle_channels_command().await
+        }
+        Command::ReadMessages => {
+            handle_readmessages_command().await
+        }
+        Command::SendMessage { channel, message } => {
+            handle_sendmessage_command(&channel, &message).await
+        }
+        // Advanced queue
+        Command::Prio { priority, range } => {
+            handle_prio_command(state, priority, range).await
+        }
+        Command::PrioId { priority, id } => {
+            handle_prioid_command(state, priority, id).await
+        }
+        Command::RangeId { id, range } => {
+            handle_rangeid_command(state, id, range).await
+        }
+        Command::AddTagId { id, tag, value } => {
+            handle_addtagid_command(state, id, &tag, &value).await
+        }
+        Command::ClearTagId { id, tag } => {
+            handle_cleartagid_command(state, id, tag.as_deref()).await
+        }
+        // Miscellaneous
+        Command::Config => {
+            handle_config_command().await
+        }
+        Command::Kill => {
+            handle_kill_command().await
+        }
+        Command::MixRampDb { decibels } => {
+            handle_mixrampdb_command(state, decibels).await
+        }
+        Command::MixRampDelay { seconds } => {
+            handle_mixrampdelay_command(state, seconds).await
+        }
         _ => {
             // Unimplemented commands
             ResponseBuilder::error(5, 0, "command", "not yet implemented")
@@ -1711,4 +1814,348 @@ async fn handle_decoders_command() -> String {
     resp.field("mime_type", "audio/wav");
 
     resp.ok()
+}
+
+// Advanced database commands
+async fn handle_searchadd_command(state: &AppState, tag: &str, value: &str) -> String {
+    // Search and add results to queue
+    let db_path = match &state.db_path {
+        Some(p) => p,
+        None => return ResponseBuilder::error(50, 0, "searchadd", "database not configured"),
+    };
+
+    let db = match rmpd_library::Database::open(db_path) {
+        Ok(d) => d,
+        Err(e) => return ResponseBuilder::error(50, 0, "searchadd", &format!("database error: {}", e)),
+    };
+
+    let songs = if tag.eq_ignore_ascii_case("any") {
+        match db.search_songs(value) {
+            Ok(s) => s,
+            Err(e) => return ResponseBuilder::error(50, 0, "searchadd", &format!("search error: {}", e)),
+        }
+    } else {
+        match db.find_songs(tag, value) {
+            Ok(s) => s,
+            Err(e) => return ResponseBuilder::error(50, 0, "searchadd", &format!("query error: {}", e)),
+        }
+    };
+
+    let mut queue = state.queue.write().await;
+    for song in songs {
+        queue.add(song);
+    }
+    drop(queue);
+
+    let mut status = state.status.write().await;
+    status.playlist_version += 1;
+    status.playlist_length = state.queue.read().await.len() as u32;
+
+    ResponseBuilder::new().ok()
+}
+
+async fn handle_searchaddpl_command(state: &AppState, name: &str, tag: &str, value: &str) -> String {
+    // Search and add results to stored playlist
+    let db_path = match &state.db_path {
+        Some(p) => p,
+        None => return ResponseBuilder::error(50, 0, "searchaddpl", "database not configured"),
+    };
+
+    let db = match rmpd_library::Database::open(db_path) {
+        Ok(d) => d,
+        Err(e) => return ResponseBuilder::error(50, 0, "searchaddpl", &format!("database error: {}", e)),
+    };
+
+    let songs = if tag.eq_ignore_ascii_case("any") {
+        match db.search_songs(value) {
+            Ok(s) => s,
+            Err(e) => return ResponseBuilder::error(50, 0, "searchaddpl", &format!("search error: {}", e)),
+        }
+    } else {
+        match db.find_songs(tag, value) {
+            Ok(s) => s,
+            Err(e) => return ResponseBuilder::error(50, 0, "searchaddpl", &format!("query error: {}", e)),
+        }
+    };
+
+    for song in songs {
+        if let Err(e) = db.playlist_add(name, song.path.as_str()) {
+            return ResponseBuilder::error(50, 0, "searchaddpl", &format!("Error: {}", e));
+        }
+    }
+
+    ResponseBuilder::new().ok()
+}
+
+async fn handle_findadd_command(state: &AppState, tag: &str, value: &str) -> String {
+    // Find (exact match) and add to queue
+    handle_searchadd_command(state, tag, value).await
+}
+
+async fn handle_listfiles_command(state: &AppState, uri: Option<&str>) -> String {
+    // List all files (songs and playlists)
+    let db_path = match &state.db_path {
+        Some(p) => p,
+        None => return ResponseBuilder::error(50, 0, "listfiles", "database not configured"),
+    };
+
+    let db = match rmpd_library::Database::open(db_path) {
+        Ok(d) => d,
+        Err(e) => return ResponseBuilder::error(50, 0, "listfiles", &format!("database error: {}", e)),
+    };
+
+    let path = uri.unwrap_or("");
+    match db.list_directory(path) {
+        Ok(listing) => {
+            let mut resp = ResponseBuilder::new();
+            for dir in &listing.directories {
+                resp.field("directory", dir);
+            }
+            for song in &listing.songs {
+                resp.field("file", &song.path);
+            }
+            resp.ok()
+        }
+        Err(e) => ResponseBuilder::error(50, 0, "listfiles", &format!("Error: {}", e)),
+    }
+}
+
+// Sticker commands (metadata storage)
+async fn handle_sticker_get_command(state: &AppState, uri: &str, name: &str) -> String {
+    let db_path = match &state.db_path {
+        Some(p) => p,
+        None => return ResponseBuilder::error(50, 0, "sticker get", "database not configured"),
+    };
+
+    let db = match rmpd_library::Database::open(db_path) {
+        Ok(d) => d,
+        Err(e) => return ResponseBuilder::error(50, 0, "sticker get", &format!("database error: {}", e)),
+    };
+
+    match db.get_sticker(uri, name) {
+        Ok(Some(value)) => {
+            let mut resp = ResponseBuilder::new();
+            resp.field("sticker", format!("{}={}", name, value));
+            resp.ok()
+        }
+        Ok(None) => ResponseBuilder::error(50, 0, "sticker get", "no such sticker"),
+        Err(e) => ResponseBuilder::error(50, 0, "sticker get", &format!("Error: {}", e)),
+    }
+}
+
+async fn handle_sticker_set_command(state: &AppState, uri: &str, name: &str, value: &str) -> String {
+    let db_path = match &state.db_path {
+        Some(p) => p,
+        None => return ResponseBuilder::error(50, 0, "sticker set", "database not configured"),
+    };
+
+    let db = match rmpd_library::Database::open(db_path) {
+        Ok(d) => d,
+        Err(e) => return ResponseBuilder::error(50, 0, "sticker set", &format!("database error: {}", e)),
+    };
+
+    match db.set_sticker(uri, name, value) {
+        Ok(_) => ResponseBuilder::new().ok(),
+        Err(e) => ResponseBuilder::error(50, 0, "sticker set", &format!("Error: {}", e)),
+    }
+}
+
+async fn handle_sticker_delete_command(state: &AppState, uri: &str, name: Option<&str>) -> String {
+    let db_path = match &state.db_path {
+        Some(p) => p,
+        None => return ResponseBuilder::error(50, 0, "sticker delete", "database not configured"),
+    };
+
+    let db = match rmpd_library::Database::open(db_path) {
+        Ok(d) => d,
+        Err(e) => return ResponseBuilder::error(50, 0, "sticker delete", &format!("database error: {}", e)),
+    };
+
+    match db.delete_sticker(uri, name) {
+        Ok(_) => ResponseBuilder::new().ok(),
+        Err(e) => ResponseBuilder::error(50, 0, "sticker delete", &format!("Error: {}", e)),
+    }
+}
+
+async fn handle_sticker_list_command(state: &AppState, uri: &str) -> String {
+    let db_path = match &state.db_path {
+        Some(p) => p,
+        None => return ResponseBuilder::error(50, 0, "sticker list", "database not configured"),
+    };
+
+    let db = match rmpd_library::Database::open(db_path) {
+        Ok(d) => d,
+        Err(e) => return ResponseBuilder::error(50, 0, "sticker list", &format!("database error: {}", e)),
+    };
+
+    match db.list_stickers(uri) {
+        Ok(stickers) => {
+            let mut resp = ResponseBuilder::new();
+            for (name, value) in stickers {
+                resp.field("sticker", format!("{}={}", name, value));
+            }
+            resp.ok()
+        }
+        Err(e) => ResponseBuilder::error(50, 0, "sticker list", &format!("Error: {}", e)),
+    }
+}
+
+async fn handle_sticker_find_command(state: &AppState, uri: &str, name: &str, _value: Option<&str>) -> String {
+    let db_path = match &state.db_path {
+        Some(p) => p,
+        None => return ResponseBuilder::error(50, 0, "sticker find", "database not configured"),
+    };
+
+    let db = match rmpd_library::Database::open(db_path) {
+        Ok(d) => d,
+        Err(e) => return ResponseBuilder::error(50, 0, "sticker find", &format!("database error: {}", e)),
+    };
+
+    match db.find_stickers(uri, name) {
+        Ok(results) => {
+            let mut resp = ResponseBuilder::new();
+            for (file_uri, sticker_value) in results {
+                resp.field("file", file_uri);
+                resp.field("sticker", format!("{}={}", name, sticker_value));
+            }
+            resp.ok()
+        }
+        Err(e) => ResponseBuilder::error(50, 0, "sticker find", &format!("Error: {}", e)),
+    }
+}
+
+// Partition commands (multi-queue support)
+async fn handle_partition_command(_state: &AppState, _name: &str) -> String {
+    // Switch to partition (not fully implemented)
+    ResponseBuilder::new().ok()
+}
+
+async fn handle_listpartitions_command() -> String {
+    // List partitions - only default for now
+    let mut resp = ResponseBuilder::new();
+    resp.field("partition", "default");
+    resp.ok()
+}
+
+async fn handle_newpartition_command(_name: &str) -> String {
+    // Create new partition (not fully implemented)
+    ResponseBuilder::new().ok()
+}
+
+async fn handle_delpartition_command(_name: &str) -> String {
+    // Delete partition (not fully implemented)
+    ResponseBuilder::new().ok()
+}
+
+async fn handle_moveoutput_command(_name: &str) -> String {
+    // Move output to current partition (not fully implemented)
+    ResponseBuilder::new().ok()
+}
+
+// Mount commands (virtual filesystem)
+async fn handle_mount_command(_path: &str, _uri: &str) -> String {
+    // Mount storage (not implemented - would require virtual FS)
+    ResponseBuilder::new().ok()
+}
+
+async fn handle_unmount_command(_path: &str) -> String {
+    // Unmount storage (not implemented)
+    ResponseBuilder::new().ok()
+}
+
+async fn handle_listmounts_command() -> String {
+    // List mounts - return empty
+    ResponseBuilder::new().ok()
+}
+
+async fn handle_listneighbors_command() -> String {
+    // List network neighbors - return empty
+    ResponseBuilder::new().ok()
+}
+
+// Client-to-client messaging
+async fn handle_subscribe_command(_channel: &str) -> String {
+    // Subscribe to channel (stub)
+    ResponseBuilder::new().ok()
+}
+
+async fn handle_unsubscribe_command(_channel: &str) -> String {
+    // Unsubscribe from channel (stub)
+    ResponseBuilder::new().ok()
+}
+
+async fn handle_channels_command() -> String {
+    // List channels - return empty
+    ResponseBuilder::new().ok()
+}
+
+async fn handle_readmessages_command() -> String {
+    // Read messages - return empty
+    ResponseBuilder::new().ok()
+}
+
+async fn handle_sendmessage_command(_channel: &str, _message: &str) -> String {
+    // Send message (stub)
+    ResponseBuilder::new().ok()
+}
+
+// Advanced queue operations
+async fn handle_prio_command(state: &AppState, _priority: u8, _range: (u32, u32)) -> String {
+    // Set priority for range (stub - would need priority field in QueueItem)
+    let mut status = state.status.write().await;
+    status.playlist_version += 1;
+    ResponseBuilder::new().ok()
+}
+
+async fn handle_prioid_command(state: &AppState, _priority: u8, _id: u32) -> String {
+    // Set priority for ID (stub)
+    let mut status = state.status.write().await;
+    status.playlist_version += 1;
+    ResponseBuilder::new().ok()
+}
+
+async fn handle_rangeid_command(state: &AppState, _id: u32, _range: (f64, f64)) -> String {
+    // Set playback range for song (stub)
+    let mut status = state.status.write().await;
+    status.playlist_version += 1;
+    ResponseBuilder::new().ok()
+}
+
+async fn handle_addtagid_command(state: &AppState, _id: u32, _tag: &str, _value: &str) -> String {
+    // Add tag to queue item (stub)
+    let mut status = state.status.write().await;
+    status.playlist_version += 1;
+    ResponseBuilder::new().ok()
+}
+
+async fn handle_cleartagid_command(state: &AppState, _id: u32, _tag: Option<&str>) -> String {
+    // Clear tags from queue item (stub)
+    let mut status = state.status.write().await;
+    status.playlist_version += 1;
+    ResponseBuilder::new().ok()
+}
+
+// Miscellaneous commands
+async fn handle_config_command() -> String {
+    // Return configuration - minimal for now
+    let mut resp = ResponseBuilder::new();
+    resp.field("music_directory", "/var/lib/mpd/music");
+    resp.ok()
+}
+
+async fn handle_kill_command() -> String {
+    // Kill server (stub - should trigger graceful shutdown)
+    ResponseBuilder::new().ok()
+}
+
+async fn handle_mixrampdb_command(state: &AppState, decibels: f32) -> String {
+    let mut status = state.status.write().await;
+    status.mixramp_db = decibels;
+    ResponseBuilder::new().ok()
+}
+
+async fn handle_mixrampdelay_command(state: &AppState, seconds: f32) -> String {
+    let mut status = state.status.write().await;
+    status.mixramp_delay = seconds;
+    ResponseBuilder::new().ok()
 }

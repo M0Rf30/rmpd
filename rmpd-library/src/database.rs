@@ -1103,6 +1103,89 @@ impl Database {
 
         Ok(())
     }
+
+    // Sticker methods (arbitrary key-value metadata for songs/directories)
+
+    /// Get a sticker value by URI and name
+    pub fn get_sticker(&self, uri: &str, name: &str) -> Result<Option<String>> {
+        self.conn.query_row(
+            "SELECT value FROM stickers WHERE uri = ?1 AND name = ?2",
+            params![uri, name],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| RmpdError::Database(e.to_string()))
+    }
+
+    /// Set a sticker value
+    pub fn set_sticker(&self, uri: &str, name: &str, value: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO stickers (uri, name, value) VALUES (?1, ?2, ?3)",
+            params![uri, name, value],
+        ).map_err(|e| RmpdError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Delete sticker(s) for a URI
+    /// If name is Some, delete only that sticker
+    /// If name is None, delete all stickers for the URI
+    pub fn delete_sticker(&self, uri: &str, name: Option<&str>) -> Result<()> {
+        if let Some(sticker_name) = name {
+            self.conn.execute(
+                "DELETE FROM stickers WHERE uri = ?1 AND name = ?2",
+                params![uri, sticker_name],
+            ).map_err(|e| RmpdError::Database(e.to_string()))?;
+        } else {
+            self.conn.execute(
+                "DELETE FROM stickers WHERE uri = ?1",
+                params![uri],
+            ).map_err(|e| RmpdError::Database(e.to_string()))?;
+        }
+        Ok(())
+    }
+
+    /// List all stickers for a URI
+    pub fn list_stickers(&self, uri: &str) -> Result<Vec<(String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT name, value FROM stickers WHERE uri = ?1 ORDER BY name"
+        ).map_err(|e| RmpdError::Database(e.to_string()))?;
+
+        let sticker_rows = stmt.query_map(params![uri], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        }).map_err(|e| RmpdError::Database(e.to_string()))?;
+
+        let mut stickers = Vec::new();
+        for row in sticker_rows {
+            stickers.push(row.map_err(|e| RmpdError::Database(e.to_string()))?);
+        }
+
+        Ok(stickers)
+    }
+
+    /// Find all URIs that have a sticker with the given name
+    /// Returns (uri, value) pairs
+    pub fn find_stickers(&self, uri: &str, name: &str) -> Result<Vec<(String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT uri, value FROM stickers WHERE uri LIKE ?1 AND name = ?2 ORDER BY uri"
+        ).map_err(|e| RmpdError::Database(e.to_string()))?;
+
+        let search_pattern = if uri.is_empty() {
+            "%".to_string()
+        } else {
+            format!("{}%", uri)
+        };
+
+        let sticker_rows = stmt.query_map(params![search_pattern, name], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        }).map_err(|e| RmpdError::Database(e.to_string()))?;
+
+        let mut results = Vec::new();
+        for row in sticker_rows {
+            results.push(row.map_err(|e| RmpdError::Database(e.to_string()))?);
+        }
+
+        Ok(results)
+    }
 }
 
 /// Directory listing result
