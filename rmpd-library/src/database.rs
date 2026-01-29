@@ -656,4 +656,464 @@ impl Database {
         ).map_err(|e| RmpdError::Database(e.to_string()))?;
         Ok(count > 0)
     }
+
+    /// List directory contents (songs + subdirectories)
+    pub fn list_directory(&self, path: &str) -> Result<DirectoryListing> {
+        // First, find the directory
+        let dir_id = if path.is_empty() {
+            // Root directory - get all top-level items
+            None
+        } else {
+            // Find directory by path
+            let id: Option<i64> = self.conn.query_row(
+                "SELECT id FROM directories WHERE path = ?1",
+                params![path],
+                |row| row.get(0),
+            ).optional()
+            .map_err(|e| RmpdError::Database(e.to_string()))?;
+            id
+        };
+
+        // Get subdirectories
+        let mut directories = Vec::new();
+        if let Some(id) = dir_id {
+            let mut stmt = self.conn.prepare("SELECT path FROM directories WHERE parent_id = ?1 ORDER BY path")
+                .map_err(|e| RmpdError::Database(e.to_string()))?;
+            let rows = stmt.query_map(params![id], |row| row.get::<_, String>(0))
+                .map_err(|e| RmpdError::Database(e.to_string()))?;
+            for row in rows {
+                directories.push(row.map_err(|e| RmpdError::Database(e.to_string()))?);
+            }
+        } else {
+            let mut stmt = self.conn.prepare("SELECT path FROM directories WHERE parent_id IS NULL ORDER BY path")
+                .map_err(|e| RmpdError::Database(e.to_string()))?;
+            let rows = stmt.query_map([], |row| row.get::<_, String>(0))
+                .map_err(|e| RmpdError::Database(e.to_string()))?;
+            for row in rows {
+                directories.push(row.map_err(|e| RmpdError::Database(e.to_string()))?);
+            }
+        }
+
+        // Get songs in this directory
+        let mut songs = Vec::new();
+        {
+            let query = "SELECT id, path, duration,
+                    title, artist, album, album_artist, track, disc, date, genre, composer, performer, comment,
+                    sample_rate, channels, bits_per_sample, bitrate,
+                    replay_gain_track_gain, replay_gain_track_peak,
+                    replay_gain_album_gain, replay_gain_album_peak,
+                    added_at, last_modified
+                FROM songs WHERE directory_id = ?1 ORDER BY path";
+
+            let mut stmt = self.conn.prepare(query)
+                .map_err(|e| RmpdError::Database(e.to_string()))?;
+
+            let song_rows = stmt.query_map(params![dir_id.unwrap_or(0)], |row| {
+                Ok(Song {
+                    id: row.get::<_, i64>(0)? as u64,
+                    path: Utf8PathBuf::from(row.get::<_, String>(1)?),
+                    duration: row.get::<_, Option<f64>>(2)?.map(Duration::from_secs_f64),
+                    title: row.get(3).ok(),
+                    artist: row.get(4).ok(),
+                    album: row.get(5).ok(),
+                    album_artist: row.get(6).ok(),
+                    track: row.get(7).ok(),
+                    disc: row.get(8).ok(),
+                    date: row.get(9).ok(),
+                    genre: row.get(10).ok(),
+                    composer: row.get(11).ok(),
+                    performer: row.get(12).ok(),
+                    comment: row.get(13).ok(),
+                    sample_rate: row.get(14).ok(),
+                    channels: row.get(15).ok(),
+                    bits_per_sample: row.get(16).ok(),
+                    bitrate: row.get(17).ok(),
+                    replay_gain_track_gain: row.get(18).ok(),
+                    replay_gain_track_peak: row.get(19).ok(),
+                    replay_gain_album_gain: row.get(20).ok(),
+                    replay_gain_album_peak: row.get(21).ok(),
+                    added_at: row.get(22)?,
+                    last_modified: row.get(23)?,
+                })
+            }).map_err(|e| RmpdError::Database(e.to_string()))?;
+
+            for row in song_rows {
+                songs.push(row.map_err(|e| RmpdError::Database(e.to_string()))?);
+            }
+        }
+
+        Ok(DirectoryListing { directories, songs })
+    }
+
+    /// List all songs under a directory recursively
+    pub fn list_directory_recursive(&self, path: &str) -> Result<Vec<Song>> {
+        let query = "SELECT id, path, duration,
+                title, artist, album, album_artist, track, disc, date, genre, composer, performer, comment,
+                sample_rate, channels, bits_per_sample, bitrate,
+                replay_gain_track_gain, replay_gain_track_peak,
+                replay_gain_album_gain, replay_gain_album_peak,
+                added_at, last_modified
+            FROM songs WHERE path LIKE ?1 || '%' ORDER BY path";
+
+        let mut stmt = self.conn.prepare(query)
+            .map_err(|e| RmpdError::Database(e.to_string()))?;
+
+        let search_path = if path.is_empty() { "%" } else { path };
+
+        let song_rows = stmt.query_map(params![search_path], |row| {
+            Ok(Song {
+                id: row.get::<_, i64>(0)? as u64,
+                path: Utf8PathBuf::from(row.get::<_, String>(1)?),
+                duration: row.get::<_, Option<f64>>(2)?.map(Duration::from_secs_f64),
+                title: row.get(3).ok(),
+                artist: row.get(4).ok(),
+                album: row.get(5).ok(),
+                album_artist: row.get(6).ok(),
+                track: row.get(7).ok(),
+                disc: row.get(8).ok(),
+                date: row.get(9).ok(),
+                genre: row.get(10).ok(),
+                composer: row.get(11).ok(),
+                performer: row.get(12).ok(),
+                comment: row.get(13).ok(),
+                sample_rate: row.get(14).ok(),
+                channels: row.get(15).ok(),
+                bits_per_sample: row.get(16).ok(),
+                bitrate: row.get(17).ok(),
+                replay_gain_track_gain: row.get(18).ok(),
+                replay_gain_track_peak: row.get(19).ok(),
+                replay_gain_album_gain: row.get(20).ok(),
+                replay_gain_album_peak: row.get(21).ok(),
+                added_at: row.get(22)?,
+                last_modified: row.get(23)?,
+            })
+        }).map_err(|e| RmpdError::Database(e.to_string()))?;
+
+        let mut songs = Vec::new();
+        for row in song_rows {
+            songs.push(row.map_err(|e| RmpdError::Database(e.to_string()))?);
+        }
+
+        Ok(songs)
+    }
+
+    /// Save current queue as a playlist
+    pub fn save_playlist(&self, name: &str, songs: &[Song]) -> Result<()> {
+        // Create or replace playlist
+        self.conn.execute(
+            "INSERT OR REPLACE INTO playlists (name, mtime) VALUES (?1, strftime('%s', 'now'))",
+            params![name],
+        ).map_err(|e| RmpdError::Database(e.to_string()))?;
+
+        let playlist_id: i64 = self.conn.query_row(
+            "SELECT id FROM playlists WHERE name = ?1",
+            params![name],
+            |row| row.get(0),
+        ).map_err(|e| RmpdError::Database(e.to_string()))?;
+
+        // Clear existing items
+        self.conn.execute(
+            "DELETE FROM playlist_items WHERE playlist_id = ?1",
+            params![playlist_id],
+        ).map_err(|e| RmpdError::Database(e.to_string()))?;
+
+        // Add songs
+        for (position, song) in songs.iter().enumerate() {
+            self.conn.execute(
+                "INSERT INTO playlist_items (playlist_id, position, song_id, uri) VALUES (?1, ?2, ?3, ?4)",
+                params![playlist_id, position as i64, song.id as i64, song.path.as_str()],
+            ).map_err(|e| RmpdError::Database(e.to_string()))?;
+        }
+
+        Ok(())
+    }
+
+    /// Load playlist and return songs
+    pub fn load_playlist(&self, name: &str) -> Result<Vec<Song>> {
+        let playlist_id: i64 = self.conn.query_row(
+            "SELECT id FROM playlists WHERE name = ?1",
+            params![name],
+            |row| row.get(0),
+        ).optional()
+        .map_err(|e| RmpdError::Database(e.to_string()))?
+        .ok_or_else(|| RmpdError::Library(format!("Playlist not found: {}", name)))?;
+
+        let mut stmt = self.conn.prepare(
+            "SELECT s.id, s.path, s.duration,
+                    s.title, s.artist, s.album, s.album_artist, s.track, s.disc, s.date, s.genre,
+                    s.composer, s.performer, s.comment,
+                    s.sample_rate, s.channels, s.bits_per_sample, s.bitrate,
+                    s.replay_gain_track_gain, s.replay_gain_track_peak,
+                    s.replay_gain_album_gain, s.replay_gain_album_peak,
+                    s.added_at, s.last_modified
+             FROM playlist_items pi
+             JOIN songs s ON pi.song_id = s.id
+             WHERE pi.playlist_id = ?1
+             ORDER BY pi.position"
+        ).map_err(|e| RmpdError::Database(e.to_string()))?;
+
+        let song_rows = stmt.query_map(params![playlist_id], |row| {
+            Ok(Song {
+                id: row.get::<_, i64>(0)? as u64,
+                path: Utf8PathBuf::from(row.get::<_, String>(1)?),
+                duration: row.get::<_, Option<f64>>(2)?.map(Duration::from_secs_f64),
+                title: row.get(3).ok(),
+                artist: row.get(4).ok(),
+                album: row.get(5).ok(),
+                album_artist: row.get(6).ok(),
+                track: row.get(7).ok(),
+                disc: row.get(8).ok(),
+                date: row.get(9).ok(),
+                genre: row.get(10).ok(),
+                composer: row.get(11).ok(),
+                performer: row.get(12).ok(),
+                comment: row.get(13).ok(),
+                sample_rate: row.get(14).ok(),
+                channels: row.get(15).ok(),
+                bits_per_sample: row.get(16).ok(),
+                bitrate: row.get(17).ok(),
+                replay_gain_track_gain: row.get(18).ok(),
+                replay_gain_track_peak: row.get(19).ok(),
+                replay_gain_album_gain: row.get(20).ok(),
+                replay_gain_album_peak: row.get(21).ok(),
+                added_at: row.get(22)?,
+                last_modified: row.get(23)?,
+            })
+        }).map_err(|e| RmpdError::Database(e.to_string()))?;
+
+        let mut songs = Vec::new();
+        for row in song_rows {
+            songs.push(row.map_err(|e| RmpdError::Database(e.to_string()))?);
+        }
+
+        Ok(songs)
+    }
+
+    /// List all playlists
+    pub fn list_playlists(&self) -> Result<Vec<PlaylistInfo>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT p.name, p.mtime, COUNT(pi.id) as song_count
+             FROM playlists p
+             LEFT JOIN playlist_items pi ON p.id = pi.playlist_id
+             GROUP BY p.id
+             ORDER BY p.name"
+        ).map_err(|e| RmpdError::Database(e.to_string()))?;
+
+        let playlist_rows = stmt.query_map([], |row| {
+            Ok(PlaylistInfo {
+                name: row.get(0)?,
+                last_modified: row.get(1)?,
+                song_count: row.get(2)?,
+            })
+        }).map_err(|e| RmpdError::Database(e.to_string()))?;
+
+        let mut playlists = Vec::new();
+        for row in playlist_rows {
+            playlists.push(row.map_err(|e| RmpdError::Database(e.to_string()))?);
+        }
+
+        Ok(playlists)
+    }
+
+    /// Get songs in a playlist
+    pub fn get_playlist_songs(&self, name: &str) -> Result<Vec<Song>> {
+        self.load_playlist(name)
+    }
+
+    /// Delete a playlist
+    pub fn delete_playlist(&self, name: &str) -> Result<()> {
+        let affected = self.conn.execute(
+            "DELETE FROM playlists WHERE name = ?1",
+            params![name],
+        ).map_err(|e| RmpdError::Database(e.to_string()))?;
+
+        if affected == 0 {
+            return Err(RmpdError::Library(format!("Playlist not found: {}", name)));
+        }
+
+        Ok(())
+    }
+
+    /// Rename a playlist
+    pub fn rename_playlist(&self, from: &str, to: &str) -> Result<()> {
+        let affected = self.conn.execute(
+            "UPDATE playlists SET name = ?1, mtime = strftime('%s', 'now') WHERE name = ?2",
+            params![to, from],
+        ).map_err(|e| RmpdError::Database(e.to_string()))?;
+
+        if affected == 0 {
+            return Err(RmpdError::Library(format!("Playlist not found: {}", from)));
+        }
+
+        Ok(())
+    }
+
+    /// Add a song to a playlist
+    pub fn playlist_add(&self, name: &str, uri: &str) -> Result<()> {
+        // Get playlist ID
+        let playlist_id: i64 = self.conn.query_row(
+            "SELECT id FROM playlists WHERE name = ?1",
+            params![name],
+            |row| row.get(0),
+        ).optional()
+        .map_err(|e| RmpdError::Database(e.to_string()))?
+        .ok_or_else(|| RmpdError::Library(format!("Playlist not found: {}", name)))?;
+
+        // Get song by URI
+        let song = self.get_song_by_path(uri)?
+            .ok_or_else(|| RmpdError::Library(format!("Song not found: {}", uri)))?;
+
+        // Get next position
+        let next_pos: i64 = self.conn.query_row(
+            "SELECT COALESCE(MAX(position), -1) + 1 FROM playlist_items WHERE playlist_id = ?1",
+            params![playlist_id],
+            |row| row.get(0),
+        ).map_err(|e| RmpdError::Database(e.to_string()))?;
+
+        // Add song
+        self.conn.execute(
+            "INSERT INTO playlist_items (playlist_id, position, song_id, uri) VALUES (?1, ?2, ?3, ?4)",
+            params![playlist_id, next_pos, song.id as i64, uri],
+        ).map_err(|e| RmpdError::Database(e.to_string()))?;
+
+        // Update mtime
+        self.conn.execute(
+            "UPDATE playlists SET mtime = strftime('%s', 'now') WHERE id = ?1",
+            params![playlist_id],
+        ).map_err(|e| RmpdError::Database(e.to_string()))?;
+
+        Ok(())
+    }
+
+    /// Clear all songs from a playlist
+    pub fn playlist_clear(&self, name: &str) -> Result<()> {
+        let playlist_id: i64 = self.conn.query_row(
+            "SELECT id FROM playlists WHERE name = ?1",
+            params![name],
+            |row| row.get(0),
+        ).optional()
+        .map_err(|e| RmpdError::Database(e.to_string()))?
+        .ok_or_else(|| RmpdError::Library(format!("Playlist not found: {}", name)))?;
+
+        self.conn.execute(
+            "DELETE FROM playlist_items WHERE playlist_id = ?1",
+            params![playlist_id],
+        ).map_err(|e| RmpdError::Database(e.to_string()))?;
+
+        // Update mtime
+        self.conn.execute(
+            "UPDATE playlists SET mtime = strftime('%s', 'now') WHERE id = ?1",
+            params![playlist_id],
+        ).map_err(|e| RmpdError::Database(e.to_string()))?;
+
+        Ok(())
+    }
+
+    /// Delete a song from a playlist by position
+    pub fn playlist_delete_pos(&self, name: &str, position: u32) -> Result<()> {
+        let playlist_id: i64 = self.conn.query_row(
+            "SELECT id FROM playlists WHERE name = ?1",
+            params![name],
+            |row| row.get(0),
+        ).optional()
+        .map_err(|e| RmpdError::Database(e.to_string()))?
+        .ok_or_else(|| RmpdError::Library(format!("Playlist not found: {}", name)))?;
+
+        let affected = self.conn.execute(
+            "DELETE FROM playlist_items WHERE playlist_id = ?1 AND position = ?2",
+            params![playlist_id, position],
+        ).map_err(|e| RmpdError::Database(e.to_string()))?;
+
+        if affected == 0 {
+            return Err(RmpdError::Library(format!("Position not found: {}", position)));
+        }
+
+        // Reindex positions
+        self.conn.execute(
+            "UPDATE playlist_items SET position = position - 1
+             WHERE playlist_id = ?1 AND position > ?2",
+            params![playlist_id, position],
+        ).map_err(|e| RmpdError::Database(e.to_string()))?;
+
+        // Update mtime
+        self.conn.execute(
+            "UPDATE playlists SET mtime = strftime('%s', 'now') WHERE id = ?1",
+            params![playlist_id],
+        ).map_err(|e| RmpdError::Database(e.to_string()))?;
+
+        Ok(())
+    }
+
+    /// Move a song within a playlist
+    pub fn playlist_move(&self, name: &str, from: u32, to: u32) -> Result<()> {
+        let playlist_id: i64 = self.conn.query_row(
+            "SELECT id FROM playlists WHERE name = ?1",
+            params![name],
+            |row| row.get(0),
+        ).optional()
+        .map_err(|e| RmpdError::Database(e.to_string()))?
+        .ok_or_else(|| RmpdError::Library(format!("Playlist not found: {}", name)))?;
+
+        if from == to {
+            return Ok(());
+        }
+
+        // This is a bit complex - we need to:
+        // 1. Get the item at 'from'
+        // 2. Delete it
+        // 3. Shift positions
+        // 4. Insert at 'to'
+
+        let item_id: i64 = self.conn.query_row(
+            "SELECT id FROM playlist_items WHERE playlist_id = ?1 AND position = ?2",
+            params![playlist_id, from],
+            |row| row.get(0),
+        ).optional()
+        .map_err(|e| RmpdError::Database(e.to_string()))?
+        .ok_or_else(|| RmpdError::Library(format!("Position not found: {}", from)))?;
+
+        // Move logic similar to queue
+        if from < to {
+            // Moving down: shift items between from+1 and to down by 1
+            self.conn.execute(
+                "UPDATE playlist_items SET position = position - 1
+                 WHERE playlist_id = ?1 AND position > ?2 AND position <= ?3",
+                params![playlist_id, from, to],
+            ).map_err(|e| RmpdError::Database(e.to_string()))?;
+        } else {
+            // Moving up: shift items between to and from-1 up by 1
+            self.conn.execute(
+                "UPDATE playlist_items SET position = position + 1
+                 WHERE playlist_id = ?1 AND position >= ?2 AND position < ?3",
+                params![playlist_id, to, from],
+            ).map_err(|e| RmpdError::Database(e.to_string()))?;
+        }
+
+        // Set the item's new position
+        self.conn.execute(
+            "UPDATE playlist_items SET position = ?1 WHERE id = ?2",
+            params![to, item_id],
+        ).map_err(|e| RmpdError::Database(e.to_string()))?;
+
+        // Update mtime
+        self.conn.execute(
+            "UPDATE playlists SET mtime = strftime('%s', 'now') WHERE id = ?1",
+            params![playlist_id],
+        ).map_err(|e| RmpdError::Database(e.to_string()))?;
+
+        Ok(())
+    }
+}
+
+/// Directory listing result
+pub struct DirectoryListing {
+    pub directories: Vec<String>,
+    pub songs: Vec<Song>,
+}
+
+/// Playlist information
+pub struct PlaylistInfo {
+    pub name: String,
+    pub last_modified: i64,
+    pub song_count: u32,
 }

@@ -75,6 +75,23 @@ pub enum Command {
     AlbumArt { uri: String, offset: usize },
     ReadPicture { uri: String, offset: usize },
 
+    // Stored playlists
+    Save { name: String },
+    Load { name: String },
+    ListPlaylists,
+    ListPlaylist { name: String },
+    ListPlaylistInfo { name: String },
+    PlaylistAdd { name: String, uri: String },
+    PlaylistClear { name: String },
+    PlaylistDelete { name: String, position: u32 },
+    PlaylistMove { name: String, from: u32, to: u32 },
+    Rm { name: String },
+    Rename { from: String, to: String },
+
+    // Idle notifications
+    Idle { subsystems: Vec<String> },
+    NoIdle,
+
     // Unknown/Invalid
     Unknown(String),
 }
@@ -280,6 +297,73 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
             let offset = parse_usize.parse_next(input)?;
             Ok(Command::ReadPicture { uri, offset })
         }
+        "save" => {
+            let name = parse_quoted_or_unquoted.parse_next(input)?;
+            Ok(Command::Save { name })
+        }
+        "load" => {
+            let name = parse_quoted_or_unquoted.parse_next(input)?;
+            Ok(Command::Load { name })
+        }
+        "listplaylists" => Ok(Command::ListPlaylists),
+        "listplaylist" => {
+            let name = parse_quoted_or_unquoted.parse_next(input)?;
+            Ok(Command::ListPlaylist { name })
+        }
+        "listplaylistinfo" => {
+            let name = parse_quoted_or_unquoted.parse_next(input)?;
+            Ok(Command::ListPlaylistInfo { name })
+        }
+        "playlistadd" => {
+            let name = parse_quoted_or_unquoted.parse_next(input)?;
+            let _ = space0.parse_next(input)?;
+            let uri = parse_quoted_or_unquoted.parse_next(input)?;
+            Ok(Command::PlaylistAdd { name, uri })
+        }
+        "playlistclear" => {
+            let name = parse_quoted_or_unquoted.parse_next(input)?;
+            Ok(Command::PlaylistClear { name })
+        }
+        "playlistdelete" => {
+            let name = parse_quoted_or_unquoted.parse_next(input)?;
+            let _ = space0.parse_next(input)?;
+            let position = parse_u32.parse_next(input)?;
+            Ok(Command::PlaylistDelete { name, position })
+        }
+        "playlistmove" => {
+            let name = parse_quoted_or_unquoted.parse_next(input)?;
+            let _ = space0.parse_next(input)?;
+            let from = parse_u32.parse_next(input)?;
+            let _ = space0.parse_next(input)?;
+            let to = parse_u32.parse_next(input)?;
+            Ok(Command::PlaylistMove { name, from, to })
+        }
+        "rm" => {
+            let name = parse_quoted_or_unquoted.parse_next(input)?;
+            Ok(Command::Rm { name })
+        }
+        "rename" => {
+            let name1 = parse_quoted_or_unquoted.parse_next(input)?;
+            let _ = space0.parse_next(input)?;
+            let name2 = parse_quoted_or_unquoted.parse_next(input)?;
+            Ok(Command::Rename { from: name1, to: name2 })
+        }
+        "idle" => {
+            // Parse optional subsystem list
+            let mut subsystems = Vec::new();
+            while !input.is_empty() {
+                let _ = space0.parse_next(input)?;
+                if input.is_empty() {
+                    break;
+                }
+                let subsystem = parse_string.parse_next(input)?;
+                if !subsystem.is_empty() {
+                    subsystems.push(subsystem);
+                }
+            }
+            Ok(Command::Idle { subsystems })
+        }
+        "noidle" => Ok(Command::NoIdle),
         _ => Ok(Command::Unknown(cmd.to_string())),
     }
 }

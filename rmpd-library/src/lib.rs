@@ -5,7 +5,7 @@ pub mod metadata;
 pub mod watcher;
 pub mod artwork;
 
-pub use database::Database;
+pub use database::{Database, DirectoryListing, PlaylistInfo};
 pub use scanner::{Scanner, ScanStats};
 pub use metadata::MetadataExtractor;
 pub use watcher::FilesystemWatcher;
