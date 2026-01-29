@@ -90,8 +90,8 @@ pub enum Command {
     ReadPicture { uri: String, offset: usize },
 
     // Stored playlists
-    Save { name: String },
-    Load { name: String },
+    Save { name: String, mode: Option<SaveMode> },
+    Load { name: String, range: Option<(u32, u32)>, position: Option<u32> },
     ListPlaylists,
     ListPlaylist { name: String },
     ListPlaylistInfo { name: String },
@@ -204,6 +204,13 @@ pub enum DeleteTarget {
 pub enum MoveFrom {
     Position(u32),
     Range(u32, u32),  // START:END (exclusive end)
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum SaveMode {
+    Create,   // Default: create new playlist or fail if exists
+    Append,   // Append to existing playlist
+    Replace,  // Replace existing playlist
 }
 
 pub fn parse_command(input: &str) -> Result<Command, String> {
@@ -671,11 +678,35 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
         }
         "save" => {
             let name = parse_quoted_or_unquoted.parse_next(input)?;
-            Ok(Command::Save { name })
+            let _ = space0.parse_next(input)?;
+
+            // Try to parse optional mode
+            let mode = if !input.is_empty() {
+                let mode_str = parse_quoted_or_unquoted.parse_next(input)?;
+                match mode_str.to_lowercase().as_str() {
+                    "create" => Some(SaveMode::Create),
+                    "append" => Some(SaveMode::Append),
+                    "replace" => Some(SaveMode::Replace),
+                    _ => return Err(winnow::error::ErrMode::Cut(winnow::error::ContextError::default()))
+                }
+            } else {
+                None
+            };
+
+            Ok(Command::Save { name, mode })
         }
         "load" => {
             let name = parse_quoted_or_unquoted.parse_next(input)?;
-            Ok(Command::Load { name })
+            let _ = space0.parse_next(input)?;
+
+            // Try to parse optional range (START:END)
+            let range = opt(parse_range).parse_next(input)?;
+            let _ = space0.parse_next(input)?;
+
+            // Try to parse optional position
+            let position = opt(parse_u32).parse_next(input)?;
+
+            Ok(Command::Load { name, range, position })
         }
         "listplaylists" => Ok(Command::ListPlaylists),
         "listplaylist" => {
@@ -988,6 +1019,14 @@ fn parse_i8(input: &mut &str) -> PResult<i8> {
         .parse_next(input)?
         .parse()
         .map_err(|_| winnow::error::ErrMode::Cut(winnow::error::ContextError::default()))
+}
+
+fn parse_range(input: &mut &str) -> PResult<(u32, u32)> {
+    // Parse range syntax (e.g., "5:10")
+    let start = parse_u32.parse_next(input)?;
+    let _ = winnow::token::one_of(':').parse_next(input)?;
+    let end = parse_u32.parse_next(input)?;
+    Ok((start, end))
 }
 
 fn parse_delete_target(input: &mut &str) -> PResult<DeleteTarget> {

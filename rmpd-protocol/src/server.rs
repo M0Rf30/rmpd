@@ -492,11 +492,11 @@ async fn handle_command(cmd: Command, state: &AppState) -> Response {
             handle_protocol_command(subcommand).await
         }
         // Stored playlists
-        Command::Save { name } => {
-            handle_save_command(state, &name).await
+        Command::Save { name, mode } => {
+            handle_save_command(state, &name, mode).await
         }
-        Command::Load { name } => {
-            handle_load_command(state, &name).await
+        Command::Load { name, range, position } => {
+            handle_load_command(state, &name, range, position).await
         }
         Command::ListPlaylists => {
             handle_listplaylists_command(state).await
@@ -1668,7 +1668,9 @@ async fn handle_listallinfo_command(state: &AppState, path: Option<&str>) -> Str
 }
 
 // Stored playlist commands
-async fn handle_save_command(state: &AppState, name: &str) -> String {
+async fn handle_save_command(state: &AppState, name: &str, mode: Option<crate::parser::SaveMode>) -> String {
+    use crate::parser::SaveMode;
+
     let db_path = match &state.db_path {
         Some(p) => p,
         None => return ResponseBuilder::error(50, 0, "save", "database not configured"),
@@ -1684,13 +1686,64 @@ async fn handle_save_command(state: &AppState, name: &str) -> String {
     let songs: Vec<_> = queue.items().iter().map(|item| item.song.clone()).collect();
     drop(queue);
 
-    match db.save_playlist(name, &songs) {
-        Ok(_) => ResponseBuilder::new().ok(),
-        Err(e) => ResponseBuilder::error(50, 0, "save", &format!("Error: {}", e)),
+    // Handle different save modes
+    let mode = mode.unwrap_or(SaveMode::Create);
+
+    match mode {
+        SaveMode::Create => {
+            // Default: create new playlist or fail if exists
+            // Check if playlist already exists
+            match db.load_playlist(name) {
+                Ok(_) => {
+                    // Playlist exists, fail
+                    return ResponseBuilder::error(50, 0, "save", "Playlist already exists");
+                }
+                Err(_) => {
+                    // Playlist doesn't exist, create it
+                    match db.save_playlist(name, &songs) {
+                        Ok(_) => ResponseBuilder::new().ok(),
+                        Err(e) => ResponseBuilder::error(50, 0, "save", &format!("Error: {}", e)),
+                    }
+                }
+            }
+        }
+        SaveMode::Replace => {
+            // Replace existing playlist or create if doesn't exist
+            // Delete existing playlist if it exists (ignore errors)
+            let _ = db.delete_playlist(name);
+
+            // Save new playlist
+            match db.save_playlist(name, &songs) {
+                Ok(_) => ResponseBuilder::new().ok(),
+                Err(e) => ResponseBuilder::error(50, 0, "save", &format!("Error: {}", e)),
+            }
+        }
+        SaveMode::Append => {
+            // Append to existing playlist or create if doesn't exist
+            match db.load_playlist(name) {
+                Ok(mut existing_songs) => {
+                    // Playlist exists, append to it
+                    existing_songs.extend(songs);
+
+                    // Save updated playlist
+                    match db.save_playlist(name, &existing_songs) {
+                        Ok(_) => ResponseBuilder::new().ok(),
+                        Err(e) => ResponseBuilder::error(50, 0, "save", &format!("Error: {}", e)),
+                    }
+                }
+                Err(_) => {
+                    // Playlist doesn't exist, create it
+                    match db.save_playlist(name, &songs) {
+                        Ok(_) => ResponseBuilder::new().ok(),
+                        Err(e) => ResponseBuilder::error(50, 0, "save", &format!("Error: {}", e)),
+                    }
+                }
+            }
+        }
     }
 }
 
-async fn handle_load_command(state: &AppState, name: &str) -> String {
+async fn handle_load_command(state: &AppState, name: &str, range: Option<(u32, u32)>, position: Option<u32>) -> String {
     let db_path = match &state.db_path {
         Some(p) => p,
         None => return ResponseBuilder::error(50, 0, "load", "database not configured"),
@@ -1702,12 +1755,31 @@ async fn handle_load_command(state: &AppState, name: &str) -> String {
     };
 
     match db.load_playlist(name) {
-        Ok(songs) => {
-            // Clear current queue and add all songs from playlist
+        Ok(mut songs) => {
+            // Apply range filter if specified
+            if let Some((start, end)) = range {
+                let start = start as usize;
+                let end = end.min(songs.len() as u32) as usize;
+                if start < songs.len() {
+                    songs = songs[start..end].to_vec();
+                } else {
+                    return ResponseBuilder::error(50, 0, "load", "Invalid range");
+                }
+            }
+
             let mut queue = state.queue.write().await;
-            queue.clear();
-            for song in songs {
-                queue.add(song);
+
+            // If position is specified, add at that position
+            // Otherwise, clear queue and add all songs
+            if let Some(pos) = position {
+                for (i, song) in songs.into_iter().enumerate() {
+                    queue.add_at(song, Some(pos + i as u32));
+                }
+            } else {
+                queue.clear();
+                for song in songs {
+                    queue.add(song);
+                }
             }
             drop(queue);
 
