@@ -1,4 +1,5 @@
 pub mod commands;
+pub mod filter;
 pub mod parser;
 pub mod queue_playback;
 pub mod response;

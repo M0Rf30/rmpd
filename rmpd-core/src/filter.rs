@@ -37,6 +37,8 @@ pub enum CompareOp {
     Greater,      // >
     LessEqual,    // <=
     GreaterEqual, // >=
+    Contains,     // contains
+    StartsWith,   // starts_with
 }
 
 impl FilterExpression {
@@ -59,23 +61,33 @@ impl FilterExpression {
         match self {
             FilterExpression::Compare { tag, op, value } => {
                 let column = tag_to_column(tag);
-                let (sql_op, needs_pattern) = match op {
-                    CompareOp::Equal => ("=", false),
-                    CompareOp::NotEqual => ("!=", false),
-                    CompareOp::Regex => ("LIKE", true),
-                    CompareOp::NotRegex => ("NOT LIKE", true),
-                    CompareOp::Less => ("<", false),
-                    CompareOp::Greater => (">", false),
-                    CompareOp::LessEqual => ("<=", false),
-                    CompareOp::GreaterEqual => (">=", false),
-                };
-
-                let value_param = if needs_pattern {
-                    // Convert MPD regex to SQL LIKE pattern
-                    // Simple conversion: .* -> %, . -> _, keep others
-                    value.replace(".*", "%").replace('.', "_")
-                } else {
-                    value.clone()
+                let (sql_op, value_param) = match op {
+                    CompareOp::Equal => ("=", value.clone()),
+                    CompareOp::NotEqual => ("!=", value.clone()),
+                    CompareOp::Regex => {
+                        // Convert MPD regex to SQL LIKE pattern
+                        // Simple conversion: .* -> %, . -> _, keep others
+                        let pattern = value.replace(".*", "%").replace('.', "_");
+                        ("LIKE", pattern)
+                    }
+                    CompareOp::NotRegex => {
+                        let pattern = value.replace(".*", "%").replace('.', "_");
+                        ("NOT LIKE", pattern)
+                    }
+                    CompareOp::Less => ("<", value.clone()),
+                    CompareOp::Greater => (">", value.clone()),
+                    CompareOp::LessEqual => ("<=", value.clone()),
+                    CompareOp::GreaterEqual => (">=", value.clone()),
+                    CompareOp::Contains => {
+                        // contains: substring match -> LIKE '%value%'
+                        let pattern = format!("%{}%", value);
+                        ("LIKE", pattern)
+                    }
+                    CompareOp::StartsWith => {
+                        // starts_with: prefix match -> LIKE 'value%'
+                        let pattern = format!("{}%", value);
+                        ("LIKE", pattern)
+                    }
                 };
 
                 (format!("{} {} ?", column, sql_op), vec![value_param])
@@ -203,7 +215,12 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_operator(&mut self) -> Result<CompareOp> {
-        if self.consume_str("==").is_ok() {
+        // Try multi-character operators first
+        if self.consume_str("starts_with").is_ok() {
+            Ok(CompareOp::StartsWith)
+        } else if self.consume_str("contains").is_ok() {
+            Ok(CompareOp::Contains)
+        } else if self.consume_str("==").is_ok() {
             Ok(CompareOp::Equal)
         } else if self.consume_str("!=").is_ok() {
             Ok(CompareOp::NotEqual)

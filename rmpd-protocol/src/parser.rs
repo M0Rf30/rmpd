@@ -67,7 +67,7 @@ pub enum Command {
     // Reflection
     Commands,
     NotCommands,
-    TagTypes,
+    TagTypes { subcommand: Option<TagTypesSubcommand> },
     UrlHandlers,
     Decoders,
 
@@ -173,6 +173,16 @@ pub enum Command {
 
     // Unknown/Invalid
     Unknown(String),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum TagTypesSubcommand {
+    All,
+    Clear,
+    Enable { tags: Vec<String> },
+    Disable { tags: Vec<String> },
+    Available,
+    Reset { tags: Vec<String> },
 }
 
 pub fn parse_command(input: &str) -> Result<Command, String> {
@@ -369,7 +379,61 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
         }
         "commands" => Ok(Command::Commands),
         "notcommands" => Ok(Command::NotCommands),
-        "tagtypes" => Ok(Command::TagTypes),
+        "tagtypes" => {
+            // Check for subcommand
+            if input.is_empty() {
+                Ok(Command::TagTypes { subcommand: None })
+            } else {
+                let subcommand_str = take_while(1.., |c: char| c.is_ascii_alphabetic()).parse_next(input)?;
+                let _ = space0.parse_next(input)?;
+
+                match subcommand_str {
+                    "all" => Ok(Command::TagTypes {
+                        subcommand: Some(TagTypesSubcommand::All)
+                    }),
+                    "clear" => Ok(Command::TagTypes {
+                        subcommand: Some(TagTypesSubcommand::Clear)
+                    }),
+                    "available" => Ok(Command::TagTypes {
+                        subcommand: Some(TagTypesSubcommand::Available)
+                    }),
+                    "enable" => {
+                        let mut tags = Vec::new();
+                        while !input.is_empty() {
+                            let tag = parse_quoted_or_unquoted.parse_next(input)?;
+                            tags.push(tag);
+                            let _ = space0.parse_next(input)?;
+                        }
+                        Ok(Command::TagTypes {
+                            subcommand: Some(TagTypesSubcommand::Enable { tags })
+                        })
+                    },
+                    "disable" => {
+                        let mut tags = Vec::new();
+                        while !input.is_empty() {
+                            let tag = parse_quoted_or_unquoted.parse_next(input)?;
+                            tags.push(tag);
+                            let _ = space0.parse_next(input)?;
+                        }
+                        Ok(Command::TagTypes {
+                            subcommand: Some(TagTypesSubcommand::Disable { tags })
+                        })
+                    },
+                    "reset" => {
+                        let mut tags = Vec::new();
+                        while !input.is_empty() {
+                            let tag = parse_quoted_or_unquoted.parse_next(input)?;
+                            tags.push(tag);
+                            let _ = space0.parse_next(input)?;
+                        }
+                        Ok(Command::TagTypes {
+                            subcommand: Some(TagTypesSubcommand::Reset { tags })
+                        })
+                    },
+                    _ => Ok(Command::Unknown(format!("tagtypes {}", subcommand_str)))
+                }
+            }
+        },
         "urlhandlers" => Ok(Command::UrlHandlers),
         "decoders" => Ok(Command::Decoders),
         "update" => {

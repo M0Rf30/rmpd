@@ -290,8 +290,8 @@ async fn handle_command(cmd: Command, state: &AppState) -> Response {
         Command::NotCommands => {
             handle_notcommands_command().await
         }
-        Command::TagTypes => {
-            handle_tagtypes_command().await
+        Command::TagTypes { subcommand } => {
+            handle_tagtypes_command(subcommand).await
         }
         Command::UrlHandlers => {
             handle_urlhandlers_command().await
@@ -2001,25 +2001,56 @@ async fn handle_notcommands_command() -> String {
     ResponseBuilder::new().ok()
 }
 
-async fn handle_tagtypes_command() -> String {
+async fn handle_tagtypes_command(subcommand: Option<crate::parser::TagTypesSubcommand>) -> String {
+    use crate::parser::TagTypesSubcommand;
+
     let mut resp = ResponseBuilder::new();
 
-    // All supported metadata tags
-    resp.field("tagtype", "Artist");
-    resp.field("tagtype", "ArtistSort");
-    resp.field("tagtype", "Album");
-    resp.field("tagtype", "AlbumSort");
-    resp.field("tagtype", "AlbumArtist");
-    resp.field("tagtype", "AlbumArtistSort");
-    resp.field("tagtype", "Title");
-    resp.field("tagtype", "Track");
-    resp.field("tagtype", "Name");
-    resp.field("tagtype", "Genre");
-    resp.field("tagtype", "Date");
-    resp.field("tagtype", "Composer");
-    resp.field("tagtype", "Performer");
-    resp.field("tagtype", "Comment");
-    resp.field("tagtype", "Disc");
+    match subcommand {
+        None | Some(TagTypesSubcommand::Available) => {
+            // List all supported metadata tags
+            resp.field("tagtype", "Artist");
+            resp.field("tagtype", "ArtistSort");
+            resp.field("tagtype", "Album");
+            resp.field("tagtype", "AlbumSort");
+            resp.field("tagtype", "AlbumArtist");
+            resp.field("tagtype", "AlbumArtistSort");
+            resp.field("tagtype", "Title");
+            resp.field("tagtype", "Track");
+            resp.field("tagtype", "Name");
+            resp.field("tagtype", "Genre");
+            resp.field("tagtype", "Date");
+            resp.field("tagtype", "Composer");
+            resp.field("tagtype", "Performer");
+            resp.field("tagtype", "Comment");
+            resp.field("tagtype", "Disc");
+        }
+        Some(TagTypesSubcommand::All) => {
+            // Enable all tag types for this client
+            // TODO: Store per-client tag mask in connection state
+            // For now, just return OK as all tags are enabled by default
+        }
+        Some(TagTypesSubcommand::Clear) => {
+            // Disable all tag types for this client
+            // TODO: Store per-client tag mask in connection state
+            // For now, just return OK
+        }
+        Some(TagTypesSubcommand::Enable { tags: _ }) => {
+            // Enable specific tags for this client
+            // TODO: Store per-client tag mask in connection state
+            // For now, just return OK as all tags are enabled by default
+        }
+        Some(TagTypesSubcommand::Disable { tags: _ }) => {
+            // Disable specific tags for this client
+            // TODO: Store per-client tag mask in connection state
+            // For now, just return OK
+        }
+        Some(TagTypesSubcommand::Reset { tags: _ }) => {
+            // Reset specific tags to default state for this client
+            // TODO: Store per-client tag mask in connection state
+            // For now, just return OK
+        }
+    }
 
     resp.ok()
 }
