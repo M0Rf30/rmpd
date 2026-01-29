@@ -312,11 +312,11 @@ async fn handle_command(cmd: Command, state: &AppState) -> String {
         Command::Update { path } | Command::Rescan { path } => {
             handle_update_command(state, path.as_deref()).await
         }
-        Command::Find { tag, value } => {
-            handle_find_command(state, &tag, &value).await
+        Command::Find { filters } => {
+            handle_find_command(state, &filters).await
         }
-        Command::Search { tag, value } => {
-            handle_search_command(state, &tag, &value).await
+        Command::Search { filters } => {
+            handle_search_command(state, &filters).await
         }
         Command::List { tag, filter_tag, filter_value, group: _ } => {
             handle_list_command(state, &tag, filter_tag.as_deref(), filter_value.as_deref()).await
@@ -663,7 +663,7 @@ async fn handle_command(cmd: Command, state: &AppState) -> String {
     }
 }
 
-async fn handle_find_command(state: &AppState, tag: &str, value: &str) -> String {
+async fn handle_find_command(state: &AppState, filters: &[(String, String)]) -> String {
     let db_path = match &state.db_path {
         Some(p) => p,
         None => return ResponseBuilder::error(50, 0, "find", "database not configured"),
@@ -674,10 +674,14 @@ async fn handle_find_command(state: &AppState, tag: &str, value: &str) -> String
         Err(e) => return ResponseBuilder::error(50, 0, "find", &format!("database error: {}", e)),
     };
 
+    if filters.is_empty() {
+        return ResponseBuilder::error(2, 0, "find", "missing arguments");
+    }
+
     // Check if this is a filter expression (starts with '(')
-    let songs = if tag.starts_with('(') {
+    let songs = if filters[0].0.starts_with('(') {
         // Parse as filter expression
-        match rmpd_core::filter::FilterExpression::parse(tag) {
+        match rmpd_core::filter::FilterExpression::parse(&filters[0].0) {
             Ok(filter) => {
                 match db.find_songs_filter(&filter) {
                     Ok(s) => s,
@@ -686,9 +690,31 @@ async fn handle_find_command(state: &AppState, tag: &str, value: &str) -> String
             }
             Err(e) => return ResponseBuilder::error(2, 0, "find", &format!("filter parse error: {}", e)),
         }
+    } else if filters.len() == 1 {
+        // Simple single tag/value search
+        match db.find_songs(&filters[0].0, &filters[0].1) {
+            Ok(s) => s,
+            Err(e) => return ResponseBuilder::error(50, 0, "find", &format!("query error: {}", e)),
+        }
     } else {
-        // Simple tag/value search
-        match db.find_songs(tag, value) {
+        // Multiple tag/value pairs - build filter expression with AND
+        use rmpd_core::filter::{FilterExpression, CompareOp};
+        let mut expr = FilterExpression::Compare {
+            tag: filters[0].0.clone(),
+            op: CompareOp::Equal,
+            value: filters[0].1.clone(),
+        };
+
+        for filter in &filters[1..] {
+            let next_expr = FilterExpression::Compare {
+                tag: filter.0.clone(),
+                op: CompareOp::Equal,
+                value: filter.1.clone(),
+            };
+            expr = FilterExpression::And(Box::new(expr), Box::new(next_expr));
+        }
+
+        match db.find_songs_filter(&expr) {
             Ok(s) => s,
             Err(e) => return ResponseBuilder::error(50, 0, "find", &format!("query error: {}", e)),
         }
@@ -701,7 +727,7 @@ async fn handle_find_command(state: &AppState, tag: &str, value: &str) -> String
     resp.ok()
 }
 
-async fn handle_search_command(state: &AppState, tag: &str, value: &str) -> String {
+async fn handle_search_command(state: &AppState, filters: &[(String, String)]) -> String {
     let db_path = match &state.db_path {
         Some(p) => p,
         None => return ResponseBuilder::error(50, 0, "search", "database not configured"),
@@ -712,10 +738,14 @@ async fn handle_search_command(state: &AppState, tag: &str, value: &str) -> Stri
         Err(e) => return ResponseBuilder::error(50, 0, "search", &format!("database error: {}", e)),
     };
 
+    if filters.is_empty() {
+        return ResponseBuilder::error(2, 0, "search", "missing arguments");
+    }
+
     // Check if this is a filter expression (starts with '(')
-    let songs = if tag.starts_with('(') {
+    let songs = if filters[0].0.starts_with('(') {
         // Parse as filter expression
-        match rmpd_core::filter::FilterExpression::parse(tag) {
+        match rmpd_core::filter::FilterExpression::parse(&filters[0].0) {
             Ok(filter) => {
                 match db.find_songs_filter(&filter) {
                     Ok(s) => s,
@@ -724,15 +754,42 @@ async fn handle_search_command(state: &AppState, tag: &str, value: &str) -> Stri
             }
             Err(e) => return ResponseBuilder::error(2, 0, "search", &format!("filter parse error: {}", e)),
         }
-    } else if tag.eq_ignore_ascii_case("any") {
-        // Use FTS for "any" tag
-        match db.search_songs(value) {
-            Ok(s) => s,
-            Err(e) => return ResponseBuilder::error(50, 0, "search", &format!("search error: {}", e)),
+    } else if filters.len() == 1 {
+        let tag = &filters[0].0;
+        let value = &filters[0].1;
+
+        if tag.eq_ignore_ascii_case("any") {
+            // Use FTS for "any" tag
+            match db.search_songs(value) {
+                Ok(s) => s,
+                Err(e) => return ResponseBuilder::error(50, 0, "search", &format!("search error: {}", e)),
+            }
+        } else {
+            // Partial match using LIKE
+            match db.find_songs(tag, value) {
+                Ok(s) => s,
+                Err(e) => return ResponseBuilder::error(50, 0, "search", &format!("query error: {}", e)),
+            }
         }
     } else {
-        // Partial match using LIKE
-        match db.find_songs(tag, value) {
+        // Multiple tag/value pairs - build filter expression with AND
+        use rmpd_core::filter::{FilterExpression, CompareOp};
+        let mut expr = FilterExpression::Compare {
+            tag: filters[0].0.clone(),
+            op: CompareOp::Equal,
+            value: filters[0].1.clone(),
+        };
+
+        for filter in &filters[1..] {
+            let next_expr = FilterExpression::Compare {
+                tag: filter.0.clone(),
+                op: CompareOp::Equal,
+                value: filter.1.clone(),
+            };
+            expr = FilterExpression::And(Box::new(expr), Box::new(next_expr));
+        }
+
+        match db.find_songs_filter(&expr) {
             Ok(s) => s,
             Err(e) => return ResponseBuilder::error(50, 0, "search", &format!("query error: {}", e)),
         }

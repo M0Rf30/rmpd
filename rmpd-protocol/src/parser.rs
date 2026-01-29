@@ -74,8 +74,8 @@ pub enum Command {
     // Database
     Update { path: Option<String> },
     Rescan { path: Option<String> },
-    Find { tag: String, value: String },
-    Search { tag: String, value: String },
+    Find { filters: Vec<(String, String)> },
+    Search { filters: Vec<(String, String)> },
     List { tag: String, filter_tag: Option<String>, filter_value: Option<String>, group: Option<String> },
     ListAll { path: Option<String> },
     ListAllInfo { path: Option<String> },
@@ -383,16 +383,70 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
         "find" => {
             let tag = parse_quoted_or_unquoted.parse_next(input)?;
             let _ = space0.parse_next(input)?;
-            // Second parameter is optional for filter expressions
-            let value = opt(parse_quoted_or_unquoted).parse_next(input)?.unwrap_or_default();
-            Ok(Command::Find { tag, value })
+
+            // Check if this is a filter expression (starts with '(')
+            if tag.starts_with('(') {
+                // Filter expression - treat as single filter
+                Ok(Command::Find { filters: vec![(tag, String::new())] })
+            } else {
+                // Traditional syntax: tag value [tag value ...]
+                let mut filters = Vec::new();
+                let value = parse_quoted_or_unquoted.parse_next(input)?;
+                filters.push((tag, value));
+
+                // Parse additional tag-value pairs
+                loop {
+                    let _ = space0.parse_next(input)?;
+                    if input.is_empty() {
+                        break;
+                    }
+
+                    let next_tag = match opt(parse_quoted_or_unquoted).parse_next(input)? {
+                        Some(t) if !t.is_empty() => t,
+                        _ => break,
+                    };
+
+                    let _ = space0.parse_next(input)?;
+                    let next_value = parse_quoted_or_unquoted.parse_next(input)?;
+                    filters.push((next_tag, next_value));
+                }
+
+                Ok(Command::Find { filters })
+            }
         }
         "search" => {
             let tag = parse_quoted_or_unquoted.parse_next(input)?;
             let _ = space0.parse_next(input)?;
-            // Second parameter is optional for filter expressions
-            let value = opt(parse_quoted_or_unquoted).parse_next(input)?.unwrap_or_default();
-            Ok(Command::Search { tag, value })
+
+            // Check if this is a filter expression (starts with '(')
+            if tag.starts_with('(') {
+                // Filter expression - treat as single filter
+                Ok(Command::Search { filters: vec![(tag, String::new())] })
+            } else {
+                // Traditional syntax: tag value [tag value ...]
+                let mut filters = Vec::new();
+                let value = parse_quoted_or_unquoted.parse_next(input)?;
+                filters.push((tag, value));
+
+                // Parse additional tag-value pairs
+                loop {
+                    let _ = space0.parse_next(input)?;
+                    if input.is_empty() {
+                        break;
+                    }
+
+                    let next_tag = match opt(parse_quoted_or_unquoted).parse_next(input)? {
+                        Some(t) if !t.is_empty() => t,
+                        _ => break,
+                    };
+
+                    let _ = space0.parse_next(input)?;
+                    let next_value = parse_quoted_or_unquoted.parse_next(input)?;
+                    filters.push((next_tag, next_value));
+                }
+
+                Ok(Command::Search { filters })
+            }
         }
         "list" => {
             let tag = parse_quoted_or_unquoted.parse_next(input)?;
