@@ -42,6 +42,19 @@ impl SymphoniaDecoder {
 
         let reader = probed.format;
 
+        // Log all available tracks
+        tracing::debug!("Available tracks: {}", reader.tracks().len());
+        for (idx, t) in reader.tracks().iter().enumerate() {
+            tracing::debug!(
+                "Track {}: id={}, codec={:?}, channels={:?}, sample_rate={:?}",
+                idx,
+                t.id,
+                t.codec_params.codec,
+                t.codec_params.channels,
+                t.codec_params.sample_rate
+            );
+        }
+
         // Find the first audio track
         let track = reader
             .tracks()
@@ -50,6 +63,7 @@ impl SymphoniaDecoder {
             .ok_or_else(|| RmpdError::Player("No audio tracks found".to_string()))?;
 
         let track_id = track.id;
+        tracing::debug!("Selected track_id: {}, codec: {:?}", track_id, track.codec_params.codec);
         let codec_params = &track.codec_params;
 
         // Get audio format info
@@ -128,9 +142,19 @@ impl SymphoniaDecoder {
                     packet
                 }
                 Err(SymphoniaError::IoError(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-                    // End of stream
-                    tracing::debug!("EOF reached after {} packets, samples_written: {}", packets_read, samples_written);
-                    break;
+                    // Check if this is truly "end of stream" or some other EOF condition
+                    let error_msg = e.to_string();
+                    tracing::debug!("UnexpectedEof after {} packets, error: {}", packets_read, error_msg);
+
+                    // Only treat "end of stream" as actual EOF (per Symphonia docs)
+                    if error_msg.contains("end of stream") {
+                        tracing::debug!("True end of stream reached, samples_written: {}", samples_written);
+                        break;
+                    } else {
+                        // Other UnexpectedEof errors - log and continue
+                        tracing::warn!("Non-fatal UnexpectedEof: {}, continuing", error_msg);
+                        continue;
+                    }
                 }
                 Err(SymphoniaError::ResetRequired) => {
                     // Decoder needs reset
@@ -146,8 +170,10 @@ impl SymphoniaDecoder {
 
             // Skip packets from other tracks
             if packet.track_id() != self.track_id {
+                tracing::debug!("Skipping packet from track {} (want track {})", packet.track_id(), self.track_id);
                 continue;
             }
+            tracing::debug!("Processing packet from track {}, size: {} bytes", packet.track_id(), packet.buf().len());
 
             // Decode packet
             let decoded = match self.decoder.decode(&packet) {

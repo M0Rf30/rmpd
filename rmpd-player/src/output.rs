@@ -2,14 +2,14 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, Stream, StreamConfig};
 use rmpd_core::error::{Result, RmpdError};
 use rmpd_core::song::AudioFormat;
-use std::sync::mpsc::{channel, Sender};
+use std::sync::mpsc::{sync_channel, SyncSender};
 use std::sync::{Arc, Mutex};
 
 /// cpal-based audio output
 pub struct CpalOutput {
     device: Device,
     stream: Option<Stream>,
-    sample_sender: Option<Sender<Vec<f32>>>,
+    sample_sender: Option<SyncSender<Vec<f32>>>,
     config: StreamConfig,
     is_paused: bool,
 }
@@ -43,7 +43,9 @@ impl CpalOutput {
             return Ok(()); // Already started
         }
 
-        let (tx, rx) = channel::<Vec<f32>>();
+        // Use bounded channel to block when buffer is full (prevents decoding faster than playback)
+        // Buffer size: allow ~5 chunks to be queued (at 4096 samples/chunk, ~0.1s per chunk @ 44.1kHz)
+        let (tx, rx) = sync_channel::<Vec<f32>>(5);
         let rx = Arc::new(Mutex::new(rx));
         let mut sample_buffer: Vec<f32> = Vec::new();
         let mut buffer_pos = 0;
