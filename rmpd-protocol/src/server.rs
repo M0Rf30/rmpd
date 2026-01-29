@@ -1214,9 +1214,21 @@ async fn handle_albumart_command(state: &AppState, uri: &str, offset: usize) -> 
         Err(e) => return Response::Text(ResponseBuilder::error(50, 0, "albumart", &format!("database error: {}", e))),
     };
 
+    // Resolve relative path to absolute path
+    let absolute_path = if uri.starts_with('/') {
+        // Already absolute
+        uri.to_string()
+    } else {
+        // Relative to music directory
+        match &state.music_dir {
+            Some(music_dir) => format!("{}/{}", music_dir, uri),
+            None => return Response::Text(ResponseBuilder::error(50, 0, "albumart", "music directory not configured")),
+        }
+    };
+
     let extractor = rmpd_library::AlbumArtExtractor::new(db);
 
-    match extractor.get_artwork(uri, offset) {
+    match extractor.get_artwork(&absolute_path, offset) {
         Ok(Some(artwork)) => {
             // Binary response with proper format
             let mut resp = ResponseBuilder::new();
