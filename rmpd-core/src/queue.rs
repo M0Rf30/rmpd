@@ -95,6 +95,20 @@ impl Queue {
         self.version += 1;
     }
 
+    pub fn shuffle_range(&mut self, start: u32, end: u32) {
+        use rand::seq::SliceRandom;
+        use rand::rng;
+
+        let start_idx = start as usize;
+        let end_idx = end.min(self.items.len() as u32) as usize;
+
+        if start_idx < end_idx && end_idx <= self.items.len() {
+            self.items[start_idx..end_idx].shuffle(&mut rng());
+            self.reindex();
+            self.version += 1;
+        }
+    }
+
     pub fn move_item(&mut self, from: u32, to: u32) -> bool {
         if from >= self.items.len() as u32 || to >= self.items.len() as u32 {
             return false;
@@ -172,5 +186,89 @@ impl Queue {
         for (idx, item) in self.items.iter_mut().enumerate() {
             item.position = idx as u32;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::song::Song;
+    use camino::Utf8PathBuf;
+
+    fn create_test_song(id: u64, name: &str) -> Song {
+        Song {
+            id,
+            path: Utf8PathBuf::from(format!("song{}.mp3", name)),
+            title: Some(format!("Song {}", name)),
+            duration: None,
+            artist: None,
+            album: None,
+            album_artist: None,
+            track: None,
+            disc: None,
+            date: None,
+            genre: None,
+            composer: None,
+            performer: None,
+            comment: None,
+            sample_rate: None,
+            channels: None,
+            bits_per_sample: None,
+            bitrate: None,
+            replay_gain_track_gain: None,
+            replay_gain_track_peak: None,
+            replay_gain_album_gain: None,
+            replay_gain_album_peak: None,
+            added_at: 0,
+            last_modified: 0,
+        }
+    }
+
+    #[test]
+    fn test_shuffle_range() {
+        let mut queue = Queue::new();
+
+        // Add test items
+        for i in 0..10 {
+            let song = create_test_song(i as u64, &i.to_string());
+            queue.add(song);
+        }
+
+        // Get original IDs of items 2-5
+        let original_ids: Vec<u32> = (2..5).map(|i| queue.get(i).unwrap().id).collect();
+
+        // Shuffle range 2:5
+        queue.shuffle_range(2, 5);
+
+        // Get IDs after shuffle
+        let shuffled_ids: Vec<u32> = (2..5).map(|i| queue.get(i).unwrap().id).collect();
+
+        // Check that the same IDs are still in the range (just reordered)
+        assert_eq!(original_ids.len(), shuffled_ids.len());
+        for id in original_ids {
+            assert!(shuffled_ids.contains(&id));
+        }
+
+        // Check that items outside the range weren't affected
+        assert_eq!(queue.get(0).unwrap().song.title, Some("Song 0".to_string()));
+        assert_eq!(queue.get(1).unwrap().song.title, Some("Song 1".to_string()));
+        assert_eq!(queue.get(5).unwrap().song.title, Some("Song 5".to_string()));
+    }
+
+    #[test]
+    fn test_shuffle_range_bounds() {
+        let mut queue = Queue::new();
+
+        // Add 5 items
+        for i in 0..5 {
+            let song = create_test_song(i as u64, &i.to_string());
+            queue.add(song);
+        }
+
+        // Test with range beyond length - should handle gracefully
+        queue.shuffle_range(2, 100);
+
+        // Should still have 5 items
+        assert_eq!(queue.len(), 5);
     }
 }

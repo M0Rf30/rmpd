@@ -42,8 +42,8 @@ pub enum Command {
     PlaylistInfo { range: Option<(u32, u32)> },
     PlaylistId { id: Option<u32> },
     Playlist,  // Deprecated, use PlaylistInfo
-    PlChanges { version: u32 },
-    PlChangesPosId { version: u32 },
+    PlChanges { version: u32, range: Option<(u32, u32)> },
+    PlChangesPosId { version: u32, range: Option<(u32, u32)> },
     PlaylistFind { tag: String, value: String },
     PlaylistSearch { tag: String, value: String },
 
@@ -78,13 +78,13 @@ pub enum Command {
     // Database
     Update { path: Option<String> },
     Rescan { path: Option<String> },
-    Find { filters: Vec<(String, String)> },
-    Search { filters: Vec<(String, String)> },
+    Find { filters: Vec<(String, String)>, sort: Option<String>, window: Option<(u32, u32)> },
+    Search { filters: Vec<(String, String)>, sort: Option<String>, window: Option<(u32, u32)> },
     List { tag: String, filter_tag: Option<String>, filter_value: Option<String>, group: Option<String> },
     ListAll { path: Option<String> },
     ListAllInfo { path: Option<String> },
     LsInfo { path: Option<String> },
-    Count { tag: String, value: String },
+    Count { filters: Vec<(String, String)>, group: Option<String> },
     SearchCount { tag: String, value: String, group: Option<String> },
     GetFingerprint { uri: String },
     ReadComments { uri: String },
@@ -97,9 +97,9 @@ pub enum Command {
     Save { name: String, mode: Option<SaveMode> },
     Load { name: String, range: Option<(u32, u32)>, position: Option<u32> },
     ListPlaylists,
-    ListPlaylist { name: String },
-    ListPlaylistInfo { name: String },
-    PlaylistAdd { name: String, uri: String },
+    ListPlaylist { name: String, range: Option<(u32, u32)> },
+    ListPlaylistInfo { name: String, range: Option<(u32, u32)> },
+    PlaylistAdd { name: String, uri: String, position: Option<u32> },
     PlaylistClear { name: String },
     PlaylistDelete { name: String, position: u32 },
     PlaylistMove { name: String, from: u32, to: u32 },
@@ -163,8 +163,8 @@ pub enum Command {
     SendMessage { channel: String, message: String },
 
     // Advanced queue operations
-    Prio { priority: u8, range: (u32, u32) },
-    PrioId { priority: u8, id: u32 },
+    Prio { priority: u8, ranges: Vec<(u32, u32)> },
+    PrioId { priority: u8, ids: Vec<u32> },
     RangeId { id: u32, range: (f64, f64) },
     AddTagId { id: u32, tag: String, value: String },
     ClearTagId { id: u32, tag: Option<String> },
@@ -304,7 +304,10 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
             let to = parse_u32.parse_next(input)?;
             Ok(Command::MoveId { id, to })
         }
-        "shuffle" => Ok(Command::Shuffle { range: None }),
+        "shuffle" => {
+            let range = opt(parse_range).parse_next(input)?;
+            Ok(Command::Shuffle { range })
+        }
         "swap" => {
             let pos1 = parse_u32.parse_next(input)?;
             let _ = space0.parse_next(input)?;
@@ -321,7 +324,10 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
         "currentsong" => Ok(Command::CurrentSong),
         "stats" => Ok(Command::Stats),
         "clearerror" => Ok(Command::ClearError),
-        "playlistinfo" => Ok(Command::PlaylistInfo { range: None }),
+        "playlistinfo" => {
+            let range = opt(parse_range).parse_next(input)?;
+            Ok(Command::PlaylistInfo { range })
+        }
         "playlistid" => {
             let id = opt(parse_u32).parse_next(input)?;
             Ok(Command::PlaylistId { id })
@@ -329,11 +335,15 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
         "playlist" => Ok(Command::Playlist),
         "plchanges" => {
             let version = parse_u32_or_quoted.parse_next(input)?;
-            Ok(Command::PlChanges { version })
+            let _ = space0.parse_next(input)?;
+            let range = opt(parse_range).parse_next(input)?;
+            Ok(Command::PlChanges { version, range })
         }
         "plchangesposid" => {
             let version = parse_u32_or_quoted.parse_next(input)?;
-            Ok(Command::PlChangesPosId { version })
+            let _ = space0.parse_next(input)?;
+            let range = opt(parse_range).parse_next(input)?;
+            Ok(Command::PlChangesPosId { version, range })
         }
         "playlistfind" => {
             let tag = parse_string.parse_next(input)?;
@@ -524,31 +534,70 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
             // Check if this is a filter expression (starts with '(')
             if tag.starts_with('(') {
                 // Filter expression - treat as single filter
-                Ok(Command::Find { filters: vec![(tag, String::new())] })
+                Ok(Command::Find { filters: vec![(tag, String::new())], sort: None, window: None })
             } else {
-                // Traditional syntax: tag value [tag value ...]
+                // Traditional syntax: tag value [tag value ...] [sort TAG] [window START:END]
                 let mut filters = Vec::new();
                 let value = parse_quoted_or_unquoted.parse_next(input)?;
                 filters.push((tag, value));
 
-                // Parse additional tag-value pairs
+                // Parse additional tag-value pairs until we hit sort/window keywords
                 loop {
                     let _ = space0.parse_next(input)?;
                     if input.is_empty() {
                         break;
                     }
 
-                    let next_tag = match opt(parse_quoted_or_unquoted).parse_next(input)? {
+                    let saved_input = *input;
+                    let next_token = match opt(parse_quoted_or_unquoted).parse_next(input)? {
                         Some(t) if !t.is_empty() => t,
                         _ => break,
                     };
 
+                    // Check for sort or window keywords
+                    if next_token == "sort" || next_token == "window" {
+                        *input = saved_input;
+                        break;
+                    }
+
                     let _ = space0.parse_next(input)?;
                     let next_value = parse_quoted_or_unquoted.parse_next(input)?;
-                    filters.push((next_tag, next_value));
+                    filters.push((next_token, next_value));
                 }
 
-                Ok(Command::Find { filters })
+                // Parse optional sort and window
+                let mut sort = None;
+                let mut window = None;
+
+                loop {
+                    let _ = space0.parse_next(input)?;
+                    if input.is_empty() {
+                        break;
+                    }
+
+                    let saved_input = *input;
+                    let keyword = match opt(parse_quoted_or_unquoted).parse_next(input)? {
+                        Some(k) => k,
+                        None => break,
+                    };
+
+                    match keyword.as_str() {
+                        "sort" => {
+                            let _ = space0.parse_next(input)?;
+                            sort = Some(parse_quoted_or_unquoted.parse_next(input)?);
+                        }
+                        "window" => {
+                            let _ = space0.parse_next(input)?;
+                            window = Some(parse_range.parse_next(input)?);
+                        }
+                        _ => {
+                            *input = saved_input;
+                            break;
+                        }
+                    }
+                }
+
+                Ok(Command::Find { filters, sort, window })
             }
         }
         "search" => {
@@ -558,31 +607,70 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
             // Check if this is a filter expression (starts with '(')
             if tag.starts_with('(') {
                 // Filter expression - treat as single filter
-                Ok(Command::Search { filters: vec![(tag, String::new())] })
+                Ok(Command::Search { filters: vec![(tag, String::new())], sort: None, window: None })
             } else {
-                // Traditional syntax: tag value [tag value ...]
+                // Traditional syntax: tag value [tag value ...] [sort TAG] [window START:END]
                 let mut filters = Vec::new();
                 let value = parse_quoted_or_unquoted.parse_next(input)?;
                 filters.push((tag, value));
 
-                // Parse additional tag-value pairs
+                // Parse additional tag-value pairs until we hit sort/window keywords
                 loop {
                     let _ = space0.parse_next(input)?;
                     if input.is_empty() {
                         break;
                     }
 
-                    let next_tag = match opt(parse_quoted_or_unquoted).parse_next(input)? {
+                    let saved_input = *input;
+                    let next_token = match opt(parse_quoted_or_unquoted).parse_next(input)? {
                         Some(t) if !t.is_empty() => t,
                         _ => break,
                     };
 
+                    // Check for sort or window keywords
+                    if next_token == "sort" || next_token == "window" {
+                        *input = saved_input;
+                        break;
+                    }
+
                     let _ = space0.parse_next(input)?;
                     let next_value = parse_quoted_or_unquoted.parse_next(input)?;
-                    filters.push((next_tag, next_value));
+                    filters.push((next_token, next_value));
                 }
 
-                Ok(Command::Search { filters })
+                // Parse optional sort and window
+                let mut sort = None;
+                let mut window = None;
+
+                loop {
+                    let _ = space0.parse_next(input)?;
+                    if input.is_empty() {
+                        break;
+                    }
+
+                    let saved_input = *input;
+                    let keyword = match opt(parse_quoted_or_unquoted).parse_next(input)? {
+                        Some(k) => k,
+                        None => break,
+                    };
+
+                    match keyword.as_str() {
+                        "sort" => {
+                            let _ = space0.parse_next(input)?;
+                            sort = Some(parse_quoted_or_unquoted.parse_next(input)?);
+                        }
+                        "window" => {
+                            let _ = space0.parse_next(input)?;
+                            window = Some(parse_range.parse_next(input)?);
+                        }
+                        _ => {
+                            *input = saved_input;
+                            break;
+                        }
+                    }
+                }
+
+                Ok(Command::Search { filters, sort, window })
             }
         }
         "list" => {
@@ -642,10 +730,47 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
             Ok(Command::LsInfo { path })
         }
         "count" => {
-            let tag = parse_string.parse_next(input)?;
+            // Parse filter pairs: TAG VALUE [TAG VALUE ...] [group GROUPTAG]
+            let mut filters = Vec::new();
+
+            loop {
+                let _ = space0.parse_next(input)?;
+                if input.is_empty() {
+                    break;
+                }
+
+                let saved_input = *input;
+                let tag = match opt(parse_quoted_or_unquoted).parse_next(input)? {
+                    Some(t) if !t.is_empty() => t,
+                    _ => break,
+                };
+
+                // Check for "group" keyword
+                if tag == "group" {
+                    *input = saved_input;
+                    break;
+                }
+
+                let _ = space0.parse_next(input)?;
+                let value = parse_quoted_or_unquoted.parse_next(input)?;
+                filters.push((tag, value));
+            }
+
+            // Parse optional group
             let _ = space0.parse_next(input)?;
-            let value = parse_quoted_or_unquoted.parse_next(input)?;
-            Ok(Command::Count { tag, value })
+            let group = if !input.is_empty() {
+                let keyword = opt(parse_quoted_or_unquoted).parse_next(input)?;
+                if keyword.as_deref() == Some("group") {
+                    let _ = space0.parse_next(input)?;
+                    opt(parse_quoted_or_unquoted).parse_next(input)?
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            Ok(Command::Count { filters, group })
         }
         "searchcount" => {
             let tag = parse_string.parse_next(input)?;
@@ -716,17 +841,23 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
         "listplaylists" => Ok(Command::ListPlaylists),
         "listplaylist" => {
             let name = parse_quoted_or_unquoted.parse_next(input)?;
-            Ok(Command::ListPlaylist { name })
+            let _ = space0.parse_next(input)?;
+            let range = opt(parse_range).parse_next(input)?;
+            Ok(Command::ListPlaylist { name, range })
         }
         "listplaylistinfo" => {
             let name = parse_quoted_or_unquoted.parse_next(input)?;
-            Ok(Command::ListPlaylistInfo { name })
+            let _ = space0.parse_next(input)?;
+            let range = opt(parse_range).parse_next(input)?;
+            Ok(Command::ListPlaylistInfo { name, range })
         }
         "playlistadd" => {
             let name = parse_quoted_or_unquoted.parse_next(input)?;
             let _ = space0.parse_next(input)?;
             let uri = parse_quoted_or_unquoted.parse_next(input)?;
-            Ok(Command::PlaylistAdd { name, uri })
+            let _ = space0.parse_next(input)?;
+            let position = opt(parse_u32).parse_next(input)?;
+            Ok(Command::PlaylistAdd { name, uri, position })
         }
         "playlistclear" => {
             let name = parse_quoted_or_unquoted.parse_next(input)?;
@@ -950,16 +1081,46 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
         "prio" => {
             let priority = parse_u8.parse_next(input)?;
             let _ = space0.parse_next(input)?;
-            let start = parse_u32.parse_next(input)?;
-            let _ = space0.parse_next(input)?;
-            let end = parse_u32.parse_next(input)?;
-            Ok(Command::Prio { priority, range: (start, end) })
+
+            // Parse first range (required)
+            let first_range = parse_range.parse_next(input)?;
+            let mut ranges = vec![first_range];
+
+            // Parse additional ranges (optional)
+            loop {
+                let _ = space0.parse_next(input)?;
+                if input.is_empty() {
+                    break;
+                }
+                match opt(parse_range).parse_next(input)? {
+                    Some(range) => ranges.push(range),
+                    None => break,
+                }
+            }
+
+            Ok(Command::Prio { priority, ranges })
         }
         "prioid" => {
             let priority = parse_u8.parse_next(input)?;
             let _ = space0.parse_next(input)?;
-            let id = parse_u32.parse_next(input)?;
-            Ok(Command::PrioId { priority, id })
+
+            // Parse first ID (required)
+            let first_id = parse_u32.parse_next(input)?;
+            let mut ids = vec![first_id];
+
+            // Parse additional IDs (optional)
+            loop {
+                let _ = space0.parse_next(input)?;
+                if input.is_empty() {
+                    break;
+                }
+                match opt(parse_u32).parse_next(input)? {
+                    Some(id) => ids.push(id),
+                    None => break,
+                }
+            }
+
+            Ok(Command::PrioId { priority, ids })
         }
         "rangeid" => {
             let id = parse_u32.parse_next(input)?;
@@ -1141,5 +1302,161 @@ mod tests {
     #[test]
     fn test_status_command() {
         assert_eq!(parse_command("status").unwrap(), Command::Status);
+    }
+
+    #[test]
+    fn test_shuffle_with_range() {
+        assert_eq!(
+            parse_command("shuffle 5:10").unwrap(),
+            Command::Shuffle { range: Some((5, 10)) }
+        );
+        assert_eq!(
+            parse_command("shuffle").unwrap(),
+            Command::Shuffle { range: None }
+        );
+    }
+
+    #[test]
+    fn test_playlistinfo_with_range() {
+        assert_eq!(
+            parse_command("playlistinfo 0:5").unwrap(),
+            Command::PlaylistInfo { range: Some((0, 5)) }
+        );
+        assert_eq!(
+            parse_command("playlistinfo").unwrap(),
+            Command::PlaylistInfo { range: None }
+        );
+    }
+
+    #[test]
+    fn test_plchanges_with_range() {
+        assert_eq!(
+            parse_command("plchanges 0 5:10").unwrap(),
+            Command::PlChanges {
+                version: 0,
+                range: Some((5, 10))
+            }
+        );
+        assert_eq!(
+            parse_command("plchanges 10").unwrap(),
+            Command::PlChanges {
+                version: 10,
+                range: None
+            }
+        );
+    }
+
+    #[test]
+    fn test_prio_with_multiple_ranges() {
+        assert_eq!(
+            parse_command("prio 10 5:10").unwrap(),
+            Command::Prio {
+                priority: 10,
+                ranges: vec![(5, 10)]
+            }
+        );
+        assert_eq!(
+            parse_command("prio 10 5:10 15:20").unwrap(),
+            Command::Prio {
+                priority: 10,
+                ranges: vec![(5, 10), (15, 20)]
+            }
+        );
+        assert_eq!(
+            parse_command("prio 255 0:5 10:15 20:25").unwrap(),
+            Command::Prio {
+                priority: 255,
+                ranges: vec![(0, 5), (10, 15), (20, 25)]
+            }
+        );
+    }
+
+    #[test]
+    fn test_prioid_with_multiple_ids() {
+        assert_eq!(
+            parse_command("prioid 10 5").unwrap(),
+            Command::PrioId {
+                priority: 10,
+                ids: vec![5]
+            }
+        );
+        assert_eq!(
+            parse_command("prioid 10 5 15").unwrap(),
+            Command::PrioId {
+                priority: 10,
+                ids: vec![5, 15]
+            }
+        );
+        assert_eq!(
+            parse_command("prioid 255 1 2 3 4 5").unwrap(),
+            Command::PrioId {
+                priority: 255,
+                ids: vec![1, 2, 3, 4, 5]
+            }
+        );
+    }
+
+    #[test]
+    fn test_find_with_sort_and_window() {
+        assert_eq!(
+            parse_command("find artist Metallica").unwrap(),
+            Command::Find {
+                filters: vec![("artist".to_string(), "Metallica".to_string())],
+                sort: None,
+                window: None
+            }
+        );
+        assert_eq!(
+            parse_command("find artist Metallica sort album").unwrap(),
+            Command::Find {
+                filters: vec![("artist".to_string(), "Metallica".to_string())],
+                sort: Some("album".to_string()),
+                window: None
+            }
+        );
+        assert_eq!(
+            parse_command("find artist Metallica window 0:10").unwrap(),
+            Command::Find {
+                filters: vec![("artist".to_string(), "Metallica".to_string())],
+                sort: None,
+                window: Some((0, 10))
+            }
+        );
+        assert_eq!(
+            parse_command("find artist Metallica sort album window 0:10").unwrap(),
+            Command::Find {
+                filters: vec![("artist".to_string(), "Metallica".to_string())],
+                sort: Some("album".to_string()),
+                window: Some((0, 10))
+            }
+        );
+    }
+
+    #[test]
+    fn test_count_with_filters_and_group() {
+        assert_eq!(
+            parse_command("count artist Metallica").unwrap(),
+            Command::Count {
+                filters: vec![("artist".to_string(), "Metallica".to_string())],
+                group: None
+            }
+        );
+        assert_eq!(
+            parse_command("count artist Metallica group album").unwrap(),
+            Command::Count {
+                filters: vec![("artist".to_string(), "Metallica".to_string())],
+                group: Some("album".to_string())
+            }
+        );
+        assert_eq!(
+            parse_command("count artist Metallica album \"Master of Puppets\"").unwrap(),
+            Command::Count {
+                filters: vec![
+                    ("artist".to_string(), "Metallica".to_string()),
+                    ("album".to_string(), "Master of Puppets".to_string())
+                ],
+                group: None
+            }
+        );
     }
 }

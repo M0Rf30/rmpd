@@ -334,17 +334,17 @@ async fn handle_command(cmd: Command, state: &AppState) -> Response {
         Command::Update { path } | Command::Rescan { path } => {
             handle_update_command(state, path.as_deref()).await
         }
-        Command::Find { filters } => {
-            handle_find_command(state, &filters).await
+        Command::Find { filters, sort, window } => {
+            handle_find_command(state, &filters, sort.as_deref(), window).await
         }
-        Command::Search { filters } => {
-            handle_search_command(state, &filters).await
+        Command::Search { filters, sort, window } => {
+            handle_search_command(state, &filters, sort.as_deref(), window).await
         }
         Command::List { tag, filter_tag, filter_value, group: _ } => {
             handle_list_command(state, &tag, filter_tag.as_deref(), filter_value.as_deref()).await
         }
-        Command::Count { tag, value } => {
-            handle_count_command(state, &tag, &value).await
+        Command::Count { filters, group } => {
+            handle_count_command(state, &filters, group.as_deref()).await
         }
         Command::ListAll { path } => {
             handle_listall_command(state, path.as_deref()).await
@@ -358,18 +358,18 @@ async fn handle_command(cmd: Command, state: &AppState) -> Response {
         Command::CurrentSong => {
             handle_currentsong_command(state).await
         }
-        Command::PlaylistInfo { range: _ } => {
-            handle_playlistinfo_command(state).await
+        Command::PlaylistInfo { range } => {
+            handle_playlistinfo_command(state, range).await
         }
         Command::Playlist => {
-            // Deprecated, same as playlistinfo
-            handle_playlistinfo_command(state).await
+            // Deprecated, same as playlistinfo without range
+            handle_playlistinfo_command(state, None).await
         }
-        Command::PlChanges { version } => {
-            handle_plchanges_command(state, version).await
+        Command::PlChanges { version, range } => {
+            handle_plchanges_command(state, version, range).await
         }
-        Command::PlChangesPosId { version } => {
-            handle_plchangesposid_command(state, version).await
+        Command::PlChangesPosId { version, range } => {
+            handle_plchangesposid_command(state, version, range).await
         }
         Command::PlaylistFind { tag, value } => {
             handle_playlistfind_command(state, &tag, &value).await
@@ -435,8 +435,8 @@ async fn handle_command(cmd: Command, state: &AppState) -> Response {
         Command::Move { from, to } => {
             handle_move_command(state, from, to).await
         }
-        Command::Shuffle { range: _ } => {
-            handle_shuffle_command(state).await
+        Command::Shuffle { range } => {
+            handle_shuffle_command(state, range).await
         }
         Command::PlaylistId { id } => {
             handle_playlistid_command(state, id).await
@@ -501,14 +501,14 @@ async fn handle_command(cmd: Command, state: &AppState) -> Response {
         Command::ListPlaylists => {
             handle_listplaylists_command(state).await
         }
-        Command::ListPlaylist { name } => {
-            handle_listplaylist_command(state, &name).await
+        Command::ListPlaylist { name, range } => {
+            handle_listplaylist_command(state, &name, range).await
         }
-        Command::ListPlaylistInfo { name } => {
-            handle_listplaylistinfo_command(state, &name).await
+        Command::ListPlaylistInfo { name, range } => {
+            handle_listplaylistinfo_command(state, &name, range).await
         }
-        Command::PlaylistAdd { name, uri } => {
-            handle_playlistadd_command(state, &name, &uri).await
+        Command::PlaylistAdd { name, uri, position } => {
+            handle_playlistadd_command(state, &name, &uri, position).await
         }
         Command::PlaylistClear { name } => {
             handle_playlistclear_command(state, &name).await
@@ -646,11 +646,11 @@ async fn handle_command(cmd: Command, state: &AppState) -> Response {
             handle_sendmessage_command(&channel, &message).await
         }
         // Advanced queue
-        Command::Prio { priority, range } => {
-            handle_prio_command(state, priority, range).await
+        Command::Prio { priority, ranges } => {
+            handle_prio_command(state, priority, &ranges).await
         }
-        Command::PrioId { priority, id } => {
-            handle_prioid_command(state, priority, id).await
+        Command::PrioId { priority, ids } => {
+            handle_prioid_command(state, priority, &ids).await
         }
         Command::RangeId { id, range } => {
             handle_rangeid_command(state, id, range).await
@@ -683,7 +683,12 @@ async fn handle_command(cmd: Command, state: &AppState) -> Response {
     Response::Text(response_str)
 }
 
-async fn handle_find_command(state: &AppState, filters: &[(String, String)]) -> String {
+async fn handle_find_command(
+    state: &AppState,
+    filters: &[(String, String)],
+    sort: Option<&str>,
+    window: Option<(u32, u32)>
+) -> String {
     let db_path = match &state.db_path {
         Some(p) => p,
         None => return ResponseBuilder::error(50, 0, "find", "database not configured"),
@@ -699,7 +704,7 @@ async fn handle_find_command(state: &AppState, filters: &[(String, String)]) -> 
     }
 
     // Check if this is a filter expression (starts with '(')
-    let songs = if filters[0].0.starts_with('(') {
+    let mut songs = if filters[0].0.starts_with('(') {
         // Parse as filter expression
         match rmpd_core::filter::FilterExpression::parse(&filters[0].0) {
             Ok(filter) => {
@@ -740,14 +745,57 @@ async fn handle_find_command(state: &AppState, filters: &[(String, String)]) -> 
         }
     };
 
+    // Apply sorting if requested
+    if let Some(sort_tag) = sort {
+        songs.sort_by(|a, b| {
+            let a_val = get_tag_value(a, sort_tag);
+            let b_val = get_tag_value(b, sort_tag);
+            a_val.cmp(&b_val)
+        });
+    }
+
+    // Apply window filtering if requested
+    let filtered = if let Some((start, end)) = window {
+        let start_idx = start as usize;
+        let end_idx = end.min(songs.len() as u32) as usize;
+        if start_idx < songs.len() {
+            &songs[start_idx..end_idx]
+        } else {
+            &[]
+        }
+    } else {
+        &songs[..]
+    };
+
     let mut resp = ResponseBuilder::new();
-    for song in songs {
-        resp.song(&song, None, None);
+    for song in filtered {
+        resp.song(song, None, None);
     }
     resp.ok()
 }
 
-async fn handle_search_command(state: &AppState, filters: &[(String, String)]) -> String {
+// Helper function to get tag value for sorting
+fn get_tag_value(song: &rmpd_core::song::Song, tag: &str) -> String {
+    match tag.to_lowercase().as_str() {
+        "artist" => song.artist.clone().unwrap_or_default(),
+        "album" => song.album.clone().unwrap_or_default(),
+        "albumartist" => song.album_artist.clone().unwrap_or_default(),
+        "title" => song.title.clone().unwrap_or_default(),
+        "track" => song.track.map(|t| t.to_string()).unwrap_or_default(),
+        "date" => song.date.clone().unwrap_or_default(),
+        "genre" => song.genre.clone().unwrap_or_default(),
+        "composer" => song.composer.clone().unwrap_or_default(),
+        "performer" => song.performer.clone().unwrap_or_default(),
+        _ => String::new(),
+    }
+}
+
+async fn handle_search_command(
+    state: &AppState,
+    filters: &[(String, String)],
+    sort: Option<&str>,
+    window: Option<(u32, u32)>
+) -> String {
     let db_path = match &state.db_path {
         Some(p) => p,
         None => return ResponseBuilder::error(50, 0, "search", "database not configured"),
@@ -763,7 +811,7 @@ async fn handle_search_command(state: &AppState, filters: &[(String, String)]) -
     }
 
     // Check if this is a filter expression (starts with '(')
-    let songs = if filters[0].0.starts_with('(') {
+    let mut songs = if filters[0].0.starts_with('(') {
         // Parse as filter expression
         match rmpd_core::filter::FilterExpression::parse(&filters[0].0) {
             Ok(filter) => {
@@ -815,9 +863,31 @@ async fn handle_search_command(state: &AppState, filters: &[(String, String)]) -
         }
     };
 
+    // Apply sorting if requested
+    if let Some(sort_tag) = sort {
+        songs.sort_by(|a, b| {
+            let a_val = get_tag_value(a, sort_tag);
+            let b_val = get_tag_value(b, sort_tag);
+            a_val.cmp(&b_val)
+        });
+    }
+
+    // Apply window filtering if requested
+    let filtered = if let Some((start, end)) = window {
+        let start_idx = start as usize;
+        let end_idx = end.min(songs.len() as u32) as usize;
+        if start_idx < songs.len() {
+            &songs[start_idx..end_idx]
+        } else {
+            &[]
+        }
+    } else {
+        &songs[..]
+    };
+
     let mut resp = ResponseBuilder::new();
-    for song in songs {
-        resp.song(&song, None, None);
+    for song in filtered {
+        resp.song(song, None, None);
     }
     resp.ok()
 }
@@ -870,7 +940,11 @@ async fn handle_list_command(state: &AppState, tag: &str, filter_tag: Option<&st
     resp.ok()
 }
 
-async fn handle_count_command(state: &AppState, tag: &str, value: &str) -> String {
+async fn handle_count_command(
+    state: &AppState,
+    filters: &[(String, String)],
+    group: Option<&str>
+) -> String {
     let db_path = match &state.db_path {
         Some(p) => p,
         None => return ResponseBuilder::error(50, 0, "count", "database not configured"),
@@ -881,19 +955,72 @@ async fn handle_count_command(state: &AppState, tag: &str, value: &str) -> Strin
         Err(e) => return ResponseBuilder::error(50, 0, "count", &format!("database error: {}", e)),
     };
 
-    let songs = match db.find_songs(tag, value) {
-        Ok(s) => s,
-        Err(e) => return ResponseBuilder::error(50, 0, "count", &format!("query error: {}", e)),
+    if filters.is_empty() {
+        return ResponseBuilder::error(2, 0, "count", "missing arguments");
+    }
+
+    // Get songs based on filters
+    let songs = if filters.len() == 1 {
+        match db.find_songs(&filters[0].0, &filters[0].1) {
+            Ok(s) => s,
+            Err(e) => return ResponseBuilder::error(50, 0, "count", &format!("query error: {}", e)),
+        }
+    } else {
+        // Multiple filters - build AND expression
+        use rmpd_core::filter::{FilterExpression, CompareOp};
+        let mut expr = FilterExpression::Compare {
+            tag: filters[0].0.clone(),
+            op: CompareOp::Equal,
+            value: filters[0].1.clone(),
+        };
+
+        for filter in &filters[1..] {
+            let next_expr = FilterExpression::Compare {
+                tag: filter.0.clone(),
+                op: CompareOp::Equal,
+                value: filter.1.clone(),
+            };
+            expr = FilterExpression::And(Box::new(expr), Box::new(next_expr));
+        }
+
+        match db.find_songs_filter(&expr) {
+            Ok(s) => s,
+            Err(e) => return ResponseBuilder::error(50, 0, "count", &format!("query error: {}", e)),
+        }
     };
 
-    let total_duration: u64 = songs.iter()
-        .filter_map(|s| s.duration)
-        .map(|d| d.as_secs())
-        .sum();
-
     let mut resp = ResponseBuilder::new();
-    resp.field("songs", songs.len());
-    resp.field("playtime", total_duration);
+
+    if let Some(group_tag) = group {
+        // Group by specified tag
+        use std::collections::HashMap;
+        let mut groups: HashMap<String, (usize, u64)> = HashMap::new();
+
+        for song in &songs {
+            let group_value = get_tag_value(song, group_tag);
+            let entry = groups.entry(group_value.clone()).or_insert((0, 0));
+            entry.0 += 1;
+            if let Some(duration) = song.duration {
+                entry.1 += duration.as_secs();
+            }
+        }
+
+        for (value, (count, playtime)) in groups {
+            resp.field(&group_tag, &value);
+            resp.field("songs", count);
+            resp.field("playtime", playtime);
+        }
+    } else {
+        // No grouping - return totals
+        let total_duration: u64 = songs.iter()
+            .filter_map(|s| s.duration)
+            .map(|d| d.as_secs())
+            .sum();
+
+        resp.field("songs", songs.len());
+        resp.field("playtime", total_duration);
+    }
+
     resp.ok()
 }
 
@@ -1481,8 +1608,12 @@ async fn handle_swapid_command(state: &AppState, id1: u32, id2: u32) -> String {
     }
 }
 
-async fn handle_shuffle_command(state: &AppState) -> String {
-    state.queue.write().await.shuffle();
+async fn handle_shuffle_command(state: &AppState, range: Option<(u32, u32)>) -> String {
+    if let Some((start, end)) = range {
+        state.queue.write().await.shuffle_range(start, end);
+    } else {
+        state.queue.write().await.shuffle();
+    }
     let mut status = state.status.write().await;
     status.playlist_version += 1;
     ResponseBuilder::new().ok()
@@ -1577,11 +1708,25 @@ async fn handle_currentsong_command(state: &AppState) -> String {
     ResponseBuilder::new().ok()
 }
 
-async fn handle_playlistinfo_command(state: &AppState) -> String {
+async fn handle_playlistinfo_command(state: &AppState, range: Option<(u32, u32)>) -> String {
     let queue = state.queue.read().await;
+    let items = queue.items();
     let mut resp = ResponseBuilder::new();
 
-    for item in queue.items() {
+    // Apply range filter
+    let filtered = if let Some((start, end)) = range {
+        let start_idx = start as usize;
+        let end_idx = end.min(items.len() as u32) as usize;
+        if start_idx < items.len() {
+            &items[start_idx..end_idx]
+        } else {
+            &[]
+        }
+    } else {
+        items
+    };
+
+    for item in filtered {
         resp.song(&item.song, Some(item.position), Some(item.id));
     }
 
@@ -1824,7 +1969,7 @@ async fn handle_listplaylists_command(state: &AppState) -> String {
     }
 }
 
-async fn handle_listplaylist_command(state: &AppState, name: &str) -> String {
+async fn handle_listplaylist_command(state: &AppState, name: &str, range: Option<(u32, u32)>) -> String {
     let db_path = match &state.db_path {
         Some(p) => p,
         None => return ResponseBuilder::error(50, 0, "listplaylist", "database not configured"),
@@ -1837,8 +1982,21 @@ async fn handle_listplaylist_command(state: &AppState, name: &str) -> String {
 
     match db.get_playlist_songs(name) {
         Ok(songs) => {
+            // Apply range filter
+            let filtered = if let Some((start, end)) = range {
+                let start_idx = start as usize;
+                let end_idx = end.min(songs.len() as u32) as usize;
+                if start_idx < songs.len() {
+                    &songs[start_idx..end_idx]
+                } else {
+                    &[]
+                }
+            } else {
+                &songs[..]
+            };
+
             let mut resp = ResponseBuilder::new();
-            for song in &songs {
+            for song in filtered {
                 resp.field("file", &song.path);
             }
             resp.ok()
@@ -1847,7 +2005,7 @@ async fn handle_listplaylist_command(state: &AppState, name: &str) -> String {
     }
 }
 
-async fn handle_listplaylistinfo_command(state: &AppState, name: &str) -> String {
+async fn handle_listplaylistinfo_command(state: &AppState, name: &str, range: Option<(u32, u32)>) -> String {
     let db_path = match &state.db_path {
         Some(p) => p,
         None => return ResponseBuilder::error(50, 0, "listplaylistinfo", "database not configured"),
@@ -1860,8 +2018,21 @@ async fn handle_listplaylistinfo_command(state: &AppState, name: &str) -> String
 
     match db.get_playlist_songs(name) {
         Ok(songs) => {
+            // Apply range filter
+            let filtered = if let Some((start, end)) = range {
+                let start_idx = start as usize;
+                let end_idx = end.min(songs.len() as u32) as usize;
+                if start_idx < songs.len() {
+                    &songs[start_idx..end_idx]
+                } else {
+                    &[]
+                }
+            } else {
+                &songs[..]
+            };
+
             let mut resp = ResponseBuilder::new();
-            for song in &songs {
+            for song in filtered {
                 resp.song(song, None, None);
             }
             resp.ok()
@@ -1870,7 +2041,7 @@ async fn handle_listplaylistinfo_command(state: &AppState, name: &str) -> String
     }
 }
 
-async fn handle_playlistadd_command(state: &AppState, name: &str, uri: &str) -> String {
+async fn handle_playlistadd_command(state: &AppState, name: &str, uri: &str, position: Option<u32>) -> String {
     let db_path = match &state.db_path {
         Some(p) => p,
         None => return ResponseBuilder::error(50, 0, "playlistadd", "database not configured"),
@@ -1880,6 +2051,10 @@ async fn handle_playlistadd_command(state: &AppState, name: &str, uri: &str) -> 
         Ok(d) => d,
         Err(e) => return ResponseBuilder::error(50, 0, "playlistadd", &format!("database error: {}", e)),
     };
+
+    // TODO: Implement position support in database layer
+    // For now, position parameter is parsed but not used
+    let _ = position;
 
     match db.playlist_add(name, uri) {
         Ok(_) => ResponseBuilder::new().ok(),
@@ -2573,15 +2748,19 @@ async fn handle_sendmessage_command(_channel: &str, _message: &str) -> String {
 }
 
 // Advanced queue operations
-async fn handle_prio_command(state: &AppState, _priority: u8, _range: (u32, u32)) -> String {
-    // Set priority for range (stub - would need priority field in QueueItem)
+async fn handle_prio_command(state: &AppState, _priority: u8, _ranges: &[(u32, u32)]) -> String {
+    // Set priority for multiple ranges (stub - would need priority field in QueueItem)
+    // TODO: Implement priority support in QueueItem
+    // For each range in ranges, set priority for items in that range
     let mut status = state.status.write().await;
     status.playlist_version += 1;
     ResponseBuilder::new().ok()
 }
 
-async fn handle_prioid_command(state: &AppState, _priority: u8, _id: u32) -> String {
-    // Set priority for ID (stub)
+async fn handle_prioid_command(state: &AppState, _priority: u8, _ids: &[u32]) -> String {
+    // Set priority for multiple IDs (stub - would need priority field in QueueItem)
+    // TODO: Implement priority support in QueueItem
+    // For each ID in ids, set priority for that queue item
     let mut status = state.status.write().await;
     status.playlist_version += 1;
     ResponseBuilder::new().ok()
@@ -2634,7 +2813,7 @@ async fn handle_mixrampdelay_command(state: &AppState, seconds: f32) -> String {
 }
 
 // Queue inspection commands
-async fn handle_plchanges_command(state: &AppState, version: u32) -> String {
+async fn handle_plchanges_command(state: &AppState, version: u32, range: Option<(u32, u32)>) -> String {
     // Return changes in queue since version
     // MPD protocol: version 0 means "give me current playlist"
     // Otherwise, return items if playlist has changed since given version
@@ -2642,7 +2821,22 @@ async fn handle_plchanges_command(state: &AppState, version: u32) -> String {
     let mut resp = ResponseBuilder::new();
 
     if version == 0 || queue.version() > version {
-        for item in queue.items() {
+        let items = queue.items();
+
+        // Apply range filter
+        let filtered = if let Some((start, end)) = range {
+            let start_idx = start as usize;
+            let end_idx = end.min(items.len() as u32) as usize;
+            if start_idx < items.len() {
+                &items[start_idx..end_idx]
+            } else {
+                &[]
+            }
+        } else {
+            items
+        };
+
+        for item in filtered {
             resp.field("file", item.song.path.as_str());
             resp.field("Pos", &item.position.to_string());
             resp.field("Id", &item.id.to_string());
@@ -2654,7 +2848,7 @@ async fn handle_plchanges_command(state: &AppState, version: u32) -> String {
     resp.ok()
 }
 
-async fn handle_plchangesposid_command(state: &AppState, version: u32) -> String {
+async fn handle_plchangesposid_command(state: &AppState, version: u32, range: Option<(u32, u32)>) -> String {
     // Return position/id changes since version
     // MPD protocol: version 0 means "give me current playlist"
     // Otherwise, return items if playlist has changed since given version
@@ -2662,7 +2856,22 @@ async fn handle_plchangesposid_command(state: &AppState, version: u32) -> String
     let mut resp = ResponseBuilder::new();
 
     if version == 0 || queue.version() > version {
-        for item in queue.items() {
+        let items = queue.items();
+
+        // Apply range filter
+        let filtered = if let Some((start, end)) = range {
+            let start_idx = start as usize;
+            let end_idx = end.min(items.len() as u32) as usize;
+            if start_idx < items.len() {
+                &items[start_idx..end_idx]
+            } else {
+                &[]
+            }
+        } else {
+            items
+        };
+
+        for item in filtered {
             resp.field("cpos", &item.position.to_string());
             resp.field("Id", &item.id.to_string());
         }
@@ -2730,10 +2939,10 @@ async fn handle_replaygain_status_command(state: &AppState) -> String {
 }
 
 // Database commands
-async fn handle_searchcount_command(state: &AppState, tag: &str, value: &str, _group: Option<&str>) -> String {
+async fn handle_searchcount_command(state: &AppState, tag: &str, value: &str, group: Option<&str>) -> String {
     // Count search results with optional grouping
-    // For now, same as count but could support grouping in future
-    handle_count_command(state, tag, value).await
+    let filters = vec![(tag.to_string(), value.to_string())];
+    handle_count_command(state, &filters, group).await
 }
 
 async fn handle_getfingerprint_command(state: &AppState, uri: &str) -> String {
