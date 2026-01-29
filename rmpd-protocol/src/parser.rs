@@ -1,0 +1,359 @@
+use winnow::prelude::*;
+use winnow::token::{take_till, take_while};
+use winnow::combinator::{alt, opt, separated};
+use winnow::ascii::{space0, newline};
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Command {
+    // Playback control
+    Play { position: Option<u32> },
+    PlayId { id: Option<u32> },
+    Pause { state: Option<bool> },
+    Stop,
+    Next,
+    Previous,
+    Seek { position: u32, time: f64 },
+    SeekId { id: u32, time: f64 },
+    SeekCur { time: f64, relative: bool },
+
+    // Queue management
+    Add { uri: String },
+    AddId { uri: String, position: Option<u32> },
+    Delete { position: u32 },
+    DeleteId { id: u32 },
+    Clear,
+    Move { from: u32, to: u32 },
+    MoveId { id: u32, to: u32 },
+    Shuffle { range: Option<(u32, u32)> },
+    Swap { pos1: u32, pos2: u32 },
+    SwapId { id1: u32, id2: u32 },
+
+    // Status
+    Status,
+    CurrentSong,
+    Stats,
+
+    // Queue inspection
+    PlaylistInfo { range: Option<(u32, u32)> },
+    PlaylistId { id: Option<u32> },
+
+    // Volume
+    SetVol { volume: u8 },
+    Volume { change: i8 },
+
+    // Options
+    Repeat { enabled: bool },
+    Random { enabled: bool },
+    Single { mode: String },
+    Consume { mode: String },
+    Crossfade { seconds: u32 },
+
+    // Connection
+    Close,
+    Ping,
+    Password { password: String },
+
+    // Reflection
+    Commands,
+    NotCommands,
+    TagTypes,
+    UrlHandlers,
+    Decoders,
+
+    // Database
+    Update { path: Option<String> },
+    Rescan { path: Option<String> },
+    Find { tag: String, value: String },
+    Search { tag: String, value: String },
+    List { tag: String, group: Option<String> },
+    ListAll { path: Option<String> },
+    ListAllInfo { path: Option<String> },
+    LsInfo { path: Option<String> },
+    Count { tag: String, value: String },
+
+    // Unknown/Invalid
+    Unknown(String),
+}
+
+pub fn parse_command(input: &str) -> Result<Command, String> {
+    let input = input.trim();
+    if input.is_empty() {
+        return Err("Empty command".to_string());
+    }
+
+    command_parser.parse(input).map_err(|e| e.to_string())
+}
+
+fn command_parser(input: &mut &str) -> PResult<Command> {
+    let cmd = take_while(1.., |c: char| c.is_ascii_alphabetic()).parse_next(input)?;
+    let _ = space0.parse_next(input)?;
+
+    match cmd {
+        "play" => {
+            let pos = opt(parse_u32).parse_next(input)?;
+            Ok(Command::Play { position: pos })
+        }
+        "playid" => {
+            let id = opt(parse_u32).parse_next(input)?;
+            Ok(Command::PlayId { id })
+        }
+        "pause" => {
+            let state = opt(parse_bool).parse_next(input)?;
+            Ok(Command::Pause { state })
+        }
+        "stop" => Ok(Command::Stop),
+        "next" => Ok(Command::Next),
+        "previous" => Ok(Command::Previous),
+        "seek" => {
+            let position = parse_u32.parse_next(input)?;
+            let _ = space0.parse_next(input)?;
+            let time = parse_f64.parse_next(input)?;
+            Ok(Command::Seek { position, time })
+        }
+        "seekid" => {
+            let id = parse_u32.parse_next(input)?;
+            let _ = space0.parse_next(input)?;
+            let time = parse_f64.parse_next(input)?;
+            Ok(Command::SeekId { id, time })
+        }
+        "seekcur" => {
+            let time_str = take_till(0.., |c: char| c.is_whitespace()).parse_next(input)?;
+            let (time, relative) = if time_str.starts_with('+') || time_str.starts_with('-') {
+                (time_str.parse().map_err(|_| winnow::error::ErrMode::Cut(
+                    winnow::error::ContextError::default()
+                ))?, true)
+            } else {
+                (time_str.parse().map_err(|_| winnow::error::ErrMode::Cut(
+                    winnow::error::ContextError::default()
+                ))?, false)
+            };
+            Ok(Command::SeekCur { time, relative })
+        }
+        "add" => {
+            let uri = parse_string.parse_next(input)?;
+            Ok(Command::Add { uri })
+        }
+        "addid" => {
+            let uri = parse_quoted_or_unquoted.parse_next(input)?;
+            let _ = space0.parse_next(input)?;
+            let position = opt(parse_u32).parse_next(input)?;
+            Ok(Command::AddId { uri, position })
+        }
+        "delete" => {
+            let position = parse_u32.parse_next(input)?;
+            Ok(Command::Delete { position })
+        }
+        "deleteid" => {
+            let id = parse_u32.parse_next(input)?;
+            Ok(Command::DeleteId { id })
+        }
+        "clear" => Ok(Command::Clear),
+        "move" => {
+            let from = parse_u32.parse_next(input)?;
+            let _ = space0.parse_next(input)?;
+            let to = parse_u32.parse_next(input)?;
+            Ok(Command::Move { from, to })
+        }
+        "moveid" => {
+            let id = parse_u32.parse_next(input)?;
+            let _ = space0.parse_next(input)?;
+            let to = parse_u32.parse_next(input)?;
+            Ok(Command::MoveId { id, to })
+        }
+        "shuffle" => Ok(Command::Shuffle { range: None }),
+        "swap" => {
+            let pos1 = parse_u32.parse_next(input)?;
+            let _ = space0.parse_next(input)?;
+            let pos2 = parse_u32.parse_next(input)?;
+            Ok(Command::Swap { pos1, pos2 })
+        }
+        "swapid" => {
+            let id1 = parse_u32.parse_next(input)?;
+            let _ = space0.parse_next(input)?;
+            let id2 = parse_u32.parse_next(input)?;
+            Ok(Command::SwapId { id1, id2 })
+        }
+        "status" => Ok(Command::Status),
+        "currentsong" => Ok(Command::CurrentSong),
+        "stats" => Ok(Command::Stats),
+        "playlistinfo" => Ok(Command::PlaylistInfo { range: None }),
+        "playlistid" => {
+            let id = opt(parse_u32).parse_next(input)?;
+            Ok(Command::PlaylistId { id })
+        }
+        "setvol" => {
+            let volume = parse_u8.parse_next(input)?;
+            Ok(Command::SetVol { volume })
+        }
+        "volume" => {
+            let change = parse_i8.parse_next(input)?;
+            Ok(Command::Volume { change })
+        }
+        "repeat" => {
+            let enabled = parse_bool.parse_next(input)?;
+            Ok(Command::Repeat { enabled })
+        }
+        "random" => {
+            let enabled = parse_bool.parse_next(input)?;
+            Ok(Command::Random { enabled })
+        }
+        "single" => {
+            let mode = parse_string.parse_next(input)?;
+            Ok(Command::Single { mode })
+        }
+        "consume" => {
+            let mode = parse_string.parse_next(input)?;
+            Ok(Command::Consume { mode })
+        }
+        "crossfade" => {
+            let seconds = parse_u32.parse_next(input)?;
+            Ok(Command::Crossfade { seconds })
+        }
+        "close" => Ok(Command::Close),
+        "ping" => Ok(Command::Ping),
+        "password" => {
+            let password = parse_string.parse_next(input)?;
+            Ok(Command::Password { password })
+        }
+        "commands" => Ok(Command::Commands),
+        "notcommands" => Ok(Command::NotCommands),
+        "tagtypes" => Ok(Command::TagTypes),
+        "urlhandlers" => Ok(Command::UrlHandlers),
+        "decoders" => Ok(Command::Decoders),
+        "update" => {
+            let path = opt(parse_string).parse_next(input)?;
+            Ok(Command::Update { path })
+        }
+        "rescan" => {
+            let path = opt(parse_string).parse_next(input)?;
+            Ok(Command::Rescan { path })
+        }
+        "find" => {
+            let tag = parse_string.parse_next(input)?;
+            let _ = space0.parse_next(input)?;
+            let value = parse_quoted_or_unquoted.parse_next(input)?;
+            Ok(Command::Find { tag, value })
+        }
+        "search" => {
+            let tag = parse_string.parse_next(input)?;
+            let _ = space0.parse_next(input)?;
+            let value = parse_quoted_or_unquoted.parse_next(input)?;
+            Ok(Command::Search { tag, value })
+        }
+        "list" => {
+            let tag = parse_string.parse_next(input)?;
+            let _ = space0.parse_next(input)?;
+            let group = opt(parse_string).parse_next(input)?;
+            Ok(Command::List { tag, group })
+        }
+        "listall" => {
+            let path = opt(parse_string).parse_next(input)?;
+            Ok(Command::ListAll { path })
+        }
+        "listallinfo" => {
+            let path = opt(parse_string).parse_next(input)?;
+            Ok(Command::ListAllInfo { path })
+        }
+        "lsinfo" => {
+            let path = opt(parse_string).parse_next(input)?;
+            Ok(Command::LsInfo { path })
+        }
+        "count" => {
+            let tag = parse_string.parse_next(input)?;
+            let _ = space0.parse_next(input)?;
+            let value = parse_quoted_or_unquoted.parse_next(input)?;
+            Ok(Command::Count { tag, value })
+        }
+        _ => Ok(Command::Unknown(cmd.to_string())),
+    }
+}
+
+fn parse_u32(input: &mut &str) -> PResult<u32> {
+    take_while(1.., |c: char| c.is_ascii_digit())
+        .parse_next(input)?
+        .parse()
+        .map_err(|_| winnow::error::ErrMode::Cut(winnow::error::ContextError::default()))
+}
+
+fn parse_u8(input: &mut &str) -> PResult<u8> {
+    take_while(1.., |c: char| c.is_ascii_digit())
+        .parse_next(input)?
+        .parse()
+        .map_err(|_| winnow::error::ErrMode::Cut(winnow::error::ContextError::default()))
+}
+
+fn parse_i8(input: &mut &str) -> PResult<i8> {
+    take_while(1.., |c: char| c.is_ascii_digit() || c == '-' || c == '+')
+        .parse_next(input)?
+        .parse()
+        .map_err(|_| winnow::error::ErrMode::Cut(winnow::error::ContextError::default()))
+}
+
+fn parse_f64(input: &mut &str) -> PResult<f64> {
+    take_while(1.., |c: char| c.is_ascii_digit() || c == '.' || c == '-' || c == '+')
+        .parse_next(input)?
+        .parse()
+        .map_err(|_| winnow::error::ErrMode::Cut(winnow::error::ContextError::default()))
+}
+
+fn parse_bool(input: &mut &str) -> PResult<bool> {
+    let val = take_while(1.., |c: char| c.is_ascii_digit())
+        .parse_next(input)?;
+    match val {
+        "0" => Ok(false),
+        "1" => Ok(true),
+        _ => Err(winnow::error::ErrMode::Cut(winnow::error::ContextError::default())),
+    }
+}
+
+fn parse_string(input: &mut &str) -> PResult<String> {
+    take_till(0.., |c: char| c.is_whitespace() || c == '\n' || c == '\r')
+        .map(|s: &str| s.to_string())
+        .parse_next(input)
+}
+
+fn parse_quoted_or_unquoted(input: &mut &str) -> PResult<String> {
+    if input.starts_with('"') {
+        parse_quoted_string.parse_next(input)
+    } else {
+        parse_string.parse_next(input)
+    }
+}
+
+fn parse_quoted_string(input: &mut &str) -> PResult<String> {
+    let _ = '"'.parse_next(input)?;
+    let content = take_till(0.., |c| c == '"').parse_next(input)?;
+    let _ = '"'.parse_next(input)?;
+    Ok(content.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_play_command() {
+        assert_eq!(parse_command("play").unwrap(), Command::Play { position: None });
+        assert_eq!(parse_command("play 5").unwrap(), Command::Play { position: Some(5) });
+    }
+
+    #[test]
+    fn test_pause_command() {
+        assert_eq!(parse_command("pause").unwrap(), Command::Pause { state: None });
+        assert_eq!(parse_command("pause 1").unwrap(), Command::Pause { state: Some(true) });
+        assert_eq!(parse_command("pause 0").unwrap(), Command::Pause { state: Some(false) });
+    }
+
+    #[test]
+    fn test_add_command() {
+        assert_eq!(
+            parse_command("add song.mp3").unwrap(),
+            Command::Add { uri: "song.mp3".to_string() }
+        );
+    }
+
+    #[test]
+    fn test_status_command() {
+        assert_eq!(parse_command("status").unwrap(), Command::Status);
+    }
+}

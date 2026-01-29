@@ -1,0 +1,16 @@
+[package]
+name = "rmpd-player"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+rmpd-core.workspace = true
+symphonia.workspace = true
+cpal.workspace = true
+rubato.workspace = true
+tokio.workspace = true
+thiserror.workspace = true
+tracing.workspace = true

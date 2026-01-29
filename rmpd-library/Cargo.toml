@@ -1,0 +1,18 @@
+[package]
+name = "rmpd-library"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+rmpd-core.workspace = true
+rusqlite.workspace = true
+lofty.workspace = true
+tantivy.workspace = true
+notify.workspace = true
+tokio.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+camino.workspace = true

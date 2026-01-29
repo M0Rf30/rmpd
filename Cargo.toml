@@ -1,0 +1,68 @@
+[workspace]
+resolver = "2"
+members = [
+    "rmpd",
+    "rmpd-core",
+    "rmpd-protocol",
+    "rmpd-player",
+    "rmpd-library",
+    "rmpd-plugin",
+    "rmpd-stream",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["rmpd contributors"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/M0Rf30/rmpd"
+
+[workspace.dependencies]
+# Core dependencies
+tokio = { version = "1", features = ["full"] }
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Audio stack
+symphonia = { version = "0.5", features = ["all"] }
+cpal = "0.15"
+rubato = "0.15"
+lofty = "0.21"
+
+# Networking & Protocol
+reqwest = { version = "0.12", features = ["stream"] }
+winnow = "0.6"
+
+# Database & Storage
+rusqlite = { version = "0.32", features = ["bundled"] }
+tantivy = "0.22"
+toml = "0.8"
+
+# Plugin System
+libloading = "0.8"
+abi_stable = "0.11"
+
+# Utilities
+clap = { version = "4", features = ["derive"] }
+notify = "6"
+camino = "1"
+serde = { version = "1", features = ["derive"] }
+bytes = "1"
+rand = "0.8"
+dirs = "5"
+
+# Shared workspace crates
+rmpd-core = { path = "rmpd-core" }
+rmpd-protocol = { path = "rmpd-protocol" }
+rmpd-player = { path = "rmpd-player" }
+rmpd-library = { path = "rmpd-library" }
+rmpd-plugin = { path = "rmpd-plugin" }
+rmpd-stream = { path = "rmpd-stream" }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true

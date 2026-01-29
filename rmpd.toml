@@ -1,0 +1,51 @@
+# rmpd configuration file
+
+[general]
+music_directory = "/home/gianluca/Music"
+playlist_directory = "/home/gianluca/.config/rmpd/playlists"
+db_file = "/home/gianluca/.config/rmpd/database.db"
+state_file = "/home/gianluca/.config/rmpd/state"
+log_level = "debug"
+follow_symlinks = false
+filesystem_charset = "UTF-8"
+
+[network]
+bind_address = "127.0.0.1"
+port = 6600
+max_connections = 100
+connection_timeout = 60
+
+[audio]
+default_output = "default"
+buffer_time = 500
+resampler_quality = "sinc_medium"
+replay_gain = "off"
+replay_gain_preamp = 0.0
+replay_gain_missing_preamp = 0.0
+volume_normalization = false
+gapless = true
+crossfade = 0
+mixramp_db = -17.0
+mixramp_delay = 0.0
+
+[[output]]
+name = "Default Output"
+type = "default"
+enabled = true
+
+[decoder]
+enabled = ["symphonia"]
+
+[plugins]
+plugin_dirs = [
+    "/home/gianluca/.config/rmpd/plugins",
+    "/usr/lib/rmpd/plugins",
+]
+enabled = []
+disabled = []
+
+[database]
+auto_update = true
+filesystem_watch = true
+cache_size = 64
+fts_enabled = true

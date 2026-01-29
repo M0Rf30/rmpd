@@ -1,0 +1,12 @@
+[package]
+name = "rmpd-plugin"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+libloading.workspace = true
+abi_stable.workspace = true
+thiserror.workspace = true

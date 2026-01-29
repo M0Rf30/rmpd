@@ -1,0 +1,16 @@
+[package]
+name = "rmpd-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+serde.workspace = true
+tokio.workspace = true
+camino = { workspace = true, features = ["serde1"] }
+toml.workspace = true
+rand = "0.8"
+dirs = "5"

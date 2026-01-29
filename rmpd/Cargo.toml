@@ -1,0 +1,23 @@
+[package]
+name = "rmpd"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "rmpd"
+path = "src/main.rs"
+
+[dependencies]
+rmpd-core.workspace = true
+rmpd-protocol.workspace = true
+rmpd-player.workspace = true
+rmpd-library.workspace = true
+
+tokio.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

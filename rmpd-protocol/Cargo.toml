@@ -1,0 +1,17 @@
+[package]
+name = "rmpd-protocol"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+rmpd-core.workspace = true
+rmpd-library.workspace = true
+tokio.workspace = true
+winnow.workspace = true
+thiserror.workspace = true
+bytes.workspace = true
+tracing.workspace = true
+anyhow.workspace = true

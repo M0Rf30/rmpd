@@ -1,0 +1,13 @@
+[package]
+name = "rmpd-stream"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+rmpd-core.workspace = true
+reqwest.workspace = true
+tokio.workspace = true
+thiserror.workspace = true
