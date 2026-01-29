@@ -4,6 +4,7 @@ use tracing::{info, error, debug};
 use anyhow::Result;
 
 use crate::parser::{parse_command, Command};
+use crate::queue_playback::QueuePlaybackManager;
 use crate::response::ResponseBuilder;
 use crate::state::AppState;
 
@@ -32,6 +33,11 @@ impl MpdServer {
     pub async fn run(&self) -> Result<()> {
         let listener = TcpListener::bind(&self.bind_address).await?;
         info!("MPD server listening on {}", self.bind_address);
+
+        // Start queue playback manager
+        let mut playback_manager = QueuePlaybackManager::new(self.state.clone());
+        playback_manager.start();
+        info!("Queue playback manager started");
 
         loop {
             match listener.accept().await {
@@ -148,11 +154,8 @@ async fn handle_command(cmd: Command, state: &AppState) -> String {
             resp.stats(artists, albums, songs, 0, 0, 0, 0);
             resp.ok()
         }
-        Command::Update { path: _ } | Command::Rescan { path: _ } => {
-            // Return update job ID (for now, just return 1)
-            let mut resp = ResponseBuilder::new();
-            resp.field("updating_db", 1);
-            resp.ok()
+        Command::Update { path } | Command::Rescan { path } => {
+            handle_update_command(state, path.as_deref()).await
         }
         Command::Find { tag, value } => {
             handle_find_command(state, &tag, &value).await
@@ -536,4 +539,48 @@ async fn handle_delete_command(state: &AppState, position: u32) -> String {
     } else {
         ResponseBuilder::error(50, 0, "delete", "No such song")
     }
+}
+
+async fn handle_update_command(state: &AppState, _path: Option<&str>) -> String {
+    let db_path = match &state.db_path {
+        Some(p) => p.clone(),
+        None => return ResponseBuilder::error(50, 0, "update", "database not configured"),
+    };
+
+    let music_dir = match &state.music_dir {
+        Some(p) => p.clone(),
+        None => return ResponseBuilder::error(50, 0, "update", "music directory not configured"),
+    };
+
+    let event_bus = state.event_bus.clone();
+
+    // Spawn background scanning task (blocking task since scan is synchronous)
+    tokio::task::spawn_blocking(move || {
+        info!("Starting library update");
+
+        match rmpd_library::Database::open(&db_path) {
+            Ok(db) => {
+                let scanner = rmpd_library::Scanner::new(event_bus.clone());
+                match scanner.scan_directory(&db, std::path::Path::new(&music_dir)) {
+                    Ok(stats) => {
+                        info!(
+                            "Library scan complete: {} scanned, {} added, {} updated, {} errors",
+                            stats.scanned, stats.added, stats.updated, stats.errors
+                        );
+                    }
+                    Err(e) => {
+                        error!("Library scan error: {}", e);
+                    }
+                }
+            }
+            Err(e) => {
+                error!("Failed to open database: {}", e);
+            }
+        }
+    });
+
+    // Return update job ID
+    let mut resp = ResponseBuilder::new();
+    resp.field("updating_db", 1);
+    resp.ok()
 }

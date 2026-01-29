@@ -236,9 +236,10 @@ impl Config {
         let content = std::fs::read_to_string(path.as_ref())
             .map_err(|e| RmpdError::Config(format!("Failed to read config: {}", e)))?;
 
-        let config: Config = toml::from_str(&content)
+        let mut config: Config = toml::from_str(&content)
             .map_err(|e| RmpdError::Config(format!("Failed to parse config: {}", e)))?;
 
+        config.expand_paths();
         config.validate()?;
         Ok(config)
     }
@@ -260,6 +261,26 @@ impl Config {
         }
 
         Err(RmpdError::Config("Config file not found".to_string()))
+    }
+
+    fn expand_paths(&mut self) {
+        // Helper function to expand tilde
+        fn expand_tilde(path: &Utf8PathBuf) -> Utf8PathBuf {
+            let path_str = path.as_str();
+            if path_str.starts_with("~/") {
+                if let Some(home) = dirs::home_dir() {
+                    if let Some(home_str) = home.to_str() {
+                        return Utf8PathBuf::from(path_str.replacen("~", home_str, 1));
+                    }
+                }
+            }
+            path.clone()
+        }
+
+        self.general.music_directory = expand_tilde(&self.general.music_directory);
+        self.general.playlist_directory = expand_tilde(&self.general.playlist_directory);
+        self.general.db_file = expand_tilde(&self.general.db_file);
+        self.general.state_file = expand_tilde(&self.general.state_file);
     }
 
     fn validate(&self) -> Result<()> {

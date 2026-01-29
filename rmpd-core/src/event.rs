@@ -12,6 +12,7 @@ pub enum Event {
     SongChanged(Option<Song>),
     PositionChanged(Duration),
     VolumeChanged(u8),
+    SongFinished,
 
     // Queue events
     QueueChanged,

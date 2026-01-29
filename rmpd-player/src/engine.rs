@@ -129,7 +129,7 @@ impl PlaybackEngine {
     fn playback_thread(
         path: &Path,
         state: Arc<RwLock<PlayerState>>,
-        _event_bus: EventBus,
+        event_bus: EventBus,
         stop_flag: Arc<AtomicBool>,
         volume: Arc<RwLock<u8>>,
     ) -> Result<()> {
@@ -172,6 +172,7 @@ impl PlaybackEngine {
             if samples_read == 0 {
                 // End of stream
                 debug!("End of stream reached");
+                event_bus.emit(Event::SongFinished);
                 break;
             }
 
