@@ -32,14 +32,21 @@ pub enum Command {
     Status,
     CurrentSong,
     Stats,
+    ClearError,
 
     // Queue inspection
     PlaylistInfo { range: Option<(u32, u32)> },
     PlaylistId { id: Option<u32> },
+    Playlist,  // Deprecated, use PlaylistInfo
+    PlChanges { version: u32 },
+    PlChangesPosId { version: u32 },
+    PlaylistFind { tag: String, value: String },
+    PlaylistSearch { tag: String, value: String },
 
     // Volume
     SetVol { volume: u8 },
     Volume { change: i8 },
+    GetVol,
 
     // Options
     Repeat { enabled: bool },
@@ -47,11 +54,15 @@ pub enum Command {
     Single { mode: String },
     Consume { mode: String },
     Crossfade { seconds: u32 },
+    ReplayGainMode { mode: String },
+    ReplayGainStatus,
 
     // Connection
     Close,
     Ping,
     Password { password: String },
+    BinaryLimit { size: u32 },
+    Protocol { min_version: Option<String>, max_version: Option<String> },
 
     // Reflection
     Commands,
@@ -70,6 +81,9 @@ pub enum Command {
     ListAllInfo { path: Option<String> },
     LsInfo { path: Option<String> },
     Count { tag: String, value: String },
+    SearchCount { tag: String, value: String, group: Option<String> },
+    GetFingerprint { uri: String },
+    ReadComments { uri: String },
 
     // Album art
     AlbumArt { uri: String, offset: usize },
@@ -87,6 +101,8 @@ pub enum Command {
     PlaylistMove { name: String, from: u32, to: u32 },
     Rm { name: String },
     Rename { from: String, to: String },
+    SearchPlaylist { name: String, tag: String, value: String },
+    PlaylistLength { name: String },
 
     // Idle notifications
     Idle { subsystems: Vec<String> },
@@ -116,6 +132,11 @@ pub enum Command {
     StickerDelete { uri: String, name: Option<String> },
     StickerList { uri: String },
     StickerFind { uri: String, name: String, value: Option<String> },
+    StickerInc { uri: String, name: String, delta: Option<i32> },
+    StickerDec { uri: String, name: String, delta: Option<i32> },
+    StickerNames { uri: Option<String> },
+    StickerTypes,
+    StickerNamesTypes { uri: Option<String> },
 
     // Partitions
     Partition { name: String },
@@ -255,10 +276,32 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
         "status" => Ok(Command::Status),
         "currentsong" => Ok(Command::CurrentSong),
         "stats" => Ok(Command::Stats),
+        "clearerror" => Ok(Command::ClearError),
         "playlistinfo" => Ok(Command::PlaylistInfo { range: None }),
         "playlistid" => {
             let id = opt(parse_u32).parse_next(input)?;
             Ok(Command::PlaylistId { id })
+        }
+        "playlist" => Ok(Command::Playlist),
+        "plchanges" => {
+            let version = parse_u32.parse_next(input)?;
+            Ok(Command::PlChanges { version })
+        }
+        "plchangesposid" => {
+            let version = parse_u32.parse_next(input)?;
+            Ok(Command::PlChangesPosId { version })
+        }
+        "playlistfind" => {
+            let tag = parse_string.parse_next(input)?;
+            let _ = space0.parse_next(input)?;
+            let value = parse_quoted_or_unquoted.parse_next(input)?;
+            Ok(Command::PlaylistFind { tag, value })
+        }
+        "playlistsearch" => {
+            let tag = parse_string.parse_next(input)?;
+            let _ = space0.parse_next(input)?;
+            let value = parse_quoted_or_unquoted.parse_next(input)?;
+            Ok(Command::PlaylistSearch { tag, value })
         }
         "setvol" => {
             let volume = parse_u8.parse_next(input)?;
@@ -268,6 +311,7 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
             let change = parse_i8.parse_next(input)?;
             Ok(Command::Volume { change })
         }
+        "getvol" => Ok(Command::GetVol),
         "repeat" => {
             let enabled = parse_bool.parse_next(input)?;
             Ok(Command::Repeat { enabled })
@@ -288,11 +332,26 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
             let seconds = parse_u32.parse_next(input)?;
             Ok(Command::Crossfade { seconds })
         }
+        "replay_gain_mode" => {
+            let mode = parse_string.parse_next(input)?;
+            Ok(Command::ReplayGainMode { mode })
+        }
+        "replay_gain_status" => Ok(Command::ReplayGainStatus),
         "close" => Ok(Command::Close),
         "ping" => Ok(Command::Ping),
         "password" => {
             let password = parse_string.parse_next(input)?;
             Ok(Command::Password { password })
+        }
+        "binarylimit" => {
+            let size = parse_u32.parse_next(input)?;
+            Ok(Command::BinaryLimit { size })
+        }
+        "protocol" => {
+            let min = opt(parse_string).parse_next(input)?;
+            let _ = space0.parse_next(input)?;
+            let max = opt(parse_string).parse_next(input)?;
+            Ok(Command::Protocol { min_version: min, max_version: max })
         }
         "commands" => Ok(Command::Commands),
         "notcommands" => Ok(Command::NotCommands),
@@ -342,6 +401,22 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
             let _ = space0.parse_next(input)?;
             let value = parse_quoted_or_unquoted.parse_next(input)?;
             Ok(Command::Count { tag, value })
+        }
+        "searchcount" => {
+            let tag = parse_string.parse_next(input)?;
+            let _ = space0.parse_next(input)?;
+            let value = parse_quoted_or_unquoted.parse_next(input)?;
+            let _ = space0.parse_next(input)?;
+            let group = opt(parse_string).parse_next(input)?;
+            Ok(Command::SearchCount { tag, value, group })
+        }
+        "getfingerprint" => {
+            let uri = parse_quoted_or_unquoted.parse_next(input)?;
+            Ok(Command::GetFingerprint { uri })
+        }
+        "readcomments" => {
+            let uri = parse_quoted_or_unquoted.parse_next(input)?;
+            Ok(Command::ReadComments { uri })
         }
         "albumart" => {
             let uri = parse_quoted_or_unquoted.parse_next(input)?;
@@ -405,6 +480,18 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
             let _ = space0.parse_next(input)?;
             let name2 = parse_quoted_or_unquoted.parse_next(input)?;
             Ok(Command::Rename { from: name1, to: name2 })
+        }
+        "searchplaylist" => {
+            let name = parse_quoted_or_unquoted.parse_next(input)?;
+            let _ = space0.parse_next(input)?;
+            let tag = parse_string.parse_next(input)?;
+            let _ = space0.parse_next(input)?;
+            let value = parse_quoted_or_unquoted.parse_next(input)?;
+            Ok(Command::SearchPlaylist { name, tag, value })
+        }
+        "playlistlength" => {
+            let name = parse_quoted_or_unquoted.parse_next(input)?;
+            Ok(Command::PlaylistLength { name })
         }
         "idle" => {
             // Parse optional subsystem list
@@ -475,7 +562,7 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
         "sticker" => {
             let operation = parse_string.parse_next(input)?;
             let _ = space0.parse_next(input)?;
-            let type_str = parse_string.parse_next(input)?; // "song" for now
+            let _type_str = parse_string.parse_next(input)?; // "song" for now
             let _ = space0.parse_next(input)?;
             let uri = parse_quoted_or_unquoted.parse_next(input)?;
             let _ = space0.parse_next(input)?;
@@ -504,8 +591,37 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
                     let value = opt(parse_quoted_or_unquoted).parse_next(input)?;
                     Ok(Command::StickerFind { uri, name, value })
                 }
+                "inc" => {
+                    let name = parse_string.parse_next(input)?;
+                    let _ = space0.parse_next(input)?;
+                    let delta = opt(|input: &mut &str| {
+                        parse_string.parse_next(input)?
+                            .parse::<i32>()
+                            .map_err(|_| winnow::error::ErrMode::Cut(winnow::error::ContextError::default()))
+                    }).parse_next(input)?;
+                    Ok(Command::StickerInc { uri, name, delta })
+                }
+                "dec" => {
+                    let name = parse_string.parse_next(input)?;
+                    let _ = space0.parse_next(input)?;
+                    let delta = opt(|input: &mut &str| {
+                        parse_string.parse_next(input)?
+                            .parse::<i32>()
+                            .map_err(|_| winnow::error::ErrMode::Cut(winnow::error::ContextError::default()))
+                    }).parse_next(input)?;
+                    Ok(Command::StickerDec { uri, name, delta })
+                }
                 _ => Ok(Command::Unknown(format!("sticker {}", operation))),
             }
+        }
+        "stickernames" => {
+            let uri = opt(parse_quoted_or_unquoted).parse_next(input)?;
+            Ok(Command::StickerNames { uri })
+        }
+        "stickertypes" => Ok(Command::StickerTypes),
+        "stickernamestypes" => {
+            let uri = opt(parse_quoted_or_unquoted).parse_next(input)?;
+            Ok(Command::StickerNamesTypes { uri })
         }
         // Partitions
         "partition" => {

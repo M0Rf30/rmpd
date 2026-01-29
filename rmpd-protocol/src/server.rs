@@ -304,6 +304,11 @@ async fn handle_command(cmd: Command, state: &AppState) -> String {
             resp.stats(artists, albums, songs, 0, 0, 0, 0);
             resp.ok()
         }
+        Command::ClearError => {
+            // Clear the error field in status
+            state.status.write().await.error = None;
+            ResponseBuilder::new().ok()
+        }
         Command::Update { path } | Command::Rescan { path } => {
             handle_update_command(state, path.as_deref()).await
         }
@@ -333,6 +338,22 @@ async fn handle_command(cmd: Command, state: &AppState) -> String {
         }
         Command::PlaylistInfo { range: _ } => {
             handle_playlistinfo_command(state).await
+        }
+        Command::Playlist => {
+            // Deprecated, same as playlistinfo
+            handle_playlistinfo_command(state).await
+        }
+        Command::PlChanges { version } => {
+            handle_plchanges_command(state, version).await
+        }
+        Command::PlChangesPosId { version } => {
+            handle_plchangesposid_command(state, version).await
+        }
+        Command::PlaylistFind { tag, value } => {
+            handle_playlistfind_command(state, &tag, &value).await
+        }
+        Command::PlaylistSearch { tag, value } => {
+            handle_playlistsearch_command(state, &tag, &value).await
         }
         // Playback commands
         Command::Play { position } => {
@@ -429,6 +450,29 @@ async fn handle_command(cmd: Command, state: &AppState) -> String {
         Command::Volume { change } => {
             handle_volume_command(state, change).await
         }
+        Command::GetVol => {
+            let status = state.status.read().await;
+            let mut resp = ResponseBuilder::new();
+            resp.field("volume", &status.volume.to_string());
+            resp.ok()
+        }
+        Command::ReplayGainMode { mode } => {
+            handle_replaygain_mode_command(state, &mode).await
+        }
+        Command::ReplayGainStatus => {
+            handle_replaygain_status_command(state).await
+        }
+        Command::BinaryLimit { size } => {
+            // Set binary limit (for large responses like images)
+            // Store in connection state if needed, for now just acknowledge
+            let _ = size;
+            ResponseBuilder::new().ok()
+        }
+        Command::Protocol { min_version, max_version } => {
+            // Protocol negotiation - for now just acknowledge
+            let _ = (min_version, max_version);
+            ResponseBuilder::new().ok()
+        }
         // Stored playlists
         Command::Save { name } => {
             handle_save_command(state, &name).await
@@ -463,6 +507,12 @@ async fn handle_command(cmd: Command, state: &AppState) -> String {
         Command::Rename { from, to } => {
             handle_rename_command(state, &from, &to).await
         }
+        Command::SearchPlaylist { name, tag, value } => {
+            handle_searchplaylist_command(state, &name, &tag, &value).await
+        }
+        Command::PlaylistLength { name } => {
+            handle_playlistlength_command(state, &name).await
+        }
         // Output control
         Command::Outputs => {
             handle_outputs_command(state).await
@@ -492,6 +542,15 @@ async fn handle_command(cmd: Command, state: &AppState) -> String {
         Command::ListFiles { uri } => {
             handle_listfiles_command(state, uri.as_deref()).await
         }
+        Command::SearchCount { tag, value, group } => {
+            handle_searchcount_command(state, &tag, &value, group.as_deref()).await
+        }
+        Command::GetFingerprint { uri } => {
+            handle_getfingerprint_command(state, &uri).await
+        }
+        Command::ReadComments { uri } => {
+            handle_readcomments_command(state, &uri).await
+        }
         // Stickers
         Command::StickerGet { uri, name } => {
             handle_sticker_get_command(state, &uri, &name).await
@@ -507,6 +566,21 @@ async fn handle_command(cmd: Command, state: &AppState) -> String {
         }
         Command::StickerFind { uri, name, value } => {
             handle_sticker_find_command(state, &uri, &name, value.as_deref()).await
+        }
+        Command::StickerInc { uri, name, delta } => {
+            handle_sticker_inc_command(state, &uri, &name, delta).await
+        }
+        Command::StickerDec { uri, name, delta } => {
+            handle_sticker_dec_command(state, &uri, &name, delta).await
+        }
+        Command::StickerNames { uri } => {
+            handle_sticker_names_command(state, uri.as_deref()).await
+        }
+        Command::StickerTypes => {
+            handle_sticker_types_command().await
+        }
+        Command::StickerNamesTypes { uri } => {
+            handle_sticker_namestypes_command(state, uri.as_deref()).await
         }
         // Partitions
         Command::Partition { name } => {
@@ -2157,5 +2231,270 @@ async fn handle_mixrampdb_command(state: &AppState, decibels: f32) -> String {
 async fn handle_mixrampdelay_command(state: &AppState, seconds: f32) -> String {
     let mut status = state.status.write().await;
     status.mixramp_delay = seconds;
+    ResponseBuilder::new().ok()
+}
+
+// Queue inspection commands
+async fn handle_plchanges_command(state: &AppState, version: u32) -> String {
+    // Return changes in queue since version
+    // For now, return all queue items if version differs from current
+    let queue = state.queue.read().await;
+    let mut resp = ResponseBuilder::new();
+
+    if queue.version() != version {
+        for item in queue.items() {
+            resp.field("file", item.song.path.as_str());
+            resp.field("Pos", &item.position.to_string());
+            resp.field("Id", &item.id.to_string());
+            if let Some(ref title) = item.song.title {
+                resp.field("Title", title);
+            }
+        }
+    }
+    resp.ok()
+}
+
+async fn handle_plchangesposid_command(state: &AppState, version: u32) -> String {
+    // Return position/id changes since version
+    let queue = state.queue.read().await;
+    let mut resp = ResponseBuilder::new();
+
+    if queue.version() != version {
+        for item in queue.items() {
+            resp.field("cpos", &item.position.to_string());
+            resp.field("Id", &item.id.to_string());
+        }
+    }
+    resp.ok()
+}
+
+async fn handle_playlistfind_command(state: &AppState, tag: &str, value: &str) -> String {
+    // Search queue for exact matches
+    let queue = state.queue.read().await;
+    let mut resp = ResponseBuilder::new();
+
+    for item in queue.items() {
+        let matches = match tag.to_lowercase().as_str() {
+            "artist" => item.song.artist.as_deref() == Some(value),
+            "album" => item.song.album.as_deref() == Some(value),
+            "title" => item.song.title.as_deref() == Some(value),
+            "genre" => item.song.genre.as_deref() == Some(value),
+            _ => false,
+        };
+
+        if matches {
+            resp.song(&item.song, Some(item.position), Some(item.id));
+        }
+    }
+    resp.ok()
+}
+
+async fn handle_playlistsearch_command(state: &AppState, tag: &str, value: &str) -> String {
+    // Case-insensitive search in queue
+    let queue = state.queue.read().await;
+    let mut resp = ResponseBuilder::new();
+    let value_lower = value.to_lowercase();
+
+    for item in queue.items() {
+        let matches = match tag.to_lowercase().as_str() {
+            "artist" => item.song.artist.as_ref().map(|s| s.to_lowercase().contains(&value_lower)).unwrap_or(false),
+            "album" => item.song.album.as_ref().map(|s| s.to_lowercase().contains(&value_lower)).unwrap_or(false),
+            "title" => item.song.title.as_ref().map(|s| s.to_lowercase().contains(&value_lower)).unwrap_or(false),
+            "genre" => item.song.genre.as_ref().map(|s| s.to_lowercase().contains(&value_lower)).unwrap_or(false),
+            _ => false,
+        };
+
+        if matches {
+            resp.song(&item.song, Some(item.position), Some(item.id));
+        }
+    }
+    resp.ok()
+}
+
+// ReplayGain commands
+async fn handle_replaygain_mode_command(state: &AppState, mode: &str) -> String {
+    // Set ReplayGain mode (off, track, album, auto)
+    // Store in player status or engine config
+    let _ = (state, mode);
+    ResponseBuilder::new().ok()
+}
+
+async fn handle_replaygain_status_command(state: &AppState) -> String {
+    // Return current ReplayGain status
+    let _ = state;
+    let mut resp = ResponseBuilder::new();
+    resp.field("replay_gain_mode", "off");
+    resp.ok()
+}
+
+// Database commands
+async fn handle_searchcount_command(state: &AppState, tag: &str, value: &str, _group: Option<&str>) -> String {
+    // Count search results with optional grouping
+    // For now, same as count but could support grouping in future
+    handle_count_command(state, tag, value).await
+}
+
+async fn handle_getfingerprint_command(state: &AppState, uri: &str) -> String {
+    // Generate chromaprint fingerprint for audio file
+    // Requires chromaprint library - stub for now
+    let _ = (state, uri);
+    ResponseBuilder::error(50, 0, "getfingerprint", "chromaprint not available")
+}
+
+async fn handle_readcomments_command(state: &AppState, uri: &str) -> String {
+    // Read file metadata comments
+    if let Some(ref db_path) = state.db_path {
+        if let Ok(db) = rmpd_library::Database::open(db_path) {
+            if let Ok(Some(song)) = db.get_song_by_path(uri) {
+                let mut resp = ResponseBuilder::new();
+                if let Some(ref comment) = song.comment {
+                    resp.field("comment", comment);
+                }
+                return resp.ok();
+            }
+        }
+    }
+    ResponseBuilder::error(50, 0, "readcomments", "No such file")
+}
+
+// Playlist commands
+async fn handle_searchplaylist_command(state: &AppState, name: &str, tag: &str, value: &str) -> String {
+    // Search stored playlist for songs matching tag/value
+    if let Some(ref db_path) = state.db_path {
+        if let Ok(db) = rmpd_library::Database::open(db_path) {
+            if let Ok(songs) = db.load_playlist(name) {
+                let mut resp = ResponseBuilder::new();
+                let value_lower = value.to_lowercase();
+
+                for song in songs {
+                    let matches = match tag.to_lowercase().as_str() {
+                        "artist" => song.artist.as_ref().map(|s| s.to_lowercase().contains(&value_lower)).unwrap_or(false),
+                        "album" => song.album.as_ref().map(|s| s.to_lowercase().contains(&value_lower)).unwrap_or(false),
+                        "title" => song.title.as_ref().map(|s| s.to_lowercase().contains(&value_lower)).unwrap_or(false),
+                        _ => false,
+                    };
+
+                    if matches {
+                        resp.song(&song, None, None);
+                    }
+                }
+                return resp.ok();
+            }
+        }
+    }
+    ResponseBuilder::error(50, 0, "searchplaylist", "Playlist not found")
+}
+
+async fn handle_playlistlength_command(state: &AppState, name: &str) -> String {
+    // Get playlist length and total duration
+    if let Some(ref db_path) = state.db_path {
+        if let Ok(db) = rmpd_library::Database::open(db_path) {
+            if let Ok(songs) = db.load_playlist(name) {
+                let total_duration: f64 = songs.iter()
+                    .filter_map(|s| s.duration)
+                    .map(|d| d.as_secs_f64())
+                    .sum();
+
+                let mut resp = ResponseBuilder::new();
+                resp.field("songs", &songs.len().to_string());
+                resp.field("playtime", &format!("{:.3}", total_duration));
+                return resp.ok();
+            }
+        }
+    }
+    ResponseBuilder::error(50, 0, "playlistlength", "Playlist not found")
+}
+
+// Sticker commands
+async fn handle_sticker_inc_command(state: &AppState, uri: &str, name: &str, delta: Option<i32>) -> String {
+    // Increment numeric sticker value
+    if let Some(ref db_path) = state.db_path {
+        if let Ok(db) = rmpd_library::Database::open(db_path) {
+            let increment = delta.unwrap_or(1);
+
+            // Get current value
+            let current = if let Ok(Some(val)) = db.get_sticker(uri, name) {
+                val.parse::<i32>().unwrap_or(0)
+            } else {
+                0
+            };
+
+            let new_value = current + increment;
+            if db.set_sticker(uri, name, &new_value.to_string()).is_ok() {
+                let mut resp = ResponseBuilder::new();
+                resp.field("sticker", &format!("{}={}", name, new_value));
+                return resp.ok();
+            }
+        }
+    }
+    ResponseBuilder::error(50, 0, "sticker inc", "Failed to increment sticker")
+}
+
+async fn handle_sticker_dec_command(state: &AppState, uri: &str, name: &str, delta: Option<i32>) -> String {
+    // Decrement numeric sticker value
+    if let Some(ref db_path) = state.db_path {
+        if let Ok(db) = rmpd_library::Database::open(db_path) {
+            let decrement = delta.unwrap_or(1);
+
+            // Get current value
+            let current = if let Ok(Some(val)) = db.get_sticker(uri, name) {
+                val.parse::<i32>().unwrap_or(0)
+            } else {
+                0
+            };
+
+            let new_value = current - decrement;
+            if db.set_sticker(uri, name, &new_value.to_string()).is_ok() {
+                let mut resp = ResponseBuilder::new();
+                resp.field("sticker", &format!("{}={}", name, new_value));
+                return resp.ok();
+            }
+        }
+    }
+    ResponseBuilder::error(50, 0, "sticker dec", "Failed to decrement sticker")
+}
+
+async fn handle_sticker_names_command(state: &AppState, uri: Option<&str>) -> String {
+    // List unique sticker names (optionally for specific URI)
+    if let Some(ref db_path) = state.db_path {
+        if let Ok(db) = rmpd_library::Database::open(db_path) {
+            // For now, just return stickers for the given URI if provided
+            // Full implementation would need a new database query
+            if let Some(uri_str) = uri {
+                if let Ok(stickers) = db.list_stickers(uri_str) {
+                    let mut resp = ResponseBuilder::new();
+                    for (name, _) in stickers {
+                        resp.field("sticker", &name);
+                    }
+                    return resp.ok();
+                }
+            }
+        }
+    }
+    ResponseBuilder::new().ok()
+}
+
+async fn handle_sticker_types_command() -> String {
+    // List available sticker types (song is the primary type)
+    let mut resp = ResponseBuilder::new();
+    resp.field("sticker", "song");
+    resp.ok()
+}
+
+async fn handle_sticker_namestypes_command(state: &AppState, uri: Option<&str>) -> String {
+    // List sticker names and types
+    if let Some(ref db_path) = state.db_path {
+        if let Ok(db) = rmpd_library::Database::open(db_path) {
+            if let Some(uri_str) = uri {
+                if let Ok(stickers) = db.list_stickers(uri_str) {
+                    let mut resp = ResponseBuilder::new();
+                    for (name, _) in stickers {
+                        resp.field("sticker", &format!("{} song", name));
+                    }
+                    return resp.ok();
+                }
+            }
+        }
+    }
     ResponseBuilder::new().ok()
 }
