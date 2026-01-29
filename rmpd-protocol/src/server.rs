@@ -1170,6 +1170,12 @@ async fn handle_add_command(state: &AppState, uri: &str, position: Option<u32>) 
     // Add to queue at specified position or at end
     let id = state.queue.write().await.add_at(song, position);
 
+    // Update status to reflect playlist changes
+    let mut status = state.status.write().await;
+    status.playlist_version += 1;
+    status.playlist_length = state.queue.read().await.len() as u32;
+    drop(status);  // Release the lock
+
     let mut resp = ResponseBuilder::new();
     resp.field("Id", id);
     resp.ok()
@@ -2625,11 +2631,12 @@ async fn handle_mixrampdelay_command(state: &AppState, seconds: f32) -> String {
 // Queue inspection commands
 async fn handle_plchanges_command(state: &AppState, version: u32) -> String {
     // Return changes in queue since version
-    // For now, return all queue items if version differs from current
+    // MPD protocol: version 0 means "give me current playlist"
+    // Otherwise, return items if playlist has changed since given version
     let queue = state.queue.read().await;
     let mut resp = ResponseBuilder::new();
 
-    if queue.version() != version {
+    if version == 0 || queue.version() > version {
         for item in queue.items() {
             resp.field("file", item.song.path.as_str());
             resp.field("Pos", &item.position.to_string());
@@ -2644,10 +2651,12 @@ async fn handle_plchanges_command(state: &AppState, version: u32) -> String {
 
 async fn handle_plchangesposid_command(state: &AppState, version: u32) -> String {
     // Return position/id changes since version
+    // MPD protocol: version 0 means "give me current playlist"
+    // Otherwise, return items if playlist has changed since given version
     let queue = state.queue.read().await;
     let mut resp = ResponseBuilder::new();
 
-    if queue.version() != version {
+    if version == 0 || queue.version() > version {
         for item in queue.items() {
             resp.field("cpos", &item.position.to_string());
             resp.field("Id", &item.id.to_string());

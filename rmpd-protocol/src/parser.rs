@@ -328,11 +328,11 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
         }
         "playlist" => Ok(Command::Playlist),
         "plchanges" => {
-            let version = parse_u32.parse_next(input)?;
+            let version = parse_u32_or_quoted.parse_next(input)?;
             Ok(Command::PlChanges { version })
         }
         "plchangesposid" => {
-            let version = parse_u32.parse_next(input)?;
+            let version = parse_u32_or_quoted.parse_next(input)?;
             Ok(Command::PlChangesPosId { version })
         }
         "playlistfind" => {
@@ -456,10 +456,11 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
             if input.is_empty() {
                 Ok(Command::TagTypes { subcommand: None })
             } else {
-                let subcommand_str = take_while(1.., |c: char| c.is_ascii_alphabetic()).parse_next(input)?;
+                // Accept quoted or unquoted subcommand
+                let subcommand_str = parse_quoted_or_unquoted.parse_next(input)?;
                 let _ = space0.parse_next(input)?;
 
-                match subcommand_str {
+                match subcommand_str.as_str() {
                     "all" => Ok(Command::TagTypes {
                         subcommand: Some(TagTypesSubcommand::All)
                     }),
@@ -1001,6 +1002,12 @@ fn parse_u32(input: &mut &str) -> PResult<u32> {
     take_while(1.., |c: char| c.is_ascii_digit())
         .parse_next(input)?
         .parse()
+        .map_err(|_| winnow::error::ErrMode::Cut(winnow::error::ContextError::default()))
+}
+
+fn parse_u32_or_quoted(input: &mut &str) -> PResult<u32> {
+    let s = parse_quoted_or_unquoted.parse_next(input)?;
+    s.parse()
         .map_err(|_| winnow::error::ErrMode::Cut(winnow::error::ContextError::default()))
 }
 
