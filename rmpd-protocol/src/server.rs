@@ -928,11 +928,23 @@ async fn handle_play_command(state: &AppState, position: Option<u32>) -> String 
     drop(queue);
 
     // Start playback
-    match state.engine.write().await.play(song).await {
+    match state.engine.write().await.play(song.clone()).await {
         Ok(_) => {
             // Update status
             let mut status = state.status.write().await;
             status.state = rmpd_core::state::PlayerState::Play;
+            status.elapsed = Some(std::time::Duration::ZERO);
+            status.duration = song.duration;
+
+            // Set audio format if available
+            if let (Some(sr), Some(ch), Some(bps)) = (song.sample_rate, song.channels, song.bits_per_sample) {
+                status.audio_format = Some(rmpd_core::song::AudioFormat {
+                    sample_rate: sr,
+                    channels: ch as u8,
+                    bits_per_sample: bps as u8,
+                });
+            }
+
             if let Some((pos, id)) = actual_position {
                 status.current_song = Some(rmpd_core::state::QueuePosition {
                     position: pos,

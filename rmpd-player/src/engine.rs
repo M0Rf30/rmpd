@@ -150,6 +150,8 @@ impl PlaybackEngine {
 
         // Playback loop
         let mut buffer = vec![0.0f32; BUFFER_SIZE];
+        let mut total_samples_played: u64 = 0;
+        let samples_per_second = format.sample_rate as u64 * format.channels as u64;
 
         while !stop_flag.load(Ordering::SeqCst) {
             // Check if paused
@@ -171,7 +173,7 @@ impl PlaybackEngine {
 
             if samples_read == 0 {
                 // End of stream
-                debug!("End of stream reached, total samples decoded");
+                debug!("End of stream reached, total samples decoded: {}", total_samples_played);
                 event_bus.emit(Event::SongFinished);
                 break;
             }
@@ -189,6 +191,17 @@ impl PlaybackEngine {
 
             // Write to output
             output.write(&buffer[..samples_read])?;
+
+            // Update elapsed time
+            total_samples_played += samples_read as u64;
+
+            // Emit position update event every ~1 second of audio (throttled)
+            if total_samples_played % samples_per_second < (samples_read as u64) {
+                let elapsed_seconds = total_samples_played as f64 / samples_per_second as f64;
+                event_bus.emit(Event::PositionChanged(
+                    std::time::Duration::from_secs_f64(elapsed_seconds)
+                ));
+            }
         }
 
         // Stop output

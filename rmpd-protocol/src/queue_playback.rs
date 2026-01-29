@@ -32,6 +32,12 @@ impl QueuePlaybackManager {
                             error!("Error advancing to next song: {}", e);
                         }
                     }
+                    Ok(Event::PositionChanged(elapsed)) => {
+                        // Update status with current position
+                        let mut status = state.status.write().await;
+                        status.elapsed = Some(elapsed);
+                        // duration is set when play command is issued
+                    }
                     Ok(_) => {} // Ignore other events
                     Err(e) => {
                         error!("Event receive error: {}", e);
