@@ -1204,6 +1204,8 @@ async fn handle_update_command(state: &AppState, _path: Option<&str>) -> String 
 }
 
 async fn handle_albumart_command(state: &AppState, uri: &str, offset: usize) -> Response {
+    debug!("AlbumArt command: uri=[{}], offset={}", uri, offset);
+
     let db_path = match &state.db_path {
         Some(p) => p,
         None => return Response::Text(ResponseBuilder::error(50, 0, "albumart", "database not configured")),
@@ -1217,11 +1219,16 @@ async fn handle_albumart_command(state: &AppState, uri: &str, offset: usize) -> 
     // Resolve relative path to absolute path
     let absolute_path = if uri.starts_with('/') {
         // Already absolute
+        debug!("Using absolute path: {}", uri);
         uri.to_string()
     } else {
         // Relative to music directory
         match &state.music_dir {
-            Some(music_dir) => format!("{}/{}", music_dir, uri),
+            Some(music_dir) => {
+                let path = format!("{}/{}", music_dir, uri);
+                debug!("Resolved relative path: {} -> {}", uri, path);
+                path
+            }
             None => return Response::Text(ResponseBuilder::error(50, 0, "albumart", "music directory not configured")),
         }
     };
