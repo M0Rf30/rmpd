@@ -161,6 +161,9 @@ impl MpdServer {
 }
 
 async fn handle_client(mut stream: TcpStream, state: AppState) -> Result<()> {
+    // Enable TCP_NODELAY for low-latency responses (disable Nagle's algorithm)
+    stream.set_nodelay(true)?;
+
     // Send greeting
     stream.write_all(format!("OK MPD {}\n", PROTOCOL_VERSION).as_bytes()).await?;
 
@@ -230,6 +233,7 @@ async fn handle_client(mut stream: TcpStream, state: AppState) -> Result<()> {
         };
 
         writer.write_all(response.as_bytes()).await?;
+        writer.flush().await?;  // Flush immediately to ensure low latency
     }
 
     Ok(())
@@ -313,22 +317,39 @@ async fn handle_idle(
         tokio::select! {
             // Wait for event
             event_result = event_rx.recv() => {
-                if let Ok(event) = event_result {
-                    let event_subsystems = event.subsystems();
+                match event_result {
+                    Ok(event) => {
+                        debug!("Idle received event: {:?}", event);
+                        let event_subsystems = event.subsystems();
 
-                    // Check if event matches any subscribed subsystem
-                    let matches = if filter_subsystems.is_empty() {
-                        // No filter - return any event
-                        !event_subsystems.is_empty()
-                    } else {
-                        // Check if event matches any filtered subsystem
-                        event_subsystems.iter().any(|s| filter_subsystems.contains(s))
-                    };
+                        // Check if event matches any subscribed subsystem
+                        let matches = if filter_subsystems.is_empty() {
+                            // No filter - return any event
+                            !event_subsystems.is_empty()
+                        } else {
+                            // Check if event matches any filtered subsystem
+                            event_subsystems.iter().any(|s| filter_subsystems.contains(s))
+                        };
 
-                    if matches {
-                        // Return changed subsystem
-                        let subsystem_name = subsystem_to_string(event_subsystems[0]);
-                        return format!("changed: {}\nOK\n", subsystem_name);
+                        debug!("Event matches filter: {}, subsystems: {:?}", matches, event_subsystems);
+
+                        if matches {
+                            // Return changed subsystem
+                            let subsystem_name = subsystem_to_string(event_subsystems[0]);
+                            debug!("Idle returning: changed: {}", subsystem_name);
+                            return format!("changed: {}\nOK\n", subsystem_name);
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                        // Channel lagged - messages were dropped
+                        // Return immediately to notify client of changes
+                        debug!("Idle: channel lagged, skipped {} messages", skipped);
+                        return format!("changed: player\nOK\n");
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        // Channel closed - should not happen, but handle gracefully
+                        debug!("Idle: event channel closed");
+                        return "OK\n".to_string();
                     }
                 }
             }
@@ -402,8 +423,24 @@ async fn handle_command(cmd: Command, state: &AppState) -> Response {
             handle_decoders_command().await
         }
         Command::Status => {
-            // Return status from state
-            let status = state.status.read().await;
+            // Read status with lock held
+            let mut status_guard = state.status.write().await;
+
+            // Sync status.state with atomic_state WHILE holding the lock
+            // This prevents race conditions between reading atomic_state and writing to status
+            let atomic_state_val = state.atomic_state.load(std::sync::atomic::Ordering::SeqCst);
+            let atomic_player_state = match atomic_state_val {
+                0 => rmpd_core::state::PlayerState::Stop,
+                1 => rmpd_core::state::PlayerState::Play,
+                2 => rmpd_core::state::PlayerState::Pause,
+                _ => rmpd_core::state::PlayerState::Stop,
+            };
+            status_guard.state = atomic_player_state;
+
+            // Clone status and release lock
+            let status = status_guard.clone();
+            drop(status_guard);
+
             let mut resp = ResponseBuilder::new();
             resp.status(&status);
             resp.ok()
@@ -1200,6 +1237,13 @@ async fn handle_play_command(state: &AppState, position: Option<u32>) -> String 
                     status.next_song = None;
                 }
             }
+            drop(status);
+
+            // Emit events to notify idle clients
+            debug!("Emitting PlayerStateChanged(Play) and SongChanged events");
+            state.event_bus.emit(rmpd_core::event::Event::PlayerStateChanged(rmpd_core::state::PlayerState::Play));
+            state.event_bus.emit(rmpd_core::event::Event::SongChanged(Some(song)));
+
             ResponseBuilder::new().ok()
         }
         Err(e) => ResponseBuilder::error(50, 0, "play", &format!("Playback error: {}", e)),
@@ -1254,6 +1298,12 @@ async fn handle_pause_command(state: &AppState, pause_state: Option<bool>) -> St
             // Update status to match actual atomic state
             let mut status = state.status.write().await;
             status.state = actual_state;
+            drop(status);
+
+            // Emit event to notify idle clients
+            debug!("Emitting PlayerStateChanged({:?}) event", actual_state);
+            state.event_bus.emit(rmpd_core::event::Event::PlayerStateChanged(actual_state));
+
             info!("Pause completed successfully, state is now: {:?}", actual_state);
             ResponseBuilder::new().ok()
         }
@@ -1274,6 +1324,12 @@ async fn handle_stop_command(state: &AppState) -> String {
             status.state = rmpd_core::state::PlayerState::Stop;
             status.current_song = None;
             status.next_song = None;
+            drop(status);
+
+            // Emit event to notify idle clients
+            debug!("Emitting PlayerStateChanged(Stop) event");
+            state.event_bus.emit(rmpd_core::event::Event::PlayerStateChanged(rmpd_core::state::PlayerState::Stop));
+
             ResponseBuilder::new().ok()
         }
         Err(e) => ResponseBuilder::error(50, 0, "stop", &format!("Stop error: {}", e)),

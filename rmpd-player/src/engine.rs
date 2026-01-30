@@ -63,8 +63,8 @@ impl PlaybackEngine {
     pub async fn play(&mut self, song: Song) -> Result<()> {
         info!("Starting playback: {}", song.path);
 
-        // Stop current playback if any
-        self.stop().await?;
+        // Stop current playback if any (internal stop, no events - caller will emit)
+        self.stop_internal().await?;
 
         // Update current song
         *self.current_song.write().await = Some(song.clone());
@@ -92,9 +92,8 @@ impl PlaybackEngine {
 
         self.playback_thread = Some(handle);
 
-        // Update atomic state (caller must update status to avoid deadlock)
+        // Update atomic state (caller must update status to avoid deadlock and emit events)
         self.atomic_state.store(PlayerState::Play as u8, Ordering::SeqCst);
-        self.event_bus.emit(Event::SongChanged(Some(song)));
 
         Ok(())
     }
@@ -129,6 +128,15 @@ impl PlaybackEngine {
 
     pub async fn stop(&mut self) -> Result<()> {
         debug!("Stopping playback");
+        self.stop_internal().await?;
+        // Emit event to notify clients (external stop)
+        self.event_bus.emit(Event::SongChanged(None));
+        Ok(())
+    }
+
+    /// Internal stop - doesn't emit events (used when stopping before playing next song)
+    async fn stop_internal(&mut self) -> Result<()> {
+        debug!("Internal stop (no events)");
 
         // Set stop flag
         self.stop_flag.store(true, Ordering::SeqCst);
@@ -144,7 +152,6 @@ impl PlaybackEngine {
         // Update atomic state (caller must update status to avoid deadlock)
         self.atomic_state.store(PlayerState::Stop as u8, Ordering::SeqCst);
         *self.current_song.write().await = None;
-        self.event_bus.emit(Event::SongChanged(None));
 
         Ok(())
     }

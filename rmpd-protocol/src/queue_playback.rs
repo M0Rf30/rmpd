@@ -40,6 +40,7 @@ impl QueuePlaybackManager {
                         status.elapsed = Some(elapsed);
 
                         // Sync status.state with atomic_state to ensure consistency
+                        // Read atomic_state WHILE holding the lock to avoid races
                         let atomic_state_val = state.atomic_state.load(std::sync::atomic::Ordering::SeqCst);
                         let atomic_player_state = match atomic_state_val {
                             0 => rmpd_core::state::PlayerState::Stop,
@@ -47,9 +48,19 @@ impl QueuePlaybackManager {
                             2 => rmpd_core::state::PlayerState::Pause,
                             _ => rmpd_core::state::PlayerState::Stop,
                         };
-                        if status.state != atomic_player_state {
+
+                        let state_changed = status.state != atomic_player_state;
+                        if state_changed {
                             debug!("Syncing status.state {:?} -> {:?}", status.state, atomic_player_state);
                             status.state = atomic_player_state;
+                        }
+
+                        // Drop lock before emitting event to avoid holding lock during event dispatch
+                        drop(status);
+
+                        if state_changed {
+                            // Emit PlayerStateChanged event to notify idle clients
+                            state.event_bus.emit(Event::PlayerStateChanged(atomic_player_state));
                         }
                     }
                     Ok(Event::BitrateChanged(bitrate)) => {
@@ -125,6 +136,9 @@ impl QueuePlaybackManager {
                     let mut status = state.status.write().await;
                     status.state = PlayerState::Stop;
                     status.current_song = None;
+                    drop(status);
+                    // Emit event to notify idle clients
+                    state.event_bus.emit(Event::PlayerStateChanged(PlayerState::Stop));
                     return Ok(());
                 }
             } else {
@@ -190,11 +204,18 @@ impl QueuePlaybackManager {
 
                     drop(status);
 
+                    // Emit events to notify idle clients
+                    state.event_bus.emit(Event::PlayerStateChanged(PlayerState::Play));
+                    state.event_bus.emit(Event::SongChanged(Some(song)));
+
                     // Stop after playing if single mode is on
                     if should_stop_after {
                         state.engine.write().await.stop().await?;
                         let mut status = state.status.write().await;
                         status.state = PlayerState::Stop;
+                        drop(status);
+                        // Emit event to notify idle clients
+                        state.event_bus.emit(Event::PlayerStateChanged(PlayerState::Stop));
                     }
                 }
                 Err(e) => {
