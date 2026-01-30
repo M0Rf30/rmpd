@@ -1,5 +1,5 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{Device, Stream, StreamConfig};
+use cpal::{Device, Stream, StreamConfig, SampleFormat};
 use rmpd_core::error::{Result, RmpdError};
 use rmpd_core::song::AudioFormat;
 use std::sync::mpsc::{sync_channel, SyncSender};
@@ -43,6 +43,40 @@ impl CpalOutput {
             return Ok(()); // Already started
         }
 
+        // Check supported formats
+        let supported_configs = self.device
+            .supported_output_configs()
+            .map_err(|e| RmpdError::Player(format!("Failed to get supported configs: {}", e)))?;
+
+        // Try to find a suitable format at our sample rate
+        let mut found_format = None;
+        tracing::info!("Searching for suitable PCM format at {:?} Hz", self.config.sample_rate);
+        for config in supported_configs {
+            let sample_format = config.sample_format();
+            let min_rate = config.min_sample_rate();
+            let max_rate = config.max_sample_rate();
+
+            tracing::debug!("  Checking format: {:?}, rates: {:?}-{:?} Hz", sample_format, min_rate, max_rate);
+
+            if self.config.sample_rate >= min_rate && self.config.sample_rate <= max_rate {
+                // Prefer F32, but accept I16 or I32 for hardware compatibility
+                if sample_format == SampleFormat::F32 {
+                    found_format = Some(sample_format);
+                    tracing::info!("Found F32 format at {:?}-{:?} Hz", min_rate, max_rate);
+                    break;
+                } else if sample_format == SampleFormat::I16 && found_format.is_none() {
+                    found_format = Some(sample_format);
+                    tracing::info!("Found I16 format at {:?}-{:?} Hz", min_rate, max_rate);
+                } else if sample_format == SampleFormat::I32 && found_format.is_none() {
+                    found_format = Some(sample_format);
+                    tracing::info!("Found I32 format at {:?}-{:?} Hz", min_rate, max_rate);
+                }
+            }
+        }
+
+        let sample_format = found_format.unwrap_or(SampleFormat::F32);
+        tracing::info!("Using sample format: {:?}", sample_format);
+
         // Use bounded channel to block when buffer is full (prevents decoding faster than playback)
         // Buffer size: allow ~5 chunks to be queued (at 4096 samples/chunk, ~0.1s per chunk @ 44.1kHz)
         let (tx, rx) = sync_channel::<Vec<f32>>(5);
@@ -51,42 +85,117 @@ impl CpalOutput {
         let mut buffer_pos = 0;
 
         let rx_clone = rx.clone();
-        let _channels = self.config.channels as usize;
 
-        // Build output stream
-        let stream = self
-            .device
-            .build_output_stream(
-                &self.config,
-                move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-                    // Fill output buffer
-                    for sample in data.iter_mut() {
-                        // Refill internal buffer if needed
-                        if buffer_pos >= sample_buffer.len() {
-                            if let Ok(rx) = rx_clone.lock() {
-                                if let Ok(new_samples) = rx.try_recv() {
-                                    sample_buffer = new_samples;
-                                    buffer_pos = 0;
+        // Build output stream based on detected format
+        let stream = match sample_format {
+            SampleFormat::F32 => {
+                self.device
+                    .build_output_stream(
+                        &self.config,
+                        move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+                            // Fill output buffer
+                            for sample in data.iter_mut() {
+                                // Refill internal buffer if needed
+                                if buffer_pos >= sample_buffer.len() {
+                                    if let Ok(rx) = rx_clone.lock() {
+                                        if let Ok(new_samples) = rx.try_recv() {
+                                            sample_buffer = new_samples;
+                                            buffer_pos = 0;
+                                        }
+                                    }
                                 }
-                            }
-                        }
 
-                        // Output sample or silence
-                        *sample = if buffer_pos < sample_buffer.len() {
-                            let val = sample_buffer[buffer_pos];
-                            buffer_pos += 1;
-                            val
-                        } else {
-                            0.0
-                        };
-                    }
-                },
-                |err| {
-                    eprintln!("Audio output error: {}", err);
-                },
-                None,
-            )
-            .map_err(|e| RmpdError::Player(format!("Failed to build output stream: {}", e)))?;
+                                // Output sample or silence
+                                *sample = if buffer_pos < sample_buffer.len() {
+                                    let val = sample_buffer[buffer_pos];
+                                    buffer_pos += 1;
+                                    val
+                                } else {
+                                    0.0
+                                };
+                            }
+                        },
+                        |err| {
+                            tracing::error!("PCM output error: {}", err);
+                        },
+                        None,
+                    )
+                    .map_err(|e| RmpdError::Player(format!("Failed to build F32 stream: {}", e)))?
+            }
+            SampleFormat::I16 => {
+                self.device
+                    .build_output_stream(
+                        &self.config,
+                        move |data: &mut [i16], _: &cpal::OutputCallbackInfo| {
+                            // Fill output buffer with converted samples
+                            for sample in data.iter_mut() {
+                                // Refill internal buffer if needed
+                                if buffer_pos >= sample_buffer.len() {
+                                    if let Ok(rx) = rx_clone.lock() {
+                                        if let Ok(new_samples) = rx.try_recv() {
+                                            sample_buffer = new_samples;
+                                            buffer_pos = 0;
+                                        }
+                                    }
+                                }
+
+                                // Output sample or silence (convert f32 to i16)
+                                *sample = if buffer_pos < sample_buffer.len() {
+                                    let val = sample_buffer[buffer_pos];
+                                    buffer_pos += 1;
+                                    // Convert F32 [-1.0, 1.0] to I16 [-32768, 32767]
+                                    (val.clamp(-1.0, 1.0) * 32767.0) as i16
+                                } else {
+                                    0
+                                };
+                            }
+                        },
+                        |err| {
+                            tracing::error!("PCM output error: {}", err);
+                        },
+                        None,
+                    )
+                    .map_err(|e| RmpdError::Player(format!("Failed to build I16 stream: {}", e)))?
+            }
+            SampleFormat::I32 => {
+                self.device
+                    .build_output_stream(
+                        &self.config,
+                        move |data: &mut [i32], _: &cpal::OutputCallbackInfo| {
+                            // Fill output buffer with converted samples
+                            for sample in data.iter_mut() {
+                                // Refill internal buffer if needed
+                                if buffer_pos >= sample_buffer.len() {
+                                    if let Ok(rx) = rx_clone.lock() {
+                                        if let Ok(new_samples) = rx.try_recv() {
+                                            sample_buffer = new_samples;
+                                            buffer_pos = 0;
+                                        }
+                                    }
+                                }
+
+                                // Output sample or silence (convert f32 to i32)
+                                *sample = if buffer_pos < sample_buffer.len() {
+                                    let val = sample_buffer[buffer_pos];
+                                    buffer_pos += 1;
+                                    // Convert F32 [-1.0, 1.0] to I32 [-2147483648, 2147483647]
+                                    (val.clamp(-1.0, 1.0) * 2147483647.0) as i32
+                                } else {
+                                    0
+                                };
+                            }
+                        },
+                        |err| {
+                            tracing::error!("PCM output error: {}", err);
+                        },
+                        None,
+                    )
+                    .map_err(|e| RmpdError::Player(format!("Failed to build I32 stream: {}", e)))?
+            }
+            _ => {
+                return Err(RmpdError::Player(format!("Unsupported sample format: {:?}", sample_format)));
+            }
+        };
 
         stream
             .play()
@@ -95,6 +204,8 @@ impl CpalOutput {
         self.stream = Some(stream);
         self.sample_sender = Some(tx);
         self.is_paused = false;
+
+        tracing::info!("PCM output started successfully");
 
         Ok(())
     }

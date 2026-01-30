@@ -185,24 +185,31 @@ impl DopOutput {
         // This ensures the DAC detects DoP format immediately (blue LED)
         // Without this, first playback sounds like PCM (yellow LED)
         tracing::info!("Priming DAC with DoP-marked silence for format detection...");
-        let primer_frames = self.config.sample_rate as usize / 10; // 100ms of silence
+
+        // Increased to 200ms to give DAC more time to detect DoP markers
+        let primer_frames = self.config.sample_rate as usize / 5; // 200ms of silence
         let mut primer_samples = Vec::with_capacity(primer_frames * self.config.channels as usize);
 
         // Generate DoP silence: alternating markers (0x05/0xFA) with zero audio data
+        // The marker must alternate per frame (not per sample) for proper DoP detection
         for frame in 0..primer_frames {
             let marker = if frame % 2 == 0 { 0x05 } else { 0xFA };
             for _ in 0..self.config.channels {
-                // DoP silence: [marker][0x00][0x00][0x00]
+                // DoP silence: [marker][0x00][0x00][0x00] (marker in MSB)
                 let dop_silence = (marker as i32) << 24;
                 primer_samples.push(dop_silence);
             }
         }
 
-        // Send primer data
-        tx.send(primer_samples)
-            .map_err(|e| RmpdError::Player(format!("Failed to send DoP primer: {}", e)))?;
+        // Send primer data in smaller chunks to avoid blocking
+        let chunk_size = self.config.sample_rate as usize / 50 * self.config.channels as usize; // ~20ms chunks
+        for chunk in primer_samples.chunks(chunk_size) {
+            tx.send(chunk.to_vec())
+                .map_err(|e| RmpdError::Player(format!("Failed to send DoP primer chunk: {}", e)))?;
+        }
 
-        tracing::info!("DoP primer sent ({} frames), DAC should detect DSD format now", primer_frames);
+        tracing::info!("DoP primer sent ({} frames = {}ms), DAC should detect DSD format now",
+                      primer_frames, (primer_frames * 1000) / self.config.sample_rate as usize);
 
         Ok(())
     }
@@ -244,6 +251,29 @@ impl DopOutput {
     }
 
     pub fn stop(&mut self) -> Result<()> {
+        // CRITICAL: Send PCM reset sequence to switch DAC back to PCM mode
+        // This allows non-DSD tracks to play correctly after DSD playback
+        tracing::info!("Sending PCM reset sequence to switch DAC back to PCM mode...");
+
+        if let Some(ref sender) = self.sample_sender {
+            let reset_frames = self.config.sample_rate as usize / 10; // 100ms
+            let mut reset_samples = Vec::with_capacity(reset_frames * self.config.channels as usize);
+
+            // Send pure silence WITHOUT DoP markers (0x00000000)
+            // This signals to the DAC that we're back in regular PCM mode
+            for _ in 0..(reset_frames * self.config.channels as usize) {
+                reset_samples.push(0); // Plain PCM silence, no DoP markers
+            }
+
+            // Send reset data (ignore errors if channel closed)
+            let _ = sender.send(reset_samples);
+
+            // Give DAC time to process reset sequence
+            std::thread::sleep(std::time::Duration::from_millis(150));
+
+            tracing::info!("PCM reset sequence sent, DAC should switch back to PCM mode");
+        }
+
         if let Some(stream) = self.stream.take() {
             drop(stream);
         }
