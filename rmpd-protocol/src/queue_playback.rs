@@ -35,14 +35,26 @@ impl QueuePlaybackManager {
                         }
                     }
                     Ok(Event::PositionChanged(elapsed)) => {
-                        // Update status with current position
+                        // Update status with current position and sync state
                         let mut status = state.status.write().await;
                         status.elapsed = Some(elapsed);
-                        // duration is set when play command is issued
+
+                        // Sync status.state with atomic_state to ensure consistency
+                        let atomic_state_val = state.atomic_state.load(std::sync::atomic::Ordering::SeqCst);
+                        let atomic_player_state = match atomic_state_val {
+                            0 => rmpd_core::state::PlayerState::Stop,
+                            1 => rmpd_core::state::PlayerState::Play,
+                            2 => rmpd_core::state::PlayerState::Pause,
+                            _ => rmpd_core::state::PlayerState::Stop,
+                        };
+                        if status.state != atomic_player_state {
+                            debug!("Syncing status.state {:?} -> {:?}", status.state, atomic_player_state);
+                            status.state = atomic_player_state;
+                        }
                     }
                     Ok(Event::BitrateChanged(bitrate)) => {
                         // Update status with current instantaneous bitrate (VBR support)
-                        info!("Bitrate changed to: {:?} kbps", bitrate);
+                        debug!("Bitrate changed to: {:?} kbps", bitrate);
                         let mut status = state.status.write().await;
                         status.bitrate = bitrate;
                     }
