@@ -1234,16 +1234,6 @@ fn parse_f64_or_quoted(input: &mut &str) -> PResult<f64> {
         .map_err(|_| winnow::error::ErrMode::Cut(winnow::error::ContextError::default()))
 }
 
-fn parse_bool(input: &mut &str) -> PResult<bool> {
-    let val = take_while(1.., |c: char| c.is_ascii_digit())
-        .parse_next(input)?;
-    match val {
-        "0" => Ok(false),
-        "1" => Ok(true),
-        _ => Err(winnow::error::ErrMode::Cut(winnow::error::ContextError::default())),
-    }
-}
-
 fn parse_bool_or_quoted(input: &mut &str) -> PResult<bool> {
     let s = parse_quoted_or_unquoted.parse_next(input)?;
     match s.as_str() {

@@ -198,6 +198,7 @@ impl ResponseBuilder {
         self
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn stats(&mut self, artists: u32, albums: u32, songs: u32, uptime: u64, db_playtime: u64, db_update: i64, playtime: u64) -> &mut Self {
         self.field("artists", artists);
         self.field("albums", albums);

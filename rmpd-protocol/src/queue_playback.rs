@@ -1,6 +1,8 @@
 use crate::state::AppState;
 use rmpd_core::event::Event;
 use rmpd_core::state::{PlayerState, QueuePosition};
+use rmpd_core::song::AudioFormat;
+use std::time::Duration;
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info};
 
@@ -43,6 +45,12 @@ impl QueuePlaybackManager {
                         info!("Bitrate changed to: {:?} kbps", bitrate);
                         let mut status = state.status.write().await;
                         status.bitrate = bitrate;
+                    }
+                    Ok(Event::PlayerStateChanged(new_state)) => {
+                        // Sync engine state with status state
+                        debug!("Player state changed to: {:?}", new_state);
+                        let mut status = state.status.write().await;
+                        status.state = new_state;
                     }
                     Ok(_) => {} // Ignore other events
                     Err(e) => {
@@ -107,6 +115,7 @@ impl QueuePlaybackManager {
                     debug!("End of queue reached, stopping playback");
                     drop(queue);
                     state.engine.write().await.stop().await?;
+                    // Update status immediately (event will also update but that's idempotent)
                     let mut status = state.status.write().await;
                     status.state = PlayerState::Stop;
                     status.current_song = None;
@@ -131,9 +140,25 @@ impl QueuePlaybackManager {
             }
 
             // Play the next song
-            match state.engine.write().await.play(song).await {
+            match state.engine.write().await.play(song.clone()).await {
                 Ok(_) => {
                     let mut status = state.status.write().await;
+
+                    // Update playback info immediately (event will also update but that's idempotent)
+                    status.state = PlayerState::Play;
+                    status.elapsed = Some(Duration::ZERO);
+                    status.duration = song.duration;
+                    status.bitrate = song.bitrate;
+
+                    // Set audio format if available
+                    if let (Some(sr), Some(ch), Some(bps)) = (song.sample_rate, song.channels, song.bits_per_sample) {
+                        status.audio_format = Some(AudioFormat {
+                            sample_rate: sr,
+                            channels: ch,
+                            bits_per_sample: bps,
+                        });
+                    }
+
                     status.current_song = Some(QueuePosition {
                         position: if consume.is_on() && next_pos > current_pos {
                             // Adjust position if we deleted a song before it

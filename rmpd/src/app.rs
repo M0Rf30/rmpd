@@ -20,6 +20,9 @@ pub async fn run(bind_address: String, config: Config) -> Result<()> {
         restore_state(&state, saved_state, &db_path, &music_dir, config.audio.restore_paused).await;
     }
 
+    // Create shutdown channel
+    let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel(1);
+
     // Clone state for shutdown handler
     let shutdown_state = state.clone();
     let shutdown_state_file_path = state_file_path.clone();
@@ -30,6 +33,8 @@ pub async fn run(bind_address: String, config: Config) -> Result<()> {
             Ok(()) => {
                 info!("Received SIGINT, saving state...");
                 save_state_on_shutdown(&shutdown_state, &shutdown_state_file_path).await;
+                // Send shutdown signal
+                let _ = shutdown_tx.send(());
             }
             Err(err) => {
                 error!("Unable to listen for shutdown signal: {}", err);
@@ -38,7 +43,7 @@ pub async fn run(bind_address: String, config: Config) -> Result<()> {
     });
 
     // Create and run server
-    let server = MpdServer::with_state(bind_address, state.clone());
+    let server = MpdServer::with_state(bind_address, state.clone(), shutdown_rx);
 
     // Run server and handle result
     let server_result = server.run().await;
@@ -130,8 +135,8 @@ async fn restore_state(state: &AppState, saved_state: rmpd_protocol::statefile::
                     if let (Some(sr), Some(ch), Some(bps)) = (song.sample_rate, song.channels, song.bits_per_sample) {
                         status.audio_format = Some(rmpd_core::song::AudioFormat {
                             sample_rate: sr,
-                            channels: ch as u8,
-                            bits_per_sample: bps as u8,
+                            channels: ch,
+                            bits_per_sample: bps,
                         });
                     }
                     drop(status);
@@ -144,6 +149,7 @@ async fn restore_state(state: &AppState, saved_state: rmpd_protocol::statefile::
                         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
                         // Start playback
+                        #[allow(clippy::redundant_pattern_matching)]
                         if let Ok(_) = state_clone.engine.write().await.play(playback_song).await {
                             // Update state immediately
                             {

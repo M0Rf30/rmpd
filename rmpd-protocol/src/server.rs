@@ -1,5 +1,6 @@
 use tokio::net::{TcpListener, TcpStream};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::sync::broadcast;
 use tracing::{info, error, debug};
 use anyhow::Result;
 
@@ -98,24 +99,27 @@ fn format_iso8601_timestamp(timestamp: i64) -> String {
 pub struct MpdServer {
     bind_address: String,
     state: AppState,
+    shutdown_rx: broadcast::Receiver<()>,
 }
 
 impl MpdServer {
-    pub fn new(bind_address: String) -> Self {
+    pub fn new(bind_address: String, shutdown_rx: broadcast::Receiver<()>) -> Self {
         Self {
             bind_address,
             state: AppState::new(),
+            shutdown_rx,
         }
     }
 
-    pub fn with_state(bind_address: String, state: AppState) -> Self {
+    pub fn with_state(bind_address: String, state: AppState, shutdown_rx: broadcast::Receiver<()>) -> Self {
         Self {
             bind_address,
             state,
+            shutdown_rx,
         }
     }
 
-    pub async fn run(&self) -> Result<()> {
+    pub async fn run(mut self) -> Result<()> {
         let listener = TcpListener::bind(&self.bind_address).await?;
         info!("MPD server listening on {}", self.bind_address);
 
@@ -125,21 +129,34 @@ impl MpdServer {
         info!("Queue playback manager started");
 
         loop {
-            match listener.accept().await {
-                Ok((stream, addr)) => {
-                    debug!("New connection from {}", addr);
-                    let state = self.state.clone();
-                    tokio::spawn(async move {
-                        if let Err(e) = handle_client(stream, state).await {
-                            error!("Client error: {}", e);
+            tokio::select! {
+                // Handle incoming connections
+                result = listener.accept() => {
+                    match result {
+                        Ok((stream, addr)) => {
+                            debug!("New connection from {}", addr);
+                            let state = self.state.clone();
+                            tokio::spawn(async move {
+                                if let Err(e) = handle_client(stream, state).await {
+                                    error!("Client error: {}", e);
+                                }
+                            });
                         }
-                    });
+                        Err(e) => {
+                            error!("Failed to accept connection: {}", e);
+                        }
+                    }
                 }
-                Err(e) => {
-                    error!("Failed to accept connection: {}", e);
+                // Handle shutdown signal
+                _ = self.shutdown_rx.recv() => {
+                    info!("Shutdown signal received, stopping server...");
+                    break;
                 }
             }
         }
+
+        info!("Server shutdown complete");
+        Ok(())
     }
 }
 
@@ -563,7 +580,7 @@ async fn handle_command(cmd: Command, state: &AppState) -> Response {
         Command::GetVol => {
             let status = state.status.read().await;
             let mut resp = ResponseBuilder::new();
-            resp.field("volume", &status.volume.to_string());
+            resp.field("volume", status.volume.to_string());
             resp.ok()
         }
         Command::ReplayGainMode { mode } => {
@@ -1096,7 +1113,7 @@ async fn handle_count_command(
         }
 
         for (value, (count, playtime)) in groups {
-            resp.field(&group_tag, &value);
+            resp.field(group_tag, &value);
             resp.field("songs", count);
             resp.field("playtime", playtime);
         }
@@ -1150,7 +1167,7 @@ async fn handle_play_command(state: &AppState, position: Option<u32>) -> String 
     // Start playback with resolved path
     match state.engine.write().await.play(playback_song).await {
         Ok(_) => {
-            // Update status
+            // Update status immediately (event will also update but that's idempotent)
             let mut status = state.status.write().await;
             status.state = rmpd_core::state::PlayerState::Play;
             status.elapsed = Some(std::time::Duration::ZERO);
@@ -1161,8 +1178,8 @@ async fn handle_play_command(state: &AppState, position: Option<u32>) -> String 
             if let (Some(sr), Some(ch), Some(bps)) = (song.sample_rate, song.channels, song.bits_per_sample) {
                 status.audio_format = Some(rmpd_core::song::AudioFormat {
                     sample_rate: sr,
-                    channels: ch as u8,
-                    bits_per_sample: bps as u8,
+                    channels: ch,
+                    bits_per_sample: bps,
                 });
             }
 
@@ -1190,13 +1207,23 @@ async fn handle_play_command(state: &AppState, position: Option<u32>) -> String 
 }
 
 async fn handle_pause_command(state: &AppState, pause_state: Option<bool>) -> String {
-    let mut engine = state.engine.write().await;
-    let current_state = engine.get_state().await;
+    let current_state = {
+        let status = state.status.read().await;
+        status.state
+    };
 
     let should_pause = pause_state.unwrap_or_else(|| current_state == rmpd_core::state::PlayerState::Play);
+    let is_currently_paused = current_state == rmpd_core::state::PlayerState::Pause;
 
-    match engine.pause().await {
+    // If already in desired state, do nothing
+    if should_pause == is_currently_paused {
+        return ResponseBuilder::new().ok();
+    }
+
+    // Toggle pause state
+    match state.engine.write().await.pause().await {
         Ok(_) => {
+            // Update status immediately (event will also update but that's idempotent)
             let mut status = state.status.write().await;
             status.state = if should_pause {
                 rmpd_core::state::PlayerState::Pause
@@ -1212,6 +1239,7 @@ async fn handle_pause_command(state: &AppState, pause_state: Option<bool>) -> St
 async fn handle_stop_command(state: &AppState) -> String {
     match state.engine.write().await.stop().await {
         Ok(_) => {
+            // Update status immediately (event will also update but that's idempotent)
             let mut status = state.status.write().await;
             status.state = rmpd_core::state::PlayerState::Stop;
             status.current_song = None;
@@ -2024,7 +2052,7 @@ async fn handle_save_command(state: &AppState, name: &str, mode: Option<crate::p
             match db.load_playlist(name) {
                 Ok(_) => {
                     // Playlist exists, fail
-                    return ResponseBuilder::error(50, 0, "save", "Playlist already exists");
+                    ResponseBuilder::error(50, 0, "save", "Playlist already exists")
                 }
                 Err(_) => {
                     // Playlist doesn't exist, create it
@@ -3016,8 +3044,8 @@ async fn handle_plchanges_command(state: &AppState, version: u32, range: Option<
 
         for item in filtered {
             resp.field("file", item.song.path.as_str());
-            resp.field("Pos", &item.position.to_string());
-            resp.field("Id", &item.id.to_string());
+            resp.field("Pos", item.position.to_string());
+            resp.field("Id", item.id.to_string());
             if let Some(ref title) = item.song.title {
                 resp.field("Title", title);
             }
@@ -3050,8 +3078,8 @@ async fn handle_plchangesposid_command(state: &AppState, version: u32, range: Op
         };
 
         for item in filtered {
-            resp.field("cpos", &item.position.to_string());
-            resp.field("Id", &item.id.to_string());
+            resp.field("cpos", item.position.to_string());
+            resp.field("Id", item.id.to_string());
         }
     }
     resp.ok()
@@ -3185,8 +3213,8 @@ async fn handle_playlistlength_command(state: &AppState, name: &str) -> String {
                     .sum();
 
                 let mut resp = ResponseBuilder::new();
-                resp.field("songs", &songs.len().to_string());
-                resp.field("playtime", &format!("{:.3}", total_duration));
+                resp.field("songs", songs.len().to_string());
+                resp.field("playtime", format!("{:.3}", total_duration));
                 return resp.ok();
             }
         }
@@ -3211,7 +3239,7 @@ async fn handle_sticker_inc_command(state: &AppState, uri: &str, name: &str, del
             let new_value = current + increment;
             if db.set_sticker(uri, name, &new_value.to_string()).is_ok() {
                 let mut resp = ResponseBuilder::new();
-                resp.field("sticker", &format!("{}={}", name, new_value));
+                resp.field("sticker", format!("{}={}", name, new_value));
                 return resp.ok();
             }
         }
@@ -3235,7 +3263,7 @@ async fn handle_sticker_dec_command(state: &AppState, uri: &str, name: &str, del
             let new_value = current - decrement;
             if db.set_sticker(uri, name, &new_value.to_string()).is_ok() {
                 let mut resp = ResponseBuilder::new();
-                resp.field("sticker", &format!("{}={}", name, new_value));
+                resp.field("sticker", format!("{}={}", name, new_value));
                 return resp.ok();
             }
         }
@@ -3278,7 +3306,7 @@ async fn handle_sticker_namestypes_command(state: &AppState, uri: Option<&str>) 
                 if let Ok(stickers) = db.list_stickers(uri_str) {
                     let mut resp = ResponseBuilder::new();
                     for (name, _) in stickers {
-                        resp.field("sticker", &format!("{} song", name));
+                        resp.field("sticker", format!("{} song", name));
                     }
                     return resp.ok();
                 }

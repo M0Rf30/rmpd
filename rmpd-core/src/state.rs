@@ -3,43 +3,28 @@ use std::time::Duration;
 
 use crate::song::AudioFormat;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum PlayerState {
+    #[default]
     Stop,
     Play,
     Pause,
 }
 
-impl Default for PlayerState {
-    fn default() -> Self {
-        Self::Stop
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum SingleMode {
+    #[default]
     Off,
     On,
     Oneshot,
 }
 
-impl Default for SingleMode {
-    fn default() -> Self {
-        Self::Off
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ConsumeMode {
+    #[default]
     Off,
     On,
     Oneshot,
-}
-
-impl Default for ConsumeMode {
-    fn default() -> Self {
-        Self::Off
-    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]

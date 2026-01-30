@@ -31,7 +31,7 @@ impl MetadataExtractor {
         let properties = tagged_file.properties();
         let duration = Some(Duration::from_secs(properties.duration().as_secs()));
         let sample_rate = properties.sample_rate();
-        let channels = properties.channels().map(|c| c as u8);
+        let channels = properties.channels();
         let bitrate = properties.audio_bitrate();
 
         // Extract tags
@@ -56,8 +56,8 @@ impl MetadataExtractor {
                 tag.album().map(|s| s.to_string()),
                 tag.get_string(&ItemKey::AlbumArtist)
                     .map(|s| s.to_string()),
-                tag.track().map(|t| t as u32),
-                tag.disk().map(|d| d as u32),
+                tag.track(),
+                tag.disk(),
                 tag.year().map(|y| y.to_string()),
                 tag.genre().map(|s| s.to_string()),
                 tag.get_string(&ItemKey::Composer)
@@ -108,7 +108,7 @@ impl MetadataExtractor {
             comment,
             sample_rate,
             channels,
-            bits_per_sample: Some(properties.bit_depth().unwrap_or(16) as u8),
+            bits_per_sample: Some(properties.bit_depth().unwrap_or(16)),
             bitrate,
             replay_gain_track_gain,
             replay_gain_track_peak,

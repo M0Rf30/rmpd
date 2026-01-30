@@ -206,11 +206,10 @@ impl PlaybackEngine {
                     output.pause()?;
                     thread::sleep(StdDuration::from_millis(100));
                     continue;
-                } else if *current_state == PlayerState::Play {
-                    if output.is_paused() {
+                } else if *current_state == PlayerState::Play
+                    && output.is_paused() {
                         output.resume()?;
                     }
-                }
             }
 
             // Read from decoder

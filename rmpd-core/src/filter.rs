@@ -8,7 +8,6 @@
 ///            | ! EXPRESSION
 ///            | TAG OPERATOR VALUE
 /// OPERATOR := == | != | =~ | !~ | < | > | <= | >=
-
 use crate::error::{Result, RmpdError};
 
 #[derive(Debug, Clone, PartialEq)]

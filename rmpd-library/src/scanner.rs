@@ -119,7 +119,7 @@ impl Scanner {
                 stats.scanned += 1;
 
                 // Emit progress every 100 files
-                if stats.scanned % 100 == 0 {
+                if stats.scanned.is_multiple_of(100) {
                     self.event_bus.emit(Event::DatabaseUpdateProgress {
                         scanned: stats.scanned,
                         total: 0, // Unknown total
