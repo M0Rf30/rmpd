@@ -21,6 +21,20 @@ pub struct Song {
     pub performer: Option<String>,
     pub comment: Option<String>,
 
+    // MusicBrainz IDs
+    pub musicbrainz_trackid: Option<String>,
+    pub musicbrainz_albumid: Option<String>,
+    pub musicbrainz_artistid: Option<String>,
+    pub musicbrainz_albumartistid: Option<String>,
+    pub musicbrainz_releasegroupid: Option<String>,
+    pub musicbrainz_releasetrackid: Option<String>,
+
+    // Extended metadata
+    pub artist_sort: Option<String>,
+    pub album_artist_sort: Option<String>,
+    pub original_date: Option<String>,
+    pub label: Option<String>,
+
     // Audio properties
     pub sample_rate: Option<u32>,
     pub channels: Option<u8>,

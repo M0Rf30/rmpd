@@ -37,6 +37,9 @@ impl MetadataExtractor {
         // Extract tags
         let tag = tagged_file.primary_tag().or_else(|| tagged_file.first_tag());
 
+        eprintln!("DEBUG: Extracting metadata from: {}", path);
+        eprintln!("DEBUG: Tag present: {}", tag.is_some());
+
         let (
             title,
             artist,
@@ -49,6 +52,16 @@ impl MetadataExtractor {
             composer,
             performer,
             comment,
+            musicbrainz_trackid,
+            musicbrainz_albumid,
+            musicbrainz_artistid,
+            musicbrainz_albumartistid,
+            musicbrainz_releasegroupid,
+            musicbrainz_releasetrackid,
+            artist_sort,
+            album_artist_sort,
+            original_date,
+            label,
         ) = if let Some(tag) = tag {
             (
                 tag.title().map(|s| s.to_string()),
@@ -65,10 +78,36 @@ impl MetadataExtractor {
                 tag.get_string(&ItemKey::Performer)
                     .map(|s| s.to_string()),
                 tag.comment().map(|s| s.to_string()),
+                // MusicBrainz IDs
+                tag.get_string(&ItemKey::MusicBrainzTrackId)
+                    .map(|s| s.to_string()),
+                tag.get_string(&ItemKey::MusicBrainzReleaseId)
+                    .map(|s| s.to_string()),
+                tag.get_string(&ItemKey::MusicBrainzArtistId)
+                    .map(|s| s.to_string()),
+                tag.get_string(&ItemKey::MusicBrainzReleaseArtistId)
+                    .map(|s| s.to_string()),
+                tag.get_string(&ItemKey::MusicBrainzReleaseGroupId)
+                    .map(|s| s.to_string()),
+                tag.get_string(&ItemKey::MusicBrainzRecordingId)
+                    .map(|s| s.to_string()),
+                // Extended metadata
+                tag.get_string(&ItemKey::TrackArtistSortOrder)
+                    .map(|s| s.to_string()),
+                tag.get_string(&ItemKey::AlbumArtistSortOrder)
+                    .map(|s| s.to_string()),
+                tag.get_string(&ItemKey::OriginalReleaseDate)
+                    .map(|s| s.to_string()),
+                tag.get_string(&ItemKey::Label)
+                    .map(|s| s.to_string()),
             )
         } else {
-            (None, None, None, None, None, None, None, None, None, None, None)
+            (None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None)
         };
+
+        eprintln!("DEBUG: Extracted MB TrackID: {:?}", musicbrainz_trackid);
+        eprintln!("DEBUG: Extracted MB AlbumID: {:?}", musicbrainz_albumid);
+        eprintln!("DEBUG: Extracted Label: {:?}", label);
 
         // ReplayGain (not all formats support this)
         let (
@@ -106,6 +145,16 @@ impl MetadataExtractor {
             composer,
             performer,
             comment,
+            musicbrainz_trackid,
+            musicbrainz_albumid,
+            musicbrainz_artistid,
+            musicbrainz_albumartistid,
+            musicbrainz_releasegroupid,
+            musicbrainz_releasetrackid,
+            artist_sort,
+            album_artist_sort,
+            original_date,
+            label,
             sample_rate,
             channels,
             bits_per_sample: Some(properties.bit_depth().unwrap_or(16)),

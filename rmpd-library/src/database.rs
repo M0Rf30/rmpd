@@ -199,6 +199,9 @@ impl Database {
             [],
         ).map_err(|e| RmpdError::Database(e.to_string()))?;
 
+        // Run migrations for new fields
+        self.migrate_add_musicbrainz_fields()?;
+
         // Triggers to keep FTS index in sync
         self.conn.execute(
             "CREATE TRIGGER IF NOT EXISTS songs_fts_insert AFTER INSERT ON songs BEGIN
@@ -227,6 +230,38 @@ impl Database {
         Ok(())
     }
 
+    fn migrate_add_musicbrainz_fields(&self) -> Result<()> {
+        // Check if columns already exist
+        let column_exists: bool = self.conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('songs') WHERE name = 'musicbrainz_trackid'",
+            [],
+            |row| row.get(0),
+        ).map_err(|e| RmpdError::Database(e.to_string()))?;
+
+        if column_exists {
+            return Ok(());
+        }
+
+        // Add new columns
+        self.conn.execute_batch("
+            ALTER TABLE songs ADD COLUMN musicbrainz_trackid TEXT;
+            ALTER TABLE songs ADD COLUMN musicbrainz_albumid TEXT;
+            ALTER TABLE songs ADD COLUMN musicbrainz_artistid TEXT;
+            ALTER TABLE songs ADD COLUMN musicbrainz_albumartistid TEXT;
+            ALTER TABLE songs ADD COLUMN musicbrainz_releasegroupid TEXT;
+            ALTER TABLE songs ADD COLUMN musicbrainz_releasetrackid TEXT;
+            ALTER TABLE songs ADD COLUMN artist_sort TEXT;
+            ALTER TABLE songs ADD COLUMN album_artist_sort TEXT;
+            ALTER TABLE songs ADD COLUMN original_date TEXT;
+            ALTER TABLE songs ADD COLUMN label TEXT;
+
+            CREATE INDEX IF NOT EXISTS idx_songs_musicbrainz_trackid ON songs(musicbrainz_trackid);
+            CREATE INDEX IF NOT EXISTS idx_songs_musicbrainz_albumid ON songs(musicbrainz_albumid);
+        ").map_err(|e| RmpdError::Database(e.to_string()))?;
+
+        Ok(())
+    }
+
     pub fn add_song(&self, song: &Song) -> Result<u64> {
         // First, ensure directory exists
         let root_path = Utf8PathBuf::from("/");
@@ -237,14 +272,19 @@ impl Database {
             "INSERT OR REPLACE INTO songs (
                 path, directory_id, mtime, duration,
                 title, artist, album, album_artist, track, disc, date, genre, composer, performer, comment,
+                musicbrainz_trackid, musicbrainz_albumid, musicbrainz_artistid, musicbrainz_albumartistid,
+                musicbrainz_releasegroupid, musicbrainz_releasetrackid,
+                artist_sort, album_artist_sort, original_date, label,
                 sample_rate, channels, bits_per_sample, bitrate,
                 replay_gain_track_gain, replay_gain_track_peak,
                 replay_gain_album_gain, replay_gain_album_peak
             ) VALUES (
                 ?1, ?2, ?3, ?4,
                 ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
-                ?16, ?17, ?18, ?19,
-                ?20, ?21, ?22, ?23
+                ?16, ?17, ?18, ?19, ?20, ?21,
+                ?22, ?23, ?24, ?25,
+                ?26, ?27, ?28, ?29,
+                ?30, ?31, ?32, ?33
             )",
             params![
                 song.path.as_str(),
@@ -262,6 +302,16 @@ impl Database {
                 song.composer,
                 song.performer,
                 song.comment,
+                song.musicbrainz_trackid,
+                song.musicbrainz_albumid,
+                song.musicbrainz_artistid,
+                song.musicbrainz_albumartistid,
+                song.musicbrainz_releasegroupid,
+                song.musicbrainz_releasetrackid,
+                song.artist_sort,
+                song.album_artist_sort,
+                song.original_date,
+                song.label,
                 song.sample_rate,
                 song.channels,
                 song.bits_per_sample,
@@ -280,6 +330,9 @@ impl Database {
         self.conn.query_row(
             "SELECT id, path, mtime, duration,
                     title, artist, album, album_artist, track, disc, date, genre, composer, performer, comment,
+                    musicbrainz_trackid, musicbrainz_albumid, musicbrainz_artistid, musicbrainz_albumartistid,
+                    musicbrainz_releasegroupid, musicbrainz_releasetrackid,
+                    artist_sort, album_artist_sort, original_date, label,
                     sample_rate, channels, bits_per_sample, bitrate,
                     replay_gain_track_gain, replay_gain_track_peak,
                     replay_gain_album_gain, replay_gain_album_peak,
@@ -302,16 +355,26 @@ impl Database {
                     composer: row.get(12)?,
                     performer: row.get(13)?,
                     comment: row.get(14)?,
-                    sample_rate: row.get(15)?,
-                    channels: row.get(16)?,
-                    bits_per_sample: row.get(17)?,
-                    bitrate: row.get(18)?,
-                    replay_gain_track_gain: row.get(19)?,
-                    replay_gain_track_peak: row.get(20)?,
-                    replay_gain_album_gain: row.get(21)?,
-                    replay_gain_album_peak: row.get(22)?,
-                    added_at: row.get(23)?,
-                    last_modified: row.get(24)?,
+                    musicbrainz_trackid: row.get(15)?,
+                    musicbrainz_albumid: row.get(16)?,
+                    musicbrainz_artistid: row.get(17)?,
+                    musicbrainz_albumartistid: row.get(18)?,
+                    musicbrainz_releasegroupid: row.get(19)?,
+                    musicbrainz_releasetrackid: row.get(20)?,
+                    artist_sort: row.get(21)?,
+                    album_artist_sort: row.get(22)?,
+                    original_date: row.get(23)?,
+                    label: row.get(24)?,
+                    sample_rate: row.get(25)?,
+                    channels: row.get(26)?,
+                    bits_per_sample: row.get(27)?,
+                    bitrate: row.get(28)?,
+                    replay_gain_track_gain: row.get(29)?,
+                    replay_gain_track_peak: row.get(30)?,
+                    replay_gain_album_gain: row.get(31)?,
+                    replay_gain_album_peak: row.get(32)?,
+                    added_at: row.get(33)?,
+                    last_modified: row.get(34)?,
                 })
             },
         )
@@ -323,6 +386,9 @@ impl Database {
         self.conn.query_row(
             "SELECT id, path, mtime, duration,
                     title, artist, album, album_artist, track, disc, date, genre, composer, performer, comment,
+                    musicbrainz_trackid, musicbrainz_albumid, musicbrainz_artistid, musicbrainz_albumartistid,
+                    musicbrainz_releasegroupid, musicbrainz_releasetrackid,
+                    artist_sort, album_artist_sort, original_date, label,
                     sample_rate, channels, bits_per_sample, bitrate,
                     replay_gain_track_gain, replay_gain_track_peak,
                     replay_gain_album_gain, replay_gain_album_peak,
@@ -345,16 +411,26 @@ impl Database {
                     composer: row.get(12)?,
                     performer: row.get(13)?,
                     comment: row.get(14)?,
-                    sample_rate: row.get(15)?,
-                    channels: row.get(16)?,
-                    bits_per_sample: row.get(17)?,
-                    bitrate: row.get(18)?,
-                    replay_gain_track_gain: row.get(19)?,
-                    replay_gain_track_peak: row.get(20)?,
-                    replay_gain_album_gain: row.get(21)?,
-                    replay_gain_album_peak: row.get(22)?,
-                    added_at: row.get(23)?,
-                    last_modified: row.get(24)?,
+                    musicbrainz_trackid: row.get(15)?,
+                    musicbrainz_albumid: row.get(16)?,
+                    musicbrainz_artistid: row.get(17)?,
+                    musicbrainz_albumartistid: row.get(18)?,
+                    musicbrainz_releasegroupid: row.get(19)?,
+                    musicbrainz_releasetrackid: row.get(20)?,
+                    artist_sort: row.get(21)?,
+                    album_artist_sort: row.get(22)?,
+                    original_date: row.get(23)?,
+                    label: row.get(24)?,
+                    sample_rate: row.get(25)?,
+                    channels: row.get(26)?,
+                    bits_per_sample: row.get(27)?,
+                    bitrate: row.get(28)?,
+                    replay_gain_track_gain: row.get(29)?,
+                    replay_gain_track_peak: row.get(30)?,
+                    replay_gain_album_gain: row.get(31)?,
+                    replay_gain_album_peak: row.get(32)?,
+                    added_at: row.get(33)?,
+                    last_modified: row.get(34)?,
                 })
             },
         )
@@ -459,16 +535,26 @@ impl Database {
                 composer: row.get(12)?,
                 performer: row.get(13)?,
                 comment: row.get(14)?,
-                sample_rate: row.get(15)?,
-                channels: row.get(16)?,
-                bits_per_sample: row.get(17)?,
-                bitrate: row.get(18)?,
-                replay_gain_track_gain: row.get(19)?,
-                replay_gain_track_peak: row.get(20)?,
-                replay_gain_album_gain: row.get(21)?,
-                replay_gain_album_peak: row.get(22)?,
-                added_at: row.get(23)?,
-                last_modified: row.get(24)?,
+                    musicbrainz_trackid: row.get(15)?,
+                    musicbrainz_albumid: row.get(16)?,
+                    musicbrainz_artistid: row.get(17)?,
+                    musicbrainz_albumartistid: row.get(18)?,
+                    musicbrainz_releasegroupid: row.get(19)?,
+                    musicbrainz_releasetrackid: row.get(20)?,
+                    artist_sort: row.get(21)?,
+                    album_artist_sort: row.get(22)?,
+                    original_date: row.get(23)?,
+                    label: row.get(24)?,
+                    sample_rate: row.get(25)?,
+                channels: row.get(26)?,
+                bits_per_sample: row.get(27)?,
+                bitrate: row.get(28)?,
+                replay_gain_track_gain: row.get(29)?,
+                replay_gain_track_peak: row.get(30)?,
+                replay_gain_album_gain: row.get(31)?,
+                replay_gain_album_peak: row.get(32)?,
+                added_at: row.get(33)?,
+                last_modified: row.get(34)?,
             })
         })
         .map_err(|e| RmpdError::Database(e.to_string()))?
@@ -576,6 +662,9 @@ impl Database {
         let query = match tag.to_lowercase().as_str() {
             "artist" => "SELECT id, path, mtime, duration,
                     title, artist, album, album_artist, track, disc, date, genre, composer, performer, comment,
+                    musicbrainz_trackid, musicbrainz_albumid, musicbrainz_artistid, musicbrainz_albumartistid,
+                    musicbrainz_releasegroupid, musicbrainz_releasetrackid,
+                    artist_sort, album_artist_sort, original_date, label,
                     sample_rate, channels, bits_per_sample, bitrate,
                     replay_gain_track_gain, replay_gain_track_peak,
                     replay_gain_album_gain, replay_gain_album_peak,
@@ -583,6 +672,9 @@ impl Database {
              FROM songs WHERE artist = ?1 ORDER BY album, track",
             "album" => "SELECT id, path, mtime, duration,
                     title, artist, album, album_artist, track, disc, date, genre, composer, performer, comment,
+                    musicbrainz_trackid, musicbrainz_albumid, musicbrainz_artistid, musicbrainz_albumartistid,
+                    musicbrainz_releasegroupid, musicbrainz_releasetrackid,
+                    artist_sort, album_artist_sort, original_date, label,
                     sample_rate, channels, bits_per_sample, bitrate,
                     replay_gain_track_gain, replay_gain_track_peak,
                     replay_gain_album_gain, replay_gain_album_peak,
@@ -590,6 +682,9 @@ impl Database {
              FROM songs WHERE album = ?1 ORDER BY track",
             "genre" => "SELECT id, path, mtime, duration,
                     title, artist, album, album_artist, track, disc, date, genre, composer, performer, comment,
+                    musicbrainz_trackid, musicbrainz_albumid, musicbrainz_artistid, musicbrainz_albumartistid,
+                    musicbrainz_releasegroupid, musicbrainz_releasetrackid,
+                    artist_sort, album_artist_sort, original_date, label,
                     sample_rate, channels, bits_per_sample, bitrate,
                     replay_gain_track_gain, replay_gain_track_peak,
                     replay_gain_album_gain, replay_gain_album_peak,
@@ -617,16 +712,26 @@ impl Database {
                 composer: row.get(12)?,
                 performer: row.get(13)?,
                 comment: row.get(14)?,
-                sample_rate: row.get(15)?,
-                channels: row.get(16)?,
-                bits_per_sample: row.get(17)?,
-                bitrate: row.get(18)?,
-                replay_gain_track_gain: row.get(19)?,
-                replay_gain_track_peak: row.get(20)?,
-                replay_gain_album_gain: row.get(21)?,
-                replay_gain_album_peak: row.get(22)?,
-                added_at: row.get(23)?,
-                last_modified: row.get(24)?,
+                    musicbrainz_trackid: row.get(15)?,
+                    musicbrainz_albumid: row.get(16)?,
+                    musicbrainz_artistid: row.get(17)?,
+                    musicbrainz_albumartistid: row.get(18)?,
+                    musicbrainz_releasegroupid: row.get(19)?,
+                    musicbrainz_releasetrackid: row.get(20)?,
+                    artist_sort: row.get(21)?,
+                    album_artist_sort: row.get(22)?,
+                    original_date: row.get(23)?,
+                    label: row.get(24)?,
+                    sample_rate: row.get(25)?,
+                channels: row.get(26)?,
+                bits_per_sample: row.get(27)?,
+                bitrate: row.get(28)?,
+                replay_gain_track_gain: row.get(29)?,
+                replay_gain_track_peak: row.get(30)?,
+                replay_gain_album_gain: row.get(31)?,
+                replay_gain_album_peak: row.get(32)?,
+                added_at: row.get(33)?,
+                last_modified: row.get(34)?,
             })
         })
         .map_err(|e| RmpdError::Database(e.to_string()))?
@@ -643,6 +748,9 @@ impl Database {
         let query = format!(
             "SELECT id, path, mtime, duration,
                     title, artist, album, album_artist, track, disc, date, genre, composer, performer, comment,
+                    musicbrainz_trackid, musicbrainz_albumid, musicbrainz_artistid, musicbrainz_albumartistid,
+                    musicbrainz_releasegroupid, musicbrainz_releasetrackid,
+                    artist_sort, album_artist_sort, original_date, label,
                     sample_rate, channels, bits_per_sample, bitrate,
                     replay_gain_track_gain, replay_gain_track_peak,
                     replay_gain_album_gain, replay_gain_album_peak,
@@ -673,16 +781,26 @@ impl Database {
                 composer: row.get(12)?,
                 performer: row.get(13)?,
                 comment: row.get(14)?,
-                sample_rate: row.get(15)?,
-                channels: row.get(16)?,
-                bits_per_sample: row.get(17)?,
-                bitrate: row.get(18)?,
-                replay_gain_track_gain: row.get(19)?,
-                replay_gain_track_peak: row.get(20)?,
-                replay_gain_album_gain: row.get(21)?,
-                replay_gain_album_peak: row.get(22)?,
-                added_at: row.get(23)?,
-                last_modified: row.get(24)?,
+                    musicbrainz_trackid: row.get(15)?,
+                    musicbrainz_albumid: row.get(16)?,
+                    musicbrainz_artistid: row.get(17)?,
+                    musicbrainz_albumartistid: row.get(18)?,
+                    musicbrainz_releasegroupid: row.get(19)?,
+                    musicbrainz_releasetrackid: row.get(20)?,
+                    artist_sort: row.get(21)?,
+                    album_artist_sort: row.get(22)?,
+                    original_date: row.get(23)?,
+                    label: row.get(24)?,
+                    sample_rate: row.get(25)?,
+                channels: row.get(26)?,
+                bits_per_sample: row.get(27)?,
+                bitrate: row.get(28)?,
+                replay_gain_track_gain: row.get(29)?,
+                replay_gain_track_peak: row.get(30)?,
+                replay_gain_album_gain: row.get(31)?,
+                replay_gain_album_peak: row.get(32)?,
+                added_at: row.get(33)?,
+                last_modified: row.get(34)?,
             })
         })
         .map_err(|e| RmpdError::Database(e.to_string()))?
@@ -696,6 +814,9 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT id, path, mtime, duration,
                     title, artist, album, album_artist, track, disc, date, genre, composer, performer, comment,
+                    musicbrainz_trackid, musicbrainz_albumid, musicbrainz_artistid, musicbrainz_albumartistid,
+                    musicbrainz_releasegroupid, musicbrainz_releasetrackid,
+                    artist_sort, album_artist_sort, original_date, label,
                     sample_rate, channels, bits_per_sample, bitrate,
                     replay_gain_track_gain, replay_gain_track_peak,
                     replay_gain_album_gain, replay_gain_album_peak,
@@ -720,16 +841,26 @@ impl Database {
                 composer: row.get(12)?,
                 performer: row.get(13)?,
                 comment: row.get(14)?,
-                sample_rate: row.get(15)?,
-                channels: row.get(16)?,
-                bits_per_sample: row.get(17)?,
-                bitrate: row.get(18)?,
-                replay_gain_track_gain: row.get(19)?,
-                replay_gain_track_peak: row.get(20)?,
-                replay_gain_album_gain: row.get(21)?,
-                replay_gain_album_peak: row.get(22)?,
-                added_at: row.get(23)?,
-                last_modified: row.get(24)?,
+                    musicbrainz_trackid: row.get(15)?,
+                    musicbrainz_albumid: row.get(16)?,
+                    musicbrainz_artistid: row.get(17)?,
+                    musicbrainz_albumartistid: row.get(18)?,
+                    musicbrainz_releasegroupid: row.get(19)?,
+                    musicbrainz_releasetrackid: row.get(20)?,
+                    artist_sort: row.get(21)?,
+                    album_artist_sort: row.get(22)?,
+                    original_date: row.get(23)?,
+                    label: row.get(24)?,
+                    sample_rate: row.get(25)?,
+                channels: row.get(26)?,
+                bits_per_sample: row.get(27)?,
+                bitrate: row.get(28)?,
+                replay_gain_track_gain: row.get(29)?,
+                replay_gain_track_peak: row.get(30)?,
+                replay_gain_album_gain: row.get(31)?,
+                replay_gain_album_peak: row.get(32)?,
+                added_at: row.get(33)?,
+                last_modified: row.get(34)?,
             })
         })
         .map_err(|e| RmpdError::Database(e.to_string()))?
@@ -844,6 +975,9 @@ impl Database {
         {
             let query = "SELECT id, path, duration,
                     title, artist, album, album_artist, track, disc, date, genre, composer, performer, comment,
+                    musicbrainz_trackid, musicbrainz_albumid, musicbrainz_artistid, musicbrainz_albumartistid,
+                    musicbrainz_releasegroupid, musicbrainz_releasetrackid,
+                    artist_sort, album_artist_sort, original_date, label,
                     sample_rate, channels, bits_per_sample, bitrate,
                     replay_gain_track_gain, replay_gain_track_peak,
                     replay_gain_album_gain, replay_gain_album_peak,
@@ -869,16 +1003,26 @@ impl Database {
                     composer: row.get(11).ok(),
                     performer: row.get(12).ok(),
                     comment: row.get(13).ok(),
-                    sample_rate: row.get(14).ok(),
-                    channels: row.get(15).ok(),
-                    bits_per_sample: row.get(16).ok(),
-                    bitrate: row.get(17).ok(),
-                    replay_gain_track_gain: row.get(18).ok(),
-                    replay_gain_track_peak: row.get(19).ok(),
-                    replay_gain_album_gain: row.get(20).ok(),
-                    replay_gain_album_peak: row.get(21).ok(),
-                    added_at: row.get(22)?,
-                    last_modified: row.get(23)?,
+                    musicbrainz_trackid: row.get(14).ok(),
+                    musicbrainz_albumid: row.get(15).ok(),
+                    musicbrainz_artistid: row.get(16).ok(),
+                    musicbrainz_albumartistid: row.get(17).ok(),
+                    musicbrainz_releasegroupid: row.get(18).ok(),
+                    musicbrainz_releasetrackid: row.get(19).ok(),
+                    artist_sort: row.get(20).ok(),
+                    album_artist_sort: row.get(21).ok(),
+                    original_date: row.get(22).ok(),
+                    label: row.get(23).ok(),
+                    sample_rate: row.get(24).ok(),
+                    channels: row.get(25).ok(),
+                    bits_per_sample: row.get(26).ok(),
+                    bitrate: row.get(27).ok(),
+                    replay_gain_track_gain: row.get(28).ok(),
+                    replay_gain_track_peak: row.get(29).ok(),
+                    replay_gain_album_gain: row.get(30).ok(),
+                    replay_gain_album_peak: row.get(31).ok(),
+                    added_at: row.get(32)?,
+                    last_modified: row.get(33)?,
                 })
             }).map_err(|e| RmpdError::Database(e.to_string()))?;
 
@@ -894,6 +1038,9 @@ impl Database {
     pub fn list_directory_recursive(&self, path: &str) -> Result<Vec<Song>> {
         let query = "SELECT id, path, duration,
                 title, artist, album, album_artist, track, disc, date, genre, composer, performer, comment,
+                musicbrainz_trackid, musicbrainz_albumid, musicbrainz_artistid, musicbrainz_albumartistid,
+                musicbrainz_releasegroupid, musicbrainz_releasetrackid,
+                artist_sort, album_artist_sort, original_date, label,
                 sample_rate, channels, bits_per_sample, bitrate,
                 replay_gain_track_gain, replay_gain_track_peak,
                 replay_gain_album_gain, replay_gain_album_peak,
@@ -921,16 +1068,26 @@ impl Database {
                 composer: row.get(11).ok(),
                 performer: row.get(12).ok(),
                 comment: row.get(13).ok(),
-                sample_rate: row.get(14).ok(),
-                channels: row.get(15).ok(),
-                bits_per_sample: row.get(16).ok(),
-                bitrate: row.get(17).ok(),
-                replay_gain_track_gain: row.get(18).ok(),
-                replay_gain_track_peak: row.get(19).ok(),
-                replay_gain_album_gain: row.get(20).ok(),
-                replay_gain_album_peak: row.get(21).ok(),
-                added_at: row.get(22)?,
-                last_modified: row.get(23)?,
+                musicbrainz_trackid: row.get(14).ok(),
+                musicbrainz_albumid: row.get(15).ok(),
+                musicbrainz_artistid: row.get(16).ok(),
+                musicbrainz_albumartistid: row.get(17).ok(),
+                musicbrainz_releasegroupid: row.get(18).ok(),
+                musicbrainz_releasetrackid: row.get(19).ok(),
+                artist_sort: row.get(20).ok(),
+                album_artist_sort: row.get(21).ok(),
+                original_date: row.get(22).ok(),
+                label: row.get(23).ok(),
+                sample_rate: row.get(24).ok(),
+                channels: row.get(25).ok(),
+                bits_per_sample: row.get(26).ok(),
+                bitrate: row.get(27).ok(),
+                replay_gain_track_gain: row.get(28).ok(),
+                replay_gain_track_peak: row.get(29).ok(),
+                replay_gain_album_gain: row.get(30).ok(),
+                replay_gain_album_peak: row.get(31).ok(),
+                added_at: row.get(32)?,
+                last_modified: row.get(33)?,
             })
         }).map_err(|e| RmpdError::Database(e.to_string()))?;
 
@@ -987,6 +1144,9 @@ impl Database {
             "SELECT s.id, s.path, s.duration,
                     s.title, s.artist, s.album, s.album_artist, s.track, s.disc, s.date, s.genre,
                     s.composer, s.performer, s.comment,
+                    s.musicbrainz_trackid, s.musicbrainz_albumid, s.musicbrainz_artistid, s.musicbrainz_albumartistid,
+                    s.musicbrainz_releasegroupid, s.musicbrainz_releasetrackid,
+                    s.artist_sort, s.album_artist_sort, s.original_date, s.label,
                     s.sample_rate, s.channels, s.bits_per_sample, s.bitrate,
                     s.replay_gain_track_gain, s.replay_gain_track_peak,
                     s.replay_gain_album_gain, s.replay_gain_album_peak,
@@ -1013,16 +1173,26 @@ impl Database {
                 composer: row.get(11).ok(),
                 performer: row.get(12).ok(),
                 comment: row.get(13).ok(),
-                sample_rate: row.get(14).ok(),
-                channels: row.get(15).ok(),
-                bits_per_sample: row.get(16).ok(),
-                bitrate: row.get(17).ok(),
-                replay_gain_track_gain: row.get(18).ok(),
-                replay_gain_track_peak: row.get(19).ok(),
-                replay_gain_album_gain: row.get(20).ok(),
-                replay_gain_album_peak: row.get(21).ok(),
-                added_at: row.get(22)?,
-                last_modified: row.get(23)?,
+                musicbrainz_trackid: row.get(14).ok(),
+                musicbrainz_albumid: row.get(15).ok(),
+                musicbrainz_artistid: row.get(16).ok(),
+                musicbrainz_albumartistid: row.get(17).ok(),
+                musicbrainz_releasegroupid: row.get(18).ok(),
+                musicbrainz_releasetrackid: row.get(19).ok(),
+                artist_sort: row.get(20).ok(),
+                album_artist_sort: row.get(21).ok(),
+                original_date: row.get(22).ok(),
+                label: row.get(23).ok(),
+                sample_rate: row.get(24).ok(),
+                channels: row.get(25).ok(),
+                bits_per_sample: row.get(26).ok(),
+                bitrate: row.get(27).ok(),
+                replay_gain_track_gain: row.get(28).ok(),
+                replay_gain_track_peak: row.get(29).ok(),
+                replay_gain_album_gain: row.get(30).ok(),
+                replay_gain_album_peak: row.get(31).ok(),
+                added_at: row.get(32)?,
+                last_modified: row.get(33)?,
             })
         }).map_err(|e| RmpdError::Database(e.to_string()))?;
 

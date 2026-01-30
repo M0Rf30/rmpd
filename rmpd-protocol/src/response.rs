@@ -190,6 +190,20 @@ impl ResponseBuilder {
         self.optional_field("Composer", song.composer.as_ref());
         self.optional_field("Performer", song.performer.as_ref());
 
+        // MusicBrainz IDs
+        self.optional_field("MUSICBRAINZ_TRACKID", song.musicbrainz_trackid.as_ref());
+        self.optional_field("MUSICBRAINZ_ALBUMID", song.musicbrainz_albumid.as_ref());
+        self.optional_field("MUSICBRAINZ_ARTISTID", song.musicbrainz_artistid.as_ref());
+        self.optional_field("MUSICBRAINZ_ALBUMARTISTID", song.musicbrainz_albumartistid.as_ref());
+        self.optional_field("MUSICBRAINZ_RELEASEGROUPID", song.musicbrainz_releasegroupid.as_ref());
+        self.optional_field("MUSICBRAINZ_RELEASETRACKID", song.musicbrainz_releasetrackid.as_ref());
+
+        // Extended metadata
+        self.optional_field("ArtistSort", song.artist_sort.as_ref());
+        self.optional_field("AlbumArtistSort", song.album_artist_sort.as_ref());
+        self.optional_field("OriginalDate", song.original_date.as_ref());
+        self.optional_field("Label", song.label.as_ref());
+
         if let Some(duration) = song.duration {
             self.field("Time", duration.as_secs());
             self.field("duration", format!("{:.3}", duration.as_secs_f64()));
