@@ -89,7 +89,8 @@ impl DopOutput {
         tracing::info!("Requested channels: {}", self.config.channels);
 
         // Create channel for sample data
-        let (tx, rx) = sync_channel::<Vec<i32>>(5);
+        // Increased buffer depth to prevent underruns during DoP startup
+        let (tx, rx) = sync_channel::<Vec<i32>>(16);
         let rx = Arc::new(Mutex::new(rx));
         let mut sample_buffer: Vec<i32> = Vec::new();
         let mut buffer_pos = 0;
@@ -175,10 +176,34 @@ impl DopOutput {
             .map_err(|e| RmpdError::Player(format!("Failed to start DoP stream: {}", e)))?;
 
         self.stream = Some(stream);
-        self.sample_sender = Some(tx);
+        self.sample_sender = Some(tx.clone());
         self.is_paused = false;
 
         tracing::info!("DoP output started successfully");
+
+        // CRITICAL FIX: Prime the DAC with DoP-marked silence
+        // This ensures the DAC detects DoP format immediately (blue LED)
+        // Without this, first playback sounds like PCM (yellow LED)
+        tracing::info!("Priming DAC with DoP-marked silence for format detection...");
+        let primer_frames = self.config.sample_rate as usize / 10; // 100ms of silence
+        let mut primer_samples = Vec::with_capacity(primer_frames * self.config.channels as usize);
+
+        // Generate DoP silence: alternating markers (0x05/0xFA) with zero audio data
+        for frame in 0..primer_frames {
+            let marker = if frame % 2 == 0 { 0x05 } else { 0xFA };
+            for _ in 0..self.config.channels {
+                // DoP silence: [marker][0x00][0x00][0x00]
+                let dop_silence = (marker as i32) << 24;
+                primer_samples.push(dop_silence);
+            }
+        }
+
+        // Send primer data
+        tx.send(primer_samples)
+            .map_err(|e| RmpdError::Player(format!("Failed to send DoP primer: {}", e)))?;
+
+        tracing::info!("DoP primer sent ({} frames), DAC should detect DSD format now", primer_frames);
+
         Ok(())
     }
 
