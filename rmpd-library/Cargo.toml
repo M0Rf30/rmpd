@@ -10,6 +10,7 @@ repository.workspace = true
 rmpd-core.workspace = true
 rusqlite.workspace = true
 lofty.workspace = true
+symphonia.workspace = true
 tantivy.workspace = true
 notify.workspace = true
 notify-debouncer-full.workspace = true

@@ -5,6 +5,8 @@ use rmpd_core::error::{Result, RmpdError};
 use rmpd_core::song::Song;
 use std::fs;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use symphonia::core::io::MediaSourceStream;
+use symphonia::core::probe::Hint;
 
 pub struct MetadataExtractor;
 
@@ -20,6 +22,15 @@ impl MetadataExtractor {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs() as i64;
+
+        // Check if this is a DSD file (lofty doesn't support DSF/DFF)
+        let ext = path.extension().map(|e| e.to_lowercase());
+        let is_dsd = matches!(ext.as_deref(), Some("dsf") | Some("dff"));
+
+        if is_dsd {
+            // Use Symphonia for DSD files
+            return Self::extract_dsd_metadata(path, mtime);
+        }
 
         // Parse audio file with lofty
         let tagged_file = Probe::open(path.as_str())
@@ -168,11 +179,93 @@ impl MetadataExtractor {
         })
     }
 
+    fn extract_dsd_metadata(path: &Utf8PathBuf, mtime: i64) -> Result<Song> {
+        // Open file for Symphonia
+        let file = std::fs::File::open(path.as_str())
+            .map_err(|e| RmpdError::Library(format!("Failed to open DSD file: {}", e)))?;
+
+        let mss = MediaSourceStream::new(Box::new(file), Default::default());
+
+        // Create hint from file extension
+        let mut hint = Hint::new();
+        if let Some(ext) = path.extension() {
+            hint.with_extension(ext);
+        }
+
+        // Probe the file
+        let probe = symphonia::default::get_probe();
+        let probed = probe
+            .format(&hint, mss, &Default::default(), &Default::default())
+            .map_err(|e| RmpdError::Library(format!("Failed to probe DSD file: {}", e)))?;
+
+        let format = probed.format;
+
+        // Get track info (DSD files typically have one track)
+        let track = format.tracks().first()
+            .ok_or_else(|| RmpdError::Library("No tracks found in DSD file".to_string()))?;
+
+        let params = &track.codec_params;
+
+        // Extract basic properties
+        let sample_rate = params.sample_rate;
+        let channels = params.channels.map(|ch| ch.count() as u8);
+        let bits_per_sample = Some(1); // DSD is always 1-bit
+
+        // Calculate duration
+        let duration = if let (Some(n_frames), Some(rate)) = (params.n_frames, sample_rate) {
+            let duration_secs = n_frames as f64 / rate as f64;
+            Some(Duration::from_secs_f64(duration_secs))
+        } else {
+            None
+        };
+
+        // DSD files typically don't have embedded metadata that Symphonia can read
+        // Use filename as title fallback
+        let title = path.file_stem().map(|s| s.to_string());
+
+        Ok(Song {
+            id: 0,
+            path: path.clone(),
+            duration,
+            title,
+            artist: None,
+            album: None,
+            album_artist: None,
+            track: None,
+            disc: None,
+            date: None,
+            genre: None,
+            composer: None,
+            performer: None,
+            comment: None,
+            musicbrainz_trackid: None,
+            musicbrainz_albumid: None,
+            musicbrainz_artistid: None,
+            musicbrainz_albumartistid: None,
+            musicbrainz_releasegroupid: None,
+            musicbrainz_releasetrackid: None,
+            artist_sort: None,
+            album_artist_sort: None,
+            original_date: None,
+            label: None,
+            sample_rate,
+            channels,
+            bits_per_sample,
+            bitrate: None, // DSD bitrate is fixed based on sample rate
+            replay_gain_track_gain: None,
+            replay_gain_track_peak: None,
+            replay_gain_album_gain: None,
+            replay_gain_album_peak: None,
+            added_at: mtime,
+            last_modified: mtime,
+        })
+    }
+
     pub fn is_supported_file(path: &Utf8PathBuf) -> bool {
         if let Some(ext) = path.extension() {
             matches!(
                 ext.to_lowercase().as_str(),
-                "mp3" | "flac" | "ogg" | "opus" | "m4a" | "aac" | "wav" | "wma" | "ape" | "wv"
+                "mp3" | "flac" | "ogg" | "opus" | "m4a" | "aac" | "wav" | "wma" | "ape" | "wv" | "dsf" | "dff"
             )
         } else {
             false
