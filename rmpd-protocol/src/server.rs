@@ -1165,7 +1165,7 @@ async fn handle_play_command(state: &AppState, position: Option<u32>) -> String 
     playback_song.path = absolute_path.into();
 
     // Start playback with resolved path
-    match state.engine.write().await.play(playback_song).await {
+    match state.engine.write().await.play(playback_song, state.status.clone()).await {
         Ok(_) => {
             // Update status immediately (event will also update but that's idempotent)
             let mut status = state.status.write().await;
@@ -1271,7 +1271,7 @@ async fn handle_next_command(state: &AppState) -> String {
         let absolute_path = resolve_path(song.path.as_str(), state.music_dir.as_deref());
         playback_song.path = absolute_path.into();
 
-        match state.engine.write().await.play(playback_song).await {
+        match state.engine.write().await.play(playback_song, state.status.clone()).await {
             Ok(_) => {
                 let mut status = state.status.write().await;
                 status.current_song = Some(rmpd_core::state::QueuePosition {
@@ -1324,7 +1324,7 @@ async fn handle_previous_command(state: &AppState) -> String {
         let absolute_path = resolve_path(song.path.as_str(), state.music_dir.as_deref());
         playback_song.path = absolute_path.into();
 
-        match state.engine.write().await.play(playback_song).await {
+        match state.engine.write().await.play(playback_song, state.status.clone()).await {
             Ok(_) => {
                 let mut status = state.status.write().await;
                 status.current_song = Some(rmpd_core::state::QueuePosition {
@@ -1682,7 +1682,7 @@ async fn handle_playid_command(state: &AppState, id: Option<u32>) -> String {
             let absolute_path = resolve_path(song.path.as_str(), state.music_dir.as_deref());
             playback_song.path = absolute_path.into();
 
-            match state.engine.write().await.play(playback_song).await {
+            match state.engine.write().await.play(playback_song, state.status.clone()).await {
                 Ok(_) => {
                     let mut status = state.status.write().await;
                     status.state = rmpd_core::state::PlayerState::Play;

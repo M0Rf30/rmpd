@@ -46,12 +46,6 @@ impl QueuePlaybackManager {
                         let mut status = state.status.write().await;
                         status.bitrate = bitrate;
                     }
-                    Ok(Event::PlayerStateChanged(new_state)) => {
-                        // Sync engine state with status state
-                        debug!("Player state changed to: {:?}", new_state);
-                        let mut status = state.status.write().await;
-                        status.state = new_state;
-                    }
                     Ok(_) => {} // Ignore other events
                     Err(e) => {
                         error!("Event receive error: {}", e);
@@ -140,7 +134,7 @@ impl QueuePlaybackManager {
             }
 
             // Play the next song
-            match state.engine.write().await.play(song.clone()).await {
+            match state.engine.write().await.play(song.clone(), state.status.clone()).await {
                 Ok(_) => {
                     let mut status = state.status.write().await;
 

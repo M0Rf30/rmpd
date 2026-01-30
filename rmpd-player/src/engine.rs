@@ -54,7 +54,7 @@ impl PlaybackEngine {
         }
     }
 
-    pub async fn play(&mut self, song: Song) -> Result<()> {
+    pub async fn play(&mut self, song: Song, status: Arc<RwLock<rmpd_core::state::PlayerStatus>>) -> Result<()> {
         info!("Starting playback: {}", song.path);
 
         // Stop current playback if any
@@ -72,13 +72,13 @@ impl PlaybackEngine {
 
         // Spawn playback thread
         let song_path = song.path.clone();
-        let state = self.state.clone();
         let event_bus = self.event_bus.clone();
         let stop_flag = self.stop_flag.clone();
         let volume = self.volume.clone();
+        let status_clone = status.clone();
 
         let handle = thread::spawn(move || {
-            if let Err(e) = Self::playback_thread(song_path.as_std_path(), state, event_bus, stop_flag, volume, command_rx) {
+            if let Err(e) = Self::playback_thread(song_path.as_std_path(), status_clone, event_bus, stop_flag, volume, command_rx) {
                 error!("Playback error: {}", e);
             }
         });
@@ -87,7 +87,6 @@ impl PlaybackEngine {
 
         // Update state
         *self.state.write().await = PlayerState::Play;
-        self.event_bus.emit(Event::PlayerStateChanged(PlayerState::Play));
         self.event_bus.emit(Event::SongChanged(Some(song)));
 
         Ok(())
@@ -98,12 +97,10 @@ impl PlaybackEngine {
         match *state {
             PlayerState::Play => {
                 *state = PlayerState::Pause;
-                self.event_bus.emit(Event::PlayerStateChanged(PlayerState::Pause));
                 Ok(())
             }
             PlayerState::Pause => {
                 *state = PlayerState::Play;
-                self.event_bus.emit(Event::PlayerStateChanged(PlayerState::Play));
                 Ok(())
             }
             PlayerState::Stop => Ok(()),
@@ -126,7 +123,6 @@ impl PlaybackEngine {
 
         // Update state
         *self.state.write().await = PlayerState::Stop;
-        self.event_bus.emit(Event::PlayerStateChanged(PlayerState::Stop));
         *self.current_song.write().await = None;
         self.event_bus.emit(Event::SongChanged(None));
 
@@ -153,7 +149,7 @@ impl PlaybackEngine {
 
     fn playback_thread(
         path: &Path,
-        state: Arc<RwLock<PlayerState>>,
+        status: Arc<RwLock<rmpd_core::state::PlayerStatus>>,
         event_bus: EventBus,
         stop_flag: Arc<AtomicBool>,
         volume: Arc<RwLock<u8>>,
@@ -201,12 +197,12 @@ impl PlaybackEngine {
 
             // Check if paused
             {
-                let current_state = futures::executor::block_on(state.read());
-                if *current_state == PlayerState::Pause {
+                let status_read = futures::executor::block_on(status.read());
+                if status_read.state == PlayerState::Pause {
                     output.pause()?;
                     thread::sleep(StdDuration::from_millis(100));
                     continue;
-                } else if *current_state == PlayerState::Play
+                } else if status_read.state == PlayerState::Play
                     && output.is_paused() {
                         output.resume()?;
                     }
