@@ -1,19 +1,22 @@
 use rmpd_core::error::{Result, RmpdError};
 use rmpd_core::song::AudioFormat;
 use std::path::Path;
-use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_NULL};
+use symphonia::core::codecs::{BitOrder, ChannelDataLayout, CodecType, DecoderOptions, CODEC_TYPE_NULL};
 use symphonia::core::errors::Error as SymphoniaError;
 use symphonia::core::formats::{FormatOptions, FormatReader};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 use symphonia::core::units::{Time, TimeBase};
+// DSD codec type (from Symphonia with DSD support)
+use symphonia::default::formats::CODEC_TYPE_DSD;
 
 /// Symphonia-based audio decoder
 pub struct SymphoniaDecoder {
     reader: Box<dyn FormatReader>,
     decoder: Box<dyn symphonia::core::codecs::Decoder>,
     track_id: u32,
+    codec_type: CodecType,
     sample_rate: u32,
     channels: Option<u8>,
     total_duration: Option<f64>,
@@ -21,6 +24,8 @@ pub struct SymphoniaDecoder {
     sample_buf: Option<symphonia::core::audio::SampleBuffer<f32>>,
     current_bitrate: Option<u32>,
     time_base: Option<TimeBase>,
+    channel_data_layout: Option<ChannelDataLayout>,
+    bit_order: Option<BitOrder>,
 }
 
 impl SymphoniaDecoder {
@@ -54,6 +59,9 @@ impl SymphoniaDecoder {
         let track_id = track.id;
         let codec_params = &track.codec_params;
 
+        // Store codec type for DSD detection
+        let codec_type = codec_params.codec;
+
         // Get audio format info
         let sample_rate = codec_params
             .sample_rate
@@ -66,6 +74,10 @@ impl SymphoniaDecoder {
 
         // Store time base for bitrate calculation
         let time_base = codec_params.time_base;
+
+        // Get DSD metadata if available
+        let channel_data_layout = codec_params.channel_data_layout;
+        let bit_order = codec_params.bit_order;
 
         // Calculate total duration
         let total_duration = if let (Some(n_frames), Some(tb)) = (codec_params.n_frames, time_base) {
@@ -84,6 +96,7 @@ impl SymphoniaDecoder {
             reader,
             decoder,
             track_id,
+            codec_type,
             sample_rate,
             channels,
             total_duration,
@@ -91,7 +104,14 @@ impl SymphoniaDecoder {
             sample_buf: None,
             current_bitrate: None,
             time_base,
+            channel_data_layout,
+            bit_order,
         })
+    }
+
+    /// Check if this is a DSD file
+    pub fn is_dsd(&self) -> bool {
+        self.codec_type == CODEC_TYPE_DSD
     }
 
     pub fn read(&mut self, buffer: &mut [f32]) -> Result<usize> {
@@ -250,6 +270,52 @@ impl SymphoniaDecoder {
     /// Get the current instantaneous bitrate in kbps (for VBR files this changes during playback)
     pub fn current_bitrate(&self) -> Option<u32> {
         self.current_bitrate
+    }
+
+    /// Get channel data layout (planar vs interleaved) for DSD files
+    pub fn channel_data_layout(&self) -> Option<ChannelDataLayout> {
+        self.channel_data_layout
+    }
+
+    /// Get bit order (LSB-first vs MSB-first) for DSD files
+    pub fn bit_order(&self) -> Option<BitOrder> {
+        self.bit_order
+    }
+
+    /// Read raw DSD data (for DoP encoding)
+    /// Returns raw DSD bytes without conversion
+    pub fn read_dsd_raw(&mut self, buffer: &mut Vec<u8>) -> Result<usize> {
+        buffer.clear();
+
+        // Read next packet
+        let packet = match self.reader.next_packet() {
+            Ok(packet) => packet,
+            Err(SymphoniaError::IoError(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                if e.to_string().contains("end of stream") {
+                    return Ok(0);
+                } else {
+                    return self.read_dsd_raw(buffer); // Try again
+                }
+            }
+            Err(SymphoniaError::ResetRequired) => {
+                self.decoder.reset();
+                return self.read_dsd_raw(buffer);
+            }
+            Err(e) => {
+                return Err(RmpdError::Player(format!("Failed to read DSD packet: {}", e)));
+            }
+        };
+
+        // Skip packets from other tracks
+        if packet.track_id() != self.track_id {
+            return self.read_dsd_raw(buffer);
+        }
+
+        // For DSD, the packet buffer contains raw DSD data
+        // Copy it directly without decoding
+        buffer.extend_from_slice(packet.buf());
+
+        Ok(buffer.len())
     }
 }
 

@@ -1,5 +1,7 @@
 use crate::decoder::SymphoniaDecoder;
 use crate::output::CpalOutput;
+use crate::dop::DopEncoder;
+use crate::dop_output::DopOutput;
 use rmpd_core::error::Result;
 use rmpd_core::event::{Event, EventBus};
 use rmpd_core::song::Song;
@@ -196,6 +198,16 @@ impl PlaybackEngine {
     ) -> Result<()> {
         // Open decoder
         let mut decoder = SymphoniaDecoder::open(path)?;
+
+        // Check if this is a DSD file
+        let is_dsd = decoder.is_dsd();
+
+        if is_dsd {
+            // Handle DSD playback with DoP encoding
+            return Self::playback_thread_dsd(decoder, atomic_state, event_bus, stop_flag, volume, command_rx);
+        }
+
+        // Standard PCM playback
         let format = decoder.format();
 
         debug!(
@@ -297,6 +309,182 @@ impl PlaybackEngine {
         output.stop()?;
 
         debug!("Playback thread finished");
+        Ok(())
+    }
+
+    /// Playback thread for DSD files with DoP encoding
+    fn playback_thread_dsd(
+        mut decoder: SymphoniaDecoder,
+        atomic_state: Arc<AtomicU8>,
+        event_bus: EventBus,
+        stop_flag: Arc<AtomicBool>,
+        _volume: Arc<RwLock<u8>>,  // Unused: DoP volume controlled by system mixer
+        command_rx: mpsc::Receiver<PlaybackCommand>,
+    ) -> Result<()> {
+        let dsd_sample_rate = decoder.sample_rate();
+        let channels = decoder.channels();
+
+        // Get DSD metadata for proper encoding
+        let channel_layout = decoder.channel_data_layout()
+            .unwrap_or(symphonia::core::codecs::ChannelDataLayout::Planar);
+        let bit_order = decoder.bit_order()
+            .unwrap_or(symphonia::core::codecs::BitOrder::LsbFirst);
+
+        info!("DSD playback: {} Hz, {} channels", dsd_sample_rate, channels);
+        info!("DSD format: channel_layout={:?}, bit_order={:?}", channel_layout, bit_order);
+
+        // Create DoP encoder
+        let mut dop_encoder = DopEncoder::new(dsd_sample_rate, channels as usize, channel_layout, bit_order)?;
+        let pcm_sample_rate = dop_encoder.pcm_sample_rate();
+
+        info!("DoP encoding: DSD {} Hz -> PCM {} Hz", dsd_sample_rate, pcm_sample_rate);
+
+        info!("Creating DoP output with {} Hz", pcm_sample_rate);
+
+        // Create DoP output (uses integer samples to preserve marker precision)
+        let mut output = match DopOutput::new(pcm_sample_rate, channels) {
+            Ok(output) => {
+                info!("DoP output created successfully");
+                output
+            }
+            Err(e) => {
+                error!("Failed to create DoP output: {}", e);
+                return Err(e);
+            }
+        };
+
+        info!("Starting DoP output...");
+        output.start()?;
+
+        info!("DoP output started successfully");
+
+        // Playback loop
+        let mut dsd_buffer = Vec::new();
+        let mut dop_i32_buffer = Vec::new();
+        let mut total_dsd_bytes: u64 = 0;
+        let dsd_bytes_per_second = (dsd_sample_rate / 8) as u64 * channels as u64;
+
+        info!("Entering DSD playback loop");
+
+        while !stop_flag.load(Ordering::SeqCst) {
+            // Log first iteration
+            if total_dsd_bytes == 0 {
+                info!("First iteration of DSD playback loop");
+            }
+            // Check for commands
+            if let Ok(cmd) = command_rx.try_recv() {
+                match cmd {
+                    PlaybackCommand::Seek(position) => {
+                        debug!("Seeking to position: {:.2}s", position);
+                        if let Err(e) = decoder.seek(position) {
+                            error!("Seek failed: {}", e);
+                        } else {
+                            total_dsd_bytes = (position * dsd_bytes_per_second as f64) as u64;
+                            event_bus.emit(Event::PositionChanged(
+                                std::time::Duration::from_secs_f64(position)
+                            ));
+                        }
+                    }
+                }
+            }
+
+            // Check if paused
+            let state_value = atomic_state.load(Ordering::SeqCst);
+            let current_state = match state_value {
+                0 => PlayerState::Stop,
+                1 => PlayerState::Play,
+                2 => PlayerState::Pause,
+                _ => PlayerState::Stop,
+            };
+
+            if current_state == PlayerState::Pause {
+                output.pause()?;
+                thread::sleep(StdDuration::from_millis(100));
+                continue;
+            } else if current_state == PlayerState::Play && output.is_paused() {
+                output.resume()?;
+            }
+
+            // Read raw DSD data
+            if total_dsd_bytes == 0 {
+                info!("Reading first DSD packet...");
+            }
+            let bytes_read = decoder.read_dsd_raw(&mut dsd_buffer)?;
+            if total_dsd_bytes == 0 {
+                info!("Read {} bytes of DSD data", bytes_read);
+            }
+
+            if bytes_read == 0 {
+                info!("End of DSD stream reached");
+                event_bus.emit(Event::SongFinished);
+                break;
+            }
+
+            // Encode to DoP
+            if total_dsd_bytes == 0 {
+                info!("Encoding {} bytes to DoP...", dsd_buffer.len());
+            }
+            dop_encoder.encode(&dsd_buffer, &mut dop_i32_buffer);
+            if total_dsd_bytes == 0 {
+                info!("Encoded to {} DoP samples", dop_i32_buffer.len());
+                // Log first few samples to verify DoP markers
+                if dop_i32_buffer.len() >= 4 {
+                    info!("First DoP samples (left-aligned): 0x{:08x}, 0x{:08x}, 0x{:08x}, 0x{:08x}",
+                          dop_i32_buffer[0], dop_i32_buffer[1], dop_i32_buffer[2], dop_i32_buffer[3]);
+                    info!("Marker bytes (MSB): 0x{:02x}, 0x{:02x}, 0x{:02x}, 0x{:02x}",
+                          (dop_i32_buffer[0] >> 24) & 0xFF,
+                          (dop_i32_buffer[1] >> 24) & 0xFF,
+                          (dop_i32_buffer[2] >> 24) & 0xFF,
+                          (dop_i32_buffer[3] >> 24) & 0xFF);
+                }
+            }
+
+            // Write i32 DoP samples directly to preserve marker precision
+            // Note: Volume control for DoP is handled by the system mixer
+            if total_dsd_bytes == 0 {
+                info!("Writing {} i32 DoP samples to output...", dop_i32_buffer.len());
+            }
+            match output.write(&dop_i32_buffer) {
+                Ok(_) => {
+                    if total_dsd_bytes == 0 {
+                        info!("First DoP write complete");
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to write DoP samples: {}", e);
+                    return Err(e);
+                }
+            }
+
+            // Update elapsed time
+            total_dsd_bytes += bytes_read as u64;
+
+            // Log every few seconds
+            if total_dsd_bytes % (dsd_bytes_per_second * 5) < (bytes_read as u64) {
+                info!("DSD playback progress: {:.1}s, {} bytes processed",
+                      total_dsd_bytes as f64 / dsd_bytes_per_second as f64,
+                      total_dsd_bytes);
+            }
+
+            // Emit position update every ~1 second
+            if total_dsd_bytes % dsd_bytes_per_second < (bytes_read as u64) {
+                let elapsed_seconds = total_dsd_bytes as f64 / dsd_bytes_per_second as f64;
+                event_bus.emit(Event::PositionChanged(
+                    std::time::Duration::from_secs_f64(elapsed_seconds)
+                ));
+
+                // DSD has fixed bitrate
+                let bitrate_kbps = (dsd_sample_rate / 1000) * channels as u32;
+                event_bus.emit(Event::BitrateChanged(Some(bitrate_kbps)));
+            }
+        }
+
+        info!("DSD playback loop exited, total bytes: {}", total_dsd_bytes);
+
+        // Stop output
+        output.stop()?;
+
+        debug!("DSD playback thread finished");
         Ok(())
     }
 }
