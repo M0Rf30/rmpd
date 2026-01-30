@@ -1,7 +1,6 @@
 use anyhow::Result;
 use rmpd_core::config::Config;
 use rmpd_protocol::{AppState, MpdServer, StateFile};
-use rmpd_core::state::PlayerState;
 use tokio::signal;
 use tracing::{info, warn, error};
 
@@ -51,7 +50,7 @@ pub async fn run(bind_address: String, config: Config) -> Result<()> {
     Ok(())
 }
 
-async fn restore_state(state: &AppState, saved_state: rmpd_protocol::statefile::SavedState, db_path: &str, music_dir: &str) {
+async fn restore_state(state: &AppState, saved_state: rmpd_protocol::statefile::SavedState, db_path: &str, _music_dir: &str) {
     // Restore playback options
     {
         let mut status = state.status.write().await;
@@ -90,70 +89,20 @@ async fn restore_state(state: &AppState, saved_state: rmpd_protocol::statefile::
         }
     }
 
-    // Restore playback state if was playing or paused
-    if let Some(play_state) = saved_state.state {
-        if play_state == PlayerState::Play || play_state == PlayerState::Pause {
-            if let Some(position) = saved_state.current_position {
-                info!("Restoring playback at position {} (state: {:?})", position, play_state);
-
-                // Get the song from queue
-                let queue = state.queue.read().await;
-                if let Some(item) = queue.get(position) {
-                    let song = item.song.clone();
-                    let song_id = item.id;
-                    drop(queue);
-
-                    // Resolve path for playback
-                    let absolute_path = if song.path.as_str().starts_with('/') {
-                        song.path.to_string()
-                    } else {
-                        format!("{}/{}", music_dir, song.path)
-                    };
-
-                    let mut playback_song = song.clone();
-                    playback_song.path = absolute_path.into();
-
-                    // Start playback
-                    if let Ok(_) = state.engine.write().await.play(playback_song).await {
-                        let mut status = state.status.write().await;
-                        status.current_song = Some(rmpd_core::state::QueuePosition {
-                            position,
-                            id: song_id,
-                        });
-                        status.duration = song.duration;
-                        status.bitrate = song.bitrate;
-
-                        // Set audio format if available
-                        if let (Some(sr), Some(ch), Some(bps)) = (song.sample_rate, song.channels, song.bits_per_sample) {
-                            status.audio_format = Some(rmpd_core::song::AudioFormat {
-                                sample_rate: sr,
-                                channels: ch as u8,
-                                bits_per_sample: bps as u8,
-                            });
-                        }
-
-                        // Seek to saved position if available
-                        if let Some(elapsed) = saved_state.elapsed_seconds {
-                            if elapsed > 0.0 {
-                                info!("Seeking to {:.2}s", elapsed);
-                                if let Err(e) = state.engine.write().await.seek(elapsed).await {
-                                    error!("Failed to seek: {}", e);
-                                }
-                            }
-                        }
-
-                        // If was paused, pause now
-                        if play_state == PlayerState::Pause {
-                            info!("Pausing playback");
-                            if let Err(e) = state.engine.write().await.pause().await {
-                                error!("Failed to pause: {}", e);
-                            }
-                        } else {
-                            status.state = PlayerState::Play;
-                        }
-                    }
-                }
-            }
+    // Restore current song position in status (but don't auto-start playback)
+    // MPD doesn't auto-resume playback on restart - user must manually play
+    if let Some(position) = saved_state.current_position {
+        info!("Setting current position to {}", position);
+        let queue = state.queue.read().await;
+        if let Some(item) = queue.get(position) {
+            let song_id = item.id;
+            let mut status = state.status.write().await;
+            status.current_song = Some(rmpd_core::state::QueuePosition {
+                position,
+                id: song_id,
+            });
+            // Note: Playback state is intentionally set to Stop
+            // User must manually start playback after daemon restart
         }
     }
 
