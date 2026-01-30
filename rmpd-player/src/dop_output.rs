@@ -89,8 +89,9 @@ impl DopOutput {
         tracing::info!("Requested channels: {}", self.config.channels);
 
         // Create channel for sample data
-        // Increased buffer depth to prevent underruns during DoP startup
-        let (tx, rx) = sync_channel::<Vec<i32>>(16);
+        // Increased buffer depth to handle high sample rates (DSD128/256)
+        // At 352.8 kHz, we need more buffer to avoid blocking during primer
+        let (tx, rx) = sync_channel::<Vec<i32>>(32);
         let rx = Arc::new(Mutex::new(rx));
         let mut sample_buffer: Vec<i32> = Vec::new();
         let mut buffer_pos = 0;
@@ -181,13 +182,25 @@ impl DopOutput {
 
         tracing::info!("DoP output started successfully");
 
+        // Give the stream a moment to fully initialize before sending primer
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
         // CRITICAL FIX: Prime the DAC with DoP-marked silence
         // This ensures the DAC detects DoP format immediately (blue LED)
         // Without this, first playback sounds like PCM (yellow LED)
         tracing::info!("Priming DAC with DoP-marked silence for format detection...");
 
-        // Increased to 200ms to give DAC more time to detect DoP markers
-        let primer_frames = self.config.sample_rate as usize / 5; // 200ms of silence
+        // Scale primer duration based on sample rate to avoid blocking
+        // DSD64 (176.4kHz): 200ms, DSD128 (352.8kHz): 100ms, DSD256+: 50ms
+        let sample_rate_hz = self.config.sample_rate as usize;
+        let primer_duration_ms = if sample_rate_hz <= 200000 {
+            200 // DSD64 and below
+        } else if sample_rate_hz <= 400000 {
+            100 // DSD128
+        } else {
+            50  // DSD256 and above
+        };
+        let primer_frames = (sample_rate_hz * primer_duration_ms) / 1000;
         let mut primer_samples = Vec::with_capacity(primer_frames * self.config.channels as usize);
 
         // Generate DoP silence: alternating markers (0x05/0xFA) with zero audio data
