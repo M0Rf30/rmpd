@@ -111,6 +111,22 @@ impl PlaybackEngine {
         Ok(())
     }
 
+    /// Set pause state explicitly (doesn't toggle)
+    pub async fn set_pause(&mut self, should_pause: bool) -> Result<()> {
+        let current = self.atomic_state.load(Ordering::SeqCst);
+
+        // Only transition if we're playing or paused (not stopped)
+        if current == PlayerState::Play as u8 || current == PlayerState::Pause as u8 {
+            let new_state = if should_pause {
+                PlayerState::Pause as u8
+            } else {
+                PlayerState::Play as u8
+            };
+            self.atomic_state.store(new_state, Ordering::SeqCst);
+        }
+        Ok(())
+    }
+
     pub async fn stop(&mut self) -> Result<()> {
         debug!("Stopping playback");
 

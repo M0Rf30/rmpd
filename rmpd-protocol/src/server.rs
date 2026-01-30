@@ -1230,18 +1230,31 @@ async fn handle_pause_command(state: &AppState, pause_state: Option<bool>) -> St
     }
 
     info!("Acquiring engine write lock...");
-    // Toggle pause state
-    match state.engine.write().await.pause().await {
+    // Set pause state
+    let result = if pause_state.is_some() {
+        // Explicit pause state given - use set_pause
+        state.engine.write().await.set_pause(should_pause).await
+    } else {
+        // No explicit state - toggle
+        state.engine.write().await.pause().await
+    };
+
+    match result {
         Ok(_) => {
             info!("Engine pause completed, updating status...");
-            // Update status to match atomic state
-            let mut status = state.status.write().await;
-            status.state = if should_pause {
-                rmpd_core::state::PlayerState::Pause
-            } else {
-                rmpd_core::state::PlayerState::Play
+            // Read the actual state from atomic (engine might not have changed it)
+            let actual_state_u8 = state.atomic_state.load(std::sync::atomic::Ordering::SeqCst);
+            let actual_state = match actual_state_u8 {
+                0 => rmpd_core::state::PlayerState::Stop,
+                1 => rmpd_core::state::PlayerState::Play,
+                2 => rmpd_core::state::PlayerState::Pause,
+                _ => rmpd_core::state::PlayerState::Stop,
             };
-            info!("Pause completed successfully");
+
+            // Update status to match actual atomic state
+            let mut status = state.status.write().await;
+            status.state = actual_state;
+            info!("Pause completed successfully, state is now: {:?}", actual_state);
             ResponseBuilder::new().ok()
         }
         Err(e) => {
