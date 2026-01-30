@@ -33,12 +33,16 @@ pub struct PlaybackEngine {
 }
 
 impl PlaybackEngine {
-    pub fn new(event_bus: EventBus, status: Arc<RwLock<rmpd_core::state::PlayerStatus>>) -> Self {
+    pub fn new(
+        event_bus: EventBus,
+        status: Arc<RwLock<rmpd_core::state::PlayerStatus>>,
+        atomic_state: Arc<AtomicU8>,
+    ) -> Self {
         Self {
             status,
             event_bus,
             stop_flag: Arc::new(AtomicBool::new(false)),
-            atomic_state: Arc::new(AtomicU8::new(PlayerState::Stop as u8)),
+            atomic_state,
             playback_thread: None,
             current_song: Arc::new(RwLock::new(None)),
             volume: Arc::new(RwLock::new(100)),

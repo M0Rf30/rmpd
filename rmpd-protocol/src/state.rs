@@ -21,6 +21,7 @@ pub struct AppState {
     pub queue: Arc<RwLock<Queue>>,
     pub status: Arc<RwLock<PlayerStatus>>,
     pub engine: Arc<RwLock<PlaybackEngine>>,
+    pub atomic_state: Arc<std::sync::atomic::AtomicU8>, // Lock-free state access
     pub event_bus: EventBus,
     pub db_path: Option<String>,
     pub music_dir: Option<String>,
@@ -32,7 +33,8 @@ impl AppState {
     pub fn new() -> Self {
         let event_bus = EventBus::new();
         let status = Arc::new(RwLock::new(PlayerStatus::default()));
-        let engine = PlaybackEngine::new(event_bus.clone(), status.clone());
+        let atomic_state = Arc::new(std::sync::atomic::AtomicU8::new(rmpd_core::state::PlayerState::Stop as u8));
+        let engine = PlaybackEngine::new(event_bus.clone(), status.clone(), atomic_state.clone());
 
         // Create default output
         let default_output = OutputInfo {
@@ -46,6 +48,7 @@ impl AppState {
             queue: Arc::new(RwLock::new(Queue::new())),
             status,
             engine: Arc::new(RwLock::new(engine)),
+            atomic_state,
             event_bus,
             db_path: None,
             music_dir: None,
@@ -57,7 +60,8 @@ impl AppState {
     pub fn with_paths(db_path: String, music_dir: String) -> Self {
         let event_bus = EventBus::new();
         let status = Arc::new(RwLock::new(PlayerStatus::default()));
-        let engine = PlaybackEngine::new(event_bus.clone(), status.clone());
+        let atomic_state = Arc::new(std::sync::atomic::AtomicU8::new(rmpd_core::state::PlayerState::Stop as u8));
+        let engine = PlaybackEngine::new(event_bus.clone(), status.clone(), atomic_state.clone());
 
         // Create default output
         let default_output = OutputInfo {
@@ -71,6 +75,7 @@ impl AppState {
             queue: Arc::new(RwLock::new(Queue::new())),
             status,
             engine: Arc::new(RwLock::new(engine)),
+            atomic_state,
             event_bus,
             db_path: Some(db_path),
             music_dir: Some(music_dir),
