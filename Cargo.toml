@@ -26,12 +26,12 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Audio stack
-# Use M0Rf30 fork with DSD support
+# Use M0Rf30 forks with DSD support
 symphonia = { git = "https://github.com/M0Rf30/Symphonia", branch = "dsd-support", features = ["all", "dsd"] }
+lofty = { git = "https://github.com/M0Rf30/lofty-rs", branch = "feat/dsd-support" }
 # Use latest cpal from git for DSD support (merged in Jan 2026)
 cpal = { git = "https://github.com/RustAudio/cpal", branch = "master" }
 rubato = "1.0"
-lofty = "0.22"
 
 # Networking & Protocol
 reqwest = { version = "0.13", features = ["stream"] }

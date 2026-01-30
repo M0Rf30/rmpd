@@ -5,8 +5,6 @@ use rmpd_core::error::{Result, RmpdError};
 use rmpd_core::song::Song;
 use std::fs;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use symphonia::core::io::MediaSourceStream;
-use symphonia::core::probe::Hint;
 
 pub struct MetadataExtractor;
 
@@ -23,16 +21,7 @@ impl MetadataExtractor {
             .unwrap()
             .as_secs() as i64;
 
-        // Check if this is a DSD file (lofty doesn't support DSF/DFF)
-        let ext = path.extension().map(|e| e.to_lowercase());
-        let is_dsd = matches!(ext.as_deref(), Some("dsf") | Some("dff"));
-
-        if is_dsd {
-            // Use Symphonia for DSD files
-            return Self::extract_dsd_metadata(path, mtime);
-        }
-
-        // Parse audio file with lofty
+        // Parse audio file with lofty (now supports DSF/DFF with ID3v2 tags)
         let tagged_file = Probe::open(path.as_str())
             .map_err(|e| RmpdError::Library(format!("Failed to open file: {}", e)))?
             .read()
@@ -78,38 +67,38 @@ impl MetadataExtractor {
                 tag.title().map(|s| s.to_string()),
                 tag.artist().map(|s| s.to_string()),
                 tag.album().map(|s| s.to_string()),
-                tag.get_string(&ItemKey::AlbumArtist)
+                tag.get_string(ItemKey::AlbumArtist)
                     .map(|s| s.to_string()),
                 tag.track(),
                 tag.disk(),
-                tag.year().map(|y| y.to_string()),
+                tag.date().map(|d| d.to_string()),
                 tag.genre().map(|s| s.to_string()),
-                tag.get_string(&ItemKey::Composer)
+                tag.get_string(ItemKey::Composer)
                     .map(|s| s.to_string()),
-                tag.get_string(&ItemKey::Performer)
+                tag.get_string(ItemKey::Performer)
                     .map(|s| s.to_string()),
                 tag.comment().map(|s| s.to_string()),
                 // MusicBrainz IDs
-                tag.get_string(&ItemKey::MusicBrainzTrackId)
+                tag.get_string(ItemKey::MusicBrainzTrackId)
                     .map(|s| s.to_string()),
-                tag.get_string(&ItemKey::MusicBrainzReleaseId)
+                tag.get_string(ItemKey::MusicBrainzReleaseId)
                     .map(|s| s.to_string()),
-                tag.get_string(&ItemKey::MusicBrainzArtistId)
+                tag.get_string(ItemKey::MusicBrainzArtistId)
                     .map(|s| s.to_string()),
-                tag.get_string(&ItemKey::MusicBrainzReleaseArtistId)
+                tag.get_string(ItemKey::MusicBrainzReleaseArtistId)
                     .map(|s| s.to_string()),
-                tag.get_string(&ItemKey::MusicBrainzReleaseGroupId)
+                tag.get_string(ItemKey::MusicBrainzReleaseGroupId)
                     .map(|s| s.to_string()),
-                tag.get_string(&ItemKey::MusicBrainzRecordingId)
+                tag.get_string(ItemKey::MusicBrainzRecordingId)
                     .map(|s| s.to_string()),
                 // Extended metadata
-                tag.get_string(&ItemKey::TrackArtistSortOrder)
+                tag.get_string(ItemKey::TrackArtistSortOrder)
                     .map(|s| s.to_string()),
-                tag.get_string(&ItemKey::AlbumArtistSortOrder)
+                tag.get_string(ItemKey::AlbumArtistSortOrder)
                     .map(|s| s.to_string()),
-                tag.get_string(&ItemKey::OriginalReleaseDate)
+                tag.get_string(ItemKey::OriginalReleaseDate)
                     .map(|s| s.to_string()),
-                tag.get_string(&ItemKey::Label)
+                tag.get_string(ItemKey::Label)
                     .map(|s| s.to_string()),
             )
         } else {
@@ -128,13 +117,13 @@ impl MetadataExtractor {
             replay_gain_album_peak,
         ) = if let Some(tag) = tag {
             (
-                tag.get_string(&ItemKey::ReplayGainTrackGain)
+                tag.get_string(ItemKey::ReplayGainTrackGain)
                     .and_then(|s| s.trim_end_matches(" dB").parse::<f32>().ok()),
-                tag.get_string(&ItemKey::ReplayGainTrackPeak)
+                tag.get_string(ItemKey::ReplayGainTrackPeak)
                     .and_then(|s| s.parse::<f32>().ok()),
-                tag.get_string(&ItemKey::ReplayGainAlbumGain)
+                tag.get_string(ItemKey::ReplayGainAlbumGain)
                     .and_then(|s| s.trim_end_matches(" dB").parse::<f32>().ok()),
-                tag.get_string(&ItemKey::ReplayGainAlbumPeak)
+                tag.get_string(ItemKey::ReplayGainAlbumPeak)
                     .and_then(|s| s.parse::<f32>().ok()),
             )
         } else {
@@ -179,87 +168,6 @@ impl MetadataExtractor {
         })
     }
 
-    fn extract_dsd_metadata(path: &Utf8PathBuf, mtime: i64) -> Result<Song> {
-        // Open file for Symphonia
-        let file = std::fs::File::open(path.as_str())
-            .map_err(|e| RmpdError::Library(format!("Failed to open DSD file: {}", e)))?;
-
-        let mss = MediaSourceStream::new(Box::new(file), Default::default());
-
-        // Create hint from file extension
-        let mut hint = Hint::new();
-        if let Some(ext) = path.extension() {
-            hint.with_extension(ext);
-        }
-
-        // Probe the file
-        let probe = symphonia::default::get_probe();
-        let probed = probe
-            .format(&hint, mss, &Default::default(), &Default::default())
-            .map_err(|e| RmpdError::Library(format!("Failed to probe DSD file: {}", e)))?;
-
-        let format = probed.format;
-
-        // Get track info (DSD files typically have one track)
-        let track = format.tracks().first()
-            .ok_or_else(|| RmpdError::Library("No tracks found in DSD file".to_string()))?;
-
-        let params = &track.codec_params;
-
-        // Extract basic properties
-        let sample_rate = params.sample_rate;
-        let channels = params.channels.map(|ch| ch.count() as u8);
-        let bits_per_sample = Some(1); // DSD is always 1-bit
-
-        // Calculate duration
-        let duration = if let (Some(n_frames), Some(rate)) = (params.n_frames, sample_rate) {
-            let duration_secs = n_frames as f64 / rate as f64;
-            Some(Duration::from_secs_f64(duration_secs))
-        } else {
-            None
-        };
-
-        // DSD files typically don't have embedded metadata that Symphonia can read
-        // Use filename as title fallback
-        let title = path.file_stem().map(|s| s.to_string());
-
-        Ok(Song {
-            id: 0,
-            path: path.clone(),
-            duration,
-            title,
-            artist: None,
-            album: None,
-            album_artist: None,
-            track: None,
-            disc: None,
-            date: None,
-            genre: None,
-            composer: None,
-            performer: None,
-            comment: None,
-            musicbrainz_trackid: None,
-            musicbrainz_albumid: None,
-            musicbrainz_artistid: None,
-            musicbrainz_albumartistid: None,
-            musicbrainz_releasegroupid: None,
-            musicbrainz_releasetrackid: None,
-            artist_sort: None,
-            album_artist_sort: None,
-            original_date: None,
-            label: None,
-            sample_rate,
-            channels,
-            bits_per_sample,
-            bitrate: None, // DSD bitrate is fixed based on sample rate
-            replay_gain_track_gain: None,
-            replay_gain_track_peak: None,
-            replay_gain_album_gain: None,
-            replay_gain_album_peak: None,
-            added_at: mtime,
-            last_modified: mtime,
-        })
-    }
 
     pub fn is_supported_file(path: &Utf8PathBuf) -> bool {
         if let Some(ext) = path.extension() {
