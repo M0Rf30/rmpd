@@ -1209,12 +1209,14 @@ async fn handle_play_command(state: &AppState, position: Option<u32>) -> String 
 async fn handle_pause_command(state: &AppState, pause_state: Option<bool>) -> String {
     info!("Pause command received: pause_state={:?}", pause_state);
 
-    let current_state = {
-        let status = state.status.read().await;
-        status.state
-    };
+    // Get current state lock-free using atomic
+    info!("Acquiring engine read lock to get atomic state...");
+    let engine = state.engine.read().await;
+    info!("Got engine read lock");
+    let current_state = engine.get_state_atomic();
+    drop(engine); // Release read lock immediately
 
-    info!("Current state: {:?}", current_state);
+    info!("Current state (atomic): {:?}", current_state);
 
     let should_pause = pause_state.unwrap_or_else(|| current_state == rmpd_core::state::PlayerState::Play);
     let is_currently_paused = current_state == rmpd_core::state::PlayerState::Pause;

@@ -134,6 +134,16 @@ impl PlaybackEngine {
         status.state
     }
 
+    /// Get current state without locks (atomic, lock-free)
+    pub fn get_state_atomic(&self) -> PlayerState {
+        match self.atomic_state.load(Ordering::SeqCst) {
+            0 => PlayerState::Stop,
+            1 => PlayerState::Play,
+            2 => PlayerState::Pause,
+            _ => PlayerState::Stop,
+        }
+    }
+
     pub async fn get_current_song(&self) -> Option<Song> {
         self.current_song.read().await.clone()
     }
