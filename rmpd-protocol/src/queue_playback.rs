@@ -134,7 +134,7 @@ impl QueuePlaybackManager {
             }
 
             // Play the next song
-            match state.engine.write().await.play(song.clone(), state.status.clone()).await {
+            match state.engine.write().await.play(song.clone()).await {
                 Ok(_) => {
                     let mut status = state.status.write().await;
 

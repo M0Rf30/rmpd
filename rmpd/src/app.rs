@@ -150,7 +150,7 @@ async fn restore_state(state: &AppState, saved_state: rmpd_protocol::statefile::
 
                         // Start playback
                         #[allow(clippy::redundant_pattern_matching)]
-                        if let Ok(_) = state_clone.engine.write().await.play(playback_song, state_clone.status.clone()).await {
+                        if let Ok(_) = state_clone.engine.write().await.play(playback_song).await {
                             // Update state immediately
                             {
                                 let mut status = state_clone.status.write().await;

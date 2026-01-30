@@ -31,7 +31,8 @@ pub struct AppState {
 impl AppState {
     pub fn new() -> Self {
         let event_bus = EventBus::new();
-        let engine = PlaybackEngine::new(event_bus.clone());
+        let status = Arc::new(RwLock::new(PlayerStatus::default()));
+        let engine = PlaybackEngine::new(event_bus.clone(), status.clone());
 
         // Create default output
         let default_output = OutputInfo {
@@ -43,7 +44,7 @@ impl AppState {
 
         Self {
             queue: Arc::new(RwLock::new(Queue::new())),
-            status: Arc::new(RwLock::new(PlayerStatus::default())),
+            status,
             engine: Arc::new(RwLock::new(engine)),
             event_bus,
             db_path: None,
@@ -55,7 +56,8 @@ impl AppState {
 
     pub fn with_paths(db_path: String, music_dir: String) -> Self {
         let event_bus = EventBus::new();
-        let engine = PlaybackEngine::new(event_bus.clone());
+        let status = Arc::new(RwLock::new(PlayerStatus::default()));
+        let engine = PlaybackEngine::new(event_bus.clone(), status.clone());
 
         // Create default output
         let default_output = OutputInfo {
@@ -67,7 +69,7 @@ impl AppState {
 
         Self {
             queue: Arc::new(RwLock::new(Queue::new())),
-            status: Arc::new(RwLock::new(PlayerStatus::default())),
+            status,
             engine: Arc::new(RwLock::new(engine)),
             event_bus,
             db_path: Some(db_path),

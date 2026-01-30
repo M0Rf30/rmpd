@@ -5,7 +5,7 @@ use rmpd_core::event::{Event, EventBus};
 use rmpd_core::song::Song;
 use rmpd_core::state::PlayerState;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::sync::mpsc;
 use std::thread;
@@ -22,9 +22,10 @@ enum PlaybackCommand {
 
 /// Main playback engine
 pub struct PlaybackEngine {
-    state: Arc<RwLock<PlayerState>>,
+    status: Arc<RwLock<rmpd_core::state::PlayerStatus>>,
     event_bus: EventBus,
     stop_flag: Arc<AtomicBool>,
+    atomic_state: Arc<AtomicU8>, // For lock-free state checking in playback thread
     playback_thread: Option<thread::JoinHandle<()>>,
     current_song: Arc<RwLock<Option<Song>>>,
     volume: Arc<RwLock<u8>>,
@@ -32,11 +33,12 @@ pub struct PlaybackEngine {
 }
 
 impl PlaybackEngine {
-    pub fn new(event_bus: EventBus) -> Self {
+    pub fn new(event_bus: EventBus, status: Arc<RwLock<rmpd_core::state::PlayerStatus>>) -> Self {
         Self {
-            state: Arc::new(RwLock::new(PlayerState::Stop)),
+            status,
             event_bus,
             stop_flag: Arc::new(AtomicBool::new(false)),
+            atomic_state: Arc::new(AtomicU8::new(PlayerState::Stop as u8)),
             playback_thread: None,
             current_song: Arc::new(RwLock::new(None)),
             volume: Arc::new(RwLock::new(100)),
@@ -54,7 +56,7 @@ impl PlaybackEngine {
         }
     }
 
-    pub async fn play(&mut self, song: Song, status: Arc<RwLock<rmpd_core::state::PlayerStatus>>) -> Result<()> {
+    pub async fn play(&mut self, song: Song) -> Result<()> {
         info!("Starting playback: {}", song.path);
 
         // Stop current playback if any
@@ -75,36 +77,34 @@ impl PlaybackEngine {
         let event_bus = self.event_bus.clone();
         let stop_flag = self.stop_flag.clone();
         let volume = self.volume.clone();
-        let status_clone = status.clone();
+        let status_clone = self.status.clone();
+        let atomic_state_clone = self.atomic_state.clone();
 
         let handle = thread::spawn(move || {
-            if let Err(e) = Self::playback_thread(song_path.as_std_path(), status_clone, event_bus, stop_flag, volume, command_rx) {
+            if let Err(e) = Self::playback_thread(song_path.as_std_path(), status_clone, atomic_state_clone, event_bus, stop_flag, volume, command_rx) {
                 error!("Playback error: {}", e);
             }
         });
 
         self.playback_thread = Some(handle);
 
-        // Update state
-        *self.state.write().await = PlayerState::Play;
+        // Update atomic state (caller must update status to avoid deadlock)
+        self.atomic_state.store(PlayerState::Play as u8, Ordering::SeqCst);
         self.event_bus.emit(Event::SongChanged(Some(song)));
 
         Ok(())
     }
 
     pub async fn pause(&mut self) -> Result<()> {
-        let mut state = self.state.write().await;
-        match *state {
-            PlayerState::Play => {
-                *state = PlayerState::Pause;
-                Ok(())
-            }
-            PlayerState::Pause => {
-                *state = PlayerState::Play;
-                Ok(())
-            }
-            PlayerState::Stop => Ok(()),
-        }
+        // Toggle atomic state - caller must update status to avoid deadlock
+        let current = self.atomic_state.load(Ordering::SeqCst);
+        let new_state = match current {
+            1 => PlayerState::Pause as u8, // Play -> Pause
+            2 => PlayerState::Play as u8,   // Pause -> Play
+            _ => return Ok(()),             // Stop -> do nothing
+        };
+        self.atomic_state.store(new_state, Ordering::SeqCst);
+        Ok(())
     }
 
     pub async fn stop(&mut self) -> Result<()> {
@@ -121,8 +121,8 @@ impl PlaybackEngine {
             let _ = handle.join();
         }
 
-        // Update state
-        *self.state.write().await = PlayerState::Stop;
+        // Update atomic state (caller must update status to avoid deadlock)
+        self.atomic_state.store(PlayerState::Stop as u8, Ordering::SeqCst);
         *self.current_song.write().await = None;
         self.event_bus.emit(Event::SongChanged(None));
 
@@ -130,7 +130,8 @@ impl PlaybackEngine {
     }
 
     pub async fn get_state(&self) -> PlayerState {
-        *self.state.read().await
+        let status = self.status.read().await;
+        status.state
     }
 
     pub async fn get_current_song(&self) -> Option<Song> {
@@ -149,7 +150,8 @@ impl PlaybackEngine {
 
     fn playback_thread(
         path: &Path,
-        status: Arc<RwLock<rmpd_core::state::PlayerStatus>>,
+        _status: Arc<RwLock<rmpd_core::state::PlayerStatus>>,
+        atomic_state: Arc<AtomicU8>,
         event_bus: EventBus,
         stop_flag: Arc<AtomicBool>,
         volume: Arc<RwLock<u8>>,
@@ -195,17 +197,21 @@ impl PlaybackEngine {
                 }
             }
 
-            // Check if paused
-            {
-                let status_read = futures::executor::block_on(status.read());
-                if status_read.state == PlayerState::Pause {
-                    output.pause()?;
-                    thread::sleep(StdDuration::from_millis(100));
-                    continue;
-                } else if status_read.state == PlayerState::Play
-                    && output.is_paused() {
-                        output.resume()?;
-                    }
+            // Check if paused - read from atomic state (no locks needed)
+            let state_value = atomic_state.load(Ordering::SeqCst);
+            let current_state = match state_value {
+                0 => PlayerState::Stop,
+                1 => PlayerState::Play,
+                2 => PlayerState::Pause,
+                _ => PlayerState::Stop,
+            };
+
+            if current_state == PlayerState::Pause {
+                output.pause()?;
+                thread::sleep(StdDuration::from_millis(100));
+                continue;
+            } else if current_state == PlayerState::Play && output.is_paused() {
+                output.resume()?;
             }
 
             // Read from decoder
@@ -222,9 +228,11 @@ impl PlaybackEngine {
                 debug!("Partial read: {} samples (buffer size: {})", samples_read, buffer.len());
             }
 
-            // Apply volume
-            let vol = futures::executor::block_on(volume.read());
-            let volume_factor = (*vol as f32) / 100.0;
+            // Apply volume - read and release lock immediately
+            let volume_factor = {
+                let vol = futures::executor::block_on(volume.read());
+                (*vol as f32) / 100.0
+            }; // Lock released here
             for sample in buffer[..samples_read].iter_mut() {
                 *sample *= volume_factor;
             }

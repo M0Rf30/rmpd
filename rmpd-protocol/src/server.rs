@@ -1165,7 +1165,7 @@ async fn handle_play_command(state: &AppState, position: Option<u32>) -> String 
     playback_song.path = absolute_path.into();
 
     // Start playback with resolved path
-    match state.engine.write().await.play(playback_song, state.status.clone()).await {
+    match state.engine.write().await.play(playback_song).await {
         Ok(_) => {
             // Update status immediately (event will also update but that's idempotent)
             let mut status = state.status.write().await;
@@ -1207,39 +1207,52 @@ async fn handle_play_command(state: &AppState, position: Option<u32>) -> String 
 }
 
 async fn handle_pause_command(state: &AppState, pause_state: Option<bool>) -> String {
+    info!("Pause command received: pause_state={:?}", pause_state);
+
     let current_state = {
         let status = state.status.read().await;
         status.state
     };
+
+    info!("Current state: {:?}", current_state);
 
     let should_pause = pause_state.unwrap_or_else(|| current_state == rmpd_core::state::PlayerState::Play);
     let is_currently_paused = current_state == rmpd_core::state::PlayerState::Pause;
 
     // If already in desired state, do nothing
     if should_pause == is_currently_paused {
+        info!("Already in desired state, returning OK");
         return ResponseBuilder::new().ok();
     }
 
+    info!("Acquiring engine write lock...");
     // Toggle pause state
     match state.engine.write().await.pause().await {
         Ok(_) => {
-            // Update status immediately (event will also update but that's idempotent)
+            info!("Engine pause completed, updating status...");
+            // Update status to match atomic state
             let mut status = state.status.write().await;
             status.state = if should_pause {
                 rmpd_core::state::PlayerState::Pause
             } else {
                 rmpd_core::state::PlayerState::Play
             };
+            info!("Pause completed successfully");
             ResponseBuilder::new().ok()
         }
-        Err(e) => ResponseBuilder::error(50, 0, "pause", &format!("Pause error: {}", e)),
+        Err(e) => {
+            error!("Pause failed: {}", e);
+            ResponseBuilder::error(50, 0, "pause", &format!("Pause error: {}", e))
+        }
     }
 }
 
 async fn handle_stop_command(state: &AppState) -> String {
+    info!("Stop command received");
+    info!("Acquiring engine write lock for stop...");
     match state.engine.write().await.stop().await {
         Ok(_) => {
-            // Update status immediately (event will also update but that's idempotent)
+            // Update status after engine stops
             let mut status = state.status.write().await;
             status.state = rmpd_core::state::PlayerState::Stop;
             status.current_song = None;
@@ -1271,7 +1284,7 @@ async fn handle_next_command(state: &AppState) -> String {
         let absolute_path = resolve_path(song.path.as_str(), state.music_dir.as_deref());
         playback_song.path = absolute_path.into();
 
-        match state.engine.write().await.play(playback_song, state.status.clone()).await {
+        match state.engine.write().await.play(playback_song).await {
             Ok(_) => {
                 let mut status = state.status.write().await;
                 status.current_song = Some(rmpd_core::state::QueuePosition {
@@ -1324,7 +1337,7 @@ async fn handle_previous_command(state: &AppState) -> String {
         let absolute_path = resolve_path(song.path.as_str(), state.music_dir.as_deref());
         playback_song.path = absolute_path.into();
 
-        match state.engine.write().await.play(playback_song, state.status.clone()).await {
+        match state.engine.write().await.play(playback_song).await {
             Ok(_) => {
                 let mut status = state.status.write().await;
                 status.current_song = Some(rmpd_core::state::QueuePosition {
@@ -1682,7 +1695,7 @@ async fn handle_playid_command(state: &AppState, id: Option<u32>) -> String {
             let absolute_path = resolve_path(song.path.as_str(), state.music_dir.as_deref());
             playback_song.path = absolute_path.into();
 
-            match state.engine.write().await.play(playback_song, state.status.clone()).await {
+            match state.engine.write().await.play(playback_song).await {
                 Ok(_) => {
                     let mut status = state.status.write().await;
                     status.state = rmpd_core::state::PlayerState::Play;
