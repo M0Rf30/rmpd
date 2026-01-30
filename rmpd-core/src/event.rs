@@ -12,6 +12,7 @@ pub enum Event {
     SongChanged(Option<Song>),
     PositionChanged(Duration),
     VolumeChanged(u8),
+    BitrateChanged(Option<u32>), // Instantaneous bitrate in kbps (for VBR files)
     SongFinished,
 
     // Queue events
@@ -68,7 +69,7 @@ impl Event {
     pub fn subsystems(&self) -> &'static [Subsystem] {
         match self {
             Event::PlayerStateChanged(_) | Event::SongChanged(_) |
-            Event::PositionChanged(_) | Event::SongFinished => &[Subsystem::Player],
+            Event::PositionChanged(_) | Event::BitrateChanged(_) | Event::SongFinished => &[Subsystem::Player],
             Event::VolumeChanged(_) => &[Subsystem::Mixer],
             Event::QueueChanged => &[Subsystem::Playlist],
             Event::QueueOptionsChanged => &[Subsystem::Options],

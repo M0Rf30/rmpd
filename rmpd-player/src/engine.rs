@@ -246,6 +246,10 @@ impl PlaybackEngine {
                 event_bus.emit(Event::PositionChanged(
                     std::time::Duration::from_secs_f64(elapsed_seconds)
                 ));
+
+                // Also emit current bitrate (for VBR files this changes during playback)
+                let current_bitrate = decoder.current_bitrate();
+                event_bus.emit(Event::BitrateChanged(current_bitrate));
             }
         }
 

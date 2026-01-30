@@ -38,6 +38,12 @@ impl QueuePlaybackManager {
                         status.elapsed = Some(elapsed);
                         // duration is set when play command is issued
                     }
+                    Ok(Event::BitrateChanged(bitrate)) => {
+                        // Update status with current instantaneous bitrate (VBR support)
+                        info!("Bitrate changed to: {:?} kbps", bitrate);
+                        let mut status = state.status.write().await;
+                        status.bitrate = bitrate;
+                    }
                     Ok(_) => {} // Ignore other events
                     Err(e) => {
                         error!("Event receive error: {}", e);

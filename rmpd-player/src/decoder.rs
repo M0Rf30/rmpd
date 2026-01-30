@@ -19,6 +19,8 @@ pub struct SymphoniaDecoder {
     total_duration: Option<f64>,
     current_frame: u64,
     sample_buf: Option<symphonia::core::audio::SampleBuffer<f32>>,
+    current_bitrate: Option<u32>,
+    time_base: Option<TimeBase>,
 }
 
 impl SymphoniaDecoder {
@@ -62,8 +64,11 @@ impl SymphoniaDecoder {
             .channels
             .map(|ch| ch.count() as u8);
 
+        // Store time base for bitrate calculation
+        let time_base = codec_params.time_base;
+
         // Calculate total duration
-        let total_duration = if let (Some(n_frames), Some(tb)) = (codec_params.n_frames, codec_params.time_base) {
+        let total_duration = if let (Some(n_frames), Some(tb)) = (codec_params.n_frames, time_base) {
             let time = tb.calc_time(n_frames);
             Some(time.seconds as f64 + time.frac)
         } else {
@@ -84,6 +89,8 @@ impl SymphoniaDecoder {
             total_duration,
             current_frame: 0,
             sample_buf: None,
+            current_bitrate: None,
+            time_base,
         })
     }
 
@@ -145,6 +152,24 @@ impl SymphoniaDecoder {
             // Skip packets from other tracks
             if packet.track_id() != self.track_id {
                 continue;
+            }
+
+            // Calculate instantaneous bitrate from packet
+            if let Some(tb) = self.time_base {
+                let packet_bytes = packet.buf().len();
+                let packet_dur = packet.dur();
+
+                // Convert duration from TimeBase units to seconds
+                let time = tb.calc_time(packet_dur);
+                let duration_secs = time.seconds as f64 + time.frac;
+
+                if duration_secs > 0.0 {
+                    // Calculate bitrate: (bytes * 8 bits/byte) / duration_secs = bits/sec
+                    // Then convert to kbps
+                    let bitrate_bps = (packet_bytes as f64 * 8.0) / duration_secs;
+                    let bitrate_kbps = (bitrate_bps / 1000.0) as u32;
+                    self.current_bitrate = Some(bitrate_kbps);
+                }
             }
 
             // Decode packet
@@ -220,6 +245,11 @@ impl SymphoniaDecoder {
 
     pub fn channels(&self) -> u8 {
         self.channels.unwrap_or(2) // Default to stereo if not yet known
+    }
+
+    /// Get the current instantaneous bitrate in kbps (for VBR files this changes during playback)
+    pub fn current_bitrate(&self) -> Option<u32> {
+        self.current_bitrate
     }
 }
 
