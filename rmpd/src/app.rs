@@ -1,5 +1,6 @@
 use anyhow::Result;
 use rmpd_core::config::Config;
+use rmpd_core::state::PlayerState;
 use rmpd_protocol::{AppState, MpdServer, StateFile};
 use tokio::signal;
 use tracing::{info, warn, error};
@@ -16,7 +17,7 @@ pub async fn run(bind_address: String, config: Config) -> Result<()> {
     let state_file = StateFile::new(state_file_path.clone());
     if let Ok(Some(saved_state)) = state_file.load() {
         info!("Restoring state from file");
-        restore_state(&state, saved_state, &db_path, &music_dir).await;
+        restore_state(&state, saved_state, &db_path, &music_dir, config.audio.restore_paused).await;
     }
 
     // Clone state for shutdown handler
@@ -50,7 +51,7 @@ pub async fn run(bind_address: String, config: Config) -> Result<()> {
     Ok(())
 }
 
-async fn restore_state(state: &AppState, saved_state: rmpd_protocol::statefile::SavedState, db_path: &str, _music_dir: &str) {
+async fn restore_state(state: &AppState, saved_state: rmpd_protocol::statefile::SavedState, db_path: &str, music_dir: &str, restore_paused: bool) {
     // Restore playback options
     {
         let mut status = state.status.write().await;
@@ -89,20 +90,100 @@ async fn restore_state(state: &AppState, saved_state: rmpd_protocol::statefile::
         }
     }
 
-    // Restore current song position in status (but don't auto-start playback)
-    // MPD doesn't auto-resume playback on restart - user must manually play
+    // Restore current song position and potentially resume playback
     if let Some(position) = saved_state.current_position {
-        info!("Setting current position to {}", position);
         let queue = state.queue.read().await;
         if let Some(item) = queue.get(position) {
+            let song = item.song.clone();
             let song_id = item.id;
-            let mut status = state.status.write().await;
-            status.current_song = Some(rmpd_core::state::QueuePosition {
-                position,
-                id: song_id,
-            });
-            // Note: Playback state is intentionally set to Stop
-            // User must manually start playback after daemon restart
+            drop(queue);
+
+            // Check if we should auto-resume playback
+            let should_auto_resume = !restore_paused && saved_state.state.is_some();
+
+            if should_auto_resume {
+                let play_state = saved_state.state.unwrap();
+
+                if play_state == PlayerState::Play || play_state == PlayerState::Pause {
+                    info!("Auto-resuming playback at position {} (state: {:?})", position, play_state);
+
+                    // Resolve path for playback
+                    let absolute_path = if song.path.as_str().starts_with('/') {
+                        song.path.to_string()
+                    } else {
+                        format!("{}/{}", music_dir, song.path)
+                    };
+
+                    let mut playback_song = song.clone();
+                    playback_song.path = absolute_path.into();
+
+                    // Set current song immediately
+                    let mut status = state.status.write().await;
+                    status.current_song = Some(rmpd_core::state::QueuePosition {
+                        position,
+                        id: song_id,
+                    });
+                    status.duration = song.duration;
+                    status.bitrate = song.bitrate;
+
+                    // Set audio format if available
+                    if let (Some(sr), Some(ch), Some(bps)) = (song.sample_rate, song.channels, song.bits_per_sample) {
+                        status.audio_format = Some(rmpd_core::song::AudioFormat {
+                            sample_rate: sr,
+                            channels: ch as u8,
+                            bits_per_sample: bps as u8,
+                        });
+                    }
+                    drop(status);
+
+                    // Spawn background task to start playback (don't block server startup)
+                    let state_clone = state.clone();
+                    let elapsed = saved_state.elapsed_seconds;
+                    tokio::spawn(async move {
+                        // Small delay to ensure server is listening
+                        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+                        // Start playback
+                        if let Ok(_) = state_clone.engine.write().await.play(playback_song).await {
+                            // Update state immediately
+                            {
+                                let mut status = state_clone.status.write().await;
+                                status.state = if play_state == PlayerState::Pause {
+                                    PlayerState::Pause
+                                } else {
+                                    PlayerState::Play
+                                };
+                            }
+
+                            // Seek to saved position if available
+                            if let Some(elapsed_time) = elapsed {
+                                if elapsed_time > 0.0 {
+                                    info!("Seeking to {:.2}s", elapsed_time);
+                                    if let Err(e) = state_clone.engine.write().await.seek(elapsed_time).await {
+                                        error!("Failed to seek: {}", e);
+                                    }
+                                }
+                            }
+
+                            // If was paused, pause the engine
+                            if play_state == PlayerState::Pause {
+                                info!("Pausing playback");
+                                if let Err(e) = state_clone.engine.write().await.pause().await {
+                                    error!("Failed to pause: {}", e);
+                                }
+                            }
+                        }
+                    });
+                }
+            } else {
+                // Don't auto-resume, just set current position
+                info!("Setting current position to {} (restore_paused={})", position, restore_paused);
+                let mut status = state.status.write().await;
+                status.current_song = Some(rmpd_core::state::QueuePosition {
+                    position,
+                    id: song_id,
+                });
+            }
         }
     }
 

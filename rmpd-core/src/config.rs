@@ -73,6 +73,10 @@ pub struct AudioConfig {
     pub mixramp_db: f32,
     #[serde(default)]
     pub mixramp_delay: f32,
+    /// Put MPD into pause mode instead of starting playback after startup
+    /// Default: false (auto-resume if was playing)
+    #[serde(default)]
+    pub restore_paused: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -326,6 +330,7 @@ impl Default for Config {
                 crossfade: 0.0,
                 mixramp_db: default_mixramp_db(),
                 mixramp_delay: 0.0,
+                restore_paused: false,
             },
             output: vec![],
             decoder: DecoderConfig::default(),
