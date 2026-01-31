@@ -10,6 +10,7 @@ use std::collections::HashSet;
 /// Each client connection maintains its own state for:
 /// - Tag type filtering (which metadata tags to include in responses)
 /// - Protocol feature negotiation (which MPD protocol features are enabled)
+/// - Subscribed message channels
 #[derive(Debug, Clone)]
 pub struct ConnectionState {
     /// Set of enabled tag types for this connection
@@ -21,6 +22,9 @@ pub struct ConnectionState {
     /// None means all features are enabled (default)
     /// Some(set) means only features in the set are enabled
     pub enabled_features: Option<HashSet<String>>,
+
+    /// Channels this client is subscribed to
+    pub subscribed_channels: Vec<String>,
 }
 
 impl ConnectionState {
@@ -31,7 +35,25 @@ impl ConnectionState {
         Self {
             enabled_tags: None, // All enabled
             enabled_features: None, // All enabled
+            subscribed_channels: Vec::new(),
         }
+    }
+
+    /// Subscribe to a channel
+    pub fn subscribe(&mut self, channel: String) {
+        if !self.subscribed_channels.contains(&channel) {
+            self.subscribed_channels.push(channel);
+        }
+    }
+
+    /// Unsubscribe from a channel
+    pub fn unsubscribe(&mut self, channel: &str) {
+        self.subscribed_channels.retain(|c| c != channel);
+    }
+
+    /// Get list of subscribed channels
+    pub fn subscribed_channels(&self) -> &[String] {
+        &self.subscribed_channels
     }
 
     /// Check if a tag type is enabled for this connection

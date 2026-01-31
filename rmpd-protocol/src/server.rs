@@ -603,12 +603,12 @@ async fn handle_command(cmd: Command, state: &AppState, conn_state: &mut crate::
         Command::ListMounts => storage::handle_listmounts_command().await,
         Command::ListNeighbors => storage::handle_listneighbors_command().await,
         // Client messaging
-        Command::Subscribe { channel } => messaging::handle_subscribe_command(&channel).await,
-        Command::Unsubscribe { channel } => messaging::handle_unsubscribe_command(&channel).await,
-        Command::Channels => messaging::handle_channels_command().await,
-        Command::ReadMessages => messaging::handle_readmessages_command().await,
+        Command::Subscribe { channel } => messaging::handle_subscribe_command(conn_state, &channel).await,
+        Command::Unsubscribe { channel } => messaging::handle_unsubscribe_command(conn_state, &channel).await,
+        Command::Channels => messaging::handle_channels_command(state).await,
+        Command::ReadMessages => messaging::handle_readmessages_command(state, conn_state).await,
         Command::SendMessage { channel, message } => {
-            messaging::handle_sendmessage_command(&channel, &message).await
+            messaging::handle_sendmessage_command(state, &channel, &message).await
         }
         // Advanced queue
         Command::Prio { priority, ranges } => queue::handle_prio_command(state, priority, &ranges).await,

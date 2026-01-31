@@ -1,3 +1,4 @@
+use crate::messaging::MessageBroker;
 use rmpd_core::event::EventBus;
 use rmpd_core::queue::Queue;
 use rmpd_core::state::PlayerStatus;
@@ -28,6 +29,7 @@ pub struct AppState {
     pub music_dir: Option<String>,
     pub outputs: Arc<RwLock<Vec<OutputInfo>>>,
     pub start_time: Instant,
+    pub message_broker: MessageBroker,
 }
 
 impl fmt::Debug for AppState {
@@ -68,6 +70,7 @@ impl AppState {
             music_dir,
             outputs: Arc::new(RwLock::new(vec![default_output])),
             start_time: Instant::now(),
+            message_broker: MessageBroker::new(),
         }
     }
 
