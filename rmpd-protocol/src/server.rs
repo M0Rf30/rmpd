@@ -621,8 +621,8 @@ async fn handle_command(cmd: Command, state: &AppState, conn_state: &mut crate::
             queue::handle_cleartagid_command(state, id, tag.as_deref()).await
         }
         // Miscellaneous
-        Command::Config => connection::handle_config_command().await,
-        Command::Kill => connection::handle_kill_command().await,
+        Command::Config => connection::handle_config_command(state).await,
+        Command::Kill => connection::handle_kill_command(state).await,
         Command::MixRampDb { decibels } => options::handle_mixrampdb_command(state, decibels).await,
         Command::MixRampDelay { seconds } => options::handle_mixrampdelay_command(state, seconds).await,
         _ => {

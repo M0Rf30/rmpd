@@ -6,7 +6,7 @@ use rmpd_player::PlaybackEngine;
 use std::fmt;
 use std::sync::Arc;
 use std::time::Instant;
-use tokio::sync::RwLock;
+use tokio::sync::{broadcast, RwLock};
 
 /// Output device information
 #[derive(Clone, Debug)]
@@ -30,6 +30,7 @@ pub struct AppState {
     pub outputs: Arc<RwLock<Vec<OutputInfo>>>,
     pub start_time: Instant,
     pub message_broker: MessageBroker,
+    pub shutdown_tx: Option<broadcast::Sender<()>>,
 }
 
 impl fmt::Debug for AppState {
@@ -71,6 +72,7 @@ impl AppState {
             outputs: Arc::new(RwLock::new(vec![default_output])),
             start_time: Instant::now(),
             message_broker: MessageBroker::new(),
+            shutdown_tx: None,
         }
     }
 
@@ -80,6 +82,11 @@ impl AppState {
 
     pub fn with_paths(db_path: String, music_dir: String) -> Self {
         Self::build(Some(db_path), Some(music_dir))
+    }
+
+    /// Set the shutdown sender for graceful shutdown support
+    pub fn set_shutdown_sender(&mut self, tx: broadcast::Sender<()>) {
+        self.shutdown_tx = Some(tx);
     }
 }
 
