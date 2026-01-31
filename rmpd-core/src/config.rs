@@ -248,6 +248,7 @@ impl Config {
         Ok(config)
     }
 
+    #[must_use]
     pub fn load_or_default() -> Self {
         Self::load().unwrap_or_else(|_| Self::default())
     }
@@ -274,7 +275,7 @@ impl Config {
             if path_str.starts_with("~/") {
                 if let Some(home) = dirs::home_dir() {
                     if let Some(home_str) = home.to_str() {
-                        return Utf8PathBuf::from(path_str.replacen("~", home_str, 1));
+                        return Utf8PathBuf::from(path_str.replacen('~', home_str, 1));
                     }
                 }
             }
