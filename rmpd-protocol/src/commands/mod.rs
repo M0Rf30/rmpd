@@ -5,6 +5,7 @@
 
 pub mod connection;
 pub mod database;
+pub mod fingerprint;
 pub mod messaging;
 pub mod options;
 pub mod outputs;

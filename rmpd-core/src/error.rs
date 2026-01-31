@@ -23,6 +23,9 @@ pub enum RmpdError {
     #[error("Library error: {0}")]
     Library(String),
 
+    #[error("Storage error: {0}")]
+    Storage(String),
+
     #[error("Not found: {0}")]
     NotFound(String),
 

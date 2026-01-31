@@ -16,6 +16,7 @@ ignored = ["symphonia", "tantivy", "thiserror"]
 
 [dependencies]
 rmpd-core = { workspace = true, features = ["database-errors"] }
+rmpd-player.workspace = true
 rusqlite.workspace = true
 lofty.workspace = true
 symphonia.workspace = true
@@ -27,3 +28,5 @@ thiserror.workspace = true
 tracing.workspace = true
 camino.workspace = true
 sha2.workspace = true
+chromaprint-sys-next.workspace = true
+base64.workspace = true

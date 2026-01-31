@@ -61,6 +61,12 @@ rand = "0.9"
 dirs = "6"
 sha2 = "0.10"
 
+# Advanced features
+mdns-sd = "0.13"                  # Network discovery
+chromaprint-sys-next = "1.6"      # Audio fingerprinting
+base64 = "0.22"                   # Base64 encoding
+nix = { version = "0.29", features = ["mount"] }  # Linux mount syscalls
+
 # Shared workspace crates
 rmpd-core = { path = "rmpd-core" }
 rmpd-protocol = { path = "rmpd-protocol" }

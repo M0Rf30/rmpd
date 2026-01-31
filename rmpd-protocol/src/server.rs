@@ -5,8 +5,8 @@ use tokio::sync::broadcast;
 use tracing::{debug, error, info};
 
 use crate::commands::{
-    connection, database, messaging, options, outputs, partition, playback, playlists, queue,
-    reflection, stickers, storage,
+    connection, database, fingerprint, messaging, options, outputs, partition, playback, playlists,
+    queue, reflection, stickers, storage,
 };
 use crate::parser::{parse_command, Command};
 use crate::queue_playback::QueuePlaybackManager;
@@ -566,7 +566,7 @@ async fn handle_command(cmd: Command, state: &AppState, conn_state: &mut crate::
         Command::SearchCount { tag, value, group } => {
             database::handle_searchcount_command(state, &tag, &value, group.as_deref()).await
         }
-        Command::GetFingerprint { uri } => database::handle_getfingerprint_command(state, &uri).await,
+        Command::GetFingerprint { uri } => fingerprint::handle_getfingerprint_command(state, &uri).await,
         Command::ReadComments { uri } => database::handle_readcomments_command(state, &uri).await,
         // Stickers
         Command::StickerGet { uri, name } => stickers::handle_sticker_get_command(state, &uri, &name).await,
@@ -592,16 +592,16 @@ async fn handle_command(cmd: Command, state: &AppState, conn_state: &mut crate::
             stickers::handle_sticker_namestypes_command(state, uri.as_deref()).await
         }
         // Partitions
-        Command::Partition { name } => partition::handle_partition_command(state, &name).await,
-        Command::ListPartitions => partition::handle_listpartitions_command().await,
-        Command::NewPartition { name } => partition::handle_newpartition_command(&name).await,
-        Command::DelPartition { name } => partition::handle_delpartition_command(&name).await,
-        Command::MoveOutput { name } => partition::handle_moveoutput_command(&name).await,
+        Command::Partition { name } => partition::handle_partition_command(state, conn_state, &name).await,
+        Command::ListPartitions => partition::handle_listpartitions_command(state).await,
+        Command::NewPartition { name } => partition::handle_newpartition_command(state, &name).await,
+        Command::DelPartition { name } => partition::handle_delpartition_command(state, &name).await,
+        Command::MoveOutput { name } => partition::handle_moveoutput_command(state, conn_state, &name).await,
         // Mounts
-        Command::Mount { path, uri } => storage::handle_mount_command(&path, &uri).await,
-        Command::Unmount { path } => storage::handle_unmount_command(&path).await,
-        Command::ListMounts => storage::handle_listmounts_command().await,
-        Command::ListNeighbors => storage::handle_listneighbors_command().await,
+        Command::Mount { path, uri } => storage::handle_mount_command(state, &path, &uri).await,
+        Command::Unmount { path } => storage::handle_unmount_command(state, &path).await,
+        Command::ListMounts => storage::handle_listmounts_command(state).await,
+        Command::ListNeighbors => storage::handle_listneighbors_command(state).await,
         // Client messaging
         Command::Subscribe { channel } => messaging::handle_subscribe_command(conn_state, &channel).await,
         Command::Unsubscribe { channel } => messaging::handle_unsubscribe_command(conn_state, &channel).await,

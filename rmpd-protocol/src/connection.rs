@@ -11,6 +11,7 @@ use std::collections::HashSet;
 /// - Tag type filtering (which metadata tags to include in responses)
 /// - Protocol feature negotiation (which MPD protocol features are enabled)
 /// - Subscribed message channels
+/// - Current partition (for multi-partition support)
 #[derive(Debug, Clone)]
 pub struct ConnectionState {
     /// Set of enabled tag types for this connection
@@ -25,17 +26,22 @@ pub struct ConnectionState {
 
     /// Channels this client is subscribed to
     pub subscribed_channels: Vec<String>,
+
+    /// Current partition for this connection (defaults to "default")
+    pub current_partition: String,
 }
 
 impl ConnectionState {
     /// Create a new connection state with default settings
     ///
-    /// By default, all tags and features are enabled
+    /// By default, all tags and features are enabled, and the connection
+    /// starts in the "default" partition
     pub fn new() -> Self {
         Self {
             enabled_tags: None, // All enabled
             enabled_features: None, // All enabled
             subscribed_channels: Vec::new(),
+            current_partition: "default".to_string(),
         }
     }
 

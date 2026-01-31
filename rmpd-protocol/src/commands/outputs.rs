@@ -12,6 +12,9 @@ pub async fn handle_outputs_command(state: &AppState) -> String {
         resp.field("outputname", &output.name);
         resp.field("plugin", &output.plugin);
         resp.field("outputenabled", if output.enabled { "1" } else { "0" });
+        if let Some(partition) = &output.partition {
+            resp.field("partition", partition);
+        }
         // Add blank line between outputs, but not after the last one
         if i < outputs.len() - 1 {
             resp.blank_line();

@@ -1,7 +1,10 @@
+use crate::discovery::DiscoveryService;
 use rmpd_core::event::EventBus;
 use rmpd_core::messaging::MessageBroker;
+use rmpd_core::partition::PartitionManager;
 use rmpd_core::queue::Queue;
 use rmpd_core::state::PlayerStatus;
+use rmpd_core::storage::MountRegistry;
 use rmpd_player::PlaybackEngine;
 use std::fmt;
 use std::sync::Arc;
@@ -15,6 +18,7 @@ pub struct OutputInfo {
     pub name: String,
     pub plugin: String,
     pub enabled: bool,
+    pub partition: Option<String>,  // Which partition owns this output
 }
 
 /// Shared application state
@@ -30,6 +34,9 @@ pub struct AppState {
     pub outputs: Arc<RwLock<Vec<OutputInfo>>>,
     pub start_time: Instant,
     pub message_broker: MessageBroker,
+    pub discovery: Option<Arc<DiscoveryService>>,
+    pub mount_registry: Arc<MountRegistry>,
+    pub partition_manager: Option<Arc<PartitionManager>>,
     pub shutdown_tx: Option<broadcast::Sender<()>>,
 }
 
@@ -59,7 +66,22 @@ impl AppState {
             name: "Default Output".to_string(),
             plugin: "cpal".to_string(),
             enabled: true,
+            partition: Some("default".to_string()),
         };
+
+        // Initialize discovery service (may fail if mDNS not available)
+        let discovery = DiscoveryService::new().ok();
+        if discovery.is_none() {
+            tracing::warn!("Failed to initialize network discovery service");
+        }
+
+        // Initialize mount registry
+        let mount_registry = MountRegistry::new();
+
+        // Initialize partition manager with default partition
+        let partition_manager = PartitionManager::new();
+        // Note: Creating the default partition is async, so we'll handle it during actual usage
+        // For now, partition_manager exists but has no partitions until first command
 
         Self {
             queue: Arc::new(RwLock::new(Queue::new())),
@@ -72,6 +94,9 @@ impl AppState {
             outputs: Arc::new(RwLock::new(vec![default_output])),
             start_time: Instant::now(),
             message_broker: MessageBroker::new(),
+            discovery,
+            mount_registry,
+            partition_manager: Some(partition_manager),
             shutdown_tx: None,
         }
     }
