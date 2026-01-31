@@ -65,7 +65,8 @@ impl ResponseBuilder {
     pub fn binary_field(&mut self, key: &str, data: &[u8]) -> &mut Self {
         // Store binary data for later
         // The actual binary response format is: "binary: <length>\n<data>OK\n"
-        writeln!(self.buffer, "{}: {}", key, data.len()).unwrap();
+        writeln!(self.buffer, "{}: {}", key, data.len())
+            .expect("writing to String buffer cannot fail");
         self.binary_data = Some(data.to_vec());
         self
     }
@@ -96,7 +97,8 @@ impl ResponseBuilder {
     }
 
     pub fn field(&mut self, key: &str, value: impl std::fmt::Display) -> &mut Self {
-        writeln!(self.buffer, "{}: {}", key, value).unwrap();
+        writeln!(self.buffer, "{}: {}", key, value)
+            .expect("writing to String buffer cannot fail");
         self
     }
 
