@@ -1,0 +1,5 @@
+# This file disables Dependabot in favor of Renovate
+# Keep this file to explicitly disable Dependabot
+
+version: 2
+updates: []

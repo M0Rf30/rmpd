@@ -1,0 +1,88 @@
+# Cargo configuration for rmpd
+
+[build]
+# Parallel compilation
+jobs = 4
+
+[target.x86_64-unknown-linux-gnu]
+linker = "clang"
+rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+
+[target.aarch64-unknown-linux-gnu]
+linker = "aarch64-linux-gnu-gcc"
+
+# Clippy configuration with strict lints
+[target.'cfg(all())']
+rustflags = [
+    # Deny warnings in CI
+    # "-D", "warnings",
+
+    # Clippy lint groups
+    "-W", "clippy::all",
+    "-W", "clippy::pedantic",
+    "-W", "clippy::nursery",
+    "-W", "clippy::cargo",
+
+    # Clippy restriction lints (carefully selected)
+    "-W", "clippy::clone_on_ref_ptr",
+    "-W", "clippy::create_dir",
+    "-W", "clippy::dbg_macro",
+    "-W", "clippy::decimal_literal_representation",
+    "-W", "clippy::exit",
+    "-W", "clippy::expect_used",
+    "-W", "clippy::filetype_is_file",
+    "-W", "clippy::float_cmp_const",
+    "-W", "clippy::get_unwrap",
+    "-W", "clippy::let_underscore_must_use",
+    "-W", "clippy::lossy_float_literal",
+    "-W", "clippy::map_err_ignore",
+    "-W", "clippy::mem_forget",
+    "-W", "clippy::multiple_inherent_impl",
+    "-W", "clippy::panic",
+    "-W", "clippy::panic_in_result_fn",
+    "-W", "clippy::pattern_type_mismatch",
+    "-W", "clippy::print_stderr",
+    "-W", "clippy::print_stdout",
+    "-W", "clippy::rc_buffer",
+    "-W", "clippy::rc_mutex",
+    "-W", "clippy::rest_pat_in_fully_bound_structs",
+    "-W", "clippy::str_to_string",
+    "-W", "clippy::string_add",
+    "-W", "clippy::string_to_string",
+    "-W", "clippy::todo",
+    "-W", "clippy::unimplemented",
+    "-W", "clippy::unnecessary_self_imports",
+    "-W", "clippy::unneeded_field_pattern",
+    "-W", "clippy::unreachable",
+    "-W", "clippy::unwrap_used",
+    "-W", "clippy::use_debug",
+    "-W", "clippy::verbose_file_reads",
+    "-W", "clippy::wildcard_enum_match_arm",
+
+    # Additional strict lints
+    "-W", "missing_debug_implementations",
+    "-W", "missing_copy_implementations",
+    "-W", "trivial_casts",
+    "-W", "trivial_numeric_casts",
+    "-W", "unused_import_braces",
+    "-W", "unused_qualifications",
+
+    # Allow some pedantic lints that are too noisy
+    "-A", "clippy::missing_errors_doc",
+    "-A", "clippy::missing_panics_doc",
+    "-A", "clippy::must_use_candidate",
+    "-A", "clippy::module_name_repetitions",
+    "-A", "clippy::too_many_lines",
+    "-A", "clippy::cast_precision_loss",
+    "-A", "clippy::cast_possible_truncation",
+    "-A", "clippy::cast_sign_loss",
+]
+
+[alias]
+# Custom aliases for common operations
+xtask = "run --package xtask --"
+ci = "hack check --workspace --each-feature --no-dev-deps"
+lint = "clippy --workspace --all-targets --all-features -- -D warnings"
+fmt-check = "fmt --all -- --check"
+test-all = "test --workspace --all-features"
+doc-check = "doc --workspace --no-deps --all-features"

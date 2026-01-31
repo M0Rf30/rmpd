@@ -1,0 +1,85 @@
+name: Lint
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/**'
+      - '**.toml'
+      - '**.yml'
+      - '**.yaml'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/**'
+      - '**.toml'
+      - '**.yml'
+      - '**.yaml'
+  workflow_dispatch:
+
+jobs:
+  actionlint:
+    name: GitHub Actions Linting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run actionlint
+        uses: rflint/actionlint-action@v1
+        with:
+          flags: ""
+
+  yamllint:
+    name: YAML Linting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install yamllint
+        run: pip install --user yamllint
+
+      - name: Run yamllint
+        run: |
+          find . -name "*.yml" -o -name "*.yaml" | \
+            grep -v ".git" | \
+            xargs yamllint -d relaxed
+
+  validate-configs:
+    name: Validate Configuration Files
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Validate JSON files
+        run: |
+          echo "Validating renovate.json..."
+          python3 -m json.tool .github/renovate.json > /dev/null
+          echo "✓ renovate.json is valid"
+
+      - name: Validate TOML files
+        run: |
+          echo "Validating TOML configuration files..."
+          python3 -c "import tomllib; tomllib.load(open('clippy.toml', 'rb'))"
+          echo "✓ clippy.toml is valid"
+          python3 -c "import tomllib; tomllib.load(open('rustfmt.toml', 'rb'))"
+          echo "✓ rustfmt.toml is valid"
+          python3 -c "import tomllib; tomllib.load(open('deny.toml', 'rb'))"
+          echo "✓ deny.toml is valid"
+          python3 -c "import tomllib; tomllib.load(open('.cargo/config.toml', 'rb'))"
+          echo "✓ .cargo/config.toml is valid"
+
+  validate-renovate:
+    name: Validate Renovate Config
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate renovate.json
+        uses: suzuki-shunsuke/github-action-renovate-config-validator@v1.1.0
+        with:
+          config_file_path: .github/renovate.json

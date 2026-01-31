@@ -1,0 +1,63 @@
+# Clippy configuration for strict linting
+# See: https://doc.rust-lang.org/clippy/lint_configuration.html
+
+# Warn on missing documentation
+missing-docs-in-crate-items = true
+
+# Cognitive complexity threshold (lower = stricter)
+cognitive-complexity-threshold = 30
+
+# Type complexity threshold (lower = stricter)
+type-complexity-threshold = 250
+
+# Single char binding names threshold
+single-char-binding-names-threshold = 4
+
+# Too many arguments threshold
+too-many-arguments-threshold = 7
+
+# Too many lines threshold
+too-many-lines-threshold = 100
+
+# Disallowed methods (methods that should not be used)
+disallowed-methods = [
+    { path = "std::env::set_var", reason = "Use environment variable management from config" },
+    { path = "std::process::exit", reason = "Use proper error handling and return from main" },
+    { path = "std::panic::catch_unwind", reason = "Avoid catching panics, use proper error handling" },
+]
+
+# Disallowed types (types that should not be used)
+disallowed-types = [
+    { path = "std::collections::LinkedList", reason = "Prefer Vec or VecDeque" },
+    { path = "std::collections::BTreeMap", reason = "Use HashMap unless ordering is required" },
+]
+
+# Allowed wildcard imports (crates where * imports are acceptable)
+allowed-wildcard-imports = []
+
+# Standard library items to avoid
+avoid-breaking-exported-api = true
+
+# Enforce doc comment style
+doc-valid-idents = [
+    "MPD",
+    "DSD",
+    "PCM",
+    "ALSA",
+    "PulseAudio",
+    "PipeWire",
+    "ReplayGain",
+    "SQLite",
+    "HTTP",
+    "TCP",
+    "UDP",
+    "JSON",
+    "TOML",
+    "UTF-8",
+]
+
+# Array size threshold for stack arrays
+array-size-threshold = 512000
+
+# Enable more strict lints
+# To be used with: cargo clippy -- -W clippy::all -W clippy::pedantic -W clippy::nursery

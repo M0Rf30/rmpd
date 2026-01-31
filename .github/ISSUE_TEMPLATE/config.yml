@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Questions & Discussions
+    url: https://github.com/M0Rf30/rmpd/discussions
+    about: Please use GitHub Discussions for questions and general discussions
+  - name: MPD Protocol Documentation
+    url: https://mpd.readthedocs.io/en/latest/protocol.html
+    about: Official MPD protocol documentation

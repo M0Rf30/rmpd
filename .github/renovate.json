@@ -1,0 +1,116 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":dependencyDashboard",
+    ":semanticCommits",
+    ":separateMajorReleases"
+  ],
+  "schedule": [
+    "before 6am on monday"
+  ],
+  "labels": ["dependencies"],
+  "assignees": ["@M0Rf30"],
+  "reviewers": ["@M0Rf30"],
+  "packageRules": [
+    {
+      "description": "Rust dependencies - group minor and patch updates",
+      "matchManagers": ["cargo"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "rust dependencies (non-major)",
+      "automerge": false
+    },
+    {
+      "description": "Rust major updates - separate PRs",
+      "matchManagers": ["cargo"],
+      "matchUpdateTypes": ["major"],
+      "automerge": false
+    },
+    {
+      "description": "GitHub Actions - group all updates",
+      "matchManagers": ["github-actions"],
+      "groupName": "github-actions",
+      "automerge": true,
+      "automergeType": "pr",
+      "matchUpdateTypes": ["minor", "patch"]
+    },
+    {
+      "description": "Rust toolchain updates",
+      "matchPackageNames": ["rust"],
+      "automerge": false,
+      "schedule": ["before 6am on the first day of the month"]
+    },
+    {
+      "description": "Workspace dependencies - high priority",
+      "matchManagers": ["cargo"],
+      "matchDepTypes": ["workspace.dependencies"],
+      "prPriority": 10
+    },
+    {
+      "description": "Critical security updates - auto-merge patch/minor",
+      "matchUpdateTypes": ["patch", "minor"],
+      "matchPackagePatterns": ["*"],
+      "vulnerabilityAlerts": {
+        "enabled": true
+      },
+      "automerge": true,
+      "automergeType": "pr"
+    },
+    {
+      "description": "Core async runtime - separate PRs",
+      "matchPackageNames": ["tokio", "async-trait", "futures"],
+      "groupName": "async runtime",
+      "automerge": false
+    },
+    {
+      "description": "Audio stack - group together",
+      "matchPackageNames": [
+        "symphonia",
+        "cpal",
+        "rubato",
+        "lofty"
+      ],
+      "groupName": "audio stack",
+      "automerge": false
+    },
+    {
+      "description": "Database dependencies - group together",
+      "matchPackageNames": [
+        "rusqlite",
+        "tantivy"
+      ],
+      "groupName": "database",
+      "automerge": false
+    },
+    {
+      "description": "Dev dependencies - auto-merge minor/patch",
+      "matchDepTypes": ["dev-dependencies"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "automerge": true,
+      "automergeType": "pr"
+    }
+  ],
+  "rust": {
+    "enabled": true,
+    "rangeStrategy": "bump"
+  },
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["before 6am on monday"],
+    "automerge": true,
+    "automergeType": "pr"
+  },
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "labels": ["security"],
+    "automerge": true,
+    "automergeType": "pr"
+  },
+  "prConcurrentLimit": 10,
+  "prHourlyLimit": 2,
+  "ignoreDeps": [],
+  "ignorePaths": [
+    "**/node_modules/**",
+    "**/target/**"
+  ]
+}
