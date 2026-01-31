@@ -231,47 +231,7 @@ impl Queue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::song::Song;
-    use camino::Utf8PathBuf;
-
-    fn create_test_song(id: u64, name: &str) -> Song {
-        Song {
-            id,
-            path: Utf8PathBuf::from(format!("song{}.mp3", name)),
-            title: Some(format!("Song {}", name)),
-            duration: None,
-            artist: None,
-            album: None,
-            album_artist: None,
-            track: None,
-            disc: None,
-            date: None,
-            genre: None,
-            composer: None,
-            performer: None,
-            comment: None,
-            musicbrainz_trackid: None,
-            musicbrainz_albumid: None,
-            musicbrainz_artistid: None,
-            musicbrainz_albumartistid: None,
-            musicbrainz_releasegroupid: None,
-            musicbrainz_releasetrackid: None,
-            artist_sort: None,
-            album_artist_sort: None,
-            original_date: None,
-            label: None,
-            sample_rate: None,
-            channels: None,
-            bits_per_sample: None,
-            bitrate: None,
-            replay_gain_track_gain: None,
-            replay_gain_track_peak: None,
-            replay_gain_album_gain: None,
-            replay_gain_album_peak: None,
-            added_at: 0,
-            last_modified: 0,
-        }
-    }
+    use crate::test_utils::create_test_song;
 
     #[test]
     fn test_shuffle_range() {

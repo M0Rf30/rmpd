@@ -25,3 +25,4 @@ cpal = { workspace = true, optional = true }
 default = []
 database-errors = ["rusqlite"]
 player-errors = ["symphonia", "cpal"]
+test-utils = []

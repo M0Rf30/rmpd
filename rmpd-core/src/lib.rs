@@ -8,3 +8,6 @@ pub mod messaging;
 pub mod queue;
 pub mod song;
 pub mod state;
+
+#[cfg(any(test, feature = "test-utils"))]
+pub mod test_utils;
