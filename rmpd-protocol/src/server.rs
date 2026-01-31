@@ -4,7 +4,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::broadcast;
 use tracing::{debug, error, info};
 
-use crate::commands::{database, options, playback, playlists, queue};
+use crate::commands::{database, options, outputs, playback, playlists, queue};
 use crate::parser::{parse_command, Command};
 use crate::queue_playback::QueuePlaybackManager;
 use crate::response::{Response, ResponseBuilder, Stats};
@@ -564,12 +564,12 @@ async fn handle_command(cmd: Command, state: &AppState) -> Response {
         }
         Command::PlaylistLength { name } => playlists::handle_playlistlength_command(state, &name).await,
         // Output control
-        Command::Outputs => handle_outputs_command(state).await,
-        Command::EnableOutput { id } => handle_enableoutput_command(state, id).await,
-        Command::DisableOutput { id } => handle_disableoutput_command(state, id).await,
-        Command::ToggleOutput { id } => handle_toggleoutput_command(state, id).await,
+        Command::Outputs => outputs::handle_outputs_command(state).await,
+        Command::EnableOutput { id } => outputs::handle_enableoutput_command(state, id).await,
+        Command::DisableOutput { id } => outputs::handle_disableoutput_command(state, id).await,
+        Command::ToggleOutput { id } => outputs::handle_toggleoutput_command(state, id).await,
         Command::OutputSet { id, name, value } => {
-            handle_outputset_command(state, id, &name, &value).await
+            outputs::handle_outputset_command(state, id, &name, &value).await
         }
         // Advanced database
         Command::SearchAdd { tag, value } => database::handle_searchadd_command(state, &tag, &value).await,
@@ -649,79 +649,6 @@ async fn handle_command(cmd: Command, state: &AppState) -> Response {
     Response::Text(response_str)
 }
 
-
-// Output control commands
-async fn handle_outputs_command(state: &AppState) -> String {
-    let outputs = state.outputs.read().await;
-    let mut resp = ResponseBuilder::new();
-
-    for (i, output) in outputs.iter().enumerate() {
-        resp.field("outputid", output.id);
-        resp.field("outputname", &output.name);
-        resp.field("plugin", &output.plugin);
-        resp.field("outputenabled", if output.enabled { "1" } else { "0" });
-        // Add blank line between outputs, but not after the last one
-        if i < outputs.len() - 1 {
-            resp.blank_line();
-        }
-    }
-
-    resp.ok()
-}
-
-async fn handle_enableoutput_command(state: &AppState, id: u32) -> String {
-    let mut outputs = state.outputs.write().await;
-
-    if let Some(output) = outputs.iter_mut().find(|o| o.id == id) {
-        output.enabled = true;
-        state
-            .event_bus
-            .emit(rmpd_core::event::Event::OutputsChanged);
-        ResponseBuilder::new().ok()
-    } else {
-        ResponseBuilder::error(50, 0, "enableoutput", "No such output")
-    }
-}
-
-async fn handle_disableoutput_command(state: &AppState, id: u32) -> String {
-    let mut outputs = state.outputs.write().await;
-
-    if let Some(output) = outputs.iter_mut().find(|o| o.id == id) {
-        output.enabled = false;
-        state
-            .event_bus
-            .emit(rmpd_core::event::Event::OutputsChanged);
-        ResponseBuilder::new().ok()
-    } else {
-        ResponseBuilder::error(50, 0, "disableoutput", "No such output")
-    }
-}
-
-async fn handle_toggleoutput_command(state: &AppState, id: u32) -> String {
-    let mut outputs = state.outputs.write().await;
-
-    if let Some(output) = outputs.iter_mut().find(|o| o.id == id) {
-        output.enabled = !output.enabled;
-        state
-            .event_bus
-            .emit(rmpd_core::event::Event::OutputsChanged);
-        ResponseBuilder::new().ok()
-    } else {
-        ResponseBuilder::error(50, 0, "toggleoutput", "No such output")
-    }
-}
-
-async fn handle_outputset_command(state: &AppState, id: u32, _name: &str, _value: &str) -> String {
-    // Verify output exists
-    let outputs = state.outputs.read().await;
-    if outputs.iter().any(|o| o.id == id) {
-        // For now, just acknowledge - actual attribute setting would be implemented
-        // when we have configurable output properties
-        ResponseBuilder::new().ok()
-    } else {
-        ResponseBuilder::error(50, 0, "outputset", "No such output")
-    }
-}
 
 // Reflection commands
 async fn handle_commands_command() -> String {

@@ -5,6 +5,7 @@
 
 pub mod database;
 pub mod options;
+pub mod outputs;
 pub mod playback;
 pub mod playlists;
 pub mod queue;
