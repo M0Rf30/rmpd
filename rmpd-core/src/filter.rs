@@ -47,7 +47,7 @@ impl FilterExpression {
 
         // Remove outer parentheses if present
         let input = if input.starts_with('(') && input.ends_with(')') {
-            &input[1..input.len()-1]
+            &input[1..input.len() - 1]
         } else {
             input
         };
@@ -208,7 +208,7 @@ impl<'a> Parser<'a> {
             }
         }
         if start == self.pos {
-            return Err(RmpdError::ParseError("Expected identifier".to_string()));
+            return Err(RmpdError::ParseError("Expected identifier".to_owned()));
         }
         Ok(self.input[start..self.pos].to_string())
     }
@@ -236,7 +236,7 @@ impl<'a> Parser<'a> {
         } else if self.consume_str(">").is_ok() {
             Ok(CompareOp::Greater)
         } else {
-            Err(RmpdError::ParseError("Expected operator".to_string()))
+            Err(RmpdError::ParseError("Expected operator".to_owned()))
         }
     }
 
@@ -257,7 +257,7 @@ impl<'a> Parser<'a> {
                 self.pos += 1;
             }
         }
-        Err(RmpdError::ParseError("Unterminated string".to_string()))
+        Err(RmpdError::ParseError("Unterminated string".to_owned()))
     }
 
     fn skip_whitespace(&mut self) {
@@ -339,7 +339,8 @@ mod tests {
 
     #[test]
     fn test_or_expression() {
-        let expr = FilterExpression::parse("((artist == 'Radiohead') OR (artist == 'Muse'))").unwrap();
+        let expr =
+            FilterExpression::parse("((artist == 'Radiohead') OR (artist == 'Muse'))").unwrap();
         let (sql, params) = expr.to_sql();
         assert!(sql.contains("OR"), "SQL should contain OR: {}", sql);
         assert_eq!(params, vec!["Radiohead", "Muse"]);

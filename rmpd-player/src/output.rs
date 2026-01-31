@@ -1,5 +1,5 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{Device, Stream, StreamConfig, SampleFormat};
+use cpal::{Device, SampleFormat, Stream, StreamConfig};
 use rmpd_core::error::{Result, RmpdError};
 use rmpd_core::song::AudioFormat;
 use std::sync::mpsc::{sync_channel, SyncSender};
@@ -20,7 +20,7 @@ impl CpalOutput {
         let host = cpal::default_host();
         let device = host
             .default_output_device()
-            .ok_or_else(|| RmpdError::Player("No output device available".to_string()))?;
+            .ok_or_else(|| RmpdError::Player("No output device available".to_owned()))?;
 
         // Create stream config
         let config = StreamConfig {
@@ -44,19 +44,28 @@ impl CpalOutput {
         }
 
         // Check supported formats
-        let supported_configs = self.device
+        let supported_configs = self
+            .device
             .supported_output_configs()
             .map_err(|e| RmpdError::Player(format!("Failed to get supported configs: {}", e)))?;
 
         // Try to find a suitable format at our sample rate
         let mut found_format = None;
-        tracing::info!("Searching for suitable PCM format at {:?} Hz", self.config.sample_rate);
+        tracing::info!(
+            "Searching for suitable PCM format at {:?} Hz",
+            self.config.sample_rate
+        );
         for config in supported_configs {
             let sample_format = config.sample_format();
             let min_rate = config.min_sample_rate();
             let max_rate = config.max_sample_rate();
 
-            tracing::debug!("  Checking format: {:?}, rates: {:?}-{:?} Hz", sample_format, min_rate, max_rate);
+            tracing::debug!(
+                "  Checking format: {:?}, rates: {:?}-{:?} Hz",
+                sample_format,
+                min_rate,
+                max_rate
+            );
 
             if self.config.sample_rate >= min_rate && self.config.sample_rate <= max_rate {
                 // Prefer F32, but accept I16 or I32 for hardware compatibility
@@ -193,7 +202,10 @@ impl CpalOutput {
                     .map_err(|e| RmpdError::Player(format!("Failed to build I32 stream: {}", e)))?
             }
             _ => {
-                return Err(RmpdError::Player(format!("Unsupported sample format: {:?}", sample_format)));
+                return Err(RmpdError::Player(format!(
+                    "Unsupported sample format: {:?}",
+                    sample_format
+                )));
             }
         };
 
@@ -218,10 +230,10 @@ impl CpalOutput {
         if let Some(ref sender) = self.sample_sender {
             sender
                 .send(samples.to_vec())
-                .map_err(|_| RmpdError::Player("Failed to send samples to output".to_string()))?;
+                .map_err(|_| RmpdError::Player("Failed to send samples to output".to_owned()))?;
             Ok(samples.len())
         } else {
-            Err(RmpdError::Player("Output not started".to_string()))
+            Err(RmpdError::Player("Output not started".to_owned()))
         }
     }
 

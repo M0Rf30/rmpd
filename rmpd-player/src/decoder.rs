@@ -1,7 +1,9 @@
 use rmpd_core::error::{Result, RmpdError};
 use rmpd_core::song::AudioFormat;
 use std::path::Path;
-use symphonia::core::codecs::{BitOrder, ChannelDataLayout, CodecType, DecoderOptions, CODEC_TYPE_NULL};
+use symphonia::core::codecs::{
+    BitOrder, ChannelDataLayout, CodecType, DecoderOptions, CODEC_TYPE_NULL,
+};
 use symphonia::core::errors::Error as SymphoniaError;
 use symphonia::core::formats::{FormatOptions, FormatReader};
 use symphonia::core::io::MediaSourceStream;
@@ -44,7 +46,12 @@ impl SymphoniaDecoder {
 
         // Probe the media source
         let probed = symphonia::default::get_probe()
-            .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
+            .format(
+                &hint,
+                mss,
+                &FormatOptions::default(),
+                &MetadataOptions::default(),
+            )
             .map_err(|e| RmpdError::Player(format!("Failed to probe format: {}", e)))?;
 
         let reader = probed.format;
@@ -54,7 +61,7 @@ impl SymphoniaDecoder {
             .tracks()
             .iter()
             .find(|t| t.codec_params.codec != CODEC_TYPE_NULL)
-            .ok_or_else(|| RmpdError::Player("No audio tracks found".to_string()))?;
+            .ok_or_else(|| RmpdError::Player("No audio tracks found".to_owned()))?;
 
         let track_id = track.id;
         let codec_params = &track.codec_params;
@@ -65,12 +72,10 @@ impl SymphoniaDecoder {
         // Get audio format info
         let sample_rate = codec_params
             .sample_rate
-            .ok_or_else(|| RmpdError::Player("Sample rate not available".to_string()))?;
+            .ok_or_else(|| RmpdError::Player("Sample rate not available".to_owned()))?;
 
         // Channels might not be available until after decoding starts
-        let channels = codec_params
-            .channels
-            .map(|ch| ch.count() as u8);
+        let channels = codec_params.channels.map(|ch| ch.count() as u8);
 
         // Store time base for bitrate calculation
         let time_base = codec_params.time_base;
@@ -80,7 +85,8 @@ impl SymphoniaDecoder {
         let bit_order = codec_params.bit_order;
 
         // Calculate total duration
-        let total_duration = if let (Some(n_frames), Some(tb)) = (codec_params.n_frames, time_base) {
+        let total_duration = if let (Some(n_frames), Some(tb)) = (codec_params.n_frames, time_base)
+        {
             let time = tb.calc_time(n_frames);
             Some(time.seconds as f64 + time.frac)
         } else {
@@ -129,8 +135,9 @@ impl SymphoniaDecoder {
 
                 if samples_to_copy > 0 {
                     let src_offset = self.current_frame as usize;
-                    buffer[samples_written..samples_written + samples_to_copy]
-                        .copy_from_slice(&sample_buf.samples()[src_offset..src_offset + samples_to_copy]);
+                    buffer[samples_written..samples_written + samples_to_copy].copy_from_slice(
+                        &sample_buf.samples()[src_offset..src_offset + samples_to_copy],
+                    );
 
                     samples_written += samples_to_copy;
                     self.current_frame += samples_to_copy as u64;
@@ -150,7 +157,9 @@ impl SymphoniaDecoder {
             // Read next packet
             let packet = match self.reader.next_packet() {
                 Ok(packet) => packet,
-                Err(SymphoniaError::IoError(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                Err(SymphoniaError::IoError(e))
+                    if e.kind() == std::io::ErrorKind::UnexpectedEof =>
+                {
                     // Only treat "end of stream" as actual EOF (per Symphonia docs)
                     if e.to_string().contains("end of stream") {
                         break;
@@ -213,7 +222,8 @@ impl SymphoniaDecoder {
                 self.channels = Some(spec.channels.count() as u8);
             }
 
-            let mut new_sample_buf = symphonia::core::audio::SampleBuffer::<f32>::new(duration, spec);
+            let mut new_sample_buf =
+                symphonia::core::audio::SampleBuffer::<f32>::new(duration, spec);
             new_sample_buf.copy_interleaved_ref(decoded);
 
             self.sample_buf = Some(new_sample_buf);
@@ -225,7 +235,7 @@ impl SymphoniaDecoder {
 
     pub fn seek(&mut self, position: f64) -> Result<()> {
         if position < 0.0 {
-            return Err(RmpdError::Player("Invalid seek position".to_string()));
+            return Err(RmpdError::Player("Invalid seek position".to_owned()));
         }
 
         let time_base = TimeBase::new(1, self.sample_rate);
@@ -237,7 +247,13 @@ impl SymphoniaDecoder {
         let ts = time_base.calc_timestamp(time);
 
         self.reader
-            .seek(symphonia::core::formats::SeekMode::Accurate, symphonia::core::formats::SeekTo::TimeStamp { ts, track_id: self.track_id })
+            .seek(
+                symphonia::core::formats::SeekMode::Accurate,
+                symphonia::core::formats::SeekTo::TimeStamp {
+                    ts,
+                    track_id: self.track_id,
+                },
+            )
             .map_err(|e| RmpdError::Player(format!("Seek failed: {}", e)))?;
 
         self.decoder.reset();
@@ -302,7 +318,10 @@ impl SymphoniaDecoder {
                 return self.read_dsd_raw(buffer);
             }
             Err(e) => {
-                return Err(RmpdError::Player(format!("Failed to read DSD packet: {}", e)));
+                return Err(RmpdError::Player(format!(
+                    "Failed to read DSD packet: {}",
+                    e
+                )));
             }
         };
 

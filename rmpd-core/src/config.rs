@@ -1,7 +1,7 @@
+use crate::error::{Result, RmpdError};
 use camino::Utf8PathBuf;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use crate::error::{RmpdError, Result};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Config {
@@ -106,7 +106,7 @@ pub struct PluginConfig {
     pub disabled: Vec<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 pub struct DatabaseConfig {
     #[serde(default = "default_true")]
     pub auto_update: bool,
@@ -172,31 +172,31 @@ fn default_state_file() -> Utf8PathBuf {
 }
 
 fn default_log_level() -> String {
-    "info".to_string()
+    "info".to_owned()
 }
 
 fn default_charset() -> String {
-    "UTF-8".to_string()
+    "UTF-8".to_owned()
 }
 
 fn default_bind_address() -> String {
-    "127.0.0.1".to_string()
+    "127.0.0.1".to_owned()
 }
 
-fn default_port() -> u16 {
+const fn default_port() -> u16 {
     6600
 }
 
-fn default_max_connections() -> usize {
+const fn default_max_connections() -> usize {
     100
 }
 
-fn default_connection_timeout() -> u64 {
+const fn default_connection_timeout() -> u64 {
     60
 }
 
 fn default_output() -> String {
-    "default".to_string()
+    "default".to_owned()
 }
 
 fn default_buffer_time() -> u32 {
@@ -212,7 +212,7 @@ fn default_true() -> bool {
 }
 
 fn default_enabled_decoders() -> Vec<String> {
-    vec!["symphonia".to_string()]
+    vec!["symphonia".to_owned()]
 }
 
 fn default_plugin_dirs() -> Vec<Utf8PathBuf> {
@@ -264,7 +264,7 @@ impl Config {
             }
         }
 
-        Err(RmpdError::Config("Config file not found".to_string()))
+        Err(RmpdError::Config("Config file not found".to_owned()))
     }
 
     fn expand_paths(&mut self) {

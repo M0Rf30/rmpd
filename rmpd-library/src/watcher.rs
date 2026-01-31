@@ -2,6 +2,7 @@ use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode};
 use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, NoCache};
 use rmpd_core::error::{Result, RmpdError};
 use rmpd_core::event::{Event as RmpdEvent, EventBus};
+use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -19,6 +20,16 @@ pub struct FilesystemWatcher {
     db: Arc<Mutex<Database>>,
     event_bus: EventBus,
     debouncer: Option<Debouncer<RecommendedWatcher, NoCache>>,
+}
+
+impl fmt::Debug for FilesystemWatcher {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FilesystemWatcher")
+            .field("music_dir", &self.music_dir)
+            .field("event_bus", &self.event_bus)
+            .field("debouncer_active", &self.debouncer.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 impl FilesystemWatcher {
@@ -72,7 +83,9 @@ impl FilesystemWatcher {
                 match result {
                     Ok(events) => {
                         for event in events {
-                            if let Err(e) = handle_fs_event(&event, &music_dir, &db, &event_bus).await {
+                            if let Err(e) =
+                                handle_fs_event(&event, &music_dir, &db, &event_bus).await
+                            {
                                 error!("Failed to handle filesystem event: {}", e);
                             }
                         }

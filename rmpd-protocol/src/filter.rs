@@ -1,3 +1,4 @@
+use winnow::ascii::{space0, space1};
 /// MPD Filter Expression Parser
 ///
 /// Implements the MPD filter syntax for find/search commands.
@@ -9,7 +10,7 @@
 /// - Nested: ((TAG == 'A') AND (TAG2 == 'B'))
 use winnow::prelude::*;
 use winnow::token::{take_till, take_while};
-use winnow::ascii::{space0, space1};
+use winnow::ModalResult;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum FilterExpr {
@@ -27,7 +28,7 @@ pub enum FilterExpr {
     Raw(String),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum FilterOp {
     /// == (equals)
     Eq,
@@ -84,7 +85,7 @@ pub fn parse_filter(input: &str) -> Result<FilterExpr, String> {
     filter_expr.parse(input.trim()).map_err(|e| e.to_string())
 }
 
-fn filter_expr(input: &mut &str) -> winnow::ModalResult<FilterExpr> {
+fn filter_expr(input: &mut &str) -> ModalResult<FilterExpr> {
     let _ = space0.parse_next(input)?;
 
     if input.starts_with('(') {
@@ -97,7 +98,7 @@ fn filter_expr(input: &mut &str) -> winnow::ModalResult<FilterExpr> {
     }
 }
 
-fn parse_parenthesized_expr(input: &mut &str) -> winnow::ModalResult<FilterExpr> {
+fn parse_parenthesized_expr(input: &mut &str) -> ModalResult<FilterExpr> {
     let _ = '('.parse_next(input)?;
     let _ = space0.parse_next(input)?;
 
@@ -184,7 +185,12 @@ fn parse_parenthesized_expr(input: &mut &str) -> winnow::ModalResult<FilterExpr>
 
                 let next_operator = match FilterOp::from_str(&next_op) {
                     Some(op) => op,
-                    None => return Ok(FilterExpr::Raw(format!("({} {} {})", next_tag, next_op, next_val))),
+                    None => {
+                        return Ok(FilterExpr::Raw(format!(
+                            "({} {} {})",
+                            next_tag, next_op, next_val
+                        )))
+                    }
                 };
 
                 exprs.push(FilterExpr::Compare {
@@ -207,18 +213,21 @@ fn parse_parenthesized_expr(input: &mut &str) -> winnow::ModalResult<FilterExpr>
             None => return Ok(FilterExpr::Raw(format!("({} {} {})", tag, op_str, value))),
         };
 
-        Ok(FilterExpr::Compare { tag, operator, value })
+        Ok(FilterExpr::Compare {
+            tag,
+            operator,
+            value,
+        })
     }
 }
 
-fn parse_token(input: &mut &str) -> winnow::ModalResult<String> {
-    let token = take_while(1.., |c: char| {
-        !c.is_whitespace() && c != ')' && c != '('
-    }).parse_next(input)?;
+fn parse_token(input: &mut &str) -> ModalResult<String> {
+    let token =
+        take_while(1.., |c: char| !c.is_whitespace() && c != ')' && c != '(').parse_next(input)?;
     Ok(token.to_string())
 }
 
-fn parse_quoted_value(input: &mut &str) -> winnow::ModalResult<String> {
+fn parse_quoted_value(input: &mut &str) -> ModalResult<String> {
     if input.starts_with('\'') {
         // Single-quoted string
         let _ = '\''.parse_next(input)?;
@@ -240,15 +249,17 @@ fn parse_quoted_value(input: &mut &str) -> winnow::ModalResult<String> {
 /// Convert filter expression back to tag/value pairs for backward compatibility
 pub fn filter_to_legacy_pairs(expr: &FilterExpr) -> Vec<(String, String)> {
     match expr {
-        FilterExpr::Compare { tag, operator: _, value } => {
+        FilterExpr::Compare {
+            tag,
+            operator: _,
+            value,
+        } => {
             // For simple comparisons, just return the tag/value pair
             vec![(tag.clone(), value.clone())]
         }
         FilterExpr::And(exprs) => {
             // Flatten all comparisons
-            exprs.iter()
-                .flat_map(filter_to_legacy_pairs)
-                .collect()
+            exprs.iter().flat_map(filter_to_legacy_pairs).collect()
         }
         FilterExpr::Not(inner) => {
             // For negated expressions, try to convert the inner expression
@@ -269,7 +280,11 @@ mod tests {
     fn test_simple_comparison() {
         let expr = parse_filter("(Artist == 'Madonna')").unwrap();
         match expr {
-            FilterExpr::Compare { tag, operator, value } => {
+            FilterExpr::Compare {
+                tag,
+                operator,
+                value,
+            } => {
                 assert_eq!(tag, "Artist");
                 assert_eq!(operator, FilterOp::Eq);
                 assert_eq!(value, "Madonna");
@@ -293,14 +308,12 @@ mod tests {
     fn test_not_expression() {
         let expr = parse_filter("(!(Artist == 'Madonna'))").unwrap();
         match expr {
-            FilterExpr::Not(inner) => {
-                match *inner {
-                    FilterExpr::Compare { tag, .. } => {
-                        assert_eq!(tag, "Artist");
-                    }
-                    _ => panic!("Expected Compare inside Not"),
+            FilterExpr::Not(inner) => match *inner {
+                FilterExpr::Compare { tag, .. } => {
+                    assert_eq!(tag, "Artist");
                 }
-            }
+                _ => panic!("Expected Compare inside Not"),
+            },
             _ => panic!("Expected Not expression"),
         }
     }
@@ -309,7 +322,11 @@ mod tests {
     fn test_contains_operator() {
         let expr = parse_filter("(Title contains 'love')").unwrap();
         match expr {
-            FilterExpr::Compare { tag, operator, value } => {
+            FilterExpr::Compare {
+                tag,
+                operator,
+                value,
+            } => {
                 assert_eq!(tag, "Title");
                 assert_eq!(operator, FilterOp::Contains);
                 assert_eq!(value, "love");

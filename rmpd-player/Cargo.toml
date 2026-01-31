@@ -6,6 +6,11 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[package.metadata.cargo-machete]
+# rubato used for sample rate conversion
+# thiserror used for error handling macros
+ignored = ["rubato", "thiserror"]
+
 [dependencies]
 rmpd-core.workspace = true
 symphonia.workspace = true

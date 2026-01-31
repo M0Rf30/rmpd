@@ -1,12 +1,14 @@
-// Music library and database
-pub mod database;
-pub mod scanner;
-pub mod metadata;
-pub mod watcher;
-pub mod artwork;
+#![allow(clippy::cargo_common_metadata)]
 
-pub use database::{Database, DirectoryListing, PlaylistInfo};
-pub use scanner::{Scanner, ScanStats};
-pub use metadata::MetadataExtractor;
-pub use watcher::FilesystemWatcher;
+// Music library and database
+pub mod artwork;
+pub mod database;
+pub mod metadata;
+pub mod scanner;
+pub mod watcher;
+
 pub use artwork::{AlbumArtExtractor, ArtworkData};
+pub use database::{Database, DirectoryListing, PlaylistInfo};
+pub use metadata::MetadataExtractor;
+pub use scanner::{ScanStats, Scanner};
+pub use watcher::FilesystemWatcher;

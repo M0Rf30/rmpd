@@ -33,7 +33,7 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(log_level))
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(log_level)),
         )
         .init();
 
@@ -47,10 +47,10 @@ async fn main() -> Result<()> {
     };
 
     // Override with CLI arguments
-    let bind_address = args.bind
+    let bind_address = args
+        .bind
         .unwrap_or_else(|| config.network.bind_address.clone());
-    let port = args.port
-        .unwrap_or(config.network.port);
+    let port = args.port.unwrap_or(config.network.port);
 
     let full_address = format!("{}:{}", bind_address, port);
 

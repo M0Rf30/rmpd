@@ -8,6 +8,7 @@ use crate::database::Database;
 
 const MAX_ARTWORK_SIZE: usize = 5 * 1024 * 1024; // 5MB
 
+#[derive(Debug)]
 pub struct AlbumArtExtractor {
     db: Database,
 }
@@ -63,22 +64,17 @@ impl AlbumArtExtractor {
             let mime_type = pic.mime_type().map(|m| m.to_string()).unwrap_or_else(|| {
                 // Try to infer from data
                 if data.starts_with(b"\xFF\xD8\xFF") {
-                    "image/jpeg".to_string()
+                    "image/jpeg".to_owned()
                 } else if data.starts_with(b"\x89PNG\r\n\x1a\n") {
-                    "image/png".to_string()
+                    "image/png".to_owned()
                 } else {
-                    "application/octet-stream".to_string()
+                    "application/octet-stream".to_owned()
                 }
             });
 
             // Store in cache using relative path as key
-            self.db.store_artwork(
-                cache_key,
-                "front",
-                &mime_type,
-                data,
-                &hash,
-            )?;
+            self.db
+                .store_artwork(cache_key, "front", &mime_type, data, &hash)?;
 
             Ok(Some(data.to_vec()))
         } else {
@@ -89,7 +85,12 @@ impl AlbumArtExtractor {
     /// Get album art from cache or extract if not cached
     /// `cache_key`: relative path for cache lookup (e.g., "01.m4a")
     /// `file_path`: absolute path for file reading (e.g., "/home/user/Music/01.m4a")
-    pub fn get_artwork(&self, cache_key: &str, file_path: &str, offset: usize) -> Result<Option<ArtworkData>> {
+    pub fn get_artwork(
+        &self,
+        cache_key: &str,
+        file_path: &str,
+        offset: usize,
+    ) -> Result<Option<ArtworkData>> {
         let data = match self.extract_and_cache(cache_key, file_path)? {
             Some(data) => data,
             None => return Ok(None),
@@ -118,7 +119,7 @@ impl AlbumArtExtractor {
         };
 
         Ok(Some(ArtworkData {
-            mime_type: mime_type.to_string(),
+            mime_type: mime_type.to_owned(),
             total_size: data.len(),
             data: chunk,
         }))
@@ -135,9 +136,10 @@ impl AlbumArtExtractor {
         if let Some(primary_tag) = tagged_file.primary_tag() {
             for pic in primary_tag.pictures() {
                 let pic_type = picture_type_to_string(pic.pic_type());
-                let mime_type = pic.mime_type()
+                let mime_type = pic
+                    .mime_type()
                     .map(|m| m.to_string())
-                    .unwrap_or_else(|| "application/octet-stream".to_string());
+                    .unwrap_or_else(|| "application/octet-stream".to_owned());
 
                 pictures.push(ExtractedPicture {
                     picture_type: pic_type,
@@ -151,12 +153,14 @@ impl AlbumArtExtractor {
     }
 }
 
+#[derive(Debug)]
 pub struct ArtworkData {
     pub mime_type: String,
     pub total_size: usize,
     pub data: Vec<u8>,
 }
 
+#[derive(Debug)]
 pub struct ExtractedPicture {
     pub picture_type: String,
     pub mime_type: String,
@@ -187,5 +191,5 @@ fn picture_type_to_string(pic_type: PictureType) -> String {
         PictureType::PublisherLogo => "publisher_logo",
         _ => "other",
     }
-    .to_string()
+    .to_owned()
 }

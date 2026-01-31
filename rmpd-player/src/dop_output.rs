@@ -1,8 +1,7 @@
 /// DoP-specific audio output using integer samples
 /// DoP requires exact bit patterns, so we use I32 format instead of F32
-
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{Device, Stream, StreamConfig, SampleFormat};
+use cpal::{Device, SampleFormat, Stream, StreamConfig};
 use rmpd_core::error::{Result, RmpdError};
 use std::sync::mpsc::{sync_channel, SyncSender};
 use std::sync::{Arc, Mutex};
@@ -22,18 +21,22 @@ impl DopOutput {
         let host = cpal::default_host();
         let device = host
             .default_output_device()
-            .ok_or_else(|| RmpdError::Player("No output device available".to_string()))?;
+            .ok_or_else(|| RmpdError::Player("No output device available".to_owned()))?;
 
         tracing::info!("Using default ALSA device (should be configured as hw: device)");
 
         // Create stream config for DoP
         let config = StreamConfig {
             channels: channels as u16,
-            sample_rate: sample_rate,
+            sample_rate,
             buffer_size: cpal::BufferSize::Default,
         };
 
-        tracing::info!("DoP output config: {}Hz, {} channels", sample_rate, channels);
+        tracing::info!(
+            "DoP output config: {}Hz, {} channels",
+            sample_rate,
+            channels
+        );
 
         // NOTE: For DoP to work properly, the device must run at the exact sample rate.
         // If PipeWire/PulseAudio is running, it may resample the audio which destroys DoP markers.
@@ -56,29 +59,48 @@ impl DopOutput {
         }
 
         // Check supported formats
-        let supported_configs = self.device
+        let supported_configs = self
+            .device
             .supported_output_configs()
             .map_err(|e| RmpdError::Player(format!("Failed to get supported configs: {}", e)))?;
 
         // Try to find I32 or I24 format at our sample rate
         let mut found_format = None;
-        tracing::info!("Searching for suitable format at {:?} Hz:", self.config.sample_rate);
+        tracing::info!(
+            "Searching for suitable format at {:?} Hz:",
+            self.config.sample_rate
+        );
         for config in supported_configs {
             let sample_format = config.sample_format();
             let min_rate = config.min_sample_rate();
             let max_rate = config.max_sample_rate();
 
-            tracing::info!("  Checking format: {:?}, rates: {:?}-{:?} Hz", sample_format, min_rate, max_rate);
+            tracing::info!(
+                "  Checking format: {:?}, rates: {:?}-{:?} Hz",
+                sample_format,
+                min_rate,
+                max_rate
+            );
 
             if self.config.sample_rate >= min_rate && self.config.sample_rate <= max_rate {
                 // Prefer I24 over I32 for DoP (24-bit format is more standard for DoP)
                 if sample_format == SampleFormat::I24 {
                     found_format = Some(sample_format);
-                    tracing::info!("Found suitable format: {:?} at {:?}-{:?} Hz", sample_format, min_rate, max_rate);
+                    tracing::info!(
+                        "Found suitable format: {:?} at {:?}-{:?} Hz",
+                        sample_format,
+                        min_rate,
+                        max_rate
+                    );
                     break;
                 } else if sample_format == SampleFormat::I32 && found_format.is_none() {
                     found_format = Some(sample_format);
-                    tracing::info!("Found suitable format: {:?} at {:?}-{:?} Hz", sample_format, min_rate, max_rate);
+                    tracing::info!(
+                        "Found suitable format: {:?} at {:?}-{:?} Hz",
+                        sample_format,
+                        min_rate,
+                        max_rate
+                    );
                 }
             }
         }
@@ -198,7 +220,7 @@ impl DopOutput {
         } else if sample_rate_hz <= 400000 {
             100 // DSD128
         } else {
-            50  // DSD256 and above
+            50 // DSD256 and above
         };
         let primer_frames = (sample_rate_hz * primer_duration_ms) / 1000;
         let mut primer_samples = Vec::with_capacity(primer_frames * self.config.channels as usize);
@@ -217,12 +239,16 @@ impl DopOutput {
         // Send primer data in smaller chunks to avoid blocking
         let chunk_size = self.config.sample_rate as usize / 50 * self.config.channels as usize; // ~20ms chunks
         for chunk in primer_samples.chunks(chunk_size) {
-            tx.send(chunk.to_vec())
-                .map_err(|e| RmpdError::Player(format!("Failed to send DoP primer chunk: {}", e)))?;
+            tx.send(chunk.to_vec()).map_err(|e| {
+                RmpdError::Player(format!("Failed to send DoP primer chunk: {}", e))
+            })?;
         }
 
-        tracing::info!("DoP primer sent ({} frames = {}ms), DAC should detect DSD format now",
-                      primer_frames, (primer_frames * 1000) / self.config.sample_rate as usize);
+        tracing::info!(
+            "DoP primer sent ({} frames = {}ms), DAC should detect DSD format now",
+            primer_frames,
+            (primer_frames * 1000) / self.config.sample_rate as usize
+        );
 
         Ok(())
     }
@@ -234,12 +260,12 @@ impl DopOutput {
         }
 
         if let Some(ref sender) = self.sample_sender {
-            sender
-                .send(samples.to_vec())
-                .map_err(|_| RmpdError::Player("Failed to send DoP samples to output".to_string()))?;
+            sender.send(samples.to_vec()).map_err(|_| {
+                RmpdError::Player("Failed to send DoP samples to output".to_owned())
+            })?;
             Ok(samples.len())
         } else {
-            Err(RmpdError::Player("DoP output not started".to_string()))
+            Err(RmpdError::Player("DoP output not started".to_owned()))
         }
     }
 
@@ -270,7 +296,8 @@ impl DopOutput {
 
         if let Some(ref sender) = self.sample_sender {
             let reset_frames = self.config.sample_rate as usize / 10; // 100ms
-            let mut reset_samples = Vec::with_capacity(reset_frames * self.config.channels as usize);
+            let mut reset_samples =
+                Vec::with_capacity(reset_frames * self.config.channels as usize);
 
             // Send pure silence WITHOUT DoP markers (0x00000000)
             // This signals to the DAC that we're back in regular PCM mode

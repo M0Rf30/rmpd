@@ -70,17 +70,21 @@ impl Event {
         match self {
             // Only notify idle for significant player events (state/song changes)
             // NOT for position/bitrate changes - those are too frequent and should be polled
-            Event::PlayerStateChanged(_) | Event::SongChanged(_) | Event::SongFinished => &[Subsystem::Player],
+            Event::PlayerStateChanged(_) | Event::SongChanged(_) | Event::SongFinished => {
+                &[Subsystem::Player]
+            }
             // Position and bitrate changes are internal - don't notify idle
             Event::PositionChanged(_) | Event::BitrateChanged(_) => &[],
             Event::VolumeChanged(_) => &[Subsystem::Mixer],
             Event::QueueChanged => &[Subsystem::Playlist],
             Event::QueueOptionsChanged => &[Subsystem::Options],
-            Event::DatabaseUpdateStarted | Event::DatabaseUpdateProgress { .. } =>
-                &[Subsystem::Update],
+            Event::DatabaseUpdateStarted | Event::DatabaseUpdateProgress { .. } => {
+                &[Subsystem::Update]
+            }
             Event::DatabaseUpdateFinished => &[Subsystem::Database, Subsystem::Update],
-            Event::SongAdded(_) | Event::SongUpdated(_) | Event::SongDeleted { .. } =>
-                &[Subsystem::Database],
+            Event::SongAdded(_) | Event::SongUpdated(_) | Event::SongDeleted { .. } => {
+                &[Subsystem::Database]
+            }
             Event::OutputsChanged => &[Subsystem::Output],
             Event::PartitionChanged(_) => &[Subsystem::Partition],
             Event::FilesystemWatchStarted | Event::FilesystemWatchStopped => &[],
@@ -90,7 +94,7 @@ impl Event {
 }
 
 /// Central event bus
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct EventBus {
     sender: broadcast::Sender<Event>,
 }

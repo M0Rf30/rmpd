@@ -6,6 +6,7 @@ use rmpd_core::song::Song;
 use std::fs;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+#[derive(Debug, Copy, Clone)]
 pub struct MetadataExtractor;
 
 impl MetadataExtractor {
@@ -35,7 +36,9 @@ impl MetadataExtractor {
         let bitrate = properties.audio_bitrate();
 
         // Extract tags
-        let tag = tagged_file.primary_tag().or_else(|| tagged_file.first_tag());
+        let tag = tagged_file
+            .primary_tag()
+            .or_else(|| tagged_file.first_tag());
 
         eprintln!("DEBUG: Extracting metadata from: {}", path);
         eprintln!("DEBUG: Tag present: {}", tag.is_some());
@@ -67,16 +70,13 @@ impl MetadataExtractor {
                 tag.title().map(|s| s.to_string()),
                 tag.artist().map(|s| s.to_string()),
                 tag.album().map(|s| s.to_string()),
-                tag.get_string(ItemKey::AlbumArtist)
-                    .map(|s| s.to_string()),
+                tag.get_string(ItemKey::AlbumArtist).map(|s| s.to_string()),
                 tag.track(),
                 tag.disk(),
                 tag.date().map(|d| d.to_string()),
                 tag.genre().map(|s| s.to_string()),
-                tag.get_string(ItemKey::Composer)
-                    .map(|s| s.to_string()),
-                tag.get_string(ItemKey::Performer)
-                    .map(|s| s.to_string()),
+                tag.get_string(ItemKey::Composer).map(|s| s.to_string()),
+                tag.get_string(ItemKey::Performer).map(|s| s.to_string()),
                 tag.comment().map(|s| s.to_string()),
                 // MusicBrainz IDs
                 tag.get_string(ItemKey::MusicBrainzTrackId)
@@ -98,11 +98,13 @@ impl MetadataExtractor {
                     .map(|s| s.to_string()),
                 tag.get_string(ItemKey::OriginalReleaseDate)
                     .map(|s| s.to_string()),
-                tag.get_string(ItemKey::Label)
-                    .map(|s| s.to_string()),
+                tag.get_string(ItemKey::Label).map(|s| s.to_string()),
             )
         } else {
-            (None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None)
+            (
+                None, None, None, None, None, None, None, None, None, None, None, None, None, None,
+                None, None, None, None, None, None, None,
+            )
         };
 
         eprintln!("DEBUG: Extracted MB TrackID: {:?}", musicbrainz_trackid);
@@ -168,12 +170,22 @@ impl MetadataExtractor {
         })
     }
 
-
     pub fn is_supported_file(path: &Utf8PathBuf) -> bool {
         if let Some(ext) = path.extension() {
             matches!(
                 ext.to_lowercase().as_str(),
-                "mp3" | "flac" | "ogg" | "opus" | "m4a" | "aac" | "wav" | "wma" | "ape" | "wv" | "dsf" | "dff"
+                "mp3"
+                    | "flac"
+                    | "ogg"
+                    | "opus"
+                    | "m4a"
+                    | "aac"
+                    | "wav"
+                    | "wma"
+                    | "ape"
+                    | "wv"
+                    | "dsf"
+                    | "dff"
             )
         } else {
             false

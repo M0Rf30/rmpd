@@ -2,6 +2,7 @@ use rmpd_core::event::EventBus;
 use rmpd_core::queue::Queue;
 use rmpd_core::state::PlayerStatus;
 use rmpd_player::PlaybackEngine;
+use std::fmt;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
@@ -29,11 +30,24 @@ pub struct AppState {
     pub start_time: Instant,
 }
 
+impl fmt::Debug for AppState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AppState")
+            .field("event_bus", &self.event_bus)
+            .field("db_path", &self.db_path)
+            .field("music_dir", &self.music_dir)
+            .field("start_time", &self.start_time)
+            .finish_non_exhaustive()
+    }
+}
+
 impl AppState {
     pub fn new() -> Self {
         let event_bus = EventBus::new();
         let status = Arc::new(RwLock::new(PlayerStatus::default()));
-        let atomic_state = Arc::new(std::sync::atomic::AtomicU8::new(rmpd_core::state::PlayerState::Stop as u8));
+        let atomic_state = Arc::new(std::sync::atomic::AtomicU8::new(
+            rmpd_core::state::PlayerState::Stop as u8,
+        ));
         let engine = PlaybackEngine::new(event_bus.clone(), status.clone(), atomic_state.clone());
 
         // Create default output
@@ -60,7 +74,9 @@ impl AppState {
     pub fn with_paths(db_path: String, music_dir: String) -> Self {
         let event_bus = EventBus::new();
         let status = Arc::new(RwLock::new(PlayerStatus::default()));
-        let atomic_state = Arc::new(std::sync::atomic::AtomicU8::new(rmpd_core::state::PlayerState::Stop as u8));
+        let atomic_state = Arc::new(std::sync::atomic::AtomicU8::new(
+            rmpd_core::state::PlayerState::Stop as u8,
+        ));
         let engine = PlaybackEngine::new(event_bus.clone(), status.clone(), atomic_state.clone());
 
         // Create default output

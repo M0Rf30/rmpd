@@ -3,6 +3,7 @@ use rmpd_core::state::PlayerStatus;
 use std::fmt::Write as FmtWrite;
 
 /// Response type that can be either text or binary
+#[derive(Debug)]
 pub enum Response {
     Text(String),
     Binary(Vec<u8>),
@@ -29,6 +30,7 @@ impl From<Vec<u8>> for Response {
     }
 }
 
+#[derive(Debug)]
 pub struct ResponseBuilder {
     buffer: String,
     binary_data: Option<Vec<u8>>,
@@ -76,7 +78,10 @@ impl ResponseBuilder {
     }
 
     pub fn error(code: i32, command_list_num: i32, command: &str, message: &str) -> String {
-        format!("ACK [{}@{}] {{{}}} {}\n", code, command_list_num, command, message)
+        format!(
+            "ACK [{}@{}] {{{}}} {}\n",
+            code, command_list_num, command, message
+        )
     }
 
     pub fn field(&mut self, key: &str, value: impl std::fmt::Display) -> &mut Self {
@@ -84,7 +89,11 @@ impl ResponseBuilder {
         self
     }
 
-    pub fn optional_field<T: std::fmt::Display>(&mut self, key: &str, value: Option<T>) -> &mut Self {
+    pub fn optional_field<T: std::fmt::Display>(
+        &mut self,
+        key: &str,
+        value: Option<T>,
+    ) -> &mut Self {
         if let Some(val) = value {
             self.field(key, val);
         }
@@ -135,23 +144,28 @@ impl ResponseBuilder {
         // Show time and elapsed fields
         if let Some(elapsed) = status.elapsed {
             if let Some(duration) = status.duration {
-                self.field("time", format!("{}:{}",
-                    elapsed.as_secs(),
-                    duration.as_secs()
-                ));
+                self.field(
+                    "time",
+                    format!("{}:{}", elapsed.as_secs(), duration.as_secs()),
+                );
             }
             self.field("elapsed", format!("{:.3}", elapsed.as_secs_f64()));
         }
 
-        self.optional_field("duration", status.duration.map(|d| format!("{:.3}", d.as_secs_f64())));
+        self.optional_field(
+            "duration",
+            status.duration.map(|d| format!("{:.3}", d.as_secs_f64())),
+        );
         self.optional_field("bitrate", status.bitrate);
 
         if let Some(fmt) = status.audio_format {
-            self.field("audio", format!("{}:{}:{}",
-                fmt.sample_rate,
-                fmt.bits_per_sample,
-                fmt.channels
-            ));
+            self.field(
+                "audio",
+                format!(
+                    "{}:{}:{}",
+                    fmt.sample_rate, fmt.bits_per_sample, fmt.channels
+                ),
+            );
         }
 
         if let Some(next) = &status.next_song {
@@ -194,9 +208,18 @@ impl ResponseBuilder {
         self.optional_field("MUSICBRAINZ_TRACKID", song.musicbrainz_trackid.as_ref());
         self.optional_field("MUSICBRAINZ_ALBUMID", song.musicbrainz_albumid.as_ref());
         self.optional_field("MUSICBRAINZ_ARTISTID", song.musicbrainz_artistid.as_ref());
-        self.optional_field("MUSICBRAINZ_ALBUMARTISTID", song.musicbrainz_albumartistid.as_ref());
-        self.optional_field("MUSICBRAINZ_RELEASEGROUPID", song.musicbrainz_releasegroupid.as_ref());
-        self.optional_field("MUSICBRAINZ_RELEASETRACKID", song.musicbrainz_releasetrackid.as_ref());
+        self.optional_field(
+            "MUSICBRAINZ_ALBUMARTISTID",
+            song.musicbrainz_albumartistid.as_ref(),
+        );
+        self.optional_field(
+            "MUSICBRAINZ_RELEASEGROUPID",
+            song.musicbrainz_releasegroupid.as_ref(),
+        );
+        self.optional_field(
+            "MUSICBRAINZ_RELEASETRACKID",
+            song.musicbrainz_releasetrackid.as_ref(),
+        );
 
         // Extended metadata
         self.optional_field("ArtistSort", song.artist_sort.as_ref());
@@ -213,7 +236,16 @@ impl ResponseBuilder {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn stats(&mut self, artists: u32, albums: u32, songs: u32, uptime: u64, db_playtime: u64, db_update: i64, playtime: u64) -> &mut Self {
+    pub fn stats(
+        &mut self,
+        artists: u32,
+        albums: u32,
+        songs: u32,
+        uptime: u64,
+        db_playtime: u64,
+        db_update: i64,
+        playtime: u64,
+    ) -> &mut Self {
         self.field("artists", artists);
         self.field("albums", albums);
         self.field("songs", songs);

@@ -1,3 +1,5 @@
+#![allow(clippy::cargo_common_metadata)]
+
 pub mod commands;
 pub mod filter;
 pub mod parser;

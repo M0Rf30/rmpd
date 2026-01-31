@@ -1,11 +1,12 @@
 use rmpd_core::error::Result;
-use rmpd_core::state::{PlayerState, PlayerStatus};
 use rmpd_core::queue::Queue;
+use rmpd_core::state::{PlayerState, PlayerStatus};
 use std::fs;
 use std::path::Path;
 use tracing::{debug, info};
 
 /// Save and restore MPD-compatible state file
+#[derive(Debug)]
 pub struct StateFile {
     path: String,
 }

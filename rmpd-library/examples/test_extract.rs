@@ -1,5 +1,5 @@
-use rmpd_library::metadata::MetadataExtractor;
 use camino::Utf8PathBuf;
+use rmpd_library::metadata::MetadataExtractor;
 
 fn main() {
     // Test with DSD file
@@ -27,7 +27,9 @@ fn main() {
     println!("\n---\n");
 
     // Test with MP3 file
-    let mp3_path = Utf8PathBuf::from("/home/gianluca/Musica/Amon Tobin/Supermodified/01 Amon Tobin - Get Your Snack On.mp3");
+    let mp3_path = Utf8PathBuf::from(
+        "/home/gianluca/Musica/Amon Tobin/Supermodified/01 Amon Tobin - Get Your Snack On.mp3",
+    );
     println!("Testing MP3 extraction from: {}", mp3_path);
     match MetadataExtractor::extract_from_file(&mp3_path) {
         Ok(song) => {

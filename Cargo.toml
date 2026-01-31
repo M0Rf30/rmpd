@@ -16,6 +16,10 @@ edition = "2021"
 authors = ["rmpd contributors"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/M0Rf30/rmpd"
+description = "A modern Music Player Daemon with DSD support"
+readme = "README.md"
+keywords = ["mpd", "audio", "player", "dsd", "music"]
+categories = ["multimedia::audio", "network-programming"]
 
 [workspace.dependencies]
 # Core dependencies

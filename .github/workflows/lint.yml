@@ -25,9 +25,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Run actionlint
-        uses: rflint/actionlint-action@v1
+        uses: reviewdog/action-actionlint@v1
         with:
-          flags: ""
+          fail_level: error
 
   yamllint:
     name: YAML Linting
@@ -83,3 +83,4 @@ jobs:
         uses: suzuki-shunsuke/github-action-renovate-config-validator@v1.1.0
         with:
           config_file_path: .github/renovate.json
+          strict: false

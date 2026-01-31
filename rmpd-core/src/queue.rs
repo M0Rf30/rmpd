@@ -25,11 +25,7 @@ impl Queue {
         self.next_id += 1;
 
         let position = self.items.len() as u32;
-        self.items.push(QueueItem {
-            id,
-            position,
-            song,
-        });
+        self.items.push(QueueItem { id, position, song });
 
         self.version += 1;
         id
@@ -87,8 +83,8 @@ impl Queue {
     }
 
     pub fn shuffle(&mut self) {
-        use rand::seq::SliceRandom;
         use rand::rng;
+        use rand::seq::SliceRandom;
 
         self.items.shuffle(&mut rng());
         self.reindex();
@@ -96,8 +92,8 @@ impl Queue {
     }
 
     pub fn shuffle_range(&mut self, start: u32, end: u32) {
-        use rand::seq::SliceRandom;
         use rand::rng;
+        use rand::seq::SliceRandom;
 
         let start_idx = start as usize;
         let end_idx = end.min(self.items.len() as u32) as usize;
@@ -211,6 +207,16 @@ mod tests {
             composer: None,
             performer: None,
             comment: None,
+            musicbrainz_trackid: None,
+            musicbrainz_albumid: None,
+            musicbrainz_artistid: None,
+            musicbrainz_albumartistid: None,
+            musicbrainz_releasegroupid: None,
+            musicbrainz_releasetrackid: None,
+            artist_sort: None,
+            album_artist_sort: None,
+            original_date: None,
+            label: None,
             sample_rate: None,
             channels: None,
             bits_per_sample: None,

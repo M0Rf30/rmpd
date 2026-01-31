@@ -8,6 +8,7 @@ use tracing::{debug, info, warn};
 use crate::database::Database;
 use crate::metadata::MetadataExtractor;
 
+#[derive(Debug)]
 pub struct Scanner {
     event_bus: EventBus,
     music_directory: Option<Utf8PathBuf>,
@@ -198,7 +199,7 @@ impl Scanner {
     }
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Copy, Clone)]
 pub struct ScanStats {
     pub scanned: u32,
     pub added: u32,

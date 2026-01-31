@@ -1,15 +1,15 @@
 use crate::decoder::SymphoniaDecoder;
-use crate::output::CpalOutput;
 use crate::dop::DopEncoder;
 use crate::dop_output::DopOutput;
+use crate::output::CpalOutput;
 use rmpd_core::error::Result;
 use rmpd_core::event::{Event, EventBus};
 use rmpd_core::song::Song;
 use rmpd_core::state::PlayerState;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
-use std::sync::Arc;
 use std::sync::mpsc;
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration as StdDuration;
 use tokio::sync::RwLock;
@@ -54,11 +54,14 @@ impl PlaybackEngine {
 
     pub async fn seek(&self, position: f64) -> Result<()> {
         if let Some(ref tx) = self.command_tx {
-            tx.send(PlaybackCommand::Seek(position))
-                .map_err(|_| rmpd_core::error::RmpdError::Player("Failed to send seek command".to_string()))?;
+            tx.send(PlaybackCommand::Seek(position)).map_err(|_| {
+                rmpd_core::error::RmpdError::Player("Failed to send seek command".to_owned())
+            })?;
             Ok(())
         } else {
-            Err(rmpd_core::error::RmpdError::Player("No active playback".to_string()))
+            Err(rmpd_core::error::RmpdError::Player(
+                "No active playback".to_owned(),
+            ))
         }
     }
 
@@ -87,7 +90,15 @@ impl PlaybackEngine {
         let atomic_state_clone = self.atomic_state.clone();
 
         let handle = thread::spawn(move || {
-            if let Err(e) = Self::playback_thread(song_path.as_std_path(), status_clone, atomic_state_clone, event_bus, stop_flag, volume, command_rx) {
+            if let Err(e) = Self::playback_thread(
+                song_path.as_std_path(),
+                status_clone,
+                atomic_state_clone,
+                event_bus,
+                stop_flag,
+                volume,
+                command_rx,
+            ) {
                 error!("Playback error: {}", e);
             }
         });
@@ -95,7 +106,8 @@ impl PlaybackEngine {
         self.playback_thread = Some(handle);
 
         // Update atomic state (caller must update status to avoid deadlock and emit events)
-        self.atomic_state.store(PlayerState::Play as u8, Ordering::SeqCst);
+        self.atomic_state
+            .store(PlayerState::Play as u8, Ordering::SeqCst);
 
         Ok(())
     }
@@ -105,8 +117,8 @@ impl PlaybackEngine {
         let current = self.atomic_state.load(Ordering::SeqCst);
         let new_state = match current {
             1 => PlayerState::Pause as u8, // Play -> Pause
-            2 => PlayerState::Play as u8,   // Pause -> Play
-            _ => return Ok(()),             // Stop -> do nothing
+            2 => PlayerState::Play as u8,  // Pause -> Play
+            _ => return Ok(()),            // Stop -> do nothing
         };
         self.atomic_state.store(new_state, Ordering::SeqCst);
         Ok(())
@@ -152,7 +164,8 @@ impl PlaybackEngine {
         }
 
         // Update atomic state (caller must update status to avoid deadlock)
-        self.atomic_state.store(PlayerState::Stop as u8, Ordering::SeqCst);
+        self.atomic_state
+            .store(PlayerState::Stop as u8, Ordering::SeqCst);
         *self.current_song.write().await = None;
 
         Ok(())
@@ -204,7 +217,14 @@ impl PlaybackEngine {
 
         if is_dsd {
             // Handle DSD playback with DoP encoding
-            return Self::playback_thread_dsd(decoder, atomic_state, event_bus, stop_flag, volume, command_rx);
+            return Self::playback_thread_dsd(
+                decoder,
+                atomic_state,
+                event_bus,
+                stop_flag,
+                volume,
+                command_rx,
+            );
         }
 
         // Standard PCM playback
@@ -239,7 +259,7 @@ impl PlaybackEngine {
                             total_samples_played = (position * samples_per_second as f64) as u64;
                             // Emit position change event
                             event_bus.emit(Event::PositionChanged(
-                                std::time::Duration::from_secs_f64(position)
+                                std::time::Duration::from_secs_f64(position),
                             ));
                         }
                     }
@@ -268,13 +288,20 @@ impl PlaybackEngine {
 
             if samples_read == 0 {
                 // End of stream
-                debug!("End of stream reached, total samples decoded: {}", total_samples_played);
+                debug!(
+                    "End of stream reached, total samples decoded: {}",
+                    total_samples_played
+                );
                 event_bus.emit(Event::SongFinished);
                 break;
             }
 
             if samples_read < buffer.len() {
-                debug!("Partial read: {} samples (buffer size: {})", samples_read, buffer.len());
+                debug!(
+                    "Partial read: {} samples (buffer size: {})",
+                    samples_read,
+                    buffer.len()
+                );
             }
 
             // Apply volume - read and release lock immediately
@@ -295,9 +322,9 @@ impl PlaybackEngine {
             // Emit position update event every ~1 second of audio (throttled)
             if total_samples_played % samples_per_second < (samples_read as u64) {
                 let elapsed_seconds = total_samples_played as f64 / samples_per_second as f64;
-                event_bus.emit(Event::PositionChanged(
-                    std::time::Duration::from_secs_f64(elapsed_seconds)
-                ));
+                event_bus.emit(Event::PositionChanged(std::time::Duration::from_secs_f64(
+                    elapsed_seconds,
+                )));
 
                 // Also emit current bitrate (for VBR files this changes during playback)
                 let current_bitrate = decoder.current_bitrate();
@@ -318,26 +345,42 @@ impl PlaybackEngine {
         atomic_state: Arc<AtomicU8>,
         event_bus: EventBus,
         stop_flag: Arc<AtomicBool>,
-        _volume: Arc<RwLock<u8>>,  // Unused: DoP volume controlled by system mixer
+        _volume: Arc<RwLock<u8>>, // Unused: DoP volume controlled by system mixer
         command_rx: mpsc::Receiver<PlaybackCommand>,
     ) -> Result<()> {
         let dsd_sample_rate = decoder.sample_rate();
         let channels = decoder.channels();
 
         // Get DSD metadata for proper encoding
-        let channel_layout = decoder.channel_data_layout()
+        let channel_layout = decoder
+            .channel_data_layout()
             .unwrap_or(symphonia::core::codecs::ChannelDataLayout::Planar);
-        let bit_order = decoder.bit_order()
+        let bit_order = decoder
+            .bit_order()
             .unwrap_or(symphonia::core::codecs::BitOrder::LsbFirst);
 
-        info!("DSD playback: {} Hz, {} channels", dsd_sample_rate, channels);
-        info!("DSD format: channel_layout={:?}, bit_order={:?}", channel_layout, bit_order);
+        info!(
+            "DSD playback: {} Hz, {} channels",
+            dsd_sample_rate, channels
+        );
+        info!(
+            "DSD format: channel_layout={:?}, bit_order={:?}",
+            channel_layout, bit_order
+        );
 
         // Create DoP encoder
-        let mut dop_encoder = DopEncoder::new(dsd_sample_rate, channels as usize, channel_layout, bit_order)?;
+        let mut dop_encoder = DopEncoder::new(
+            dsd_sample_rate,
+            channels as usize,
+            channel_layout,
+            bit_order,
+        )?;
         let pcm_sample_rate = dop_encoder.pcm_sample_rate();
 
-        info!("DoP encoding: DSD {} Hz -> PCM {} Hz", dsd_sample_rate, pcm_sample_rate);
+        info!(
+            "DoP encoding: DSD {} Hz -> PCM {} Hz",
+            dsd_sample_rate, pcm_sample_rate
+        );
 
         info!("Creating DoP output with {} Hz", pcm_sample_rate);
 
@@ -381,7 +424,7 @@ impl PlaybackEngine {
                         } else {
                             total_dsd_bytes = (position * dsd_bytes_per_second as f64) as u64;
                             event_bus.emit(Event::PositionChanged(
-                                std::time::Duration::from_secs_f64(position)
+                                std::time::Duration::from_secs_f64(position),
                             ));
                         }
                     }
@@ -429,20 +472,27 @@ impl PlaybackEngine {
                 info!("Encoded to {} DoP samples", dop_i32_buffer.len());
                 // Log first few samples to verify DoP markers
                 if dop_i32_buffer.len() >= 4 {
-                    info!("First DoP samples (left-aligned): 0x{:08x}, 0x{:08x}, 0x{:08x}, 0x{:08x}",
-                          dop_i32_buffer[0], dop_i32_buffer[1], dop_i32_buffer[2], dop_i32_buffer[3]);
-                    info!("Marker bytes (MSB): 0x{:02x}, 0x{:02x}, 0x{:02x}, 0x{:02x}",
-                          (dop_i32_buffer[0] >> 24) & 0xFF,
-                          (dop_i32_buffer[1] >> 24) & 0xFF,
-                          (dop_i32_buffer[2] >> 24) & 0xFF,
-                          (dop_i32_buffer[3] >> 24) & 0xFF);
+                    info!(
+                        "First DoP samples (left-aligned): 0x{:08x}, 0x{:08x}, 0x{:08x}, 0x{:08x}",
+                        dop_i32_buffer[0], dop_i32_buffer[1], dop_i32_buffer[2], dop_i32_buffer[3]
+                    );
+                    info!(
+                        "Marker bytes (MSB): 0x{:02x}, 0x{:02x}, 0x{:02x}, 0x{:02x}",
+                        (dop_i32_buffer[0] >> 24) & 0xFF,
+                        (dop_i32_buffer[1] >> 24) & 0xFF,
+                        (dop_i32_buffer[2] >> 24) & 0xFF,
+                        (dop_i32_buffer[3] >> 24) & 0xFF
+                    );
                 }
             }
 
             // Write i32 DoP samples directly to preserve marker precision
             // Note: Volume control for DoP is handled by the system mixer
             if total_dsd_bytes == 0 {
-                info!("Writing {} i32 DoP samples to output...", dop_i32_buffer.len());
+                info!(
+                    "Writing {} i32 DoP samples to output...",
+                    dop_i32_buffer.len()
+                );
             }
             match output.write(&dop_i32_buffer) {
                 Ok(_) => {
@@ -461,17 +511,19 @@ impl PlaybackEngine {
 
             // Log every few seconds
             if total_dsd_bytes % (dsd_bytes_per_second * 5) < (bytes_read as u64) {
-                info!("DSD playback progress: {:.1}s, {} bytes processed",
-                      total_dsd_bytes as f64 / dsd_bytes_per_second as f64,
-                      total_dsd_bytes);
+                info!(
+                    "DSD playback progress: {:.1}s, {} bytes processed",
+                    total_dsd_bytes as f64 / dsd_bytes_per_second as f64,
+                    total_dsd_bytes
+                );
             }
 
             // Emit position update every ~1 second
             if total_dsd_bytes % dsd_bytes_per_second < (bytes_read as u64) {
                 let elapsed_seconds = total_dsd_bytes as f64 / dsd_bytes_per_second as f64;
-                event_bus.emit(Event::PositionChanged(
-                    std::time::Duration::from_secs_f64(elapsed_seconds)
-                ));
+                event_bus.emit(Event::PositionChanged(std::time::Duration::from_secs_f64(
+                    elapsed_seconds,
+                )));
 
                 // DSD has fixed bitrate
                 let bitrate_kbps = (dsd_sample_rate / 1000) * channels as u32;

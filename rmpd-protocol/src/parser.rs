@@ -1,8 +1,8 @@
+use winnow::ascii::space0;
+use winnow::combinator::opt;
+use winnow::error::{ContextError, ErrMode};
 use winnow::prelude::*;
 use winnow::token::{take_till, take_while};
-use winnow::combinator::opt;
-use winnow::ascii::space0;
-use winnow::error::{ContextError, ErrMode};
 
 // Type alias for parser results (winnow 0.7 compatibility)
 type PResult<O> = Result<O, ErrMode<ContextError>>;
@@ -10,27 +10,66 @@ type PResult<O> = Result<O, ErrMode<ContextError>>;
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
     // Playback control
-    Play { position: Option<u32> },
-    PlayId { id: Option<u32> },
-    Pause { state: Option<bool> },
+    Play {
+        position: Option<u32>,
+    },
+    PlayId {
+        id: Option<u32>,
+    },
+    Pause {
+        state: Option<bool>,
+    },
     Stop,
     Next,
     Previous,
-    Seek { position: u32, time: f64 },
-    SeekId { id: u32, time: f64 },
-    SeekCur { time: f64, relative: bool },
+    Seek {
+        position: u32,
+        time: f64,
+    },
+    SeekId {
+        id: u32,
+        time: f64,
+    },
+    SeekCur {
+        time: f64,
+        relative: bool,
+    },
 
     // Queue management
-    Add { uri: String, position: Option<u32> },
-    AddId { uri: String, position: Option<u32> },
-    Delete { target: DeleteTarget },
-    DeleteId { id: u32 },
+    Add {
+        uri: String,
+        position: Option<u32>,
+    },
+    AddId {
+        uri: String,
+        position: Option<u32>,
+    },
+    Delete {
+        target: DeleteTarget,
+    },
+    DeleteId {
+        id: u32,
+    },
     Clear,
-    Move { from: MoveFrom, to: u32 },
-    MoveId { id: u32, to: u32 },
-    Shuffle { range: Option<(u32, u32)> },
-    Swap { pos1: u32, pos2: u32 },
-    SwapId { id1: u32, id2: u32 },
+    Move {
+        from: MoveFrom,
+        to: u32,
+    },
+    MoveId {
+        id: u32,
+        to: u32,
+    },
+    Shuffle {
+        range: Option<(u32, u32)>,
+    },
+    Swap {
+        pos1: u32,
+        pos2: u32,
+    },
+    SwapId {
+        id1: u32,
+        id2: u32,
+    },
 
     // Status
     Status,
@@ -39,85 +78,214 @@ pub enum Command {
     ClearError,
 
     // Queue inspection
-    PlaylistInfo { range: Option<(u32, u32)> },
-    PlaylistId { id: Option<u32> },
-    Playlist,  // Deprecated, use PlaylistInfo
-    PlChanges { version: u32, range: Option<(u32, u32)> },
-    PlChangesPosId { version: u32, range: Option<(u32, u32)> },
-    PlaylistFind { tag: String, value: String },
-    PlaylistSearch { tag: String, value: String },
+    PlaylistInfo {
+        range: Option<(u32, u32)>,
+    },
+    PlaylistId {
+        id: Option<u32>,
+    },
+    Playlist, // Deprecated, use PlaylistInfo
+    PlChanges {
+        version: u32,
+        range: Option<(u32, u32)>,
+    },
+    PlChangesPosId {
+        version: u32,
+        range: Option<(u32, u32)>,
+    },
+    PlaylistFind {
+        tag: String,
+        value: String,
+    },
+    PlaylistSearch {
+        tag: String,
+        value: String,
+    },
 
     // Volume
-    SetVol { volume: u8 },
-    Volume { change: i8 },
+    SetVol {
+        volume: u8,
+    },
+    Volume {
+        change: i8,
+    },
     GetVol,
 
     // Options
-    Repeat { enabled: bool },
-    Random { enabled: bool },
-    Single { mode: String },
-    Consume { mode: String },
-    Crossfade { seconds: u32 },
-    ReplayGainMode { mode: String },
+    Repeat {
+        enabled: bool,
+    },
+    Random {
+        enabled: bool,
+    },
+    Single {
+        mode: String,
+    },
+    Consume {
+        mode: String,
+    },
+    Crossfade {
+        seconds: u32,
+    },
+    ReplayGainMode {
+        mode: String,
+    },
     ReplayGainStatus,
 
     // Connection
     Close,
     Ping,
-    Password { password: String },
-    BinaryLimit { size: u32 },
-    Protocol { subcommand: Option<ProtocolSubcommand> },
+    Password {
+        password: String,
+    },
+    BinaryLimit {
+        size: u32,
+    },
+    Protocol {
+        subcommand: Option<ProtocolSubcommand>,
+    },
 
     // Reflection
     Commands,
     NotCommands,
-    TagTypes { subcommand: Option<TagTypesSubcommand> },
+    TagTypes {
+        subcommand: Option<TagTypesSubcommand>,
+    },
     UrlHandlers,
     Decoders,
 
     // Database
-    Update { path: Option<String> },
-    Rescan { path: Option<String> },
-    Find { filters: Vec<(String, String)>, sort: Option<String>, window: Option<(u32, u32)> },
-    Search { filters: Vec<(String, String)>, sort: Option<String>, window: Option<(u32, u32)> },
-    List { tag: String, filter_tag: Option<String>, filter_value: Option<String>, group: Option<String> },
-    ListAll { path: Option<String> },
-    ListAllInfo { path: Option<String> },
-    LsInfo { path: Option<String> },
-    Count { filters: Vec<(String, String)>, group: Option<String> },
-    SearchCount { tag: String, value: String, group: Option<String> },
-    GetFingerprint { uri: String },
-    ReadComments { uri: String },
+    Update {
+        path: Option<String>,
+    },
+    Rescan {
+        path: Option<String>,
+    },
+    Find {
+        filters: Vec<(String, String)>,
+        sort: Option<String>,
+        window: Option<(u32, u32)>,
+    },
+    Search {
+        filters: Vec<(String, String)>,
+        sort: Option<String>,
+        window: Option<(u32, u32)>,
+    },
+    List {
+        tag: String,
+        filter_tag: Option<String>,
+        filter_value: Option<String>,
+        group: Option<String>,
+    },
+    ListAll {
+        path: Option<String>,
+    },
+    ListAllInfo {
+        path: Option<String>,
+    },
+    LsInfo {
+        path: Option<String>,
+    },
+    Count {
+        filters: Vec<(String, String)>,
+        group: Option<String>,
+    },
+    SearchCount {
+        tag: String,
+        value: String,
+        group: Option<String>,
+    },
+    GetFingerprint {
+        uri: String,
+    },
+    ReadComments {
+        uri: String,
+    },
 
     // Album art
-    AlbumArt { uri: String, offset: usize },
-    ReadPicture { uri: String, offset: usize },
+    AlbumArt {
+        uri: String,
+        offset: usize,
+    },
+    ReadPicture {
+        uri: String,
+        offset: usize,
+    },
 
     // Stored playlists
-    Save { name: String, mode: Option<SaveMode> },
-    Load { name: String, range: Option<(u32, u32)>, position: Option<u32> },
+    Save {
+        name: String,
+        mode: Option<SaveMode>,
+    },
+    Load {
+        name: String,
+        range: Option<(u32, u32)>,
+        position: Option<u32>,
+    },
     ListPlaylists,
-    ListPlaylist { name: String, range: Option<(u32, u32)> },
-    ListPlaylistInfo { name: String, range: Option<(u32, u32)> },
-    PlaylistAdd { name: String, uri: String, position: Option<u32> },
-    PlaylistClear { name: String },
-    PlaylistDelete { name: String, position: u32 },
-    PlaylistMove { name: String, from: u32, to: u32 },
-    Rm { name: String },
-    Rename { from: String, to: String },
-    SearchPlaylist { name: String, tag: String, value: String },
-    PlaylistLength { name: String },
+    ListPlaylist {
+        name: String,
+        range: Option<(u32, u32)>,
+    },
+    ListPlaylistInfo {
+        name: String,
+        range: Option<(u32, u32)>,
+    },
+    PlaylistAdd {
+        name: String,
+        uri: String,
+        position: Option<u32>,
+    },
+    PlaylistClear {
+        name: String,
+    },
+    PlaylistDelete {
+        name: String,
+        position: u32,
+    },
+    PlaylistMove {
+        name: String,
+        from: u32,
+        to: u32,
+    },
+    Rm {
+        name: String,
+    },
+    Rename {
+        from: String,
+        to: String,
+    },
+    SearchPlaylist {
+        name: String,
+        tag: String,
+        value: String,
+    },
+    PlaylistLength {
+        name: String,
+    },
 
     // Idle notifications
-    Idle { subsystems: Vec<String> },
+    Idle {
+        subsystems: Vec<String>,
+    },
     NoIdle,
 
     // Output control
     Outputs,
-    EnableOutput { id: u32 },
-    DisableOutput { id: u32 },
-    ToggleOutput { id: u32 },
-    OutputSet { id: u32, name: String, value: String },
+    EnableOutput {
+        id: u32,
+    },
+    DisableOutput {
+        id: u32,
+    },
+    ToggleOutput {
+        id: u32,
+    },
+    OutputSet {
+        id: u32,
+        name: String,
+        value: String,
+    },
 
     // Command batching
     CommandListBegin,
@@ -125,55 +293,135 @@ pub enum Command {
     CommandListEnd,
 
     // Advanced database
-    SearchAdd { tag: String, value: String },
-    SearchAddPl { name: String, tag: String, value: String },
-    FindAdd { tag: String, value: String },
-    ListFiles { uri: Option<String> },
+    SearchAdd {
+        tag: String,
+        value: String,
+    },
+    SearchAddPl {
+        name: String,
+        tag: String,
+        value: String,
+    },
+    FindAdd {
+        tag: String,
+        value: String,
+    },
+    ListFiles {
+        uri: Option<String>,
+    },
 
     // Sticker database
-    StickerGet { uri: String, name: String },
-    StickerSet { uri: String, name: String, value: String },
-    StickerDelete { uri: String, name: Option<String> },
-    StickerList { uri: String },
-    StickerFind { uri: String, name: String, value: Option<String> },
-    StickerInc { uri: String, name: String, delta: Option<i32> },
-    StickerDec { uri: String, name: String, delta: Option<i32> },
-    StickerNames { uri: Option<String> },
+    StickerGet {
+        uri: String,
+        name: String,
+    },
+    StickerSet {
+        uri: String,
+        name: String,
+        value: String,
+    },
+    StickerDelete {
+        uri: String,
+        name: Option<String>,
+    },
+    StickerList {
+        uri: String,
+    },
+    StickerFind {
+        uri: String,
+        name: String,
+        value: Option<String>,
+    },
+    StickerInc {
+        uri: String,
+        name: String,
+        delta: Option<i32>,
+    },
+    StickerDec {
+        uri: String,
+        name: String,
+        delta: Option<i32>,
+    },
+    StickerNames {
+        uri: Option<String>,
+    },
     StickerTypes,
-    StickerNamesTypes { uri: Option<String> },
+    StickerNamesTypes {
+        uri: Option<String>,
+    },
 
     // Partitions
-    Partition { name: String },
+    Partition {
+        name: String,
+    },
     ListPartitions,
-    NewPartition { name: String },
-    DelPartition { name: String },
-    MoveOutput { name: String },
+    NewPartition {
+        name: String,
+    },
+    DelPartition {
+        name: String,
+    },
+    MoveOutput {
+        name: String,
+    },
 
     // Mounts
-    Mount { path: String, uri: String },
-    Unmount { path: String },
+    Mount {
+        path: String,
+        uri: String,
+    },
+    Unmount {
+        path: String,
+    },
     ListMounts,
     ListNeighbors,
 
     // Client-to-client messaging
-    Subscribe { channel: String },
-    Unsubscribe { channel: String },
+    Subscribe {
+        channel: String,
+    },
+    Unsubscribe {
+        channel: String,
+    },
     Channels,
     ReadMessages,
-    SendMessage { channel: String, message: String },
+    SendMessage {
+        channel: String,
+        message: String,
+    },
 
     // Advanced queue operations
-    Prio { priority: u8, ranges: Vec<(u32, u32)> },
-    PrioId { priority: u8, ids: Vec<u32> },
-    RangeId { id: u32, range: (f64, f64) },
-    AddTagId { id: u32, tag: String, value: String },
-    ClearTagId { id: u32, tag: Option<String> },
+    Prio {
+        priority: u8,
+        ranges: Vec<(u32, u32)>,
+    },
+    PrioId {
+        priority: u8,
+        ids: Vec<u32>,
+    },
+    RangeId {
+        id: u32,
+        range: (f64, f64),
+    },
+    AddTagId {
+        id: u32,
+        tag: String,
+        value: String,
+    },
+    ClearTagId {
+        id: u32,
+        tag: Option<String>,
+    },
 
     // Miscellaneous
     Config,
     Kill,
-    MixRampDb { decibels: f32 },
-    MixRampDelay { seconds: f32 },
+    MixRampDb {
+        decibels: f32,
+    },
+    MixRampDelay {
+        seconds: f32,
+    },
 
     // Unknown/Invalid
     Unknown(String),
@@ -198,23 +446,23 @@ pub enum ProtocolSubcommand {
     Available,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DeleteTarget {
     Position(u32),
-    Range(u32, u32),  // START:END (exclusive end)
+    Range(u32, u32), // START:END (exclusive end)
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum MoveFrom {
     Position(u32),
-    Range(u32, u32),  // START:END (exclusive end)
+    Range(u32, u32), // START:END (exclusive end)
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SaveMode {
-    Create,   // Default: create new playlist or fail if exists
-    Append,   // Append to existing playlist
-    Replace,  // Replace existing playlist
+    Create,  // Default: create new playlist or fail if exists
+    Append,  // Append to existing playlist
+    Replace, // Replace existing playlist
 }
 
 pub fn parse_command(input: &str) -> Result<Command, String> {
@@ -261,13 +509,19 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
         "seekcur" => {
             let time_str = take_till(0.., |c: char| c.is_whitespace()).parse_next(input)?;
             let (time, relative) = if time_str.starts_with('+') || time_str.starts_with('-') {
-                (time_str.parse().map_err(|_| winnow::error::ErrMode::Cut(
-                    winnow::error::ContextError::default()
-                ))?, true)
+                (
+                    time_str
+                        .parse()
+                        .map_err(|_| ErrMode::Cut(ContextError::default()))?,
+                    true,
+                )
             } else {
-                (time_str.parse().map_err(|_| winnow::error::ErrMode::Cut(
-                    winnow::error::ContextError::default()
-                ))?, false)
+                (
+                    time_str
+                        .parse()
+                        .map_err(|_| ErrMode::Cut(ContextError::default()))?,
+                    false,
+                )
             };
             Ok(Command::SeekCur { time, relative })
         }
@@ -359,14 +613,16 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
         }
         "setvol" => {
             let val_str = parse_quoted_or_unquoted.parse_next(input)?;
-            let volume = val_str.parse::<u8>()
-                .map_err(|_| winnow::error::ErrMode::Cut(winnow::error::ContextError::default()))?;
+            let volume = val_str
+                .parse::<u8>()
+                .map_err(|_| ErrMode::Cut(ContextError::default()))?;
             Ok(Command::SetVol { volume })
         }
         "volume" => {
             let val_str = parse_quoted_or_unquoted.parse_next(input)?;
-            let change = val_str.parse::<i8>()
-                .map_err(|_| winnow::error::ErrMode::Cut(winnow::error::ContextError::default()))?;
+            let change = val_str
+                .parse::<i8>()
+                .map_err(|_| ErrMode::Cut(ContextError::default()))?;
             Ok(Command::Volume { change })
         }
         "getvol" => Ok(Command::GetVol),
@@ -375,7 +631,7 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
             let enabled = match val.as_str() {
                 "0" => false,
                 "1" => true,
-                _ => return Err(winnow::error::ErrMode::Cut(winnow::error::ContextError::default())),
+                _ => return Err(ErrMode::Cut(ContextError::default())),
             };
             Ok(Command::Repeat { enabled })
         }
@@ -384,7 +640,7 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
             let enabled = match val.as_str() {
                 "0" => false,
                 "1" => true,
-                _ => return Err(winnow::error::ErrMode::Cut(winnow::error::ContextError::default())),
+                _ => return Err(ErrMode::Cut(ContextError::default())),
             };
             Ok(Command::Random { enabled })
         }
@@ -420,18 +676,19 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
             if input.is_empty() {
                 Ok(Command::Protocol { subcommand: None })
             } else {
-                let subcommand_str = take_while(1.., |c: char| c.is_ascii_alphabetic()).parse_next(input)?;
+                let subcommand_str =
+                    take_while(1.., |c: char| c.is_ascii_alphabetic()).parse_next(input)?;
                 let _ = space0.parse_next(input)?;
 
                 match subcommand_str {
                     "all" => Ok(Command::Protocol {
-                        subcommand: Some(ProtocolSubcommand::All)
+                        subcommand: Some(ProtocolSubcommand::All),
                     }),
                     "clear" => Ok(Command::Protocol {
-                        subcommand: Some(ProtocolSubcommand::Clear)
+                        subcommand: Some(ProtocolSubcommand::Clear),
                     }),
                     "available" => Ok(Command::Protocol {
-                        subcommand: Some(ProtocolSubcommand::Available)
+                        subcommand: Some(ProtocolSubcommand::Available),
                     }),
                     "enable" => {
                         let mut features = Vec::new();
@@ -441,9 +698,9 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
                             let _ = space0.parse_next(input)?;
                         }
                         Ok(Command::Protocol {
-                            subcommand: Some(ProtocolSubcommand::Enable { features })
+                            subcommand: Some(ProtocolSubcommand::Enable { features }),
                         })
-                    },
+                    }
                     "disable" => {
                         let mut features = Vec::new();
                         while !input.is_empty() {
@@ -452,10 +709,10 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
                             let _ = space0.parse_next(input)?;
                         }
                         Ok(Command::Protocol {
-                            subcommand: Some(ProtocolSubcommand::Disable { features })
+                            subcommand: Some(ProtocolSubcommand::Disable { features }),
                         })
-                    },
-                    _ => Ok(Command::Unknown(format!("protocol {}", subcommand_str)))
+                    }
+                    _ => Ok(Command::Unknown(format!("protocol {}", subcommand_str))),
                 }
             }
         }
@@ -472,13 +729,13 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
 
                 match subcommand_str.as_str() {
                     "all" => Ok(Command::TagTypes {
-                        subcommand: Some(TagTypesSubcommand::All)
+                        subcommand: Some(TagTypesSubcommand::All),
                     }),
                     "clear" => Ok(Command::TagTypes {
-                        subcommand: Some(TagTypesSubcommand::Clear)
+                        subcommand: Some(TagTypesSubcommand::Clear),
                     }),
                     "available" => Ok(Command::TagTypes {
-                        subcommand: Some(TagTypesSubcommand::Available)
+                        subcommand: Some(TagTypesSubcommand::Available),
                     }),
                     "enable" => {
                         let mut tags = Vec::new();
@@ -488,9 +745,9 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
                             let _ = space0.parse_next(input)?;
                         }
                         Ok(Command::TagTypes {
-                            subcommand: Some(TagTypesSubcommand::Enable { tags })
+                            subcommand: Some(TagTypesSubcommand::Enable { tags }),
                         })
-                    },
+                    }
                     "disable" => {
                         let mut tags = Vec::new();
                         while !input.is_empty() {
@@ -499,9 +756,9 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
                             let _ = space0.parse_next(input)?;
                         }
                         Ok(Command::TagTypes {
-                            subcommand: Some(TagTypesSubcommand::Disable { tags })
+                            subcommand: Some(TagTypesSubcommand::Disable { tags }),
                         })
-                    },
+                    }
                     "reset" => {
                         let mut tags = Vec::new();
                         while !input.is_empty() {
@@ -510,13 +767,13 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
                             let _ = space0.parse_next(input)?;
                         }
                         Ok(Command::TagTypes {
-                            subcommand: Some(TagTypesSubcommand::Reset { tags })
+                            subcommand: Some(TagTypesSubcommand::Reset { tags }),
                         })
-                    },
-                    _ => Ok(Command::Unknown(format!("tagtypes {}", subcommand_str)))
+                    }
+                    _ => Ok(Command::Unknown(format!("tagtypes {}", subcommand_str))),
                 }
             }
-        },
+        }
         "urlhandlers" => Ok(Command::UrlHandlers),
         "decoders" => Ok(Command::Decoders),
         "update" => {
@@ -534,7 +791,11 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
             // Check if this is a filter expression (starts with '(')
             if tag.starts_with('(') {
                 // Filter expression - treat as single filter
-                Ok(Command::Find { filters: vec![(tag, String::new())], sort: None, window: None })
+                Ok(Command::Find {
+                    filters: vec![(tag, String::new())],
+                    sort: None,
+                    window: None,
+                })
             } else {
                 // Traditional syntax: tag value [tag value ...] [sort TAG] [window START:END]
                 let mut filters = Vec::new();
@@ -597,7 +858,11 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
                     }
                 }
 
-                Ok(Command::Find { filters, sort, window })
+                Ok(Command::Find {
+                    filters,
+                    sort,
+                    window,
+                })
             }
         }
         "search" => {
@@ -607,7 +872,11 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
             // Check if this is a filter expression (starts with '(')
             if tag.starts_with('(') {
                 // Filter expression - treat as single filter
-                Ok(Command::Search { filters: vec![(tag, String::new())], sort: None, window: None })
+                Ok(Command::Search {
+                    filters: vec![(tag, String::new())],
+                    sort: None,
+                    window: None,
+                })
             } else {
                 // Traditional syntax: tag value [tag value ...] [sort TAG] [window START:END]
                 let mut filters = Vec::new();
@@ -670,7 +939,11 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
                     }
                 }
 
-                Ok(Command::Search { filters, sort, window })
+                Ok(Command::Search {
+                    filters,
+                    sort,
+                    window,
+                })
             }
         }
         "list" => {
@@ -679,13 +952,15 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
 
             // Try to parse optional filter or group
             let saved_input = *input;
-            let next_token = opt(parse_quoted_or_unquoted).parse_next(input)?
-                .filter(|s| !s.is_empty());  // Filter out empty strings
+            let next_token = opt(parse_quoted_or_unquoted)
+                .parse_next(input)?
+                .filter(|s| !s.is_empty()); // Filter out empty strings
 
             let (filter_tag, filter_value, group) = if next_token.as_deref() == Some("group") {
                 // Format: list TAG group GROUPTYPE
                 let _ = space0.parse_next(input)?;
-                let group_type = opt(parse_quoted_or_unquoted).parse_next(input)?
+                let group_type = opt(parse_quoted_or_unquoted)
+                    .parse_next(input)?
                     .filter(|s| !s.is_empty());
                 (None, None, group_type)
             } else if let Some(ft) = next_token {
@@ -696,12 +971,14 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
 
                 // Check for optional "group" keyword
                 let saved_input2 = *input;
-                let group_keyword = opt(parse_quoted_or_unquoted).parse_next(input)?
+                let group_keyword = opt(parse_quoted_or_unquoted)
+                    .parse_next(input)?
                     .filter(|s| !s.is_empty());
 
                 let group_type = if group_keyword.as_deref() == Some("group") {
                     let _ = space0.parse_next(input)?;
-                    opt(parse_quoted_or_unquoted).parse_next(input)?
+                    opt(parse_quoted_or_unquoted)
+                        .parse_next(input)?
                         .filter(|s| !s.is_empty())
                 } else {
                     *input = saved_input2;
@@ -715,7 +992,12 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
                 (None, None, None)
             };
 
-            Ok(Command::List { tag, filter_tag, filter_value, group })
+            Ok(Command::List {
+                tag,
+                filter_tag,
+                filter_value,
+                group,
+            })
         }
         "listall" => {
             let path = opt(parse_quoted_or_unquoted).parse_next(input)?;
@@ -792,18 +1074,18 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
             let uri = parse_quoted_or_unquoted.parse_next(input)?;
             let _ = space0.parse_next(input)?;
             let offset_str = parse_quoted_or_unquoted.parse_next(input)?;
-            let offset = offset_str.parse::<usize>().map_err(|_| {
-                winnow::error::ErrMode::Cut(winnow::error::ContextError::default())
-            })?;
+            let offset = offset_str
+                .parse::<usize>()
+                .map_err(|_| ErrMode::Cut(ContextError::default()))?;
             Ok(Command::AlbumArt { uri, offset })
         }
         "readpicture" => {
             let uri = parse_quoted_or_unquoted.parse_next(input)?;
             let _ = space0.parse_next(input)?;
             let offset_str = parse_quoted_or_unquoted.parse_next(input)?;
-            let offset = offset_str.parse::<usize>().map_err(|_| {
-                winnow::error::ErrMode::Cut(winnow::error::ContextError::default())
-            })?;
+            let offset = offset_str
+                .parse::<usize>()
+                .map_err(|_| ErrMode::Cut(ContextError::default()))?;
             Ok(Command::ReadPicture { uri, offset })
         }
         "save" => {
@@ -817,7 +1099,7 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
                     "create" => Some(SaveMode::Create),
                     "append" => Some(SaveMode::Append),
                     "replace" => Some(SaveMode::Replace),
-                    _ => return Err(winnow::error::ErrMode::Cut(winnow::error::ContextError::default()))
+                    _ => return Err(ErrMode::Cut(ContextError::default())),
                 }
             } else {
                 None
@@ -836,7 +1118,11 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
             // Try to parse optional position
             let position = opt(parse_u32).parse_next(input)?;
 
-            Ok(Command::Load { name, range, position })
+            Ok(Command::Load {
+                name,
+                range,
+                position,
+            })
         }
         "listplaylists" => Ok(Command::ListPlaylists),
         "listplaylist" => {
@@ -857,7 +1143,11 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
             let uri = parse_quoted_or_unquoted.parse_next(input)?;
             let _ = space0.parse_next(input)?;
             let position = opt(parse_u32).parse_next(input)?;
-            Ok(Command::PlaylistAdd { name, uri, position })
+            Ok(Command::PlaylistAdd {
+                name,
+                uri,
+                position,
+            })
         }
         "playlistclear" => {
             let name = parse_quoted_or_unquoted.parse_next(input)?;
@@ -885,7 +1175,10 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
             let name1 = parse_quoted_or_unquoted.parse_next(input)?;
             let _ = space0.parse_next(input)?;
             let name2 = parse_quoted_or_unquoted.parse_next(input)?;
-            Ok(Command::Rename { from: name1, to: name2 })
+            Ok(Command::Rename {
+                from: name1,
+                to: name2,
+            })
         }
         "searchplaylist" => {
             let name = parse_quoted_or_unquoted.parse_next(input)?;
@@ -988,9 +1281,7 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
                     let name = opt(parse_string).parse_next(input)?;
                     Ok(Command::StickerDelete { uri, name })
                 }
-                "list" => {
-                    Ok(Command::StickerList { uri })
-                }
+                "list" => Ok(Command::StickerList { uri }),
                 "find" => {
                     let name = parse_string.parse_next(input)?;
                     let _ = space0.parse_next(input)?;
@@ -1001,20 +1292,24 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
                     let name = parse_string.parse_next(input)?;
                     let _ = space0.parse_next(input)?;
                     let delta = opt(|input: &mut &str| {
-                        parse_string.parse_next(input)?
+                        parse_string
+                            .parse_next(input)?
                             .parse::<i32>()
-                            .map_err(|_| winnow::error::ErrMode::Cut(winnow::error::ContextError::default()))
-                    }).parse_next(input)?;
+                            .map_err(|_| ErrMode::Cut(ContextError::default()))
+                    })
+                    .parse_next(input)?;
                     Ok(Command::StickerInc { uri, name, delta })
                 }
                 "dec" => {
                     let name = parse_string.parse_next(input)?;
                     let _ = space0.parse_next(input)?;
                     let delta = opt(|input: &mut &str| {
-                        parse_string.parse_next(input)?
+                        parse_string
+                            .parse_next(input)?
                             .parse::<i32>()
-                            .map_err(|_| winnow::error::ErrMode::Cut(winnow::error::ContextError::default()))
-                    }).parse_next(input)?;
+                            .map_err(|_| ErrMode::Cut(ContextError::default()))
+                    })
+                    .parse_next(input)?;
                     Ok(Command::StickerDec { uri, name, delta })
                 }
                 _ => Ok(Command::Unknown(format!("sticker {}", operation))),
@@ -1128,7 +1423,10 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
             let start = parse_f64.parse_next(input)?;
             let _ = space0.parse_next(input)?;
             let end = parse_f64.parse_next(input)?;
-            Ok(Command::RangeId { id, range: (start, end) })
+            Ok(Command::RangeId {
+                id,
+                range: (start, end),
+            })
         }
         "addtagid" => {
             let id = parse_u32.parse_next(input)?;
@@ -1163,23 +1461,22 @@ fn parse_u32(input: &mut &str) -> PResult<u32> {
     take_while(1.., |c: char| c.is_ascii_digit())
         .parse_next(input)?
         .parse()
-        .map_err(|_| winnow::error::ErrMode::Cut(winnow::error::ContextError::default()))
+        .map_err(|_| ErrMode::Cut(ContextError::default()))
 }
 
 fn parse_u32_or_quoted(input: &mut &str) -> PResult<u32> {
     let s = parse_quoted_or_unquoted.parse_next(input)?;
     if s.is_empty() {
-        return Err(winnow::error::ErrMode::Backtrack(winnow::error::ContextError::default()));
+        return Err(ErrMode::Backtrack(ContextError::default()));
     }
-    s.parse()
-        .map_err(|_| winnow::error::ErrMode::Cut(winnow::error::ContextError::default()))
+    s.parse().map_err(|_| ErrMode::Cut(ContextError::default()))
 }
 
 fn parse_u8(input: &mut &str) -> PResult<u8> {
     take_while(1.., |c: char| c.is_ascii_digit())
         .parse_next(input)?
         .parse()
-        .map_err(|_| winnow::error::ErrMode::Cut(winnow::error::ContextError::default()))
+        .map_err(|_| ErrMode::Cut(ContextError::default()))
 }
 
 fn parse_range(input: &mut &str) -> PResult<(u32, u32)> {
@@ -1219,19 +1516,20 @@ fn parse_move_from(input: &mut &str) -> PResult<MoveFrom> {
 }
 
 fn parse_f64(input: &mut &str) -> PResult<f64> {
-    take_while(1.., |c: char| c.is_ascii_digit() || c == '.' || c == '-' || c == '+')
-        .parse_next(input)?
-        .parse()
-        .map_err(|_| winnow::error::ErrMode::Cut(winnow::error::ContextError::default()))
+    take_while(1.., |c: char| {
+        c.is_ascii_digit() || c == '.' || c == '-' || c == '+'
+    })
+    .parse_next(input)?
+    .parse()
+    .map_err(|_| ErrMode::Cut(ContextError::default()))
 }
 
 fn parse_f64_or_quoted(input: &mut &str) -> PResult<f64> {
     let s = parse_quoted_or_unquoted.parse_next(input)?;
     if s.is_empty() {
-        return Err(winnow::error::ErrMode::Backtrack(winnow::error::ContextError::default()));
+        return Err(ErrMode::Backtrack(ContextError::default()));
     }
-    s.parse()
-        .map_err(|_| winnow::error::ErrMode::Cut(winnow::error::ContextError::default()))
+    s.parse().map_err(|_| ErrMode::Cut(ContextError::default()))
 }
 
 fn parse_bool_or_quoted(input: &mut &str) -> PResult<bool> {
@@ -1239,8 +1537,8 @@ fn parse_bool_or_quoted(input: &mut &str) -> PResult<bool> {
     match s.as_str() {
         "0" => Ok(false),
         "1" => Ok(true),
-        "" => Err(winnow::error::ErrMode::Backtrack(winnow::error::ContextError::default())),
-        _ => Err(winnow::error::ErrMode::Cut(winnow::error::ContextError::default())),
+        "" => Err(ErrMode::Backtrack(ContextError::default())),
+        _ => Err(ErrMode::Cut(ContextError::default())),
     }
 }
 
@@ -1276,22 +1574,40 @@ mod tests {
 
     #[test]
     fn test_play_command() {
-        assert_eq!(parse_command("play").unwrap(), Command::Play { position: None });
-        assert_eq!(parse_command("play 5").unwrap(), Command::Play { position: Some(5) });
+        assert_eq!(
+            parse_command("play").unwrap(),
+            Command::Play { position: None }
+        );
+        assert_eq!(
+            parse_command("play 5").unwrap(),
+            Command::Play { position: Some(5) }
+        );
     }
 
     #[test]
     fn test_pause_command() {
-        assert_eq!(parse_command("pause").unwrap(), Command::Pause { state: None });
-        assert_eq!(parse_command("pause 1").unwrap(), Command::Pause { state: Some(true) });
-        assert_eq!(parse_command("pause 0").unwrap(), Command::Pause { state: Some(false) });
+        assert_eq!(
+            parse_command("pause").unwrap(),
+            Command::Pause { state: None }
+        );
+        assert_eq!(
+            parse_command("pause 1").unwrap(),
+            Command::Pause { state: Some(true) }
+        );
+        assert_eq!(
+            parse_command("pause 0").unwrap(),
+            Command::Pause { state: Some(false) }
+        );
     }
 
     #[test]
     fn test_add_command() {
         assert_eq!(
             parse_command("add song.mp3").unwrap(),
-            Command::Add { uri: "song.mp3".to_string(), position: None }
+            Command::Add {
+                uri: "song.mp3".to_string(),
+                position: None
+            }
         );
     }
 
@@ -1299,7 +1615,10 @@ mod tests {
     fn test_add_command_with_quotes() {
         assert_eq!(
             parse_command(r#"add "/home/user/song with spaces.mp3""#).unwrap(),
-            Command::Add { uri: "/home/user/song with spaces.mp3".to_string(), position: None }
+            Command::Add {
+                uri: "/home/user/song with spaces.mp3".to_string(),
+                position: None
+            }
         );
     }
 
@@ -1307,7 +1626,10 @@ mod tests {
     fn test_add_command_with_path() {
         assert_eq!(
             parse_command("add /home/user/song.mp3").unwrap(),
-            Command::Add { uri: "/home/user/song.mp3".to_string(), position: None }
+            Command::Add {
+                uri: "/home/user/song.mp3".to_string(),
+                position: None
+            }
         );
     }
 
@@ -1320,7 +1642,9 @@ mod tests {
     fn test_shuffle_with_range() {
         assert_eq!(
             parse_command("shuffle 5:10").unwrap(),
-            Command::Shuffle { range: Some((5, 10)) }
+            Command::Shuffle {
+                range: Some((5, 10))
+            }
         );
         assert_eq!(
             parse_command("shuffle").unwrap(),
@@ -1332,7 +1656,9 @@ mod tests {
     fn test_playlistinfo_with_range() {
         assert_eq!(
             parse_command("playlistinfo 0:5").unwrap(),
-            Command::PlaylistInfo { range: Some((0, 5)) }
+            Command::PlaylistInfo {
+                range: Some((0, 5))
+            }
         );
         assert_eq!(
             parse_command("playlistinfo").unwrap(),

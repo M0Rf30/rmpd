@@ -50,9 +50,6 @@
       "description": "Critical security updates - auto-merge patch/minor",
       "matchUpdateTypes": ["patch", "minor"],
       "matchPackagePatterns": ["*"],
-      "vulnerabilityAlerts": {
-        "enabled": true
-      },
       "automerge": true,
       "automergeType": "pr"
     },

@@ -54,13 +54,14 @@ pub struct Song {
 
 impl Song {
     pub fn display_title(&self) -> &str {
-        self.title.as_deref().unwrap_or_else(|| {
-            self.path.file_name().unwrap_or("Unknown")
-        })
+        self.title
+            .as_deref()
+            .unwrap_or_else(|| self.path.file_name().unwrap_or("Unknown"))
     }
 
     pub fn display_artist(&self) -> &str {
-        self.artist.as_deref()
+        self.artist
+            .as_deref()
             .or(self.album_artist.as_deref())
             .unwrap_or("Unknown Artist")
     }

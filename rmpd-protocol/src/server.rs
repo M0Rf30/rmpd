@@ -1,8 +1,8 @@
-use tokio::net::{TcpListener, TcpStream};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::sync::broadcast;
-use tracing::{info, error, debug};
 use anyhow::Result;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::broadcast;
+use tracing::{debug, error, info};
 
 use crate::parser::{parse_command, Command};
 use crate::queue_playback::QueuePlaybackManager;
@@ -92,10 +92,13 @@ fn format_iso8601_timestamp(timestamp: i64) -> String {
     }
     let day = days + 1;
 
-    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
-            year, month, day, hours, minutes, seconds)
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        year, month, day, hours, minutes, seconds
+    )
 }
 
+#[derive(Debug)]
 pub struct MpdServer {
     bind_address: String,
     state: AppState,
@@ -111,7 +114,11 @@ impl MpdServer {
         }
     }
 
-    pub fn with_state(bind_address: String, state: AppState, shutdown_rx: broadcast::Receiver<()>) -> Self {
+    pub fn with_state(
+        bind_address: String,
+        state: AppState,
+        shutdown_rx: broadcast::Receiver<()>,
+    ) -> Self {
         Self {
             bind_address,
             state,
@@ -165,7 +172,9 @@ async fn handle_client(mut stream: TcpStream, state: AppState) -> Result<()> {
     stream.set_nodelay(true)?;
 
     // Send greeting
-    stream.write_all(format!("OK MPD {}\n", PROTOCOL_VERSION).as_bytes()).await?;
+    stream
+        .write_all(format!("OK MPD {}\n", PROTOCOL_VERSION).as_bytes())
+        .await?;
 
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
@@ -211,9 +220,15 @@ async fn handle_client(mut stream: TcpStream, state: AppState) -> Result<()> {
             }
             Ok(Command::CommandListEnd) => {
                 if !batch_mode {
-                    Response::Text(ResponseBuilder::error(5, 0, "command_list_end", "not in command list"))
+                    Response::Text(ResponseBuilder::error(
+                        5,
+                        0,
+                        "command_list_end",
+                        "not in command list",
+                    ))
                 } else {
-                    let response = execute_command_list(&batch_commands, &state, batch_ok_mode).await;
+                    let response =
+                        execute_command_list(&batch_commands, &state, batch_ok_mode).await;
                     batch_mode = false;
                     batch_ok_mode = false;
                     batch_commands.clear();
@@ -233,7 +248,7 @@ async fn handle_client(mut stream: TcpStream, state: AppState) -> Result<()> {
         };
 
         writer.write_all(response.as_bytes()).await?;
-        writer.flush().await?;  // Flush immediately to ensure low latency
+        writer.flush().await?; // Flush immediately to ensure low latency
     }
 
     Ok(())
@@ -252,7 +267,10 @@ async fn execute_command_list(commands: &[String], state: &AppState, ok_mode: bo
                     Response::Text(s) => s,
                     Response::Binary(_) => {
                         return Response::Text(ResponseBuilder::error(
-                            5, index as i32, cmd_str, "binary commands not allowed in command list"
+                            5,
+                            index as i32,
+                            cmd_str,
+                            "binary commands not allowed in command list",
                         ));
                     }
                 };
@@ -260,7 +278,9 @@ async fn execute_command_list(commands: &[String], state: &AppState, ok_mode: bo
                 // Check for errors
                 if cmd_response_str.starts_with("ACK") {
                     // Return error with command list index
-                    return Response::Text(cmd_response_str.replace("ACK [", &format!("ACK [{}@", index)));
+                    return Response::Text(
+                        cmd_response_str.replace("ACK [", &format!("ACK [{}@", index)),
+                    );
                 }
 
                 if ok_mode {
@@ -282,33 +302,37 @@ async fn execute_command_list(commands: &[String], state: &AppState, ok_mode: bo
 
 async fn handle_idle(
     reader: &mut BufReader<tokio::net::tcp::OwnedReadHalf>,
-    event_rx: &mut tokio::sync::broadcast::Receiver<rmpd_core::event::Event>,
+    event_rx: &mut broadcast::Receiver<rmpd_core::event::Event>,
     subsystems: Vec<String>,
 ) -> String {
     use rmpd_core::event::Subsystem;
+    use tokio::sync::broadcast::error::RecvError;
 
     // Convert string subsystems to enum
     let filter_subsystems: Vec<Subsystem> = if subsystems.is_empty() {
         // If no subsystems specified, listen to all
         vec![]
     } else {
-        subsystems.iter().filter_map(|s| match s.to_lowercase().as_str() {
-            "database" => Some(Subsystem::Database),
-            "update" => Some(Subsystem::Update),
-            "stored_playlist" => Some(Subsystem::StoredPlaylist),
-            "playlist" => Some(Subsystem::Playlist),
-            "player" => Some(Subsystem::Player),
-            "mixer" => Some(Subsystem::Mixer),
-            "output" => Some(Subsystem::Output),
-            "options" => Some(Subsystem::Options),
-            "partition" => Some(Subsystem::Partition),
-            "sticker" => Some(Subsystem::Sticker),
-            "subscription" => Some(Subsystem::Subscription),
-            "message" => Some(Subsystem::Message),
-            "neighbor" => Some(Subsystem::Neighbor),
-            "mount" => Some(Subsystem::Mount),
-            _ => None,
-        }).collect()
+        subsystems
+            .iter()
+            .filter_map(|s| match s.to_lowercase().as_str() {
+                "database" => Some(Subsystem::Database),
+                "update" => Some(Subsystem::Update),
+                "stored_playlist" => Some(Subsystem::StoredPlaylist),
+                "playlist" => Some(Subsystem::Playlist),
+                "player" => Some(Subsystem::Player),
+                "mixer" => Some(Subsystem::Mixer),
+                "output" => Some(Subsystem::Output),
+                "options" => Some(Subsystem::Options),
+                "partition" => Some(Subsystem::Partition),
+                "sticker" => Some(Subsystem::Sticker),
+                "subscription" => Some(Subsystem::Subscription),
+                "message" => Some(Subsystem::Message),
+                "neighbor" => Some(Subsystem::Neighbor),
+                "mount" => Some(Subsystem::Mount),
+                _ => None,
+            })
+            .collect()
     };
 
     let mut line = String::new();
@@ -340,16 +364,16 @@ async fn handle_idle(
                             return format!("changed: {}\nOK\n", subsystem_name);
                         }
                     }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                    Err(RecvError::Lagged(skipped)) => {
                         // Channel lagged - messages were dropped
                         // Return immediately to notify client of changes
                         debug!("Idle: channel lagged, skipped {} messages", skipped);
-                        return format!("changed: player\nOK\n");
+                        return "changed: player\nOK\n".to_owned();
                     }
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    Err(RecvError::Closed) => {
                         // Channel closed - should not happen, but handle gracefully
                         debug!("Idle: event channel closed");
-                        return "OK\n".to_string();
+                        return "OK\n".to_owned();
                     }
                 }
             }
@@ -358,11 +382,11 @@ async fn handle_idle(
                 if let Ok(bytes) = line_result {
                     if bytes > 0 && line.trim() == "noidle" {
                         // Cancel idle
-                        return "OK\n".to_string();
+                        return "OK\n".to_owned();
                     }
                 }
                 // Connection closed or error
-                return "OK\n".to_string();
+                return "OK\n".to_owned();
             }
         }
     }
@@ -407,21 +431,11 @@ async fn handle_command(cmd: Command, state: &AppState) -> Response {
             // Connection will be closed by the handler
             ResponseBuilder::new().ok()
         }
-        Command::Commands => {
-            handle_commands_command().await
-        }
-        Command::NotCommands => {
-            handle_notcommands_command().await
-        }
-        Command::TagTypes { subcommand } => {
-            handle_tagtypes_command(subcommand).await
-        }
-        Command::UrlHandlers => {
-            handle_urlhandlers_command().await
-        }
-        Command::Decoders => {
-            handle_decoders_command().await
-        }
+        Command::Commands => handle_commands_command().await,
+        Command::NotCommands => handle_notcommands_command().await,
+        Command::TagTypes { subcommand } => handle_tagtypes_command(subcommand).await,
+        Command::UrlHandlers => handle_urlhandlers_command().await,
+        Command::Decoders => handle_decoders_command().await,
         Command::Status => {
             // Read status with lock held
             let mut status_guard = state.status.write().await;
@@ -447,21 +461,22 @@ async fn handle_command(cmd: Command, state: &AppState) -> Response {
         }
         Command::Stats => {
             // Get stats from database if available
-            let (songs, artists, albums, db_playtime, db_update) = if let Some(ref db_path) = state.db_path {
-                if let Ok(db) = rmpd_library::Database::open(db_path) {
-                    let songs = db.count_songs().unwrap_or(0);
-                    let artists = db.count_artists().unwrap_or(0);
-                    let albums = db.count_albums().unwrap_or(0);
-                    let db_playtime = db.get_db_playtime().unwrap_or(0);
-                    let db_update = db.get_db_update().unwrap_or(0);
+            let (songs, artists, albums, db_playtime, db_update) =
+                if let Some(ref db_path) = state.db_path {
+                    if let Ok(db) = rmpd_library::Database::open(db_path) {
+                        let songs = db.count_songs().unwrap_or(0);
+                        let artists = db.count_artists().unwrap_or(0);
+                        let albums = db.count_albums().unwrap_or(0);
+                        let db_playtime = db.get_db_playtime().unwrap_or(0);
+                        let db_update = db.get_db_update().unwrap_or(0);
 
-                    (songs, artists, albums, db_playtime, db_update)
+                        (songs, artists, albums, db_playtime, db_update)
+                    } else {
+                        (0, 0, 0, 0, 0)
+                    }
                 } else {
                     (0, 0, 0, 0, 0)
-                }
-            } else {
-                (0, 0, 0, 0, 0)
-            };
+                };
 
             // Calculate uptime in seconds
             let uptime = state.start_time.elapsed().as_secs();
@@ -478,33 +493,30 @@ async fn handle_command(cmd: Command, state: &AppState) -> Response {
         Command::Update { path } | Command::Rescan { path } => {
             handle_update_command(state, path.as_deref()).await
         }
-        Command::Find { filters, sort, window } => {
-            handle_find_command(state, &filters, sort.as_deref(), window).await
-        }
-        Command::Search { filters, sort, window } => {
-            handle_search_command(state, &filters, sort.as_deref(), window).await
-        }
-        Command::List { tag, filter_tag, filter_value, group: _ } => {
-            handle_list_command(state, &tag, filter_tag.as_deref(), filter_value.as_deref()).await
-        }
+        Command::Find {
+            filters,
+            sort,
+            window,
+        } => handle_find_command(state, &filters, sort.as_deref(), window).await,
+        Command::Search {
+            filters,
+            sort,
+            window,
+        } => handle_search_command(state, &filters, sort.as_deref(), window).await,
+        Command::List {
+            tag,
+            filter_tag,
+            filter_value,
+            group: _,
+        } => handle_list_command(state, &tag, filter_tag.as_deref(), filter_value.as_deref()).await,
         Command::Count { filters, group } => {
             handle_count_command(state, &filters, group.as_deref()).await
         }
-        Command::ListAll { path } => {
-            handle_listall_command(state, path.as_deref()).await
-        }
-        Command::ListAllInfo { path } => {
-            handle_listallinfo_command(state, path.as_deref()).await
-        }
-        Command::LsInfo { path } => {
-            handle_lsinfo_command(state, path.as_deref()).await
-        }
-        Command::CurrentSong => {
-            handle_currentsong_command(state).await
-        }
-        Command::PlaylistInfo { range } => {
-            handle_playlistinfo_command(state, range).await
-        }
+        Command::ListAll { path } => handle_listall_command(state, path.as_deref()).await,
+        Command::ListAllInfo { path } => handle_listallinfo_command(state, path.as_deref()).await,
+        Command::LsInfo { path } => handle_lsinfo_command(state, path.as_deref()).await,
+        Command::CurrentSong => handle_currentsong_command(state).await,
+        Command::PlaylistInfo { range } => handle_playlistinfo_command(state, range).await,
         Command::Playlist => {
             // Deprecated, same as playlistinfo without range
             handle_playlistinfo_command(state, None).await
@@ -522,69 +534,27 @@ async fn handle_command(cmd: Command, state: &AppState) -> Response {
             handle_playlistsearch_command(state, &tag, &value).await
         }
         // Playback commands
-        Command::Play { position } => {
-            handle_play_command(state, position).await
-        }
-        Command::Pause { state: pause_state } => {
-            handle_pause_command(state, pause_state).await
-        }
-        Command::Stop => {
-            handle_stop_command(state).await
-        }
-        Command::Next => {
-            handle_next_command(state).await
-        }
-        Command::Previous => {
-            handle_previous_command(state).await
-        }
-        Command::Seek { position, time } => {
-            handle_seek_command(state, position, time).await
-        }
-        Command::SeekId { id, time } => {
-            handle_seekid_command(state, id, time).await
-        }
-        Command::SeekCur { time, relative } => {
-            handle_seekcur_command(state, time, relative).await
-        }
-        Command::SetVol { volume } => {
-            handle_setvol_command(state, volume).await
-        }
-        Command::Add { uri, position } => {
-            handle_add_command(state, &uri, position).await
-        }
-        Command::Clear => {
-            handle_clear_command(state).await
-        }
-        Command::Delete { target } => {
-            handle_delete_command(state, target).await
-        }
-        Command::DeleteId { id } => {
-            handle_deleteid_command(state, id).await
-        }
-        Command::AddId { uri, position } => {
-            handle_addid_command(state, &uri, position).await
-        }
-        Command::PlayId { id } => {
-            handle_playid_command(state, id).await
-        }
-        Command::MoveId { id, to } => {
-            handle_moveid_command(state, id, to).await
-        }
-        Command::Swap { pos1, pos2 } => {
-            handle_swap_command(state, pos1, pos2).await
-        }
-        Command::SwapId { id1, id2 } => {
-            handle_swapid_command(state, id1, id2).await
-        }
-        Command::Move { from, to } => {
-            handle_move_command(state, from, to).await
-        }
-        Command::Shuffle { range } => {
-            handle_shuffle_command(state, range).await
-        }
-        Command::PlaylistId { id } => {
-            handle_playlistid_command(state, id).await
-        }
+        Command::Play { position } => handle_play_command(state, position).await,
+        Command::Pause { state: pause_state } => handle_pause_command(state, pause_state).await,
+        Command::Stop => handle_stop_command(state).await,
+        Command::Next => handle_next_command(state).await,
+        Command::Previous => handle_previous_command(state).await,
+        Command::Seek { position, time } => handle_seek_command(state, position, time).await,
+        Command::SeekId { id, time } => handle_seekid_command(state, id, time).await,
+        Command::SeekCur { time, relative } => handle_seekcur_command(state, time, relative).await,
+        Command::SetVol { volume } => handle_setvol_command(state, volume).await,
+        Command::Add { uri, position } => handle_add_command(state, &uri, position).await,
+        Command::Clear => handle_clear_command(state).await,
+        Command::Delete { target } => handle_delete_command(state, target).await,
+        Command::DeleteId { id } => handle_deleteid_command(state, id).await,
+        Command::AddId { uri, position } => handle_addid_command(state, &uri, position).await,
+        Command::PlayId { id } => handle_playid_command(state, id).await,
+        Command::MoveId { id, to } => handle_moveid_command(state, id, to).await,
+        Command::Swap { pos1, pos2 } => handle_swap_command(state, pos1, pos2).await,
+        Command::SwapId { id1, id2 } => handle_swapid_command(state, id1, id2).await,
+        Command::Move { from, to } => handle_move_command(state, from, to).await,
+        Command::Shuffle { range } => handle_shuffle_command(state, range).await,
+        Command::PlaylistId { id } => handle_playlistid_command(state, id).await,
         Command::Password { password: _ } => {
             // No password protection implemented yet
             ResponseBuilder::new().ok()
@@ -593,139 +563,89 @@ async fn handle_command(cmd: Command, state: &AppState) -> Response {
             // Already handled at the beginning of the function
             unreachable!()
         }
-        Command::Unknown(cmd) => {
-            ResponseBuilder::error(5, 0, &cmd, "unknown command")
-        }
-        Command::Repeat { enabled } => {
-            handle_repeat_command(state, enabled).await
-        }
-        Command::Random { enabled } => {
-            handle_random_command(state, enabled).await
-        }
-        Command::Single { mode } => {
-            handle_single_command(state, &mode).await
-        }
-        Command::Consume { mode } => {
-            handle_consume_command(state, &mode).await
-        }
-        Command::Crossfade { seconds } => {
-            handle_crossfade_command(state, seconds).await
-        }
-        Command::Volume { change } => {
-            handle_volume_command(state, change).await
-        }
+        Command::Unknown(cmd) => ResponseBuilder::error(5, 0, &cmd, "unknown command"),
+        Command::Repeat { enabled } => handle_repeat_command(state, enabled).await,
+        Command::Random { enabled } => handle_random_command(state, enabled).await,
+        Command::Single { mode } => handle_single_command(state, &mode).await,
+        Command::Consume { mode } => handle_consume_command(state, &mode).await,
+        Command::Crossfade { seconds } => handle_crossfade_command(state, seconds).await,
+        Command::Volume { change } => handle_volume_command(state, change).await,
         Command::GetVol => {
             let status = state.status.read().await;
             let mut resp = ResponseBuilder::new();
             resp.field("volume", status.volume.to_string());
             resp.ok()
         }
-        Command::ReplayGainMode { mode } => {
-            handle_replaygain_mode_command(state, &mode).await
-        }
-        Command::ReplayGainStatus => {
-            handle_replaygain_status_command(state).await
-        }
+        Command::ReplayGainMode { mode } => handle_replaygain_mode_command(state, &mode).await,
+        Command::ReplayGainStatus => handle_replaygain_status_command(state).await,
         Command::BinaryLimit { size } => {
             // Set binary limit (for large responses like images)
             // Store in connection state if needed, for now just acknowledge
             let _ = size;
             ResponseBuilder::new().ok()
         }
-        Command::Protocol { subcommand } => {
-            handle_protocol_command(subcommand).await
-        }
+        Command::Protocol { subcommand } => handle_protocol_command(subcommand).await,
         // Stored playlists
-        Command::Save { name, mode } => {
-            handle_save_command(state, &name, mode).await
-        }
-        Command::Load { name, range, position } => {
-            handle_load_command(state, &name, range, position).await
-        }
-        Command::ListPlaylists => {
-            handle_listplaylists_command(state).await
-        }
+        Command::Save { name, mode } => handle_save_command(state, &name, mode).await,
+        Command::Load {
+            name,
+            range,
+            position,
+        } => handle_load_command(state, &name, range, position).await,
+        Command::ListPlaylists => handle_listplaylists_command(state).await,
         Command::ListPlaylist { name, range } => {
             handle_listplaylist_command(state, &name, range).await
         }
         Command::ListPlaylistInfo { name, range } => {
             handle_listplaylistinfo_command(state, &name, range).await
         }
-        Command::PlaylistAdd { name, uri, position } => {
-            handle_playlistadd_command(state, &name, &uri, position).await
-        }
-        Command::PlaylistClear { name } => {
-            handle_playlistclear_command(state, &name).await
-        }
+        Command::PlaylistAdd {
+            name,
+            uri,
+            position,
+        } => handle_playlistadd_command(state, &name, &uri, position).await,
+        Command::PlaylistClear { name } => handle_playlistclear_command(state, &name).await,
         Command::PlaylistDelete { name, position } => {
             handle_playlistdelete_command(state, &name, position).await
         }
         Command::PlaylistMove { name, from, to } => {
             handle_playlistmove_command(state, &name, from, to).await
         }
-        Command::Rm { name } => {
-            handle_rm_command(state, &name).await
-        }
-        Command::Rename { from, to } => {
-            handle_rename_command(state, &from, &to).await
-        }
+        Command::Rm { name } => handle_rm_command(state, &name).await,
+        Command::Rename { from, to } => handle_rename_command(state, &from, &to).await,
         Command::SearchPlaylist { name, tag, value } => {
             handle_searchplaylist_command(state, &name, &tag, &value).await
         }
-        Command::PlaylistLength { name } => {
-            handle_playlistlength_command(state, &name).await
-        }
+        Command::PlaylistLength { name } => handle_playlistlength_command(state, &name).await,
         // Output control
-        Command::Outputs => {
-            handle_outputs_command(state).await
-        }
-        Command::EnableOutput { id } => {
-            handle_enableoutput_command(state, id).await
-        }
-        Command::DisableOutput { id } => {
-            handle_disableoutput_command(state, id).await
-        }
-        Command::ToggleOutput { id } => {
-            handle_toggleoutput_command(state, id).await
-        }
+        Command::Outputs => handle_outputs_command(state).await,
+        Command::EnableOutput { id } => handle_enableoutput_command(state, id).await,
+        Command::DisableOutput { id } => handle_disableoutput_command(state, id).await,
+        Command::ToggleOutput { id } => handle_toggleoutput_command(state, id).await,
         Command::OutputSet { id, name, value } => {
             handle_outputset_command(state, id, &name, &value).await
         }
         // Advanced database
-        Command::SearchAdd { tag, value } => {
-            handle_searchadd_command(state, &tag, &value).await
-        }
+        Command::SearchAdd { tag, value } => handle_searchadd_command(state, &tag, &value).await,
         Command::SearchAddPl { name, tag, value } => {
             handle_searchaddpl_command(state, &name, &tag, &value).await
         }
-        Command::FindAdd { tag, value } => {
-            handle_findadd_command(state, &tag, &value).await
-        }
-        Command::ListFiles { uri } => {
-            handle_listfiles_command(state, uri.as_deref()).await
-        }
+        Command::FindAdd { tag, value } => handle_findadd_command(state, &tag, &value).await,
+        Command::ListFiles { uri } => handle_listfiles_command(state, uri.as_deref()).await,
         Command::SearchCount { tag, value, group } => {
             handle_searchcount_command(state, &tag, &value, group.as_deref()).await
         }
-        Command::GetFingerprint { uri } => {
-            handle_getfingerprint_command(state, &uri).await
-        }
-        Command::ReadComments { uri } => {
-            handle_readcomments_command(state, &uri).await
-        }
+        Command::GetFingerprint { uri } => handle_getfingerprint_command(state, &uri).await,
+        Command::ReadComments { uri } => handle_readcomments_command(state, &uri).await,
         // Stickers
-        Command::StickerGet { uri, name } => {
-            handle_sticker_get_command(state, &uri, &name).await
-        }
+        Command::StickerGet { uri, name } => handle_sticker_get_command(state, &uri, &name).await,
         Command::StickerSet { uri, name, value } => {
             handle_sticker_set_command(state, &uri, &name, &value).await
         }
         Command::StickerDelete { uri, name } => {
             handle_sticker_delete_command(state, &uri, name.as_deref()).await
         }
-        Command::StickerList { uri } => {
-            handle_sticker_list_command(state, &uri).await
-        }
+        Command::StickerList { uri } => handle_sticker_list_command(state, &uri).await,
         Command::StickerFind { uri, name, value } => {
             handle_sticker_find_command(state, &uri, &name, value.as_deref()).await
         }
@@ -735,70 +655,34 @@ async fn handle_command(cmd: Command, state: &AppState) -> Response {
         Command::StickerDec { uri, name, delta } => {
             handle_sticker_dec_command(state, &uri, &name, delta).await
         }
-        Command::StickerNames { uri } => {
-            handle_sticker_names_command(state, uri.as_deref()).await
-        }
-        Command::StickerTypes => {
-            handle_sticker_types_command().await
-        }
+        Command::StickerNames { uri } => handle_sticker_names_command(state, uri.as_deref()).await,
+        Command::StickerTypes => handle_sticker_types_command().await,
         Command::StickerNamesTypes { uri } => {
             handle_sticker_namestypes_command(state, uri.as_deref()).await
         }
         // Partitions
-        Command::Partition { name } => {
-            handle_partition_command(state, &name).await
-        }
-        Command::ListPartitions => {
-            handle_listpartitions_command().await
-        }
-        Command::NewPartition { name } => {
-            handle_newpartition_command(&name).await
-        }
-        Command::DelPartition { name } => {
-            handle_delpartition_command(&name).await
-        }
-        Command::MoveOutput { name } => {
-            handle_moveoutput_command(&name).await
-        }
+        Command::Partition { name } => handle_partition_command(state, &name).await,
+        Command::ListPartitions => handle_listpartitions_command().await,
+        Command::NewPartition { name } => handle_newpartition_command(&name).await,
+        Command::DelPartition { name } => handle_delpartition_command(&name).await,
+        Command::MoveOutput { name } => handle_moveoutput_command(&name).await,
         // Mounts
-        Command::Mount { path, uri } => {
-            handle_mount_command(&path, &uri).await
-        }
-        Command::Unmount { path } => {
-            handle_unmount_command(&path).await
-        }
-        Command::ListMounts => {
-            handle_listmounts_command().await
-        }
-        Command::ListNeighbors => {
-            handle_listneighbors_command().await
-        }
+        Command::Mount { path, uri } => handle_mount_command(&path, &uri).await,
+        Command::Unmount { path } => handle_unmount_command(&path).await,
+        Command::ListMounts => handle_listmounts_command().await,
+        Command::ListNeighbors => handle_listneighbors_command().await,
         // Client messaging
-        Command::Subscribe { channel } => {
-            handle_subscribe_command(&channel).await
-        }
-        Command::Unsubscribe { channel } => {
-            handle_unsubscribe_command(&channel).await
-        }
-        Command::Channels => {
-            handle_channels_command().await
-        }
-        Command::ReadMessages => {
-            handle_readmessages_command().await
-        }
+        Command::Subscribe { channel } => handle_subscribe_command(&channel).await,
+        Command::Unsubscribe { channel } => handle_unsubscribe_command(&channel).await,
+        Command::Channels => handle_channels_command().await,
+        Command::ReadMessages => handle_readmessages_command().await,
         Command::SendMessage { channel, message } => {
             handle_sendmessage_command(&channel, &message).await
         }
         // Advanced queue
-        Command::Prio { priority, ranges } => {
-            handle_prio_command(state, priority, &ranges).await
-        }
-        Command::PrioId { priority, ids } => {
-            handle_prioid_command(state, priority, &ids).await
-        }
-        Command::RangeId { id, range } => {
-            handle_rangeid_command(state, id, range).await
-        }
+        Command::Prio { priority, ranges } => handle_prio_command(state, priority, &ranges).await,
+        Command::PrioId { priority, ids } => handle_prioid_command(state, priority, &ids).await,
+        Command::RangeId { id, range } => handle_rangeid_command(state, id, range).await,
         Command::AddTagId { id, tag, value } => {
             handle_addtagid_command(state, id, &tag, &value).await
         }
@@ -806,18 +690,10 @@ async fn handle_command(cmd: Command, state: &AppState) -> Response {
             handle_cleartagid_command(state, id, tag.as_deref()).await
         }
         // Miscellaneous
-        Command::Config => {
-            handle_config_command().await
-        }
-        Command::Kill => {
-            handle_kill_command().await
-        }
-        Command::MixRampDb { decibels } => {
-            handle_mixrampdb_command(state, decibels).await
-        }
-        Command::MixRampDelay { seconds } => {
-            handle_mixrampdelay_command(state, seconds).await
-        }
+        Command::Config => handle_config_command().await,
+        Command::Kill => handle_kill_command().await,
+        Command::MixRampDb { decibels } => handle_mixrampdb_command(state, decibels).await,
+        Command::MixRampDelay { seconds } => handle_mixrampdelay_command(state, seconds).await,
         _ => {
             // Unimplemented commands
             ResponseBuilder::error(5, 0, "command", "not yet implemented")
@@ -831,7 +707,7 @@ async fn handle_find_command(
     state: &AppState,
     filters: &[(String, String)],
     sort: Option<&str>,
-    window: Option<(u32, u32)>
+    window: Option<(u32, u32)>,
 ) -> String {
     let db_path = match &state.db_path {
         Some(p) => p,
@@ -851,13 +727,15 @@ async fn handle_find_command(
     let mut songs = if filters[0].0.starts_with('(') {
         // Parse as filter expression
         match rmpd_core::filter::FilterExpression::parse(&filters[0].0) {
-            Ok(filter) => {
-                match db.find_songs_filter(&filter) {
-                    Ok(s) => s,
-                    Err(e) => return ResponseBuilder::error(50, 0, "find", &format!("query error: {}", e)),
+            Ok(filter) => match db.find_songs_filter(&filter) {
+                Ok(s) => s,
+                Err(e) => {
+                    return ResponseBuilder::error(50, 0, "find", &format!("query error: {}", e))
                 }
+            },
+            Err(e) => {
+                return ResponseBuilder::error(2, 0, "find", &format!("filter parse error: {}", e))
             }
-            Err(e) => return ResponseBuilder::error(2, 0, "find", &format!("filter parse error: {}", e)),
         }
     } else if filters.len() == 1 {
         // Simple single tag/value search
@@ -867,7 +745,7 @@ async fn handle_find_command(
         }
     } else {
         // Multiple tag/value pairs - build filter expression with AND
-        use rmpd_core::filter::{FilterExpression, CompareOp};
+        use rmpd_core::filter::{CompareOp, FilterExpression};
         let mut expr = FilterExpression::Compare {
             tag: filters[0].0.clone(),
             op: CompareOp::Equal,
@@ -938,7 +816,7 @@ async fn handle_search_command(
     state: &AppState,
     filters: &[(String, String)],
     sort: Option<&str>,
-    window: Option<(u32, u32)>
+    window: Option<(u32, u32)>,
 ) -> String {
     let db_path = match &state.db_path {
         Some(p) => p,
@@ -947,7 +825,9 @@ async fn handle_search_command(
 
     let db = match rmpd_library::Database::open(db_path) {
         Ok(d) => d,
-        Err(e) => return ResponseBuilder::error(50, 0, "search", &format!("database error: {}", e)),
+        Err(e) => {
+            return ResponseBuilder::error(50, 0, "search", &format!("database error: {}", e))
+        }
     };
 
     if filters.is_empty() {
@@ -958,13 +838,20 @@ async fn handle_search_command(
     let mut songs = if filters[0].0.starts_with('(') {
         // Parse as filter expression
         match rmpd_core::filter::FilterExpression::parse(&filters[0].0) {
-            Ok(filter) => {
-                match db.find_songs_filter(&filter) {
-                    Ok(s) => s,
-                    Err(e) => return ResponseBuilder::error(50, 0, "search", &format!("query error: {}", e)),
+            Ok(filter) => match db.find_songs_filter(&filter) {
+                Ok(s) => s,
+                Err(e) => {
+                    return ResponseBuilder::error(50, 0, "search", &format!("query error: {}", e))
                 }
+            },
+            Err(e) => {
+                return ResponseBuilder::error(
+                    2,
+                    0,
+                    "search",
+                    &format!("filter parse error: {}", e),
+                )
             }
-            Err(e) => return ResponseBuilder::error(2, 0, "search", &format!("filter parse error: {}", e)),
         }
     } else if filters.len() == 1 {
         let tag = &filters[0].0;
@@ -974,18 +861,22 @@ async fn handle_search_command(
             // Use FTS for "any" tag
             match db.search_songs(value) {
                 Ok(s) => s,
-                Err(e) => return ResponseBuilder::error(50, 0, "search", &format!("search error: {}", e)),
+                Err(e) => {
+                    return ResponseBuilder::error(50, 0, "search", &format!("search error: {}", e))
+                }
             }
         } else {
             // Partial match using LIKE
             match db.find_songs(tag, value) {
                 Ok(s) => s,
-                Err(e) => return ResponseBuilder::error(50, 0, "search", &format!("query error: {}", e)),
+                Err(e) => {
+                    return ResponseBuilder::error(50, 0, "search", &format!("query error: {}", e))
+                }
             }
         }
     } else {
         // Multiple tag/value pairs - build filter expression with AND
-        use rmpd_core::filter::{FilterExpression, CompareOp};
+        use rmpd_core::filter::{CompareOp, FilterExpression};
         let mut expr = FilterExpression::Compare {
             tag: filters[0].0.clone(),
             op: CompareOp::Equal,
@@ -1003,7 +894,9 @@ async fn handle_search_command(
 
         match db.find_songs_filter(&expr) {
             Ok(s) => s,
-            Err(e) => return ResponseBuilder::error(50, 0, "search", &format!("query error: {}", e)),
+            Err(e) => {
+                return ResponseBuilder::error(50, 0, "search", &format!("query error: {}", e))
+            }
         }
     };
 
@@ -1036,7 +929,12 @@ async fn handle_search_command(
     resp.ok()
 }
 
-async fn handle_list_command(state: &AppState, tag: &str, filter_tag: Option<&str>, filter_value: Option<&str>) -> String {
+async fn handle_list_command(
+    state: &AppState,
+    tag: &str,
+    filter_tag: Option<&str>,
+    filter_value: Option<&str>,
+) -> String {
     let db_path = match &state.db_path {
         Some(p) => p,
         None => return ResponseBuilder::error(50, 0, "list", "database not configured"),
@@ -1087,7 +985,7 @@ async fn handle_list_command(state: &AppState, tag: &str, filter_tag: Option<&st
 async fn handle_count_command(
     state: &AppState,
     filters: &[(String, String)],
-    group: Option<&str>
+    group: Option<&str>,
 ) -> String {
     let db_path = match &state.db_path {
         Some(p) => p,
@@ -1107,11 +1005,13 @@ async fn handle_count_command(
     let songs = if filters.len() == 1 {
         match db.find_songs(&filters[0].0, &filters[0].1) {
             Ok(s) => s,
-            Err(e) => return ResponseBuilder::error(50, 0, "count", &format!("query error: {}", e)),
+            Err(e) => {
+                return ResponseBuilder::error(50, 0, "count", &format!("query error: {}", e))
+            }
         }
     } else {
         // Multiple filters - build AND expression
-        use rmpd_core::filter::{FilterExpression, CompareOp};
+        use rmpd_core::filter::{CompareOp, FilterExpression};
         let mut expr = FilterExpression::Compare {
             tag: filters[0].0.clone(),
             op: CompareOp::Equal,
@@ -1129,7 +1029,9 @@ async fn handle_count_command(
 
         match db.find_songs_filter(&expr) {
             Ok(s) => s,
-            Err(e) => return ResponseBuilder::error(50, 0, "count", &format!("query error: {}", e)),
+            Err(e) => {
+                return ResponseBuilder::error(50, 0, "count", &format!("query error: {}", e))
+            }
         }
     };
 
@@ -1156,7 +1058,8 @@ async fn handle_count_command(
         }
     } else {
         // No grouping - return totals
-        let total_duration: u64 = songs.iter()
+        let total_duration: u64 = songs
+            .iter()
             .filter_map(|s| s.duration)
             .map(|d| d.as_secs())
             .sum();
@@ -1212,7 +1115,9 @@ async fn handle_play_command(state: &AppState, position: Option<u32>) -> String 
             status.bitrate = song.bitrate;
 
             // Set audio format if available
-            if let (Some(sr), Some(ch), Some(bps)) = (song.sample_rate, song.channels, song.bits_per_sample) {
+            if let (Some(sr), Some(ch), Some(bps)) =
+                (song.sample_rate, song.channels, song.bits_per_sample)
+            {
                 status.audio_format = Some(rmpd_core::song::AudioFormat {
                     sample_rate: sr,
                     channels: ch,
@@ -1221,10 +1126,7 @@ async fn handle_play_command(state: &AppState, position: Option<u32>) -> String 
             }
 
             if let Some((pos, id)) = actual_position {
-                status.current_song = Some(rmpd_core::state::QueuePosition {
-                    position: pos,
-                    id,
-                });
+                status.current_song = Some(rmpd_core::state::QueuePosition { position: pos, id });
 
                 // Set next_song for UI (e.g., Cantata's next button)
                 let queue = state.queue.read().await;
@@ -1241,8 +1143,14 @@ async fn handle_play_command(state: &AppState, position: Option<u32>) -> String 
 
             // Emit events to notify idle clients
             debug!("Emitting PlayerStateChanged(Play) and SongChanged events");
-            state.event_bus.emit(rmpd_core::event::Event::PlayerStateChanged(rmpd_core::state::PlayerState::Play));
-            state.event_bus.emit(rmpd_core::event::Event::SongChanged(Some(song)));
+            state
+                .event_bus
+                .emit(rmpd_core::event::Event::PlayerStateChanged(
+                    rmpd_core::state::PlayerState::Play,
+                ));
+            state
+                .event_bus
+                .emit(rmpd_core::event::Event::SongChanged(Some(song)));
 
             ResponseBuilder::new().ok()
         }
@@ -1264,7 +1172,8 @@ async fn handle_pause_command(state: &AppState, pause_state: Option<bool>) -> St
 
     info!("Current state (atomic, no locks): {:?}", current_state);
 
-    let should_pause = pause_state.unwrap_or_else(|| current_state == rmpd_core::state::PlayerState::Play);
+    let should_pause =
+        pause_state.unwrap_or_else(|| current_state == rmpd_core::state::PlayerState::Play);
     let is_currently_paused = current_state == rmpd_core::state::PlayerState::Pause;
 
     // If already in desired state, do nothing
@@ -1302,9 +1211,14 @@ async fn handle_pause_command(state: &AppState, pause_state: Option<bool>) -> St
 
             // Emit event to notify idle clients
             debug!("Emitting PlayerStateChanged({:?}) event", actual_state);
-            state.event_bus.emit(rmpd_core::event::Event::PlayerStateChanged(actual_state));
+            state
+                .event_bus
+                .emit(rmpd_core::event::Event::PlayerStateChanged(actual_state));
 
-            info!("Pause completed successfully, state is now: {:?}", actual_state);
+            info!(
+                "Pause completed successfully, state is now: {:?}",
+                actual_state
+            );
             ResponseBuilder::new().ok()
         }
         Err(e) => {
@@ -1328,7 +1242,11 @@ async fn handle_stop_command(state: &AppState) -> String {
 
             // Emit event to notify idle clients
             debug!("Emitting PlayerStateChanged(Stop) event");
-            state.event_bus.emit(rmpd_core::event::Event::PlayerStateChanged(rmpd_core::state::PlayerState::Stop));
+            state
+                .event_bus
+                .emit(rmpd_core::event::Event::PlayerStateChanged(
+                    rmpd_core::state::PlayerState::Stop,
+                ));
 
             ResponseBuilder::new().ok()
         }
@@ -1452,7 +1370,8 @@ async fn handle_seek_command(state: &AppState, position: u32, time: f64) -> Stri
             match state.engine.read().await.seek(time).await {
                 Ok(_) => {
                     // Update status elapsed time
-                    state.status.write().await.elapsed = Some(std::time::Duration::from_secs_f64(time));
+                    state.status.write().await.elapsed =
+                        Some(std::time::Duration::from_secs_f64(time));
                     ResponseBuilder::new().ok()
                 }
                 Err(e) => ResponseBuilder::error(50, 0, "seek", &format!("Seek failed: {}", e)),
@@ -1476,7 +1395,8 @@ async fn handle_seekid_command(state: &AppState, id: u32, time: f64) -> String {
             match state.engine.read().await.seek(time).await {
                 Ok(_) => {
                     // Update status elapsed time
-                    state.status.write().await.elapsed = Some(std::time::Duration::from_secs_f64(time));
+                    state.status.write().await.elapsed =
+                        Some(std::time::Duration::from_secs_f64(time));
                     ResponseBuilder::new().ok()
                 }
                 Err(e) => ResponseBuilder::error(50, 0, "seekid", &format!("Seek failed: {}", e)),
@@ -1493,7 +1413,10 @@ async fn handle_seekcur_command(state: &AppState, time: f64, relative: bool) -> 
     let status = state.status.read().await;
 
     if status.current_song.is_some() {
-        let current_elapsed = status.elapsed.unwrap_or(std::time::Duration::ZERO).as_secs_f64();
+        let current_elapsed = status
+            .elapsed
+            .unwrap_or(std::time::Duration::ZERO)
+            .as_secs_f64();
         drop(status);
 
         // Calculate actual seek position
@@ -1509,7 +1432,8 @@ async fn handle_seekcur_command(state: &AppState, time: f64, relative: bool) -> 
         match state.engine.read().await.seek(seek_position).await {
             Ok(_) => {
                 // Update status elapsed time
-                state.status.write().await.elapsed = Some(std::time::Duration::from_secs_f64(seek_position));
+                state.status.write().await.elapsed =
+                    Some(std::time::Duration::from_secs_f64(seek_position));
                 ResponseBuilder::new().ok()
             }
             Err(e) => ResponseBuilder::error(50, 0, "seekcur", &format!("Seek failed: {}", e)),
@@ -1556,7 +1480,7 @@ async fn handle_add_command(state: &AppState, uri: &str, position: Option<u32>) 
     let mut status = state.status.write().await;
     status.playlist_version += 1;
     status.playlist_length = state.queue.read().await.len() as u32;
-    drop(status);  // Release the lock
+    drop(status); // Release the lock
 
     let mut resp = ResponseBuilder::new();
     resp.field("Id", id);
@@ -1663,12 +1587,26 @@ async fn handle_albumart_command(state: &AppState, uri: &str, offset: usize) -> 
 
     let db_path = match &state.db_path {
         Some(p) => p,
-        None => return Response::Text(ResponseBuilder::error(50, 0, "albumart", "database not configured")),
+        None => {
+            return Response::Text(ResponseBuilder::error(
+                50,
+                0,
+                "albumart",
+                "database not configured",
+            ))
+        }
     };
 
     let db = match rmpd_library::Database::open(db_path) {
         Ok(d) => d,
-        Err(e) => return Response::Text(ResponseBuilder::error(50, 0, "albumart", &format!("database error: {}", e))),
+        Err(e) => {
+            return Response::Text(ResponseBuilder::error(
+                50,
+                0,
+                "albumart",
+                &format!("database error: {}", e),
+            ))
+        }
     };
 
     // Resolve relative path to absolute path
@@ -1684,7 +1622,14 @@ async fn handle_albumart_command(state: &AppState, uri: &str, offset: usize) -> 
                 debug!("Resolved relative path: {} -> {}", uri, path);
                 path
             }
-            None => return Response::Text(ResponseBuilder::error(50, 0, "albumart", "music directory not configured")),
+            None => {
+                return Response::Text(ResponseBuilder::error(
+                    50,
+                    0,
+                    "albumart",
+                    "music directory not configured",
+                ))
+            }
         }
     };
 
@@ -1705,7 +1650,12 @@ async fn handle_albumart_command(state: &AppState, uri: &str, offset: usize) -> 
             // This is the correct MPD protocol behavior for chunked transfers
             Response::Text(ResponseBuilder::new().ok())
         }
-        Err(e) => Response::Text(ResponseBuilder::error(50, 0, "albumart", &format!("Error: {}", e))),
+        Err(e) => Response::Text(ResponseBuilder::error(
+            50,
+            0,
+            "albumart",
+            &format!("Error: {}", e),
+        )),
     }
 }
 
@@ -1717,7 +1667,10 @@ async fn handle_readpicture_command(state: &AppState, uri: &str, offset: usize) 
 
 // Queue ID-based operations
 async fn handle_addid_command(state: &AppState, uri: &str, position: Option<u32>) -> String {
-    debug!("AddId command received with URI: [{}], position: {:?}", uri, position);
+    debug!(
+        "AddId command received with URI: [{}], position: {:?}",
+        uri, position
+    );
 
     let db_path = match &state.db_path {
         Some(p) => p,
@@ -1790,7 +1743,9 @@ async fn handle_playid_command(state: &AppState, id: Option<u32>) -> String {
 
                     ResponseBuilder::new().ok()
                 }
-                Err(e) => ResponseBuilder::error(50, 0, "playid", &format!("Playback error: {}", e)),
+                Err(e) => {
+                    ResponseBuilder::error(50, 0, "playid", &format!("Playback error: {}", e))
+                }
             }
         } else {
             ResponseBuilder::error(50, 0, "playid", "No such song")
@@ -2016,7 +1971,9 @@ async fn handle_lsinfo_command(state: &AppState, path: Option<&str>) -> String {
 
     let db = match rmpd_library::Database::open(db_path) {
         Ok(d) => d,
-        Err(e) => return ResponseBuilder::error(50, 0, "lsinfo", &format!("database error: {}", e)),
+        Err(e) => {
+            return ResponseBuilder::error(50, 0, "lsinfo", &format!("database error: {}", e))
+        }
     };
 
     let path_str = path.unwrap_or("");
@@ -2067,7 +2024,9 @@ async fn handle_listall_command(state: &AppState, path: Option<&str>) -> String 
 
     let db = match rmpd_library::Database::open(db_path) {
         Ok(d) => d,
-        Err(e) => return ResponseBuilder::error(50, 0, "listall", &format!("database error: {}", e)),
+        Err(e) => {
+            return ResponseBuilder::error(50, 0, "listall", &format!("database error: {}", e))
+        }
     };
 
     let path_str = path.unwrap_or("");
@@ -2092,7 +2051,9 @@ async fn handle_listallinfo_command(state: &AppState, path: Option<&str>) -> Str
 
     let db = match rmpd_library::Database::open(db_path) {
         Ok(d) => d,
-        Err(e) => return ResponseBuilder::error(50, 0, "listallinfo", &format!("database error: {}", e)),
+        Err(e) => {
+            return ResponseBuilder::error(50, 0, "listallinfo", &format!("database error: {}", e))
+        }
     };
 
     let path_str = path.unwrap_or("");
@@ -2110,7 +2071,11 @@ async fn handle_listallinfo_command(state: &AppState, path: Option<&str>) -> Str
 }
 
 // Stored playlist commands
-async fn handle_save_command(state: &AppState, name: &str, mode: Option<crate::parser::SaveMode>) -> String {
+async fn handle_save_command(
+    state: &AppState,
+    name: &str,
+    mode: Option<crate::parser::SaveMode>,
+) -> String {
     use crate::parser::SaveMode;
 
     let db_path = match &state.db_path {
@@ -2185,7 +2150,12 @@ async fn handle_save_command(state: &AppState, name: &str, mode: Option<crate::p
     }
 }
 
-async fn handle_load_command(state: &AppState, name: &str, range: Option<(u32, u32)>, position: Option<u32>) -> String {
+async fn handle_load_command(
+    state: &AppState,
+    name: &str,
+    range: Option<(u32, u32)>,
+    position: Option<u32>,
+) -> String {
     let db_path = match &state.db_path {
         Some(p) => p,
         None => return ResponseBuilder::error(50, 0, "load", "database not configured"),
@@ -2244,7 +2214,14 @@ async fn handle_listplaylists_command(state: &AppState) -> String {
 
     let db = match rmpd_library::Database::open(db_path) {
         Ok(d) => d,
-        Err(e) => return ResponseBuilder::error(50, 0, "listplaylists", &format!("database error: {}", e)),
+        Err(e) => {
+            return ResponseBuilder::error(
+                50,
+                0,
+                "listplaylists",
+                &format!("database error: {}", e),
+            )
+        }
     };
 
     match db.list_playlists() {
@@ -2261,7 +2238,11 @@ async fn handle_listplaylists_command(state: &AppState) -> String {
     }
 }
 
-async fn handle_listplaylist_command(state: &AppState, name: &str, range: Option<(u32, u32)>) -> String {
+async fn handle_listplaylist_command(
+    state: &AppState,
+    name: &str,
+    range: Option<(u32, u32)>,
+) -> String {
     let db_path = match &state.db_path {
         Some(p) => p,
         None => return ResponseBuilder::error(50, 0, "listplaylist", "database not configured"),
@@ -2269,7 +2250,9 @@ async fn handle_listplaylist_command(state: &AppState, name: &str, range: Option
 
     let db = match rmpd_library::Database::open(db_path) {
         Ok(d) => d,
-        Err(e) => return ResponseBuilder::error(50, 0, "listplaylist", &format!("database error: {}", e)),
+        Err(e) => {
+            return ResponseBuilder::error(50, 0, "listplaylist", &format!("database error: {}", e))
+        }
     };
 
     match db.get_playlist_songs(name) {
@@ -2297,15 +2280,28 @@ async fn handle_listplaylist_command(state: &AppState, name: &str, range: Option
     }
 }
 
-async fn handle_listplaylistinfo_command(state: &AppState, name: &str, range: Option<(u32, u32)>) -> String {
+async fn handle_listplaylistinfo_command(
+    state: &AppState,
+    name: &str,
+    range: Option<(u32, u32)>,
+) -> String {
     let db_path = match &state.db_path {
         Some(p) => p,
-        None => return ResponseBuilder::error(50, 0, "listplaylistinfo", "database not configured"),
+        None => {
+            return ResponseBuilder::error(50, 0, "listplaylistinfo", "database not configured")
+        }
     };
 
     let db = match rmpd_library::Database::open(db_path) {
         Ok(d) => d,
-        Err(e) => return ResponseBuilder::error(50, 0, "listplaylistinfo", &format!("database error: {}", e)),
+        Err(e) => {
+            return ResponseBuilder::error(
+                50,
+                0,
+                "listplaylistinfo",
+                &format!("database error: {}", e),
+            )
+        }
     };
 
     match db.get_playlist_songs(name) {
@@ -2333,7 +2329,12 @@ async fn handle_listplaylistinfo_command(state: &AppState, name: &str, range: Op
     }
 }
 
-async fn handle_playlistadd_command(state: &AppState, name: &str, uri: &str, position: Option<u32>) -> String {
+async fn handle_playlistadd_command(
+    state: &AppState,
+    name: &str,
+    uri: &str,
+    position: Option<u32>,
+) -> String {
     let db_path = match &state.db_path {
         Some(p) => p,
         None => return ResponseBuilder::error(50, 0, "playlistadd", "database not configured"),
@@ -2341,7 +2342,9 @@ async fn handle_playlistadd_command(state: &AppState, name: &str, uri: &str, pos
 
     let db = match rmpd_library::Database::open(db_path) {
         Ok(d) => d,
-        Err(e) => return ResponseBuilder::error(50, 0, "playlistadd", &format!("database error: {}", e)),
+        Err(e) => {
+            return ResponseBuilder::error(50, 0, "playlistadd", &format!("database error: {}", e))
+        }
     };
 
     // TODO: Implement position support in database layer
@@ -2362,7 +2365,14 @@ async fn handle_playlistclear_command(state: &AppState, name: &str) -> String {
 
     let db = match rmpd_library::Database::open(db_path) {
         Ok(d) => d,
-        Err(e) => return ResponseBuilder::error(50, 0, "playlistclear", &format!("database error: {}", e)),
+        Err(e) => {
+            return ResponseBuilder::error(
+                50,
+                0,
+                "playlistclear",
+                &format!("database error: {}", e),
+            )
+        }
     };
 
     match db.playlist_clear(name) {
@@ -2379,7 +2389,14 @@ async fn handle_playlistdelete_command(state: &AppState, name: &str, position: u
 
     let db = match rmpd_library::Database::open(db_path) {
         Ok(d) => d,
-        Err(e) => return ResponseBuilder::error(50, 0, "playlistdelete", &format!("database error: {}", e)),
+        Err(e) => {
+            return ResponseBuilder::error(
+                50,
+                0,
+                "playlistdelete",
+                &format!("database error: {}", e),
+            )
+        }
     };
 
     match db.playlist_delete_pos(name, position) {
@@ -2396,7 +2413,9 @@ async fn handle_playlistmove_command(state: &AppState, name: &str, from: u32, to
 
     let db = match rmpd_library::Database::open(db_path) {
         Ok(d) => d,
-        Err(e) => return ResponseBuilder::error(50, 0, "playlistmove", &format!("database error: {}", e)),
+        Err(e) => {
+            return ResponseBuilder::error(50, 0, "playlistmove", &format!("database error: {}", e))
+        }
     };
 
     match db.playlist_move(name, from, to) {
@@ -2430,7 +2449,9 @@ async fn handle_rename_command(state: &AppState, from: &str, to: &str) -> String
 
     let db = match rmpd_library::Database::open(db_path) {
         Ok(d) => d,
-        Err(e) => return ResponseBuilder::error(50, 0, "rename", &format!("database error: {}", e)),
+        Err(e) => {
+            return ResponseBuilder::error(50, 0, "rename", &format!("database error: {}", e))
+        }
     };
 
     match db.rename_playlist(from, to) {
@@ -2463,7 +2484,9 @@ async fn handle_enableoutput_command(state: &AppState, id: u32) -> String {
 
     if let Some(output) = outputs.iter_mut().find(|o| o.id == id) {
         output.enabled = true;
-        state.event_bus.emit(rmpd_core::event::Event::OutputsChanged);
+        state
+            .event_bus
+            .emit(rmpd_core::event::Event::OutputsChanged);
         ResponseBuilder::new().ok()
     } else {
         ResponseBuilder::error(50, 0, "enableoutput", "No such output")
@@ -2475,7 +2498,9 @@ async fn handle_disableoutput_command(state: &AppState, id: u32) -> String {
 
     if let Some(output) = outputs.iter_mut().find(|o| o.id == id) {
         output.enabled = false;
-        state.event_bus.emit(rmpd_core::event::Event::OutputsChanged);
+        state
+            .event_bus
+            .emit(rmpd_core::event::Event::OutputsChanged);
         ResponseBuilder::new().ok()
     } else {
         ResponseBuilder::error(50, 0, "disableoutput", "No such output")
@@ -2487,7 +2512,9 @@ async fn handle_toggleoutput_command(state: &AppState, id: u32) -> String {
 
     if let Some(output) = outputs.iter_mut().find(|o| o.id == id) {
         output.enabled = !output.enabled;
-        state.event_bus.emit(rmpd_core::event::Event::OutputsChanged);
+        state
+            .event_bus
+            .emit(rmpd_core::event::Event::OutputsChanged);
         ResponseBuilder::new().ok()
     } else {
         ResponseBuilder::error(50, 0, "toggleoutput", "No such output")
@@ -2679,11 +2706,11 @@ async fn handle_protocol_command(subcommand: Option<crate::parser::ProtocolSubco
         None | Some(ProtocolSubcommand::Available) => {
             // List all available protocol features
             // Based on MPD 0.24.x protocol features
-            resp.field("feature", "binary");          // Binary responses
+            resp.field("feature", "binary"); // Binary responses
             resp.field("feature", "command_list_ok"); // Command lists with OK markers
-            resp.field("feature", "idle");            // Idle notifications
-            resp.field("feature", "ranges");          // Range syntax (START:END)
-            resp.field("feature", "tags");            // Tag type negotiation
+            resp.field("feature", "idle"); // Idle notifications
+            resp.field("feature", "ranges"); // Range syntax (START:END)
+            resp.field("feature", "tags"); // Tag type negotiation
         }
         Some(ProtocolSubcommand::All) => {
             // Enable all protocol features for this client
@@ -2766,18 +2793,24 @@ async fn handle_searchadd_command(state: &AppState, tag: &str, value: &str) -> S
 
     let db = match rmpd_library::Database::open(db_path) {
         Ok(d) => d,
-        Err(e) => return ResponseBuilder::error(50, 0, "searchadd", &format!("database error: {}", e)),
+        Err(e) => {
+            return ResponseBuilder::error(50, 0, "searchadd", &format!("database error: {}", e))
+        }
     };
 
     let songs = if tag.eq_ignore_ascii_case("any") {
         match db.search_songs(value) {
             Ok(s) => s,
-            Err(e) => return ResponseBuilder::error(50, 0, "searchadd", &format!("search error: {}", e)),
+            Err(e) => {
+                return ResponseBuilder::error(50, 0, "searchadd", &format!("search error: {}", e))
+            }
         }
     } else {
         match db.find_songs(tag, value) {
             Ok(s) => s,
-            Err(e) => return ResponseBuilder::error(50, 0, "searchadd", &format!("query error: {}", e)),
+            Err(e) => {
+                return ResponseBuilder::error(50, 0, "searchadd", &format!("query error: {}", e))
+            }
         }
     };
 
@@ -2794,7 +2827,12 @@ async fn handle_searchadd_command(state: &AppState, tag: &str, value: &str) -> S
     ResponseBuilder::new().ok()
 }
 
-async fn handle_searchaddpl_command(state: &AppState, name: &str, tag: &str, value: &str) -> String {
+async fn handle_searchaddpl_command(
+    state: &AppState,
+    name: &str,
+    tag: &str,
+    value: &str,
+) -> String {
     // Search and add results to stored playlist
     let db_path = match &state.db_path {
         Some(p) => p,
@@ -2803,18 +2841,29 @@ async fn handle_searchaddpl_command(state: &AppState, name: &str, tag: &str, val
 
     let db = match rmpd_library::Database::open(db_path) {
         Ok(d) => d,
-        Err(e) => return ResponseBuilder::error(50, 0, "searchaddpl", &format!("database error: {}", e)),
+        Err(e) => {
+            return ResponseBuilder::error(50, 0, "searchaddpl", &format!("database error: {}", e))
+        }
     };
 
     let songs = if tag.eq_ignore_ascii_case("any") {
         match db.search_songs(value) {
             Ok(s) => s,
-            Err(e) => return ResponseBuilder::error(50, 0, "searchaddpl", &format!("search error: {}", e)),
+            Err(e) => {
+                return ResponseBuilder::error(
+                    50,
+                    0,
+                    "searchaddpl",
+                    &format!("search error: {}", e),
+                )
+            }
         }
     } else {
         match db.find_songs(tag, value) {
             Ok(s) => s,
-            Err(e) => return ResponseBuilder::error(50, 0, "searchaddpl", &format!("query error: {}", e)),
+            Err(e) => {
+                return ResponseBuilder::error(50, 0, "searchaddpl", &format!("query error: {}", e))
+            }
         }
     };
 
@@ -2841,7 +2890,9 @@ async fn handle_listfiles_command(state: &AppState, uri: Option<&str>) -> String
 
     let db = match rmpd_library::Database::open(db_path) {
         Ok(d) => d,
-        Err(e) => return ResponseBuilder::error(50, 0, "listfiles", &format!("database error: {}", e)),
+        Err(e) => {
+            return ResponseBuilder::error(50, 0, "listfiles", &format!("database error: {}", e))
+        }
     };
 
     let path = uri.unwrap_or("");
@@ -2869,7 +2920,9 @@ async fn handle_sticker_get_command(state: &AppState, uri: &str, name: &str) -> 
 
     let db = match rmpd_library::Database::open(db_path) {
         Ok(d) => d,
-        Err(e) => return ResponseBuilder::error(50, 0, "sticker get", &format!("database error: {}", e)),
+        Err(e) => {
+            return ResponseBuilder::error(50, 0, "sticker get", &format!("database error: {}", e))
+        }
     };
 
     match db.get_sticker(uri, name) {
@@ -2883,7 +2936,12 @@ async fn handle_sticker_get_command(state: &AppState, uri: &str, name: &str) -> 
     }
 }
 
-async fn handle_sticker_set_command(state: &AppState, uri: &str, name: &str, value: &str) -> String {
+async fn handle_sticker_set_command(
+    state: &AppState,
+    uri: &str,
+    name: &str,
+    value: &str,
+) -> String {
     let db_path = match &state.db_path {
         Some(p) => p,
         None => return ResponseBuilder::error(50, 0, "sticker set", "database not configured"),
@@ -2891,7 +2949,9 @@ async fn handle_sticker_set_command(state: &AppState, uri: &str, name: &str, val
 
     let db = match rmpd_library::Database::open(db_path) {
         Ok(d) => d,
-        Err(e) => return ResponseBuilder::error(50, 0, "sticker set", &format!("database error: {}", e)),
+        Err(e) => {
+            return ResponseBuilder::error(50, 0, "sticker set", &format!("database error: {}", e))
+        }
     };
 
     match db.set_sticker(uri, name, value) {
@@ -2908,7 +2968,14 @@ async fn handle_sticker_delete_command(state: &AppState, uri: &str, name: Option
 
     let db = match rmpd_library::Database::open(db_path) {
         Ok(d) => d,
-        Err(e) => return ResponseBuilder::error(50, 0, "sticker delete", &format!("database error: {}", e)),
+        Err(e) => {
+            return ResponseBuilder::error(
+                50,
+                0,
+                "sticker delete",
+                &format!("database error: {}", e),
+            )
+        }
     };
 
     match db.delete_sticker(uri, name) {
@@ -2925,7 +2992,9 @@ async fn handle_sticker_list_command(state: &AppState, uri: &str) -> String {
 
     let db = match rmpd_library::Database::open(db_path) {
         Ok(d) => d,
-        Err(e) => return ResponseBuilder::error(50, 0, "sticker list", &format!("database error: {}", e)),
+        Err(e) => {
+            return ResponseBuilder::error(50, 0, "sticker list", &format!("database error: {}", e))
+        }
     };
 
     match db.list_stickers(uri) {
@@ -2940,7 +3009,12 @@ async fn handle_sticker_list_command(state: &AppState, uri: &str) -> String {
     }
 }
 
-async fn handle_sticker_find_command(state: &AppState, uri: &str, name: &str, _value: Option<&str>) -> String {
+async fn handle_sticker_find_command(
+    state: &AppState,
+    uri: &str,
+    name: &str,
+    _value: Option<&str>,
+) -> String {
     let db_path = match &state.db_path {
         Some(p) => p,
         None => return ResponseBuilder::error(50, 0, "sticker find", "database not configured"),
@@ -2948,7 +3022,9 @@ async fn handle_sticker_find_command(state: &AppState, uri: &str, name: &str, _v
 
     let db = match rmpd_library::Database::open(db_path) {
         Ok(d) => d,
-        Err(e) => return ResponseBuilder::error(50, 0, "sticker find", &format!("database error: {}", e)),
+        Err(e) => {
+            return ResponseBuilder::error(50, 0, "sticker find", &format!("database error: {}", e))
+        }
     };
 
     match db.find_stickers(uri, name) {
@@ -3105,7 +3181,11 @@ async fn handle_mixrampdelay_command(state: &AppState, seconds: f32) -> String {
 }
 
 // Queue inspection commands
-async fn handle_plchanges_command(state: &AppState, version: u32, range: Option<(u32, u32)>) -> String {
+async fn handle_plchanges_command(
+    state: &AppState,
+    version: u32,
+    range: Option<(u32, u32)>,
+) -> String {
     // Return changes in queue since version
     // MPD protocol: version 0 means "give me current playlist"
     // Otherwise, return items if playlist has changed since given version
@@ -3140,7 +3220,11 @@ async fn handle_plchanges_command(state: &AppState, version: u32, range: Option<
     resp.ok()
 }
 
-async fn handle_plchangesposid_command(state: &AppState, version: u32, range: Option<(u32, u32)>) -> String {
+async fn handle_plchangesposid_command(
+    state: &AppState,
+    version: u32,
+    range: Option<(u32, u32)>,
+) -> String {
     // Return position/id changes since version
     // MPD protocol: version 0 means "give me current playlist"
     // Otherwise, return items if playlist has changed since given version
@@ -3200,10 +3284,30 @@ async fn handle_playlistsearch_command(state: &AppState, tag: &str, value: &str)
 
     for item in queue.items() {
         let matches = match tag.to_lowercase().as_str() {
-            "artist" => item.song.artist.as_ref().map(|s| s.to_lowercase().contains(&value_lower)).unwrap_or(false),
-            "album" => item.song.album.as_ref().map(|s| s.to_lowercase().contains(&value_lower)).unwrap_or(false),
-            "title" => item.song.title.as_ref().map(|s| s.to_lowercase().contains(&value_lower)).unwrap_or(false),
-            "genre" => item.song.genre.as_ref().map(|s| s.to_lowercase().contains(&value_lower)).unwrap_or(false),
+            "artist" => item
+                .song
+                .artist
+                .as_ref()
+                .map(|s| s.to_lowercase().contains(&value_lower))
+                .unwrap_or(false),
+            "album" => item
+                .song
+                .album
+                .as_ref()
+                .map(|s| s.to_lowercase().contains(&value_lower))
+                .unwrap_or(false),
+            "title" => item
+                .song
+                .title
+                .as_ref()
+                .map(|s| s.to_lowercase().contains(&value_lower))
+                .unwrap_or(false),
+            "genre" => item
+                .song
+                .genre
+                .as_ref()
+                .map(|s| s.to_lowercase().contains(&value_lower))
+                .unwrap_or(false),
             _ => false,
         };
 
@@ -3231,7 +3335,12 @@ async fn handle_replaygain_status_command(state: &AppState) -> String {
 }
 
 // Database commands
-async fn handle_searchcount_command(state: &AppState, tag: &str, value: &str, group: Option<&str>) -> String {
+async fn handle_searchcount_command(
+    state: &AppState,
+    tag: &str,
+    value: &str,
+    group: Option<&str>,
+) -> String {
     // Count search results with optional grouping
     let filters = vec![(tag.to_string(), value.to_string())];
     handle_count_command(state, &filters, group).await
@@ -3261,7 +3370,12 @@ async fn handle_readcomments_command(state: &AppState, uri: &str) -> String {
 }
 
 // Playlist commands
-async fn handle_searchplaylist_command(state: &AppState, name: &str, tag: &str, value: &str) -> String {
+async fn handle_searchplaylist_command(
+    state: &AppState,
+    name: &str,
+    tag: &str,
+    value: &str,
+) -> String {
     // Search stored playlist for songs matching tag/value
     if let Some(ref db_path) = state.db_path {
         if let Ok(db) = rmpd_library::Database::open(db_path) {
@@ -3271,9 +3385,21 @@ async fn handle_searchplaylist_command(state: &AppState, name: &str, tag: &str, 
 
                 for song in songs {
                     let matches = match tag.to_lowercase().as_str() {
-                        "artist" => song.artist.as_ref().map(|s| s.to_lowercase().contains(&value_lower)).unwrap_or(false),
-                        "album" => song.album.as_ref().map(|s| s.to_lowercase().contains(&value_lower)).unwrap_or(false),
-                        "title" => song.title.as_ref().map(|s| s.to_lowercase().contains(&value_lower)).unwrap_or(false),
+                        "artist" => song
+                            .artist
+                            .as_ref()
+                            .map(|s| s.to_lowercase().contains(&value_lower))
+                            .unwrap_or(false),
+                        "album" => song
+                            .album
+                            .as_ref()
+                            .map(|s| s.to_lowercase().contains(&value_lower))
+                            .unwrap_or(false),
+                        "title" => song
+                            .title
+                            .as_ref()
+                            .map(|s| s.to_lowercase().contains(&value_lower))
+                            .unwrap_or(false),
                         _ => false,
                     };
 
@@ -3293,7 +3419,8 @@ async fn handle_playlistlength_command(state: &AppState, name: &str) -> String {
     if let Some(ref db_path) = state.db_path {
         if let Ok(db) = rmpd_library::Database::open(db_path) {
             if let Ok(songs) = db.load_playlist(name) {
-                let total_duration: f64 = songs.iter()
+                let total_duration: f64 = songs
+                    .iter()
                     .filter_map(|s| s.duration)
                     .map(|d| d.as_secs_f64())
                     .sum();
@@ -3309,7 +3436,12 @@ async fn handle_playlistlength_command(state: &AppState, name: &str) -> String {
 }
 
 // Sticker commands
-async fn handle_sticker_inc_command(state: &AppState, uri: &str, name: &str, delta: Option<i32>) -> String {
+async fn handle_sticker_inc_command(
+    state: &AppState,
+    uri: &str,
+    name: &str,
+    delta: Option<i32>,
+) -> String {
     // Increment numeric sticker value
     if let Some(ref db_path) = state.db_path {
         if let Ok(db) = rmpd_library::Database::open(db_path) {
@@ -3333,7 +3465,12 @@ async fn handle_sticker_inc_command(state: &AppState, uri: &str, name: &str, del
     ResponseBuilder::error(50, 0, "sticker inc", "Failed to increment sticker")
 }
 
-async fn handle_sticker_dec_command(state: &AppState, uri: &str, name: &str, delta: Option<i32>) -> String {
+async fn handle_sticker_dec_command(
+    state: &AppState,
+    uri: &str,
+    name: &str,
+    delta: Option<i32>,
+) -> String {
     // Decrement numeric sticker value
     if let Some(ref db_path) = state.db_path {
         if let Ok(db) = rmpd_library::Database::open(db_path) {

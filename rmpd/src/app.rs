@@ -3,7 +3,7 @@ use rmpd_core::config::Config;
 use rmpd_core::state::PlayerState;
 use rmpd_protocol::{AppState, MpdServer, StateFile};
 use tokio::signal;
-use tracing::{info, warn, error};
+use tracing::{error, info, warn};
 
 pub async fn run(bind_address: String, config: Config) -> Result<()> {
     // Create application state with database and music directory paths
@@ -17,7 +17,14 @@ pub async fn run(bind_address: String, config: Config) -> Result<()> {
     let state_file = StateFile::new(state_file_path.clone());
     if let Ok(Some(saved_state)) = state_file.load() {
         info!("Restoring state from file");
-        restore_state(&state, saved_state, &db_path, &music_dir, config.audio.restore_paused).await;
+        restore_state(
+            &state,
+            saved_state,
+            &db_path,
+            &music_dir,
+            config.audio.restore_paused,
+        )
+        .await;
     }
 
     // Create shutdown channel
@@ -56,7 +63,13 @@ pub async fn run(bind_address: String, config: Config) -> Result<()> {
     Ok(())
 }
 
-async fn restore_state(state: &AppState, saved_state: rmpd_protocol::statefile::SavedState, db_path: &str, music_dir: &str, restore_paused: bool) {
+async fn restore_state(
+    state: &AppState,
+    saved_state: rmpd_protocol::statefile::SavedState,
+    db_path: &str,
+    music_dir: &str,
+    restore_paused: bool,
+) {
     // Restore playback options
     {
         let mut status = state.status.write().await;
@@ -72,7 +85,10 @@ async fn restore_state(state: &AppState, saved_state: rmpd_protocol::statefile::
 
     // Restore playlist
     if !saved_state.playlist_paths.is_empty() {
-        info!("Restoring playlist with {} songs", saved_state.playlist_paths.len());
+        info!(
+            "Restoring playlist with {} songs",
+            saved_state.playlist_paths.len()
+        );
 
         if let Ok(db) = rmpd_library::Database::open(db_path) {
             let mut queue = state.queue.write().await;
@@ -110,7 +126,10 @@ async fn restore_state(state: &AppState, saved_state: rmpd_protocol::statefile::
                 let play_state = saved_state.state.unwrap();
 
                 if play_state == PlayerState::Play || play_state == PlayerState::Pause {
-                    info!("Auto-resuming playback at position {} (state: {:?})", position, play_state);
+                    info!(
+                        "Auto-resuming playback at position {} (state: {:?})",
+                        position, play_state
+                    );
 
                     // Resolve path for playback
                     let absolute_path = if song.path.as_str().starts_with('/') {
@@ -132,7 +151,9 @@ async fn restore_state(state: &AppState, saved_state: rmpd_protocol::statefile::
                     status.bitrate = song.bitrate;
 
                     // Set audio format if available
-                    if let (Some(sr), Some(ch), Some(bps)) = (song.sample_rate, song.channels, song.bits_per_sample) {
+                    if let (Some(sr), Some(ch), Some(bps)) =
+                        (song.sample_rate, song.channels, song.bits_per_sample)
+                    {
                         status.audio_format = Some(rmpd_core::song::AudioFormat {
                             sample_rate: sr,
                             channels: ch,
@@ -165,7 +186,9 @@ async fn restore_state(state: &AppState, saved_state: rmpd_protocol::statefile::
                             if let Some(elapsed_time) = elapsed {
                                 if elapsed_time > 0.0 {
                                     info!("Seeking to {:.2}s", elapsed_time);
-                                    if let Err(e) = state_clone.engine.write().await.seek(elapsed_time).await {
+                                    if let Err(e) =
+                                        state_clone.engine.write().await.seek(elapsed_time).await
+                                    {
                                         error!("Failed to seek: {}", e);
                                     }
                                 }
@@ -183,7 +206,10 @@ async fn restore_state(state: &AppState, saved_state: rmpd_protocol::statefile::
                 }
             } else {
                 // Don't auto-resume, just set current position
-                info!("Setting current position to {} (restore_paused={})", position, restore_paused);
+                info!(
+                    "Setting current position to {} (restore_paused={})",
+                    position, restore_paused
+                );
                 let mut status = state.status.write().await;
                 status.current_song = Some(rmpd_core::state::QueuePosition {
                     position,
