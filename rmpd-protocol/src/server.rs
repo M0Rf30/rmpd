@@ -4,34 +4,16 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::broadcast;
 use tracing::{debug, error, info};
 
-use crate::commands::{database, options, outputs, playback, playlists, queue, reflection, stickers};
+use crate::commands::{
+    connection, database, messaging, options, outputs, partition, playback, playlists, queue,
+    reflection, stickers, storage,
+};
 use crate::parser::{parse_command, Command};
 use crate::queue_playback::QueuePlaybackManager;
 use crate::response::{Response, ResponseBuilder, Stats};
 use crate::state::AppState;
 
 const PROTOCOL_VERSION: &str = "0.24.0";
-
-/// Strip music directory prefix from absolute path
-fn strip_music_dir_prefix<'a>(path: &'a str, music_dir: Option<&str>) -> &'a str {
-    if let Some(music_dir) = music_dir {
-        // Normalize music_dir to end with /
-        let music_dir_with_slash = if music_dir.ends_with('/') {
-            music_dir
-        } else {
-            // Need to handle this case by checking both variants
-            if let Some(stripped) = path.strip_prefix(music_dir) {
-                return stripped.trim_start_matches('/');
-            }
-            music_dir
-        };
-
-        if let Some(stripped) = path.strip_prefix(music_dir_with_slash) {
-            return stripped;
-        }
-    }
-    path
-}
 
 /// Convert Unix timestamp to ISO 8601 format (RFC 3339)
 #[derive(Debug)]
@@ -119,6 +101,9 @@ async fn handle_client(mut stream: TcpStream, state: AppState) -> Result<()> {
     // Subscribe to event bus for idle notifications
     let mut event_rx = state.event_bus.subscribe();
 
+    // Per-client connection state
+    let mut conn_state = crate::ConnectionState::new();
+
     // Command batching state
     let mut batch_mode = false;
     let mut batch_ok_mode = false;
@@ -164,7 +149,7 @@ async fn handle_client(mut stream: TcpStream, state: AppState) -> Result<()> {
                     ))
                 } else {
                     let response =
-                        execute_command_list(&batch_commands, &state, batch_ok_mode).await;
+                        execute_command_list(&batch_commands, &state, &mut conn_state, batch_ok_mode).await;
                     batch_mode = false;
                     batch_ok_mode = false;
                     batch_commands.clear();
@@ -179,7 +164,7 @@ async fn handle_client(mut stream: TcpStream, state: AppState) -> Result<()> {
                 batch_commands.push(trimmed.to_string());
                 continue; // Don't send response yet
             }
-            Ok(cmd) => handle_command(cmd, &state).await,
+            Ok(cmd) => handle_command(cmd, &state, &mut conn_state).await,
             Err(e) => Response::Text(ResponseBuilder::error(5, 0, trimmed, &e)),
         };
 
@@ -190,13 +175,13 @@ async fn handle_client(mut stream: TcpStream, state: AppState) -> Result<()> {
     Ok(())
 }
 
-async fn execute_command_list(commands: &[String], state: &AppState, ok_mode: bool) -> Response {
+async fn execute_command_list(commands: &[String], state: &AppState, conn_state: &mut crate::ConnectionState, ok_mode: bool) -> Response {
     let mut response = String::new();
 
     for (index, cmd_str) in commands.iter().enumerate() {
         match parse_command(cmd_str) {
             Ok(cmd) => {
-                let cmd_response = handle_command(cmd, state).await;
+                let cmd_response = handle_command(cmd, state, conn_state).await;
 
                 // Convert response to string for batching (binary commands not allowed in batch)
                 let cmd_response_str = match cmd_response {
@@ -348,7 +333,7 @@ fn subsystem_to_string(subsystem: rmpd_core::event::Subsystem) -> &'static str {
     }
 }
 
-async fn handle_command(cmd: Command, state: &AppState) -> Response {
+async fn handle_command(cmd: Command, state: &AppState, conn_state: &mut crate::ConnectionState) -> Response {
     // Special handling for binary commands
     match cmd {
         Command::AlbumArt { uri, offset } => {
@@ -369,7 +354,7 @@ async fn handle_command(cmd: Command, state: &AppState) -> Response {
         }
         Command::Commands => reflection::handle_commands_command().await,
         Command::NotCommands => reflection::handle_notcommands_command().await,
-        Command::TagTypes { subcommand } => reflection::handle_tagtypes_command(subcommand).await,
+        Command::TagTypes { subcommand } => reflection::handle_tagtypes_command(conn_state, subcommand).await,
         Command::UrlHandlers => reflection::handle_urlhandlers_command().await,
         Command::Decoders => reflection::handle_decoders_command().await,
         Command::Status => {
@@ -468,16 +453,16 @@ async fn handle_command(cmd: Command, state: &AppState) -> Response {
             queue::handle_playlistinfo_command(state, None).await
         }
         Command::PlChanges { version, range } => {
-            handle_plchanges_command(state, version, range).await
+            queue::handle_plchanges_command(state, version, range).await
         }
         Command::PlChangesPosId { version, range } => {
-            handle_plchangesposid_command(state, version, range).await
+            queue::handle_plchangesposid_command(state, version, range).await
         }
         Command::PlaylistFind { tag, value } => {
-            handle_playlistfind_command(state, &tag, &value).await
+            queue::handle_playlistfind_command(state, &tag, &value).await
         }
         Command::PlaylistSearch { tag, value } => {
-            handle_playlistsearch_command(state, &tag, &value).await
+            queue::handle_playlistsearch_command(state, &tag, &value).await
         }
         // Playback commands
         Command::Play { position } => playback::handle_play_command(state, position).await,
@@ -530,7 +515,7 @@ async fn handle_command(cmd: Command, state: &AppState) -> Response {
             let _ = size;
             ResponseBuilder::new().ok()
         }
-        Command::Protocol { subcommand } => reflection::handle_protocol_command(subcommand).await,
+        Command::Protocol { subcommand } => reflection::handle_protocol_command(conn_state, subcommand).await,
         // Stored playlists
         Command::Save { name, mode } => playlists::handle_save_command(state, &name, mode).await,
         Command::Load {
@@ -579,10 +564,10 @@ async fn handle_command(cmd: Command, state: &AppState) -> Response {
         Command::FindAdd { tag, value } => database::handle_findadd_command(state, &tag, &value).await,
         Command::ListFiles { uri } => database::handle_listfiles_command(state, uri.as_deref()).await,
         Command::SearchCount { tag, value, group } => {
-            handle_searchcount_command(state, &tag, &value, group.as_deref()).await
+            database::handle_searchcount_command(state, &tag, &value, group.as_deref()).await
         }
-        Command::GetFingerprint { uri } => handle_getfingerprint_command(state, &uri).await,
-        Command::ReadComments { uri } => handle_readcomments_command(state, &uri).await,
+        Command::GetFingerprint { uri } => database::handle_getfingerprint_command(state, &uri).await,
+        Command::ReadComments { uri } => database::handle_readcomments_command(state, &uri).await,
         // Stickers
         Command::StickerGet { uri, name } => stickers::handle_sticker_get_command(state, &uri, &name).await,
         Command::StickerSet { uri, name, value } => {
@@ -607,37 +592,37 @@ async fn handle_command(cmd: Command, state: &AppState) -> Response {
             stickers::handle_sticker_namestypes_command(state, uri.as_deref()).await
         }
         // Partitions
-        Command::Partition { name } => handle_partition_command(state, &name).await,
-        Command::ListPartitions => handle_listpartitions_command().await,
-        Command::NewPartition { name } => handle_newpartition_command(&name).await,
-        Command::DelPartition { name } => handle_delpartition_command(&name).await,
-        Command::MoveOutput { name } => handle_moveoutput_command(&name).await,
+        Command::Partition { name } => partition::handle_partition_command(state, &name).await,
+        Command::ListPartitions => partition::handle_listpartitions_command().await,
+        Command::NewPartition { name } => partition::handle_newpartition_command(&name).await,
+        Command::DelPartition { name } => partition::handle_delpartition_command(&name).await,
+        Command::MoveOutput { name } => partition::handle_moveoutput_command(&name).await,
         // Mounts
-        Command::Mount { path, uri } => handle_mount_command(&path, &uri).await,
-        Command::Unmount { path } => handle_unmount_command(&path).await,
-        Command::ListMounts => handle_listmounts_command().await,
-        Command::ListNeighbors => handle_listneighbors_command().await,
+        Command::Mount { path, uri } => storage::handle_mount_command(&path, &uri).await,
+        Command::Unmount { path } => storage::handle_unmount_command(&path).await,
+        Command::ListMounts => storage::handle_listmounts_command().await,
+        Command::ListNeighbors => storage::handle_listneighbors_command().await,
         // Client messaging
-        Command::Subscribe { channel } => handle_subscribe_command(&channel).await,
-        Command::Unsubscribe { channel } => handle_unsubscribe_command(&channel).await,
-        Command::Channels => handle_channels_command().await,
-        Command::ReadMessages => handle_readmessages_command().await,
+        Command::Subscribe { channel } => messaging::handle_subscribe_command(&channel).await,
+        Command::Unsubscribe { channel } => messaging::handle_unsubscribe_command(&channel).await,
+        Command::Channels => messaging::handle_channels_command().await,
+        Command::ReadMessages => messaging::handle_readmessages_command().await,
         Command::SendMessage { channel, message } => {
-            handle_sendmessage_command(&channel, &message).await
+            messaging::handle_sendmessage_command(&channel, &message).await
         }
         // Advanced queue
-        Command::Prio { priority, ranges } => handle_prio_command(state, priority, &ranges).await,
-        Command::PrioId { priority, ids } => handle_prioid_command(state, priority, &ids).await,
-        Command::RangeId { id, range } => handle_rangeid_command(state, id, range).await,
+        Command::Prio { priority, ranges } => queue::handle_prio_command(state, priority, &ranges).await,
+        Command::PrioId { priority, ids } => queue::handle_prioid_command(state, priority, &ids).await,
+        Command::RangeId { id, range } => queue::handle_rangeid_command(state, id, range).await,
         Command::AddTagId { id, tag, value } => {
-            handle_addtagid_command(state, id, &tag, &value).await
+            queue::handle_addtagid_command(state, id, &tag, &value).await
         }
         Command::ClearTagId { id, tag } => {
-            handle_cleartagid_command(state, id, tag.as_deref()).await
+            queue::handle_cleartagid_command(state, id, tag.as_deref()).await
         }
         // Miscellaneous
-        Command::Config => handle_config_command().await,
-        Command::Kill => handle_kill_command().await,
+        Command::Config => connection::handle_config_command().await,
+        Command::Kill => connection::handle_kill_command().await,
         Command::MixRampDb { decibels } => options::handle_mixrampdb_command(state, decibels).await,
         Command::MixRampDelay { seconds } => options::handle_mixrampdelay_command(state, seconds).await,
         _ => {
@@ -648,307 +633,3 @@ async fn handle_command(cmd: Command, state: &AppState) -> Response {
 
     Response::Text(response_str)
 }
-
-
-// Partition commands (multi-queue support)
-async fn handle_partition_command(_state: &AppState, _name: &str) -> String {
-    // Switch to partition (not fully implemented)
-    ResponseBuilder::new().ok()
-}
-
-async fn handle_listpartitions_command() -> String {
-    // List partitions - only default for now
-    let mut resp = ResponseBuilder::new();
-    resp.field("partition", "default");
-    resp.ok()
-}
-
-async fn handle_newpartition_command(_name: &str) -> String {
-    // Create new partition (not fully implemented)
-    ResponseBuilder::new().ok()
-}
-
-async fn handle_delpartition_command(_name: &str) -> String {
-    // Delete partition (not fully implemented)
-    ResponseBuilder::new().ok()
-}
-
-async fn handle_moveoutput_command(_name: &str) -> String {
-    // Move output to current partition (not fully implemented)
-    ResponseBuilder::new().ok()
-}
-
-// Mount commands (virtual filesystem)
-async fn handle_mount_command(_path: &str, _uri: &str) -> String {
-    // Mount storage (not implemented - would require virtual FS)
-    ResponseBuilder::new().ok()
-}
-
-async fn handle_unmount_command(_path: &str) -> String {
-    // Unmount storage (not implemented)
-    ResponseBuilder::new().ok()
-}
-
-async fn handle_listmounts_command() -> String {
-    // List mounts - return empty
-    ResponseBuilder::new().ok()
-}
-
-async fn handle_listneighbors_command() -> String {
-    // List network neighbors - return empty
-    ResponseBuilder::new().ok()
-}
-
-// Client-to-client messaging
-async fn handle_subscribe_command(_channel: &str) -> String {
-    // Subscribe to channel (stub)
-    ResponseBuilder::new().ok()
-}
-
-async fn handle_unsubscribe_command(_channel: &str) -> String {
-    // Unsubscribe from channel (stub)
-    ResponseBuilder::new().ok()
-}
-
-async fn handle_channels_command() -> String {
-    // List channels - return empty
-    ResponseBuilder::new().ok()
-}
-
-async fn handle_readmessages_command() -> String {
-    // Read messages - return empty
-    ResponseBuilder::new().ok()
-}
-
-async fn handle_sendmessage_command(_channel: &str, _message: &str) -> String {
-    // Send message (stub)
-    ResponseBuilder::new().ok()
-}
-
-// Advanced queue operations
-async fn handle_prio_command(state: &AppState, _priority: u8, _ranges: &[(u32, u32)]) -> String {
-    // Set priority for multiple ranges (stub - would need priority field in QueueItem)
-    // TODO: Implement priority support in QueueItem
-    // For each range in ranges, set priority for items in that range
-    let mut status = state.status.write().await;
-    status.playlist_version += 1;
-    ResponseBuilder::new().ok()
-}
-
-async fn handle_prioid_command(state: &AppState, _priority: u8, _ids: &[u32]) -> String {
-    // Set priority for multiple IDs (stub - would need priority field in QueueItem)
-    // TODO: Implement priority support in QueueItem
-    // For each ID in ids, set priority for that queue item
-    let mut status = state.status.write().await;
-    status.playlist_version += 1;
-    ResponseBuilder::new().ok()
-}
-
-async fn handle_rangeid_command(state: &AppState, _id: u32, _range: (f64, f64)) -> String {
-    // Set playback range for song (stub)
-    let mut status = state.status.write().await;
-    status.playlist_version += 1;
-    ResponseBuilder::new().ok()
-}
-
-async fn handle_addtagid_command(state: &AppState, _id: u32, _tag: &str, _value: &str) -> String {
-    // Add tag to queue item (stub)
-    let mut status = state.status.write().await;
-    status.playlist_version += 1;
-    ResponseBuilder::new().ok()
-}
-
-async fn handle_cleartagid_command(state: &AppState, _id: u32, _tag: Option<&str>) -> String {
-    // Clear tags from queue item (stub)
-    let mut status = state.status.write().await;
-    status.playlist_version += 1;
-    ResponseBuilder::new().ok()
-}
-
-// Miscellaneous commands
-async fn handle_config_command() -> String {
-    // Return configuration - minimal for now
-    let mut resp = ResponseBuilder::new();
-    resp.field("music_directory", "/var/lib/mpd/music");
-    resp.ok()
-}
-
-async fn handle_kill_command() -> String {
-    // Kill server (stub - should trigger graceful shutdown)
-    ResponseBuilder::new().ok()
-}
-
-// Queue inspection commands
-async fn handle_plchanges_command(
-    state: &AppState,
-    version: u32,
-    range: Option<(u32, u32)>,
-) -> String {
-    // Return changes in queue since version
-    // MPD protocol: version 0 means "give me current playlist"
-    // Otherwise, return items if playlist has changed since given version
-    let queue = state.queue.read().await;
-    let mut resp = ResponseBuilder::new();
-
-    if version == 0 || queue.version() > version {
-        let items = queue.items();
-
-        // Apply range filter
-        let filtered = if let Some((start, end)) = range {
-            let start_idx = start as usize;
-            let end_idx = end.min(items.len() as u32) as usize;
-            if start_idx < items.len() {
-                &items[start_idx..end_idx]
-            } else {
-                &[]
-            }
-        } else {
-            items
-        };
-
-        for item in filtered {
-            resp.field("file", item.song.path.as_str());
-            resp.field("Pos", item.position.to_string());
-            resp.field("Id", item.id.to_string());
-            if let Some(ref title) = item.song.title {
-                resp.field("Title", title);
-            }
-        }
-    }
-    resp.ok()
-}
-
-async fn handle_plchangesposid_command(
-    state: &AppState,
-    version: u32,
-    range: Option<(u32, u32)>,
-) -> String {
-    // Return position/id changes since version
-    // MPD protocol: version 0 means "give me current playlist"
-    // Otherwise, return items if playlist has changed since given version
-    let queue = state.queue.read().await;
-    let mut resp = ResponseBuilder::new();
-
-    if version == 0 || queue.version() > version {
-        let items = queue.items();
-
-        // Apply range filter
-        let filtered = if let Some((start, end)) = range {
-            let start_idx = start as usize;
-            let end_idx = end.min(items.len() as u32) as usize;
-            if start_idx < items.len() {
-                &items[start_idx..end_idx]
-            } else {
-                &[]
-            }
-        } else {
-            items
-        };
-
-        for item in filtered {
-            resp.field("cpos", item.position.to_string());
-            resp.field("Id", item.id.to_string());
-        }
-    }
-    resp.ok()
-}
-
-async fn handle_playlistfind_command(state: &AppState, tag: &str, value: &str) -> String {
-    // Search queue for exact matches
-    let queue = state.queue.read().await;
-    let mut resp = ResponseBuilder::new();
-
-    for item in queue.items() {
-        let matches = match tag.to_lowercase().as_str() {
-            "artist" => item.song.artist.as_deref() == Some(value),
-            "album" => item.song.album.as_deref() == Some(value),
-            "title" => item.song.title.as_deref() == Some(value),
-            "genre" => item.song.genre.as_deref() == Some(value),
-            _ => false,
-        };
-
-        if matches {
-            resp.song(&item.song, Some(item.position), Some(item.id));
-        }
-    }
-    resp.ok()
-}
-
-async fn handle_playlistsearch_command(state: &AppState, tag: &str, value: &str) -> String {
-    // Case-insensitive search in queue
-    let queue = state.queue.read().await;
-    let mut resp = ResponseBuilder::new();
-    let value_lower = value.to_lowercase();
-
-    for item in queue.items() {
-        let matches = match tag.to_lowercase().as_str() {
-            "artist" => item
-                .song
-                .artist
-                .as_ref()
-                .map(|s| s.to_lowercase().contains(&value_lower))
-                .unwrap_or(false),
-            "album" => item
-                .song
-                .album
-                .as_ref()
-                .map(|s| s.to_lowercase().contains(&value_lower))
-                .unwrap_or(false),
-            "title" => item
-                .song
-                .title
-                .as_ref()
-                .map(|s| s.to_lowercase().contains(&value_lower))
-                .unwrap_or(false),
-            "genre" => item
-                .song
-                .genre
-                .as_ref()
-                .map(|s| s.to_lowercase().contains(&value_lower))
-                .unwrap_or(false),
-            _ => false,
-        };
-
-        if matches {
-            resp.song(&item.song, Some(item.position), Some(item.id));
-        }
-    }
-    resp.ok()
-}
-
-// Database commands
-async fn handle_searchcount_command(
-    state: &AppState,
-    tag: &str,
-    value: &str,
-    group: Option<&str>,
-) -> String {
-    // Count search results with optional grouping
-    let filters = vec![(tag.to_string(), value.to_string())];
-    database::handle_count_command(state, &filters, group).await
-}
-
-async fn handle_getfingerprint_command(state: &AppState, uri: &str) -> String {
-    // Generate chromaprint fingerprint for audio file
-    // Requires chromaprint library - stub for now
-    let _ = (state, uri);
-    ResponseBuilder::error(50, 0, "getfingerprint", "chromaprint not available")
-}
-
-async fn handle_readcomments_command(state: &AppState, uri: &str) -> String {
-    // Read file metadata comments
-    if let Some(ref db_path) = state.db_path {
-        if let Ok(db) = rmpd_library::Database::open(db_path) {
-            if let Ok(Some(song)) = db.get_song_by_path(uri) {
-                let mut resp = ResponseBuilder::new();
-                if let Some(ref comment) = song.comment {
-                    resp.field("comment", comment);
-                }
-                return resp.ok();
-            }
-        }
-    }
-    ResponseBuilder::error(50, 0, "readcomments", "No such file")
-}
-
-// Playlist queue search commands

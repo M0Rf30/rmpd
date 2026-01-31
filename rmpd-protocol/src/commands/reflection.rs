@@ -3,6 +3,7 @@
 //! These commands allow clients to query the server's capabilities,
 //! supported commands, tag types, decoders, and URL handlers.
 
+use crate::connection::ConnectionState;
 use crate::response::ResponseBuilder;
 
 pub async fn handle_commands_command() -> String {
@@ -114,94 +115,107 @@ pub async fn handle_notcommands_command() -> String {
     ResponseBuilder::new().ok()
 }
 
-pub async fn handle_tagtypes_command(subcommand: Option<crate::parser::TagTypesSubcommand>) -> String {
+pub async fn handle_tagtypes_command(
+    conn_state: &mut ConnectionState,
+    subcommand: Option<crate::parser::TagTypesSubcommand>,
+) -> String {
     use crate::parser::TagTypesSubcommand;
 
     let mut resp = ResponseBuilder::new();
 
     match subcommand {
         None | Some(TagTypesSubcommand::Available) => {
-            // List all supported metadata tags
-            resp.field("tagtype", "Artist");
-            resp.field("tagtype", "ArtistSort");
-            resp.field("tagtype", "Album");
-            resp.field("tagtype", "AlbumSort");
-            resp.field("tagtype", "AlbumArtist");
-            resp.field("tagtype", "AlbumArtistSort");
-            resp.field("tagtype", "Title");
-            resp.field("tagtype", "Track");
-            resp.field("tagtype", "Name");
-            resp.field("tagtype", "Genre");
-            resp.field("tagtype", "Date");
-            resp.field("tagtype", "Composer");
-            resp.field("tagtype", "Performer");
-            resp.field("tagtype", "Comment");
-            resp.field("tagtype", "Disc");
+            // List all currently enabled metadata tags for this connection
+            let all_tags = vec![
+                "Artist",
+                "ArtistSort",
+                "Album",
+                "AlbumSort",
+                "AlbumArtist",
+                "AlbumArtistSort",
+                "Title",
+                "Track",
+                "Name",
+                "Genre",
+                "Date",
+                "Composer",
+                "Performer",
+                "Comment",
+                "Disc",
+            ];
+
+            for tag in all_tags {
+                if conn_state.is_tag_enabled(tag) {
+                    resp.field("tagtype", tag);
+                }
+            }
         }
         Some(TagTypesSubcommand::All) => {
             // Enable all tag types for this client
-            // TODO: Store per-client tag mask in connection state
-            // For now, just return OK as all tags are enabled by default
+            conn_state.enable_all_tags();
         }
         Some(TagTypesSubcommand::Clear) => {
             // Disable all tag types for this client
-            // TODO: Store per-client tag mask in connection state
-            // For now, just return OK
+            conn_state.disable_all_tags();
         }
-        Some(TagTypesSubcommand::Enable { tags: _ }) => {
+        Some(TagTypesSubcommand::Enable { tags }) => {
             // Enable specific tags for this client
-            // TODO: Store per-client tag mask in connection state
-            // For now, just return OK as all tags are enabled by default
+            conn_state.enable_tags(tags);
         }
-        Some(TagTypesSubcommand::Disable { tags: _ }) => {
+        Some(TagTypesSubcommand::Disable { tags }) => {
             // Disable specific tags for this client
-            // TODO: Store per-client tag mask in connection state
-            // For now, just return OK
+            conn_state.disable_tags(tags);
         }
-        Some(TagTypesSubcommand::Reset { tags: _ }) => {
+        Some(TagTypesSubcommand::Reset { tags }) => {
             // Reset specific tags to default state for this client
-            // TODO: Store per-client tag mask in connection state
-            // For now, just return OK
+            conn_state.reset_tags(tags);
         }
     }
 
     resp.ok()
 }
 
-pub async fn handle_protocol_command(subcommand: Option<crate::parser::ProtocolSubcommand>) -> String {
+pub async fn handle_protocol_command(
+    conn_state: &mut ConnectionState,
+    subcommand: Option<crate::parser::ProtocolSubcommand>,
+) -> String {
     use crate::parser::ProtocolSubcommand;
 
     let mut resp = ResponseBuilder::new();
 
     match subcommand {
         None | Some(ProtocolSubcommand::Available) => {
-            // List all available protocol features
+            // List all currently enabled protocol features for this connection
             // Based on MPD 0.24.x protocol features
-            resp.field("feature", "binary"); // Binary responses
-            resp.field("feature", "command_list_ok"); // Command lists with OK markers
-            resp.field("feature", "idle"); // Idle notifications
-            resp.field("feature", "ranges"); // Range syntax (START:END)
-            resp.field("feature", "tags"); // Tag type negotiation
+            let all_features = vec![
+                "binary",          // Binary responses
+                "command_list_ok", // Command lists with OK markers
+                "idle",            // Idle notifications
+                "ranges",          // Range syntax (START:END)
+                "tags",            // Tag type negotiation
+            ];
+
+            for feature in all_features {
+                if conn_state.is_feature_enabled(feature) {
+                    resp.field("feature", feature);
+                }
+            }
         }
         Some(ProtocolSubcommand::All) => {
             // Enable all protocol features for this client
-            // TODO: Store per-client protocol features in connection state
-            // For now, just return OK as all features are enabled by default
+            conn_state.enable_all_features();
         }
         Some(ProtocolSubcommand::Clear) => {
             // Disable all protocol features for this client
-            // TODO: Store per-client protocol features in connection state
-            // For now, just return OK
+            conn_state.disable_all_features();
         }
-        Some(ProtocolSubcommand::Enable { features: _ }) => {
+        Some(ProtocolSubcommand::Enable { features }) => {
             // Enable specific protocol features for this client
-            // TODO: Store per-client protocol features in connection state
-            // For now, just return OK as all features are enabled by default
+            conn_state.enable_features(features);
         }
-        Some(ProtocolSubcommand::Disable { features: _ }) => {
+        Some(ProtocolSubcommand::Disable { features }) => {
             // Disable specific protocol features for this client
-            // TODO: Store per-client protocol features in connection state
-            // For now, just return OK
+            conn_state.disable_features(features);
         }
     }
 
