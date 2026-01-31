@@ -10,6 +10,7 @@ pub mod playback;
 pub mod playlists;
 pub mod queue;
 pub mod reflection;
+pub mod stickers;
 
 // TODO: Extract remaining command modules
 // pub mod connection;
