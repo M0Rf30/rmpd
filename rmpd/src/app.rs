@@ -120,10 +120,8 @@ async fn restore_state(
             drop(queue);
 
             // Check if we should auto-resume playback
-            let should_auto_resume = !restore_paused && saved_state.state.is_some();
-
-            if should_auto_resume {
-                let play_state = saved_state.state.unwrap();
+            if !restore_paused {
+                if let Some(play_state) = saved_state.state {
 
                 if play_state == PlayerState::Play || play_state == PlayerState::Pause {
                     info!(
@@ -202,6 +200,7 @@ async fn restore_state(
                             }
                         }
                     });
+                }
                 }
             } else {
                 // Don't auto-resume, just set current position
