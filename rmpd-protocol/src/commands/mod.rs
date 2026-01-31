@@ -3,21 +3,18 @@
 //! This module splits the large server.rs file into logical categories for better
 //! organization and maintainability.
 
+pub mod connection;
 pub mod database;
+pub mod messaging;
 pub mod options;
 pub mod outputs;
+pub mod partition;
 pub mod playback;
 pub mod playlists;
 pub mod queue;
 pub mod reflection;
 pub mod stickers;
-
-// TODO: Extract remaining command modules
-// pub mod connection;
-// pub mod outputs;
-// pub mod reflection;
-// pub mod status;
-// pub mod stickers;
+pub mod storage;
 
 // Re-export commonly used types
 pub use crate::response::{Response, ResponseBuilder, Stats};
