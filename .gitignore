@@ -1,23 +1,86 @@
-# Rust
+# Rust build artifacts
 /target/
 **/*.rs.bk
 *.pdb
-Cargo.lock
 
-# IDE
+# Cargo
+# Note: Cargo.lock should be committed for binary crates
+# It's NOT ignored here since rmpd is a binary
+
+# IDE / Editor
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
-
-# OS
+*.bak
 .DS_Store
 Thumbs.db
+*.sublime-project
+*.sublime-workspace
 
-# rmpd specific
+# OS specific
+.DS_Store
+Thumbs.db
+desktop.ini
+.Spotlight-V100
+.Trashes
+._*
+
+# rmpd runtime files
 *.db
 *.db-shm
 *.db-wal
 /state
 /playlists/
+rmpd.log
+
+# Development & AI-generated files
+CLAUDE.md
+CI_SETUP.md
+ALBUM_ART_FIX.md
+CLIENT_TEST_*.md
+FINAL_TEST_REPORT.md
+IMPLEMENTATION.md
+PATH_MIGRATION_PLAN.md
+PHASE2_STATUS.md
+PLAYBACK_FIX_COMPLETE.md
+PROGRESS_REPORT.md
+PROTOCOL_AUDIT.md
+PROTOCOL_ENHANCEMENTS_TEST_RESULTS.md
+RELATIVE_PATHS_SUCCESS.md
+RMPC_COMPATIBILITY.md
+SESSION_SUMMARY.md
+STATUS.md
+TEST_RESULTS.md
+*.md.off
+mpd-send.sh
+
+# Test data and fixtures
+/test-music/
+/fixtures/music/
+
+# Coverage reports
+/coverage/
+lcov.info
+*.profraw
+*.profdata
+
+# Benchmarks
+/criterion/
+/target/criterion/
+
+# Backup files
+*.orig
+*.rej
+
+# Local configuration overrides
+rmpd.local.toml
+.env
+.env.local
+
+# Documentation build
+/target/doc/
+
+# Clippy/Rustfmt cache
+.clippy.toml.cache
