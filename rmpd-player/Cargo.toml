@@ -12,7 +12,7 @@ repository.workspace = true
 ignored = ["rubato", "thiserror"]
 
 [dependencies]
-rmpd-core.workspace = true
+rmpd-core = { workspace = true, features = ["player-errors"] }
 symphonia.workspace = true
 cpal.workspace = true
 rubato.workspace = true

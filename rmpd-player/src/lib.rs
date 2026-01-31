@@ -1,4 +1,5 @@
 // Audio player engine
+pub mod cpal_utils;
 pub mod decoder;
 pub mod dop;
 pub mod dop_output;

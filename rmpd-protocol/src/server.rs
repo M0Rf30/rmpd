@@ -6,7 +6,7 @@ use tracing::{debug, error, info};
 
 use crate::parser::{parse_command, Command};
 use crate::queue_playback::QueuePlaybackManager;
-use crate::response::{Response, ResponseBuilder};
+use crate::response::{Response, ResponseBuilder, Stats};
 use crate::state::AppState;
 
 const PROTOCOL_VERSION: &str = "0.24.0";
@@ -481,8 +481,18 @@ async fn handle_command(cmd: Command, state: &AppState) -> Response {
             // Calculate uptime in seconds
             let uptime = state.start_time.elapsed().as_secs();
 
+            let stats = Stats {
+                artists,
+                albums,
+                songs,
+                uptime,
+                db_playtime,
+                db_update,
+                playtime: 0,
+            };
+
             let mut resp = ResponseBuilder::new();
-            resp.stats(artists, albums, songs, uptime, db_playtime, db_update, 0);
+            resp.stats(&stats);
             resp.ok()
         }
         Command::ClearError => {

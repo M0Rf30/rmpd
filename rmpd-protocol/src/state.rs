@@ -42,7 +42,7 @@ impl fmt::Debug for AppState {
 }
 
 impl AppState {
-    pub fn new() -> Self {
+    fn build(db_path: Option<String>, music_dir: Option<String>) -> Self {
         let event_bus = EventBus::new();
         let status = Arc::new(RwLock::new(PlayerStatus::default()));
         let atomic_state = Arc::new(std::sync::atomic::AtomicU8::new(
@@ -64,40 +64,19 @@ impl AppState {
             engine: Arc::new(RwLock::new(engine)),
             atomic_state,
             event_bus,
-            db_path: None,
-            music_dir: None,
+            db_path,
+            music_dir,
             outputs: Arc::new(RwLock::new(vec![default_output])),
             start_time: Instant::now(),
         }
     }
 
+    pub fn new() -> Self {
+        Self::build(None, None)
+    }
+
     pub fn with_paths(db_path: String, music_dir: String) -> Self {
-        let event_bus = EventBus::new();
-        let status = Arc::new(RwLock::new(PlayerStatus::default()));
-        let atomic_state = Arc::new(std::sync::atomic::AtomicU8::new(
-            rmpd_core::state::PlayerState::Stop as u8,
-        ));
-        let engine = PlaybackEngine::new(event_bus.clone(), status.clone(), atomic_state.clone());
-
-        // Create default output
-        let default_output = OutputInfo {
-            id: 0,
-            name: "Default Output".to_string(),
-            plugin: "cpal".to_string(),
-            enabled: true,
-        };
-
-        Self {
-            queue: Arc::new(RwLock::new(Queue::new())),
-            status,
-            engine: Arc::new(RwLock::new(engine)),
-            atomic_state,
-            event_bus,
-            db_path: Some(db_path),
-            music_dir: Some(music_dir),
-            outputs: Arc::new(RwLock::new(vec![default_output])),
-            start_time: Instant::now(),
-        }
+        Self::build(Some(db_path), Some(music_dir))
     }
 }
 

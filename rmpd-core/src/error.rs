@@ -34,3 +34,32 @@ pub enum RmpdError {
 }
 
 pub type Result<T> = std::result::Result<T, RmpdError>;
+
+// Automatic error conversions for common dependency errors
+#[cfg(feature = "database-errors")]
+impl From<rusqlite::Error> for RmpdError {
+    fn from(err: rusqlite::Error) -> Self {
+        RmpdError::Database(err.to_string())
+    }
+}
+
+#[cfg(feature = "player-errors")]
+impl From<symphonia::core::errors::Error> for RmpdError {
+    fn from(err: symphonia::core::errors::Error) -> Self {
+        RmpdError::Player(err.to_string())
+    }
+}
+
+#[cfg(feature = "player-errors")]
+impl From<cpal::BuildStreamError> for RmpdError {
+    fn from(err: cpal::BuildStreamError) -> Self {
+        RmpdError::Player(format!("Failed to build stream: {}", err))
+    }
+}
+
+#[cfg(feature = "player-errors")]
+impl From<cpal::PlayStreamError> for RmpdError {
+    fn from(err: cpal::PlayStreamError) -> Self {
+        RmpdError::Player(format!("Stream playback error: {}", err))
+    }
+}

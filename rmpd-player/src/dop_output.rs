@@ -1,6 +1,7 @@
 /// DoP-specific audio output using integer samples
 /// DoP requires exact bit patterns, so we use I32 format instead of F32
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use crate::cpal_utils::CpalDeviceConfig;
+use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{Device, SampleFormat, Stream, StreamConfig};
 use rmpd_core::error::{Result, RmpdError};
 use std::sync::mpsc::{sync_channel, SyncSender};
@@ -17,20 +18,12 @@ pub struct DopOutput {
 
 impl DopOutput {
     pub fn new(sample_rate: u32, channels: u8) -> Result<Self> {
-        // For DoP, use the default device which should be configured as hw:CARD in ~/.asoundrc
-        let host = cpal::default_host();
-        let device = host
-            .default_output_device()
-            .ok_or_else(|| RmpdError::Player("No output device available".to_owned()))?;
-
         tracing::info!("Using default ALSA device (should be configured as hw: device)");
 
-        // Create stream config for DoP
-        let config = StreamConfig {
-            channels: channels as u16,
+        let device_config = CpalDeviceConfig::new(
             sample_rate,
-            buffer_size: cpal::BufferSize::Default,
-        };
+            channels as u16,
+        )?;
 
         tracing::info!(
             "DoP output config: {}Hz, {} channels",
@@ -45,10 +38,10 @@ impl DopOutput {
         tracing::warn!("DoP requires direct hardware access at {} Hz - ensure PipeWire/PulseAudio isn't resampling", sample_rate);
 
         Ok(Self {
-            device,
+            device: device_config.device,
             stream: None,
             sample_sender: None,
-            config,
+            config: device_config.config,
             is_paused: false,
         })
     }
@@ -58,55 +51,13 @@ impl DopOutput {
             return Ok(()); // Already started
         }
 
-        // Check supported formats
-        let supported_configs = self
-            .device
-            .supported_output_configs()
-            .map_err(|e| RmpdError::Player(format!("Failed to get supported configs: {}", e)))?;
-
-        // Try to find I32 or I24 format at our sample rate
-        let mut found_format = None;
-        tracing::info!(
-            "Searching for suitable format at {:?} Hz:",
-            self.config.sample_rate
-        );
-        for config in supported_configs {
-            let sample_format = config.sample_format();
-            let min_rate = config.min_sample_rate();
-            let max_rate = config.max_sample_rate();
-
-            tracing::info!(
-                "  Checking format: {:?}, rates: {:?}-{:?} Hz",
-                sample_format,
-                min_rate,
-                max_rate
-            );
-
-            if self.config.sample_rate >= min_rate && self.config.sample_rate <= max_rate {
-                // Prefer I24 over I32 for DoP (24-bit format is more standard for DoP)
-                if sample_format == SampleFormat::I24 {
-                    found_format = Some(sample_format);
-                    tracing::info!(
-                        "Found suitable format: {:?} at {:?}-{:?} Hz",
-                        sample_format,
-                        min_rate,
-                        max_rate
-                    );
-                    break;
-                } else if sample_format == SampleFormat::I32 && found_format.is_none() {
-                    found_format = Some(sample_format);
-                    tracing::info!(
-                        "Found suitable format: {:?} at {:?}-{:?} Hz",
-                        sample_format,
-                        min_rate,
-                        max_rate
-                    );
-                }
-            }
-        }
-
-        let sample_format = found_format.unwrap_or(SampleFormat::I32);
-        tracing::info!("Using sample format: {:?}", sample_format);
+        // Find suitable DoP format using utility
+        let mut device_config = CpalDeviceConfig {
+            device: self.device.clone(),
+            config: self.config.clone(),
+            sample_format: SampleFormat::I32,
+        };
+        let sample_format = device_config.find_dop_format()?;
         tracing::info!("Requested sample rate: {:?} Hz", self.config.sample_rate);
         tracing::info!("Requested channels: {}", self.config.channels);
 

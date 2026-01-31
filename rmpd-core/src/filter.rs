@@ -121,6 +121,13 @@ impl<'a> Parser<'a> {
         Self { input, pos: 0 }
     }
 
+    fn peek_char(&self) -> Result<char> {
+        self.input.chars().nth(self.pos)
+            .ok_or_else(|| RmpdError::ParseError(
+                format!("Unexpected end of input at position {}", self.pos)
+            ))
+    }
+
     fn parse_expression(&mut self) -> Result<FilterExpression> {
         // Entry point - just parse as OR expression (highest level)
         self.parse_or_expression()
@@ -200,7 +207,7 @@ impl<'a> Parser<'a> {
     fn parse_identifier(&mut self) -> Result<String> {
         let start = self.pos;
         while self.pos < self.input.len() {
-            let ch = self.input.chars().nth(self.pos).unwrap();
+            let ch = self.peek_char()?;
             if ch.is_alphanumeric() || ch == '_' || ch == '-' {
                 self.pos += 1;
             } else {
@@ -245,7 +252,7 @@ impl<'a> Parser<'a> {
         self.consume_str("'")?;
         let start = self.pos;
         while self.pos < self.input.len() {
-            let ch = self.input.chars().nth(self.pos).unwrap();
+            let ch = self.peek_char()?;
             if ch == '\'' {
                 let value = self.input[start..self.pos].to_string();
                 self.pos += 1; // consume closing quote
@@ -262,8 +269,12 @@ impl<'a> Parser<'a> {
 
     fn skip_whitespace(&mut self) {
         while self.pos < self.input.len() {
-            if self.input.chars().nth(self.pos).unwrap().is_whitespace() {
-                self.pos += 1;
+            if let Ok(ch) = self.peek_char() {
+                if ch.is_whitespace() {
+                    self.pos += 1;
+                } else {
+                    break;
+                }
             } else {
                 break;
             }
@@ -283,8 +294,11 @@ impl<'a> Parser<'a> {
         if rest.len() == keyword.len() {
             return true;
         }
-        let next_ch = rest.chars().nth(keyword.len()).unwrap();
-        next_ch.is_whitespace() || next_ch == ')' || next_ch == '('
+        if let Some(next_ch) = rest.chars().nth(keyword.len()) {
+            next_ch.is_whitespace() || next_ch == ')' || next_ch == '('
+        } else {
+            false
+        }
     }
 
     fn consume_str(&mut self, s: &str) -> Result<()> {

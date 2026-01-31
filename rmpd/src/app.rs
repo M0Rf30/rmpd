@@ -170,8 +170,7 @@ async fn restore_state(
                         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
                         // Start playback
-                        #[allow(clippy::redundant_pattern_matching)]
-                        if let Ok(_) = state_clone.engine.write().await.play(playback_song).await {
+                        if state_clone.engine.write().await.play(playback_song).await.is_ok() {
                             // Update state immediately
                             {
                                 let mut status = state_clone.status.write().await;

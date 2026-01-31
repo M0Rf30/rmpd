@@ -11,7 +11,7 @@ pub struct Database {
 
 impl Database {
     pub fn open(path: &str) -> Result<Self> {
-        let conn = Connection::open(path).map_err(|e| RmpdError::Database(e.to_string()))?;
+        let conn = Connection::open(path)?;
 
         let db = Self { conn };
         db.init_schema()?;
@@ -62,7 +62,7 @@ impl Database {
             )",
                 [],
             )
-            .map_err(|e| RmpdError::Database(e.to_string()))?;
+            ?;
 
         // Directories table
         self.conn
@@ -77,7 +77,7 @@ impl Database {
             )",
                 [],
             )
-            .map_err(|e| RmpdError::Database(e.to_string()))?;
+            ?;
 
         // Artists table (normalized)
         self.conn
@@ -88,7 +88,7 @@ impl Database {
             )",
                 [],
             )
-            .map_err(|e| RmpdError::Database(e.to_string()))?;
+            ?;
 
         // Albums table (normalized)
         self.conn
@@ -104,7 +104,7 @@ impl Database {
             )",
                 [],
             )
-            .map_err(|e| RmpdError::Database(e.to_string()))?;
+            ?;
 
         // Playlists table
         self.conn
@@ -116,7 +116,7 @@ impl Database {
             )",
                 [],
             )
-            .map_err(|e| RmpdError::Database(e.to_string()))?;
+            ?;
 
         // Playlist items
         self.conn
@@ -133,7 +133,7 @@ impl Database {
             )",
                 [],
             )
-            .map_err(|e| RmpdError::Database(e.to_string()))?;
+            ?;
 
         // Stickers (arbitrary key-value metadata)
         self.conn
@@ -148,7 +148,7 @@ impl Database {
             )",
                 [],
             )
-            .map_err(|e| RmpdError::Database(e.to_string()))?;
+            ?;
 
         // Artwork table (album art cache)
         self.conn
@@ -167,7 +167,7 @@ impl Database {
             )",
                 [],
             )
-            .map_err(|e| RmpdError::Database(e.to_string()))?;
+            ?;
 
         // Full-text search using FTS5
         self.conn
@@ -179,7 +179,7 @@ impl Database {
             )",
                 [],
             )
-            .map_err(|e| RmpdError::Database(e.to_string()))?;
+            ?;
 
         // Create indexes
         self.conn
@@ -187,49 +187,49 @@ impl Database {
                 "CREATE INDEX IF NOT EXISTS idx_songs_artist ON songs(artist)",
                 [],
             )
-            .map_err(|e| RmpdError::Database(e.to_string()))?;
+            ?;
 
         self.conn
             .execute(
                 "CREATE INDEX IF NOT EXISTS idx_songs_album ON songs(album)",
                 [],
             )
-            .map_err(|e| RmpdError::Database(e.to_string()))?;
+            ?;
 
         self.conn
             .execute(
                 "CREATE INDEX IF NOT EXISTS idx_songs_album_artist ON songs(album_artist)",
                 [],
             )
-            .map_err(|e| RmpdError::Database(e.to_string()))?;
+            ?;
 
         self.conn
             .execute(
                 "CREATE INDEX IF NOT EXISTS idx_songs_directory ON songs(directory_id)",
                 [],
             )
-            .map_err(|e| RmpdError::Database(e.to_string()))?;
+            ?;
 
         self.conn
             .execute(
                 "CREATE INDEX IF NOT EXISTS idx_directories_parent ON directories(parent_id)",
                 [],
             )
-            .map_err(|e| RmpdError::Database(e.to_string()))?;
+            ?;
 
         self.conn
             .execute(
                 "CREATE INDEX IF NOT EXISTS idx_artwork_path ON artwork(song_path)",
                 [],
             )
-            .map_err(|e| RmpdError::Database(e.to_string()))?;
+            ?;
 
         self.conn
             .execute(
                 "CREATE INDEX IF NOT EXISTS idx_artwork_hash ON artwork(hash)",
                 [],
             )
-            .map_err(|e| RmpdError::Database(e.to_string()))?;
+            ?;
 
         // Run migrations for new fields
         self.migrate_add_musicbrainz_fields()?;
@@ -241,7 +241,7 @@ impl Database {
                 VALUES (new.id, new.title, new.artist, new.album, new.album_artist, new.genre, new.composer);
             END",
             [],
-        ).map_err(|e| RmpdError::Database(e.to_string()))?;
+        )?;
 
         self.conn
             .execute(
@@ -250,7 +250,7 @@ impl Database {
             END",
                 [],
             )
-            .map_err(|e| RmpdError::Database(e.to_string()))?;
+            ?;
 
         self.conn.execute(
             "CREATE TRIGGER IF NOT EXISTS songs_fts_update AFTER UPDATE ON songs BEGIN
@@ -259,7 +259,7 @@ impl Database {
                 VALUES (new.id, new.title, new.artist, new.album, new.album_artist, new.genre, new.composer);
             END",
             [],
-        ).map_err(|e| RmpdError::Database(e.to_string()))?;
+        )?;
 
         Ok(())
     }
@@ -270,7 +270,7 @@ impl Database {
             "SELECT COUNT(*) FROM pragma_table_info('songs') WHERE name = 'musicbrainz_trackid'",
             [],
             |row| row.get(0),
-        ).map_err(|e| RmpdError::Database(e.to_string()))?;
+        )?;
 
         if column_exists {
             return Ok(());
@@ -295,7 +295,7 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_songs_musicbrainz_albumid ON songs(musicbrainz_albumid);
         ",
             )
-            .map_err(|e| RmpdError::Database(e.to_string()))?;
+            ?;
 
         Ok(())
     }
@@ -359,13 +359,13 @@ impl Database {
                 song.replay_gain_album_gain,
                 song.replay_gain_album_peak,
             ],
-        ).map_err(|e| RmpdError::Database(e.to_string()))?;
+        )?;
 
         Ok(self.conn.last_insert_rowid() as u64)
     }
 
     pub fn get_song(&self, id: u64) -> Result<Option<Song>> {
-        self.conn.query_row(
+        Ok(self.conn.query_row(
             "SELECT id, path, mtime, duration,
                     title, artist, album, album_artist, track, disc, date, genre, composer, performer, comment,
                     musicbrainz_trackid, musicbrainz_albumid, musicbrainz_artistid, musicbrainz_albumartistid,
@@ -416,12 +416,11 @@ impl Database {
                 })
             },
         )
-        .optional()
-        .map_err(|e| RmpdError::Database(e.to_string()))
+        .optional()?)
     }
 
     pub fn get_song_by_path(&self, path: &str) -> Result<Option<Song>> {
-        self.conn.query_row(
+        Ok(self.conn.query_row(
             "SELECT id, path, mtime, duration,
                     title, artist, album, album_artist, track, disc, date, genre, composer, performer, comment,
                     musicbrainz_trackid, musicbrainz_albumid, musicbrainz_artistid, musicbrainz_albumartistid,
@@ -472,51 +471,45 @@ impl Database {
                 })
             },
         )
-        .optional()
-        .map_err(|e| RmpdError::Database(e.to_string()))
+        .optional()?)
     }
 
     pub fn count_songs(&self) -> Result<u32> {
-        self.conn
-            .query_row("SELECT COUNT(*) FROM songs", [], |row| row.get(0))
-            .map_err(|e| RmpdError::Database(e.to_string()))
+        Ok(self.conn
+            .query_row("SELECT COUNT(*) FROM songs", [], |row| row.get(0))?)
     }
 
     pub fn count_artists(&self) -> Result<u32> {
-        self.conn
+        Ok(self.conn
             .query_row(
                 "SELECT COUNT(DISTINCT artist) FROM songs WHERE artist IS NOT NULL",
                 [],
                 |row| row.get(0),
-            )
-            .map_err(|e| RmpdError::Database(e.to_string()))
+            )?)
     }
 
     pub fn count_albums(&self) -> Result<u32> {
-        self.conn
+        Ok(self.conn
             .query_row(
                 "SELECT COUNT(DISTINCT album) FROM songs WHERE album IS NOT NULL",
                 [],
                 |row| row.get(0),
-            )
-            .map_err(|e| RmpdError::Database(e.to_string()))
+            )?)
     }
 
     pub fn get_db_playtime(&self) -> Result<u64> {
-        self.conn
+        Ok(self.conn
             .query_row("SELECT COALESCE(SUM(duration), 0) FROM songs", [], |row| {
                 let duration: f64 = row.get(0)?;
                 Ok(duration as u64)
-            })
-            .map_err(|e| RmpdError::Database(e.to_string()))
+            })?)
     }
 
     pub fn get_db_update(&self) -> Result<i64> {
-        self.conn
+        Ok(self.conn
             .query_row("SELECT COALESCE(MAX(added_at), 0) FROM songs", [], |row| {
                 row.get(0)
-            })
-            .map_err(|e| RmpdError::Database(e.to_string()))
+            })?)
     }
 
     fn get_or_create_directory(&self, path: &camino::Utf8Path) -> Result<i64> {
@@ -529,7 +522,7 @@ impl Database {
                 |row| row.get::<_, i64>(0),
             )
             .optional()
-            .map_err(|e| RmpdError::Database(e.to_string()))?
+            ?
         {
             return Ok(id);
         }
@@ -544,7 +537,10 @@ impl Database {
         // Create this directory
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_else(|_| {
+                tracing::warn!("System time before UNIX_EPOCH, using 0");
+                Duration::ZERO
+            })
             .as_secs() as i64;
 
         self.conn
@@ -552,7 +548,7 @@ impl Database {
                 "INSERT INTO directories (path, parent_id, mtime) VALUES (?1, ?2, ?3)",
                 params![path.as_str(), parent_id, now],
             )
-            .map_err(|e| RmpdError::Database(e.to_string()))?;
+            ?;
 
         Ok(self.conn.last_insert_rowid())
     }
@@ -569,7 +565,7 @@ impl Database {
              JOIN songs_fts ON songs_fts.rowid = s.id
              WHERE songs_fts MATCH ?1
              ORDER BY rank"
-        ).map_err(|e| RmpdError::Database(e.to_string()))?;
+        )?;
 
         let songs = stmt
             .query_map(params![query], |row| {
@@ -610,9 +606,9 @@ impl Database {
                     last_modified: row.get(34)?,
                 })
             })
-            .map_err(|e| RmpdError::Database(e.to_string()))?
+            ?
             .collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(|e| RmpdError::Database(e.to_string()))?;
+            ?;
 
         Ok(songs)
     }
@@ -620,13 +616,13 @@ impl Database {
     pub fn list_artists(&self) -> Result<Vec<String>> {
         let mut stmt = self.conn.prepare(
             "SELECT DISTINCT artist FROM songs WHERE artist IS NOT NULL ORDER BY artist COLLATE NOCASE"
-        ).map_err(|e| RmpdError::Database(e.to_string()))?;
+        )?;
 
         let artists = stmt
             .query_map([], |row| row.get(0))
-            .map_err(|e| RmpdError::Database(e.to_string()))?
+            ?
             .collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(|e| RmpdError::Database(e.to_string()))?;
+            ?;
 
         Ok(artists)
     }
@@ -634,13 +630,13 @@ impl Database {
     pub fn list_albums(&self) -> Result<Vec<String>> {
         let mut stmt = self.conn.prepare(
             "SELECT DISTINCT album FROM songs WHERE album IS NOT NULL ORDER BY album COLLATE NOCASE"
-        ).map_err(|e| RmpdError::Database(e.to_string()))?;
+        )?;
 
         let albums = stmt
             .query_map([], |row| row.get(0))
-            .map_err(|e| RmpdError::Database(e.to_string()))?
+            ?
             .collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(|e| RmpdError::Database(e.to_string()))?;
+            ?;
 
         Ok(albums)
     }
@@ -648,13 +644,13 @@ impl Database {
     pub fn list_genres(&self) -> Result<Vec<String>> {
         let mut stmt = self.conn.prepare(
             "SELECT DISTINCT genre FROM songs WHERE genre IS NOT NULL ORDER BY genre COLLATE NOCASE"
-        ).map_err(|e| RmpdError::Database(e.to_string()))?;
+        )?;
 
         let genres = stmt
             .query_map([], |row| row.get(0))
-            .map_err(|e| RmpdError::Database(e.to_string()))?
+            ?
             .collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(|e| RmpdError::Database(e.to_string()))?;
+            ?;
 
         Ok(genres)
     }
@@ -662,13 +658,13 @@ impl Database {
     pub fn list_album_artists(&self) -> Result<Vec<String>> {
         let mut stmt = self.conn.prepare(
             "SELECT DISTINCT album_artist FROM songs WHERE album_artist IS NOT NULL ORDER BY album_artist COLLATE NOCASE"
-        ).map_err(|e| RmpdError::Database(e.to_string()))?;
+        )?;
 
         let album_artists = stmt
             .query_map([], |row| row.get(0))
-            .map_err(|e| RmpdError::Database(e.to_string()))?
+            ?
             .collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(|e| RmpdError::Database(e.to_string()))?;
+            ?;
 
         Ok(album_artists)
     }
@@ -717,13 +713,13 @@ impl Database {
         let mut stmt = self
             .conn
             .prepare(&query)
-            .map_err(|e| RmpdError::Database(e.to_string()))?;
+            ?;
 
         let values = stmt
             .query_map([filter_value], |row| row.get(0))
-            .map_err(|e| RmpdError::Database(e.to_string()))?
+            ?
             .collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(|e| RmpdError::Database(e.to_string()))?;
+            ?;
 
         Ok(values)
     }
@@ -766,7 +762,7 @@ impl Database {
         let mut stmt = self
             .conn
             .prepare(query)
-            .map_err(|e| RmpdError::Database(e.to_string()))?;
+            ?;
 
         let songs = stmt
             .query_map(params![value], |row| {
@@ -807,9 +803,9 @@ impl Database {
                     last_modified: row.get(34)?,
                 })
             })
-            .map_err(|e| RmpdError::Database(e.to_string()))?
+            ?
             .collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(|e| RmpdError::Database(e.to_string()))?;
+            ?;
 
         Ok(songs)
     }
@@ -838,7 +834,7 @@ impl Database {
         let mut stmt = self
             .conn
             .prepare(&query)
-            .map_err(|e| RmpdError::Database(e.to_string()))?;
+            ?;
 
         // Convert Vec<String> to params that rusqlite can use
         let params_refs: Vec<&dyn rusqlite::ToSql> = params
@@ -888,9 +884,9 @@ impl Database {
                     last_modified: row.get(34)?,
                 })
             })
-            .map_err(|e| RmpdError::Database(e.to_string()))?
+            ?
             .collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(|e| RmpdError::Database(e.to_string()))?;
+            ?;
 
         Ok(songs)
     }
@@ -908,7 +904,7 @@ impl Database {
                     added_at, last_modified
              FROM songs
              ORDER BY path"
-        ).map_err(|e| RmpdError::Database(e.to_string()))?;
+        )?;
 
         let songs = stmt
             .query_map([], |row| {
@@ -949,9 +945,9 @@ impl Database {
                     last_modified: row.get(34)?,
                 })
             })
-            .map_err(|e| RmpdError::Database(e.to_string()))?
+            ?
             .collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(|e| RmpdError::Database(e.to_string()))?;
+            ?;
 
         Ok(songs)
     }
@@ -959,20 +955,19 @@ impl Database {
     pub fn delete_song_by_path(&self, path: &str) -> Result<()> {
         self.conn
             .execute("DELETE FROM songs WHERE path = ?1", params![path])
-            .map_err(|e| RmpdError::Database(e.to_string()))?;
+            ?;
         Ok(())
     }
 
     // Artwork methods
     pub fn get_artwork(&self, path: &str, picture_type: &str) -> Result<Option<Vec<u8>>> {
-        self.conn
+        Ok(self.conn
             .query_row(
                 "SELECT data FROM artwork WHERE song_path = ?1 AND picture_type = ?2",
                 params![path, picture_type],
                 |row| row.get(0),
             )
-            .optional()
-            .map_err(|e| RmpdError::Database(e.to_string()))
+            .optional()?)
     }
 
     pub fn store_artwork(
@@ -987,7 +982,7 @@ impl Database {
             "INSERT OR REPLACE INTO artwork (song_path, picture_type, mime_type, data, size, hash)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![path, picture_type, mime_type, data, data.len() as i64, hash],
-        ).map_err(|e| RmpdError::Database(e.to_string()))?;
+        )?;
         Ok(())
     }
 
@@ -999,7 +994,7 @@ impl Database {
                 params![path, picture_type],
                 |row| row.get(0),
             )
-            .map_err(|e| RmpdError::Database(e.to_string()))?;
+            ?;
         Ok(count > 0)
     }
 
@@ -1015,7 +1010,7 @@ impl Database {
                 [],
                 |row| row.get(0),
             ).optional()
-            .map_err(|e| RmpdError::Database(e.to_string()))?;
+            ?;
 
             // If we can't find Music/Musica directory, try to find any directory with songs
             if id.is_none() {
@@ -1026,7 +1021,7 @@ impl Database {
                         |row| row.get(0),
                     )
                     .optional()
-                    .map_err(|e| RmpdError::Database(e.to_string()))?
+                    ?
             } else {
                 id
             }
@@ -1040,7 +1035,7 @@ impl Database {
                     |row| row.get(0),
                 )
                 .optional()
-                .map_err(|e| RmpdError::Database(e.to_string()))?;
+                ?;
             id
         };
 
@@ -1050,23 +1045,23 @@ impl Database {
             let mut stmt = self
                 .conn
                 .prepare("SELECT path FROM directories WHERE parent_id = ?1 ORDER BY path")
-                .map_err(|e| RmpdError::Database(e.to_string()))?;
+                ?;
             let rows = stmt
                 .query_map(params![id], |row| row.get::<_, String>(0))
-                .map_err(|e| RmpdError::Database(e.to_string()))?;
+                ?;
             for row in rows {
-                directories.push(row.map_err(|e| RmpdError::Database(e.to_string()))?);
+                directories.push(row?);
             }
         } else {
             let mut stmt = self
                 .conn
                 .prepare("SELECT path FROM directories WHERE parent_id IS NULL ORDER BY path")
-                .map_err(|e| RmpdError::Database(e.to_string()))?;
+                ?;
             let rows = stmt
                 .query_map([], |row| row.get::<_, String>(0))
-                .map_err(|e| RmpdError::Database(e.to_string()))?;
+                ?;
             for row in rows {
-                directories.push(row.map_err(|e| RmpdError::Database(e.to_string()))?);
+                directories.push(row?);
             }
         }
 
@@ -1087,7 +1082,7 @@ impl Database {
             let mut stmt = self
                 .conn
                 .prepare(query)
-                .map_err(|e| RmpdError::Database(e.to_string()))?;
+                ?;
 
             let song_rows = stmt
                 .query_map(params![dir_id.unwrap_or(0)], |row| {
@@ -1128,10 +1123,10 @@ impl Database {
                         last_modified: row.get(33)?,
                     })
                 })
-                .map_err(|e| RmpdError::Database(e.to_string()))?;
+                ?;
 
             for row in song_rows {
-                songs.push(row.map_err(|e| RmpdError::Database(e.to_string()))?);
+                songs.push(row?);
             }
         }
 
@@ -1154,7 +1149,7 @@ impl Database {
         let mut stmt = self
             .conn
             .prepare(query)
-            .map_err(|e| RmpdError::Database(e.to_string()))?;
+            ?;
 
         let search_path = if path.is_empty() { "%" } else { path };
 
@@ -1197,11 +1192,11 @@ impl Database {
                     last_modified: row.get(33)?,
                 })
             })
-            .map_err(|e| RmpdError::Database(e.to_string()))?;
+            ?;
 
         let mut songs = Vec::new();
         for row in song_rows {
-            songs.push(row.map_err(|e| RmpdError::Database(e.to_string()))?);
+            songs.push(row?);
         }
 
         Ok(songs)
@@ -1215,7 +1210,7 @@ impl Database {
                 "INSERT OR REPLACE INTO playlists (name, mtime) VALUES (?1, strftime('%s', 'now'))",
                 params![name],
             )
-            .map_err(|e| RmpdError::Database(e.to_string()))?;
+            ?;
 
         let playlist_id: i64 = self
             .conn
@@ -1224,7 +1219,7 @@ impl Database {
                 params![name],
                 |row| row.get(0),
             )
-            .map_err(|e| RmpdError::Database(e.to_string()))?;
+            ?;
 
         // Clear existing items
         self.conn
@@ -1232,14 +1227,14 @@ impl Database {
                 "DELETE FROM playlist_items WHERE playlist_id = ?1",
                 params![playlist_id],
             )
-            .map_err(|e| RmpdError::Database(e.to_string()))?;
+            ?;
 
         // Add songs
         for (position, song) in songs.iter().enumerate() {
             self.conn.execute(
                 "INSERT INTO playlist_items (playlist_id, position, song_id, uri) VALUES (?1, ?2, ?3, ?4)",
                 params![playlist_id, position as i64, song.id as i64, song.path.as_str()],
-            ).map_err(|e| RmpdError::Database(e.to_string()))?;
+            )?;
         }
 
         Ok(())
@@ -1255,7 +1250,7 @@ impl Database {
                 |row| row.get(0),
             )
             .optional()
-            .map_err(|e| RmpdError::Database(e.to_string()))?
+            ?
             .ok_or_else(|| RmpdError::Library(format!("Playlist not found: {}", name)))?;
 
         let mut stmt = self.conn.prepare(
@@ -1273,7 +1268,7 @@ impl Database {
              JOIN songs s ON pi.song_id = s.id
              WHERE pi.playlist_id = ?1
              ORDER BY pi.position"
-        ).map_err(|e| RmpdError::Database(e.to_string()))?;
+        )?;
 
         let song_rows = stmt
             .query_map(params![playlist_id], |row| {
@@ -1314,11 +1309,11 @@ impl Database {
                     last_modified: row.get(33)?,
                 })
             })
-            .map_err(|e| RmpdError::Database(e.to_string()))?;
+            ?;
 
         let mut songs = Vec::new();
         for row in song_rows {
-            songs.push(row.map_err(|e| RmpdError::Database(e.to_string()))?);
+            songs.push(row?);
         }
 
         Ok(songs)
@@ -1335,7 +1330,7 @@ impl Database {
              GROUP BY p.id
              ORDER BY p.name",
             )
-            .map_err(|e| RmpdError::Database(e.to_string()))?;
+            ?;
 
         let playlist_rows = stmt
             .query_map([], |row| {
@@ -1345,11 +1340,11 @@ impl Database {
                     song_count: row.get(2)?,
                 })
             })
-            .map_err(|e| RmpdError::Database(e.to_string()))?;
+            ?;
 
         let mut playlists = Vec::new();
         for row in playlist_rows {
-            playlists.push(row.map_err(|e| RmpdError::Database(e.to_string()))?);
+            playlists.push(row?);
         }
 
         Ok(playlists)
@@ -1365,7 +1360,7 @@ impl Database {
         let affected = self
             .conn
             .execute("DELETE FROM playlists WHERE name = ?1", params![name])
-            .map_err(|e| RmpdError::Database(e.to_string()))?;
+            ?;
 
         if affected == 0 {
             return Err(RmpdError::Library(format!("Playlist not found: {}", name)));
@@ -1382,7 +1377,7 @@ impl Database {
                 "UPDATE playlists SET name = ?1, mtime = strftime('%s', 'now') WHERE name = ?2",
                 params![to, from],
             )
-            .map_err(|e| RmpdError::Database(e.to_string()))?;
+            ?;
 
         if affected == 0 {
             return Err(RmpdError::Library(format!("Playlist not found: {}", from)));
@@ -1402,7 +1397,7 @@ impl Database {
                 |row| row.get(0),
             )
             .optional()
-            .map_err(|e| RmpdError::Database(e.to_string()))?
+            ?
             .ok_or_else(|| RmpdError::Library(format!("Playlist not found: {}", name)))?;
 
         // Get song by URI
@@ -1418,13 +1413,13 @@ impl Database {
                 params![playlist_id],
                 |row| row.get(0),
             )
-            .map_err(|e| RmpdError::Database(e.to_string()))?;
+            ?;
 
         // Add song
         self.conn.execute(
             "INSERT INTO playlist_items (playlist_id, position, song_id, uri) VALUES (?1, ?2, ?3, ?4)",
             params![playlist_id, next_pos, song.id as i64, uri],
-        ).map_err(|e| RmpdError::Database(e.to_string()))?;
+        )?;
 
         // Update mtime
         self.conn
@@ -1432,7 +1427,7 @@ impl Database {
                 "UPDATE playlists SET mtime = strftime('%s', 'now') WHERE id = ?1",
                 params![playlist_id],
             )
-            .map_err(|e| RmpdError::Database(e.to_string()))?;
+            ?;
 
         Ok(())
     }
@@ -1447,7 +1442,7 @@ impl Database {
                 |row| row.get(0),
             )
             .optional()
-            .map_err(|e| RmpdError::Database(e.to_string()))?
+            ?
             .ok_or_else(|| RmpdError::Library(format!("Playlist not found: {}", name)))?;
 
         self.conn
@@ -1455,7 +1450,7 @@ impl Database {
                 "DELETE FROM playlist_items WHERE playlist_id = ?1",
                 params![playlist_id],
             )
-            .map_err(|e| RmpdError::Database(e.to_string()))?;
+            ?;
 
         // Update mtime
         self.conn
@@ -1463,7 +1458,7 @@ impl Database {
                 "UPDATE playlists SET mtime = strftime('%s', 'now') WHERE id = ?1",
                 params![playlist_id],
             )
-            .map_err(|e| RmpdError::Database(e.to_string()))?;
+            ?;
 
         Ok(())
     }
@@ -1478,7 +1473,7 @@ impl Database {
                 |row| row.get(0),
             )
             .optional()
-            .map_err(|e| RmpdError::Database(e.to_string()))?
+            ?
             .ok_or_else(|| RmpdError::Library(format!("Playlist not found: {}", name)))?;
 
         let affected = self
@@ -1487,7 +1482,7 @@ impl Database {
                 "DELETE FROM playlist_items WHERE playlist_id = ?1 AND position = ?2",
                 params![playlist_id, position],
             )
-            .map_err(|e| RmpdError::Database(e.to_string()))?;
+            ?;
 
         if affected == 0 {
             return Err(RmpdError::Library(format!(
@@ -1503,7 +1498,7 @@ impl Database {
              WHERE playlist_id = ?1 AND position > ?2",
                 params![playlist_id, position],
             )
-            .map_err(|e| RmpdError::Database(e.to_string()))?;
+            ?;
 
         // Update mtime
         self.conn
@@ -1511,7 +1506,7 @@ impl Database {
                 "UPDATE playlists SET mtime = strftime('%s', 'now') WHERE id = ?1",
                 params![playlist_id],
             )
-            .map_err(|e| RmpdError::Database(e.to_string()))?;
+            ?;
 
         Ok(())
     }
@@ -1526,7 +1521,7 @@ impl Database {
                 |row| row.get(0),
             )
             .optional()
-            .map_err(|e| RmpdError::Database(e.to_string()))?
+            ?
             .ok_or_else(|| RmpdError::Library(format!("Playlist not found: {}", name)))?;
 
         if from == to {
@@ -1547,7 +1542,7 @@ impl Database {
                 |row| row.get(0),
             )
             .optional()
-            .map_err(|e| RmpdError::Database(e.to_string()))?
+            ?
             .ok_or_else(|| RmpdError::Library(format!("Position not found: {}", from)))?;
 
         // Move logic similar to queue
@@ -1559,7 +1554,7 @@ impl Database {
                  WHERE playlist_id = ?1 AND position > ?2 AND position <= ?3",
                     params![playlist_id, from, to],
                 )
-                .map_err(|e| RmpdError::Database(e.to_string()))?;
+                ?;
         } else {
             // Moving up: shift items between to and from-1 up by 1
             self.conn
@@ -1568,7 +1563,7 @@ impl Database {
                  WHERE playlist_id = ?1 AND position >= ?2 AND position < ?3",
                     params![playlist_id, to, from],
                 )
-                .map_err(|e| RmpdError::Database(e.to_string()))?;
+                ?;
         }
 
         // Set the item's new position
@@ -1577,7 +1572,7 @@ impl Database {
                 "UPDATE playlist_items SET position = ?1 WHERE id = ?2",
                 params![to, item_id],
             )
-            .map_err(|e| RmpdError::Database(e.to_string()))?;
+            ?;
 
         // Update mtime
         self.conn
@@ -1585,7 +1580,7 @@ impl Database {
                 "UPDATE playlists SET mtime = strftime('%s', 'now') WHERE id = ?1",
                 params![playlist_id],
             )
-            .map_err(|e| RmpdError::Database(e.to_string()))?;
+            ?;
 
         Ok(())
     }
@@ -1594,14 +1589,13 @@ impl Database {
 
     /// Get a sticker value by URI and name
     pub fn get_sticker(&self, uri: &str, name: &str) -> Result<Option<String>> {
-        self.conn
+        Ok(self.conn
             .query_row(
                 "SELECT value FROM stickers WHERE uri = ?1 AND name = ?2",
                 params![uri, name],
                 |row| row.get(0),
             )
-            .optional()
-            .map_err(|e| RmpdError::Database(e.to_string()))
+            .optional()?)
     }
 
     /// Set a sticker value
@@ -1611,7 +1605,7 @@ impl Database {
                 "INSERT OR REPLACE INTO stickers (uri, name, value) VALUES (?1, ?2, ?3)",
                 params![uri, name, value],
             )
-            .map_err(|e| RmpdError::Database(e.to_string()))?;
+            ?;
         Ok(())
     }
 
@@ -1625,11 +1619,11 @@ impl Database {
                     "DELETE FROM stickers WHERE uri = ?1 AND name = ?2",
                     params![uri, sticker_name],
                 )
-                .map_err(|e| RmpdError::Database(e.to_string()))?;
+                ?;
         } else {
             self.conn
                 .execute("DELETE FROM stickers WHERE uri = ?1", params![uri])
-                .map_err(|e| RmpdError::Database(e.to_string()))?;
+                ?;
         }
         Ok(())
     }
@@ -1639,15 +1633,15 @@ impl Database {
         let mut stmt = self
             .conn
             .prepare("SELECT name, value FROM stickers WHERE uri = ?1 ORDER BY name")
-            .map_err(|e| RmpdError::Database(e.to_string()))?;
+            ?;
 
         let sticker_rows = stmt
             .query_map(params![uri], |row| Ok((row.get(0)?, row.get(1)?)))
-            .map_err(|e| RmpdError::Database(e.to_string()))?;
+            ?;
 
         let mut stickers = Vec::new();
         for row in sticker_rows {
-            stickers.push(row.map_err(|e| RmpdError::Database(e.to_string()))?);
+            stickers.push(row?);
         }
 
         Ok(stickers)
@@ -1659,7 +1653,7 @@ impl Database {
         let mut stmt = self
             .conn
             .prepare("SELECT uri, value FROM stickers WHERE uri LIKE ?1 AND name = ?2 ORDER BY uri")
-            .map_err(|e| RmpdError::Database(e.to_string()))?;
+            ?;
 
         let search_pattern = if uri.is_empty() {
             "%".to_string()
@@ -1671,11 +1665,11 @@ impl Database {
             .query_map(params![search_pattern, name], |row| {
                 Ok((row.get(0)?, row.get(1)?))
             })
-            .map_err(|e| RmpdError::Database(e.to_string()))?;
+            ?;
 
         let mut results = Vec::new();
         for row in sticker_rows {
-            results.push(row.map_err(|e| RmpdError::Database(e.to_string()))?);
+            results.push(row?);
         }
 
         Ok(results)

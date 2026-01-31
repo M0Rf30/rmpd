@@ -1,4 +1,5 @@
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use crate::cpal_utils::CpalDeviceConfig;
+use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{Device, SampleFormat, Stream, StreamConfig};
 use rmpd_core::error::{Result, RmpdError};
 use rmpd_core::song::AudioFormat;
@@ -16,24 +17,16 @@ pub struct CpalOutput {
 
 impl CpalOutput {
     pub fn new(format: AudioFormat) -> Result<Self> {
-        // Get default output device
-        let host = cpal::default_host();
-        let device = host
-            .default_output_device()
-            .ok_or_else(|| RmpdError::Player("No output device available".to_owned()))?;
-
-        // Create stream config
-        let config = StreamConfig {
-            channels: format.channels as u16,
-            sample_rate: format.sample_rate,
-            buffer_size: cpal::BufferSize::Default,
-        };
+        let device_config = CpalDeviceConfig::new(
+            format.sample_rate,
+            format.channels as u16,
+        )?;
 
         Ok(Self {
-            device,
+            device: device_config.device,
             stream: None,
             sample_sender: None,
-            config,
+            config: device_config.config,
             is_paused: false,
         })
     }
@@ -43,48 +36,13 @@ impl CpalOutput {
             return Ok(()); // Already started
         }
 
-        // Check supported formats
-        let supported_configs = self
-            .device
-            .supported_output_configs()
-            .map_err(|e| RmpdError::Player(format!("Failed to get supported configs: {}", e)))?;
-
-        // Try to find a suitable format at our sample rate
-        let mut found_format = None;
-        tracing::info!(
-            "Searching for suitable PCM format at {:?} Hz",
-            self.config.sample_rate
-        );
-        for config in supported_configs {
-            let sample_format = config.sample_format();
-            let min_rate = config.min_sample_rate();
-            let max_rate = config.max_sample_rate();
-
-            tracing::debug!(
-                "  Checking format: {:?}, rates: {:?}-{:?} Hz",
-                sample_format,
-                min_rate,
-                max_rate
-            );
-
-            if self.config.sample_rate >= min_rate && self.config.sample_rate <= max_rate {
-                // Prefer F32, but accept I16 or I32 for hardware compatibility
-                if sample_format == SampleFormat::F32 {
-                    found_format = Some(sample_format);
-                    tracing::info!("Found F32 format at {:?}-{:?} Hz", min_rate, max_rate);
-                    break;
-                } else if sample_format == SampleFormat::I16 && found_format.is_none() {
-                    found_format = Some(sample_format);
-                    tracing::info!("Found I16 format at {:?}-{:?} Hz", min_rate, max_rate);
-                } else if sample_format == SampleFormat::I32 && found_format.is_none() {
-                    found_format = Some(sample_format);
-                    tracing::info!("Found I32 format at {:?}-{:?} Hz", min_rate, max_rate);
-                }
-            }
-        }
-
-        let sample_format = found_format.unwrap_or(SampleFormat::F32);
-        tracing::info!("Using sample format: {:?}", sample_format);
+        // Find suitable PCM format using utility
+        let mut device_config = CpalDeviceConfig {
+            device: self.device.clone(),
+            config: self.config.clone(),
+            sample_format: SampleFormat::F32,
+        };
+        let sample_format = device_config.find_pcm_format()?;
 
         // Use bounded channel to block when buffer is full (prevents decoding faster than playback)
         // Buffer size: allow ~5 chunks to be queued (at 4096 samples/chunk, ~0.1s per chunk @ 44.1kHz)

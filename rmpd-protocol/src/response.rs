@@ -2,6 +2,17 @@ use rmpd_core::song::Song;
 use rmpd_core::state::PlayerStatus;
 use std::fmt::Write as FmtWrite;
 
+/// Database statistics
+pub struct Stats {
+    pub artists: u32,
+    pub albums: u32,
+    pub songs: u32,
+    pub uptime: u64,
+    pub db_playtime: u64,
+    pub db_update: i64,
+    pub playtime: u64,
+}
+
 /// Response type that can be either text or binary
 #[derive(Debug)]
 pub enum Response {
@@ -235,24 +246,14 @@ impl ResponseBuilder {
         self
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub fn stats(
-        &mut self,
-        artists: u32,
-        albums: u32,
-        songs: u32,
-        uptime: u64,
-        db_playtime: u64,
-        db_update: i64,
-        playtime: u64,
-    ) -> &mut Self {
-        self.field("artists", artists);
-        self.field("albums", albums);
-        self.field("songs", songs);
-        self.field("uptime", uptime);
-        self.field("db_playtime", db_playtime);
-        self.field("db_update", db_update);
-        self.field("playtime", playtime);
+    pub fn stats(&mut self, stats: &Stats) -> &mut Self {
+        self.field("artists", stats.artists);
+        self.field("albums", stats.albums);
+        self.field("songs", stats.songs);
+        self.field("uptime", stats.uptime);
+        self.field("db_playtime", stats.db_playtime);
+        self.field("db_update", stats.db_update);
+        self.field("playtime", stats.playtime);
         self
     }
 }

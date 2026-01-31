@@ -151,7 +151,10 @@ impl Scanner {
                     .modified()
                     .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
                     .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
+                    .unwrap_or_else(|_| {
+                        tracing::warn!("System time before UNIX_EPOCH, using 0");
+                        std::time::Duration::ZERO
+                    })
                     .as_secs() as i64;
 
                 // Skip if file hasn't been modified

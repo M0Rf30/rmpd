@@ -17,3 +17,11 @@ camino = { workspace = true, features = ["serde1"] }
 toml.workspace = true
 rand = "0.9"
 dirs = "6"
+rusqlite = { workspace = true, optional = true }
+symphonia = { workspace = true, optional = true }
+cpal = { workspace = true, optional = true }
+
+[features]
+default = []
+database-errors = ["rusqlite"]
+player-errors = ["symphonia", "cpal"]

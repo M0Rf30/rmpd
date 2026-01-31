@@ -19,7 +19,10 @@ impl MetadataExtractor {
             .modified()
             .unwrap_or(SystemTime::UNIX_EPOCH)
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_else(|_| {
+                tracing::warn!("System time before UNIX_EPOCH, using 0");
+                Duration::ZERO
+            })
             .as_secs() as i64;
 
         // Parse audio file with lofty (now supports DSF/DFF with ID3v2 tags)
@@ -40,8 +43,8 @@ impl MetadataExtractor {
             .primary_tag()
             .or_else(|| tagged_file.first_tag());
 
-        eprintln!("DEBUG: Extracting metadata from: {}", path);
-        eprintln!("DEBUG: Tag present: {}", tag.is_some());
+        tracing::debug!("Extracting metadata from: {}", path);
+        tracing::debug!("Tag present: {}", tag.is_some());
 
         let (
             title,
@@ -107,9 +110,9 @@ impl MetadataExtractor {
             )
         };
 
-        eprintln!("DEBUG: Extracted MB TrackID: {:?}", musicbrainz_trackid);
-        eprintln!("DEBUG: Extracted MB AlbumID: {:?}", musicbrainz_albumid);
-        eprintln!("DEBUG: Extracted Label: {:?}", label);
+        tracing::debug!("Extracted MB TrackID: {:?}", musicbrainz_trackid);
+        tracing::debug!("Extracted MB AlbumID: {:?}", musicbrainz_albumid);
+        tracing::debug!("Extracted Label: {:?}", label);
 
         // ReplayGain (not all formats support this)
         let (

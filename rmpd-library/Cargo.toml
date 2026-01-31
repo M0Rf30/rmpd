@@ -15,7 +15,7 @@ categories.workspace = true
 ignored = ["symphonia", "tantivy", "thiserror"]
 
 [dependencies]
-rmpd-core.workspace = true
+rmpd-core = { workspace = true, features = ["database-errors"] }
 rusqlite.workspace = true
 lofty.workspace = true
 symphonia.workspace = true

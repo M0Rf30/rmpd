@@ -169,7 +169,13 @@ async fn handle_fs_event(
                 match MetadataExtractor::extract_from_file(&path_buf) {
                     Ok(song) => {
                         // Database operations need to be done with lock
-                        let db_guard = db.lock().unwrap();
+                        let db_guard = match db.lock() {
+                            Ok(guard) => guard,
+                            Err(poisoned) => {
+                                tracing::error!("Database mutex poisoned, recovering: {}", poisoned);
+                                poisoned.into_inner()
+                            }
+                        };
 
                         // Check if song already exists
                         let exists = db_guard.get_song_by_path(&path_str)?.is_some();
@@ -210,7 +216,13 @@ async fn handle_fs_event(
                 debug!("File removed: {}", path_str);
 
                 // Remove from database
-                let db_guard = db.lock().unwrap();
+                let db_guard = match db.lock() {
+                    Ok(guard) => guard,
+                    Err(poisoned) => {
+                        tracing::error!("Database mutex poisoned, recovering: {}", poisoned);
+                        poisoned.into_inner()
+                    }
+                };
                 db_guard.delete_song_by_path(&path_str)?;
                 drop(db_guard);
 
