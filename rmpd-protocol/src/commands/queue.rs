@@ -231,6 +231,9 @@ pub async fn handle_playlistid_command(state: &AppState, id: Option<u32>) -> Str
         // Get specific song by ID
         if let Some(item) = queue.get_by_id(song_id) {
             resp.song(&item.song, Some(item.position), Some(item.id));
+            if item.priority > 0 {
+                resp.field("Prio", item.priority);
+            }
         } else {
             return ResponseBuilder::error(50, 0, "playlistid", "No such song");
         }
@@ -238,6 +241,9 @@ pub async fn handle_playlistid_command(state: &AppState, id: Option<u32>) -> Str
         // Get all songs with IDs
         for item in queue.items() {
             resp.song(&item.song, Some(item.position), Some(item.id));
+            if item.priority > 0 {
+                resp.field("Prio", item.priority);
+            }
         }
     }
 
@@ -264,6 +270,9 @@ pub async fn handle_playlistinfo_command(state: &AppState, range: Option<(u32, u
 
     for item in filtered {
         resp.song(&item.song, Some(item.position), Some(item.id));
+        if item.priority > 0 {
+            resp.field("Prio", item.priority);
+        }
     }
 
     resp.ok()
@@ -330,4 +339,212 @@ pub async fn handle_playid_command(state: &AppState, id: Option<u32>) -> String 
         // Resume playback (same as play with no args)
         playback::handle_play_command(state, None).await
     }
+}
+
+/// Set priority for songs in queue by position range
+///
+/// Sets the priority for all songs within the specified position ranges.
+/// Priority is 0-255 where higher values have higher priority.
+pub async fn handle_prio_command(state: &AppState, priority: u8, ranges: &[(u32, u32)]) -> String {
+    let mut queue = state.queue.write().await;
+    queue.set_priority_range(priority, ranges);
+
+    let mut status = state.status.write().await;
+    status.playlist_version = queue.version();
+
+    ResponseBuilder::new().ok()
+}
+
+/// Set priority for songs in queue by ID
+///
+/// Sets the priority for all songs with the specified IDs.
+/// Priority is 0-255 where higher values have higher priority.
+pub async fn handle_prioid_command(state: &AppState, priority: u8, ids: &[u32]) -> String {
+    let mut queue = state.queue.write().await;
+    let changed = queue.set_priority_ids(priority, ids);
+
+    if changed {
+        let mut status = state.status.write().await;
+        status.playlist_version = queue.version();
+    }
+
+    ResponseBuilder::new().ok()
+}
+
+/// Set playback range for a song
+///
+/// TODO: Implement playback range (start/end time) in QueueItem
+pub async fn handle_rangeid_command(state: &AppState, _id: u32, _range: (f64, f64)) -> String {
+    // Set playback range for song (stub)
+    let mut status = state.status.write().await;
+    status.playlist_version += 1;
+    ResponseBuilder::new().ok()
+}
+
+/// Add a tag to a queue item
+///
+/// TODO: Implement per-item tag storage in QueueItem
+pub async fn handle_addtagid_command(state: &AppState, _id: u32, _tag: &str, _value: &str) -> String {
+    // Add tag to queue item (stub)
+    let mut status = state.status.write().await;
+    status.playlist_version += 1;
+    ResponseBuilder::new().ok()
+}
+
+/// Clear tags from a queue item
+///
+/// TODO: Implement per-item tag storage in QueueItem
+pub async fn handle_cleartagid_command(state: &AppState, _id: u32, _tag: Option<&str>) -> String {
+    // Clear tags from queue item (stub)
+    let mut status = state.status.write().await;
+    status.playlist_version += 1;
+    ResponseBuilder::new().ok()
+}
+
+/// Return changes in queue since version
+///
+/// MPD protocol: version 0 means "give me current playlist"
+/// Otherwise, return items if playlist has changed since given version
+pub async fn handle_plchanges_command(
+    state: &AppState,
+    version: u32,
+    range: Option<(u32, u32)>,
+) -> String {
+    let queue = state.queue.read().await;
+    let mut resp = ResponseBuilder::new();
+
+    if version == 0 || queue.version() > version {
+        let items = queue.items();
+
+        // Apply range filter
+        let filtered = if let Some((start, end)) = range {
+            let start_idx = start as usize;
+            let end_idx = end.min(items.len() as u32) as usize;
+            if start_idx < items.len() {
+                &items[start_idx..end_idx]
+            } else {
+                &[]
+            }
+        } else {
+            items
+        };
+
+        for item in filtered {
+            resp.field("file", item.song.path.as_str());
+            resp.field("Pos", item.position.to_string());
+            resp.field("Id", item.id.to_string());
+            if item.priority > 0 {
+                resp.field("Prio", item.priority);
+            }
+            if let Some(ref title) = item.song.title {
+                resp.field("Title", title);
+            }
+        }
+    }
+    resp.ok()
+}
+
+/// Return position/id changes since version
+///
+/// MPD protocol: version 0 means "give me current playlist"
+/// Otherwise, return items if playlist has changed since given version
+pub async fn handle_plchangesposid_command(
+    state: &AppState,
+    version: u32,
+    range: Option<(u32, u32)>,
+) -> String {
+    let queue = state.queue.read().await;
+    let mut resp = ResponseBuilder::new();
+
+    if version == 0 || queue.version() > version {
+        let items = queue.items();
+
+        // Apply range filter
+        let filtered = if let Some((start, end)) = range {
+            let start_idx = start as usize;
+            let end_idx = end.min(items.len() as u32) as usize;
+            if start_idx < items.len() {
+                &items[start_idx..end_idx]
+            } else {
+                &[]
+            }
+        } else {
+            items
+        };
+
+        for item in filtered {
+            resp.field("cpos", item.position.to_string());
+            resp.field("Id", item.id.to_string());
+        }
+    }
+    resp.ok()
+}
+
+/// Search queue for exact tag matches
+pub async fn handle_playlistfind_command(state: &AppState, tag: &str, value: &str) -> String {
+    let queue = state.queue.read().await;
+    let mut resp = ResponseBuilder::new();
+
+    for item in queue.items() {
+        let matches = match tag.to_lowercase().as_str() {
+            "artist" => item.song.artist.as_deref() == Some(value),
+            "album" => item.song.album.as_deref() == Some(value),
+            "title" => item.song.title.as_deref() == Some(value),
+            "genre" => item.song.genre.as_deref() == Some(value),
+            _ => false,
+        };
+
+        if matches {
+            resp.song(&item.song, Some(item.position), Some(item.id));
+            if item.priority > 0 {
+                resp.field("Prio", item.priority);
+            }
+        }
+    }
+    resp.ok()
+}
+
+/// Case-insensitive search in queue
+pub async fn handle_playlistsearch_command(state: &AppState, tag: &str, value: &str) -> String {
+    let queue = state.queue.read().await;
+    let mut resp = ResponseBuilder::new();
+    let value_lower = value.to_lowercase();
+
+    for item in queue.items() {
+        let matches = match tag.to_lowercase().as_str() {
+            "artist" => item
+                .song
+                .artist
+                .as_ref()
+                .map(|s| s.to_lowercase().contains(&value_lower))
+                .unwrap_or(false),
+            "album" => item
+                .song
+                .album
+                .as_ref()
+                .map(|s| s.to_lowercase().contains(&value_lower))
+                .unwrap_or(false),
+            "title" => item
+                .song
+                .title
+                .as_ref()
+                .map(|s| s.to_lowercase().contains(&value_lower))
+                .unwrap_or(false),
+            "genre" => item
+                .song
+                .genre
+                .as_ref()
+                .map(|s| s.to_lowercase().contains(&value_lower))
+                .unwrap_or(false),
+            _ => false,
+        };
+
+        if matches {
+            resp.song(&item.song, Some(item.position), Some(item.id));
+            if item.priority > 0 {
+                resp.field("Prio", item.priority);
+            }
+        }
+    }
+    resp.ok()
 }

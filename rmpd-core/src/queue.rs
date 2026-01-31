@@ -6,6 +6,8 @@ pub struct QueueItem {
     pub id: u32,
     pub position: u32,
     pub song: Song,
+    /// Priority (0-255, default 0). Higher values have higher priority.
+    pub priority: u8,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -25,7 +27,12 @@ impl Queue {
         self.next_id += 1;
 
         let position = self.items.len() as u32;
-        self.items.push(QueueItem { id, position, song });
+        self.items.push(QueueItem {
+            id,
+            position,
+            song,
+            priority: 0, // Default priority
+        });
 
         self.version += 1;
         id
@@ -165,6 +172,7 @@ impl Queue {
             id,
             position: pos,
             song,
+            priority: 0, // Default priority
         };
 
         if pos as usize >= self.items.len() {
@@ -176,6 +184,41 @@ impl Queue {
         self.reindex();
         self.version += 1;
         id
+    }
+
+    /// Set priority for songs in the given position range
+    pub fn set_priority_range(&mut self, priority: u8, ranges: &[(u32, u32)]) {
+        for &(start, end) in ranges {
+            let start_idx = start as usize;
+            let end_idx = end.min(self.items.len() as u32) as usize;
+
+            for idx in start_idx..end_idx {
+                if idx < self.items.len() {
+                    self.items[idx].priority = priority;
+                }
+            }
+        }
+        self.version += 1;
+    }
+
+    /// Set priority for songs with the given IDs
+    pub fn set_priority_ids(&mut self, priority: u8, ids: &[u32]) -> bool {
+        let mut any_changed = false;
+        for &id in ids {
+            if let Some(item) = self.items.iter_mut().find(|item| item.id == id) {
+                item.priority = priority;
+                any_changed = true;
+            }
+        }
+        if any_changed {
+            self.version += 1;
+        }
+        any_changed
+    }
+
+    /// Get mutable reference to an item by ID
+    pub fn get_by_id_mut(&mut self, id: u32) -> Option<&mut QueueItem> {
+        self.items.iter_mut().find(|item| item.id == id)
     }
 
     fn reindex(&mut self) {
