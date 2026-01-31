@@ -771,3 +771,43 @@ pub async fn handle_listfiles_command(state: &AppState, uri: Option<&str>) -> St
         Err(e) => ResponseBuilder::error(50, 0, "listfiles", &format!("Error: {}", e)),
     }
 }
+
+/// Count search results with optional grouping
+///
+/// This is a convenience wrapper for count_command
+pub async fn handle_searchcount_command(
+    state: &AppState,
+    tag: &str,
+    value: &str,
+    group: Option<&str>,
+) -> String {
+    let filters = vec![(tag.to_string(), value.to_string())];
+    handle_count_command(state, &filters, group).await
+}
+
+/// Generate chromaprint fingerprint for audio file
+///
+/// TODO: Implement chromaprint integration for audio fingerprinting
+/// Requires linking to chromaprint library and processing audio data
+pub async fn handle_getfingerprint_command(state: &AppState, uri: &str) -> String {
+    let _ = (state, uri);
+    ResponseBuilder::error(50, 0, "getfingerprint", "chromaprint not available")
+}
+
+/// Read file metadata comments
+///
+/// Returns comment field from the song metadata
+pub async fn handle_readcomments_command(state: &AppState, uri: &str) -> String {
+    if let Some(ref db_path) = state.db_path {
+        if let Ok(db) = rmpd_library::Database::open(db_path) {
+            if let Ok(Some(song)) = db.get_song_by_path(uri) {
+                let mut resp = ResponseBuilder::new();
+                if let Some(ref comment) = song.comment {
+                    resp.field("comment", comment);
+                }
+                return resp.ok();
+            }
+        }
+    }
+    ResponseBuilder::error(50, 0, "readcomments", "No such file")
+}
