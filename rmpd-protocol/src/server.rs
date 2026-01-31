@@ -4,6 +4,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::broadcast;
 use tracing::{debug, error, info};
 
+use crate::commands::{options, playback};
 use crate::parser::{parse_command, Command};
 use crate::queue_playback::QueuePlaybackManager;
 use crate::response::{Response, ResponseBuilder, Stats};
@@ -544,15 +545,15 @@ async fn handle_command(cmd: Command, state: &AppState) -> Response {
             handle_playlistsearch_command(state, &tag, &value).await
         }
         // Playback commands
-        Command::Play { position } => handle_play_command(state, position).await,
-        Command::Pause { state: pause_state } => handle_pause_command(state, pause_state).await,
-        Command::Stop => handle_stop_command(state).await,
-        Command::Next => handle_next_command(state).await,
-        Command::Previous => handle_previous_command(state).await,
-        Command::Seek { position, time } => handle_seek_command(state, position, time).await,
-        Command::SeekId { id, time } => handle_seekid_command(state, id, time).await,
-        Command::SeekCur { time, relative } => handle_seekcur_command(state, time, relative).await,
-        Command::SetVol { volume } => handle_setvol_command(state, volume).await,
+        Command::Play { position } => playback::handle_play_command(state, position).await,
+        Command::Pause { state: pause_state } => playback::handle_pause_command(state, pause_state).await,
+        Command::Stop => playback::handle_stop_command(state).await,
+        Command::Next => playback::handle_next_command(state).await,
+        Command::Previous => playback::handle_previous_command(state).await,
+        Command::Seek { position, time } => playback::handle_seek_command(state, position, time).await,
+        Command::SeekId { id, time } => playback::handle_seekid_command(state, id, time).await,
+        Command::SeekCur { time, relative } => playback::handle_seekcur_command(state, time, relative).await,
+        Command::SetVol { volume } => options::handle_setvol_command(state, volume).await,
         Command::Add { uri, position } => handle_add_command(state, &uri, position).await,
         Command::Clear => handle_clear_command(state).await,
         Command::Delete { target } => handle_delete_command(state, target).await,
@@ -574,20 +575,20 @@ async fn handle_command(cmd: Command, state: &AppState) -> Response {
             unreachable!()
         }
         Command::Unknown(cmd) => ResponseBuilder::error(5, 0, &cmd, "unknown command"),
-        Command::Repeat { enabled } => handle_repeat_command(state, enabled).await,
-        Command::Random { enabled } => handle_random_command(state, enabled).await,
-        Command::Single { mode } => handle_single_command(state, &mode).await,
-        Command::Consume { mode } => handle_consume_command(state, &mode).await,
-        Command::Crossfade { seconds } => handle_crossfade_command(state, seconds).await,
-        Command::Volume { change } => handle_volume_command(state, change).await,
+        Command::Repeat { enabled } => options::handle_repeat_command(state, enabled).await,
+        Command::Random { enabled } => options::handle_random_command(state, enabled).await,
+        Command::Single { mode } => options::handle_single_command(state, &mode).await,
+        Command::Consume { mode } => options::handle_consume_command(state, &mode).await,
+        Command::Crossfade { seconds } => options::handle_crossfade_command(state, seconds).await,
+        Command::Volume { change } => options::handle_volume_command(state, change).await,
         Command::GetVol => {
             let status = state.status.read().await;
             let mut resp = ResponseBuilder::new();
             resp.field("volume", status.volume.to_string());
             resp.ok()
         }
-        Command::ReplayGainMode { mode } => handle_replaygain_mode_command(state, &mode).await,
-        Command::ReplayGainStatus => handle_replaygain_status_command(state).await,
+        Command::ReplayGainMode { mode } => options::handle_replaygain_mode_command(state, &mode).await,
+        Command::ReplayGainStatus => options::handle_replaygain_status_command(state).await,
         Command::BinaryLimit { size } => {
             // Set binary limit (for large responses like images)
             // Store in connection state if needed, for now just acknowledge
@@ -702,8 +703,8 @@ async fn handle_command(cmd: Command, state: &AppState) -> Response {
         // Miscellaneous
         Command::Config => handle_config_command().await,
         Command::Kill => handle_kill_command().await,
-        Command::MixRampDb { decibels } => handle_mixrampdb_command(state, decibels).await,
-        Command::MixRampDelay { seconds } => handle_mixrampdelay_command(state, seconds).await,
+        Command::MixRampDb { decibels } => options::handle_mixrampdb_command(state, decibels).await,
+        Command::MixRampDelay { seconds } => options::handle_mixrampdelay_command(state, seconds).await,
         _ => {
             // Unimplemented commands
             ResponseBuilder::error(5, 0, "command", "not yet implemented")
@@ -1081,389 +1082,6 @@ async fn handle_count_command(
     resp.ok()
 }
 
-async fn handle_play_command(state: &AppState, position: Option<u32>) -> String {
-    let queue = state.queue.read().await;
-
-    // Get song to play and track the actual position
-    let (song, actual_position) = if let Some(pos) = position {
-        // Play specific position
-        if let Some(item) = queue.get(pos) {
-            (item.song.clone(), Some((pos, item.id)))
-        } else {
-            return ResponseBuilder::error(50, 0, "play", "No such song");
-        }
-    } else {
-        // Resume or play first song
-        let current_song = state.engine.read().await.get_current_song().await;
-        if let Some(song) = current_song {
-            // Resuming - keep existing position if set
-            let pos = state.status.read().await.current_song;
-            (song, pos.map(|p| (p.position, p.id)))
-        } else if let Some(item) = queue.get(0) {
-            // Play first song
-            (item.song.clone(), Some((0, item.id)))
-        } else {
-            return ResponseBuilder::error(50, 0, "play", "No songs in queue");
-        }
-    };
-
-    drop(queue);
-
-    // Resolve relative path to absolute for playback
-    let mut playback_song = song.clone();
-    let absolute_path = resolve_path(song.path.as_str(), state.music_dir.as_deref());
-    playback_song.path = absolute_path.into();
-
-    // Start playback with resolved path
-    match state.engine.write().await.play(playback_song).await {
-        Ok(_) => {
-            // Update status immediately (event will also update but that's idempotent)
-            let mut status = state.status.write().await;
-            status.state = rmpd_core::state::PlayerState::Play;
-            status.elapsed = Some(std::time::Duration::ZERO);
-            status.duration = song.duration;
-            status.bitrate = song.bitrate;
-
-            // Set audio format if available
-            if let (Some(sr), Some(ch), Some(bps)) =
-                (song.sample_rate, song.channels, song.bits_per_sample)
-            {
-                status.audio_format = Some(rmpd_core::song::AudioFormat {
-                    sample_rate: sr,
-                    channels: ch,
-                    bits_per_sample: bps,
-                });
-            }
-
-            if let Some((pos, id)) = actual_position {
-                status.current_song = Some(rmpd_core::state::QueuePosition { position: pos, id });
-
-                // Set next_song for UI (e.g., Cantata's next button)
-                let queue = state.queue.read().await;
-                if let Some(next_item) = queue.get(pos + 1) {
-                    status.next_song = Some(rmpd_core::state::QueuePosition {
-                        position: pos + 1,
-                        id: next_item.id,
-                    });
-                } else {
-                    status.next_song = None;
-                }
-            }
-            drop(status);
-
-            // Emit events to notify idle clients
-            debug!("Emitting PlayerStateChanged(Play) and SongChanged events");
-            state
-                .event_bus
-                .emit(rmpd_core::event::Event::PlayerStateChanged(
-                    rmpd_core::state::PlayerState::Play,
-                ));
-            state
-                .event_bus
-                .emit(rmpd_core::event::Event::SongChanged(Some(song)));
-
-            ResponseBuilder::new().ok()
-        }
-        Err(e) => ResponseBuilder::error(50, 0, "play", &format!("Playback error: {}", e)),
-    }
-}
-
-async fn handle_pause_command(state: &AppState, pause_state: Option<bool>) -> String {
-    info!("Pause command received: pause_state={:?}", pause_state);
-
-    // Get current state lock-free using atomic (no engine lock needed!)
-    let current_state_u8 = state.atomic_state.load(std::sync::atomic::Ordering::SeqCst);
-    let current_state = match current_state_u8 {
-        0 => rmpd_core::state::PlayerState::Stop,
-        1 => rmpd_core::state::PlayerState::Play,
-        2 => rmpd_core::state::PlayerState::Pause,
-        _ => rmpd_core::state::PlayerState::Stop,
-    };
-
-    info!("Current state (atomic, no locks): {:?}", current_state);
-
-    let should_pause =
-        pause_state.unwrap_or_else(|| current_state == rmpd_core::state::PlayerState::Play);
-    let is_currently_paused = current_state == rmpd_core::state::PlayerState::Pause;
-
-    // If already in desired state, do nothing
-    if should_pause == is_currently_paused {
-        info!("Already in desired state, returning OK");
-        return ResponseBuilder::new().ok();
-    }
-
-    info!("Acquiring engine write lock...");
-    // Set pause state
-    let result = if pause_state.is_some() {
-        // Explicit pause state given - use set_pause
-        state.engine.write().await.set_pause(should_pause).await
-    } else {
-        // No explicit state - toggle
-        state.engine.write().await.pause().await
-    };
-
-    match result {
-        Ok(_) => {
-            info!("Engine pause completed, updating status...");
-            // Read the actual state from atomic (engine might not have changed it)
-            let actual_state_u8 = state.atomic_state.load(std::sync::atomic::Ordering::SeqCst);
-            let actual_state = match actual_state_u8 {
-                0 => rmpd_core::state::PlayerState::Stop,
-                1 => rmpd_core::state::PlayerState::Play,
-                2 => rmpd_core::state::PlayerState::Pause,
-                _ => rmpd_core::state::PlayerState::Stop,
-            };
-
-            // Update status to match actual atomic state
-            let mut status = state.status.write().await;
-            status.state = actual_state;
-            drop(status);
-
-            // Emit event to notify idle clients
-            debug!("Emitting PlayerStateChanged({:?}) event", actual_state);
-            state
-                .event_bus
-                .emit(rmpd_core::event::Event::PlayerStateChanged(actual_state));
-
-            info!(
-                "Pause completed successfully, state is now: {:?}",
-                actual_state
-            );
-            ResponseBuilder::new().ok()
-        }
-        Err(e) => {
-            error!("Pause failed: {}", e);
-            ResponseBuilder::error(50, 0, "pause", &format!("Pause error: {}", e))
-        }
-    }
-}
-
-async fn handle_stop_command(state: &AppState) -> String {
-    info!("Stop command received");
-    info!("Acquiring engine write lock for stop...");
-    match state.engine.write().await.stop().await {
-        Ok(_) => {
-            // Update status after engine stops
-            let mut status = state.status.write().await;
-            status.state = rmpd_core::state::PlayerState::Stop;
-            status.current_song = None;
-            status.next_song = None;
-            drop(status);
-
-            // Emit event to notify idle clients
-            debug!("Emitting PlayerStateChanged(Stop) event");
-            state
-                .event_bus
-                .emit(rmpd_core::event::Event::PlayerStateChanged(
-                    rmpd_core::state::PlayerState::Stop,
-                ));
-
-            ResponseBuilder::new().ok()
-        }
-        Err(e) => ResponseBuilder::error(50, 0, "stop", &format!("Stop error: {}", e)),
-    }
-}
-
-async fn handle_next_command(state: &AppState) -> String {
-    let queue = state.queue.read().await;
-    let status = state.status.read().await;
-
-    let next_pos = if let Some(current) = status.current_song {
-        current.position + 1
-    } else {
-        0
-    };
-
-    if let Some(item) = queue.get(next_pos) {
-        let song = item.song.clone();
-        let item_id = item.id;
-        drop(queue);
-        drop(status);
-
-        // Resolve relative path to absolute for playback
-        let mut playback_song = song.clone();
-        let absolute_path = resolve_path(song.path.as_str(), state.music_dir.as_deref());
-        playback_song.path = absolute_path.into();
-
-        match state.engine.write().await.play(playback_song).await {
-            Ok(_) => {
-                let mut status = state.status.write().await;
-                status.current_song = Some(rmpd_core::state::QueuePosition {
-                    position: next_pos,
-                    id: item_id,
-                });
-
-                // Set next_song for UI (e.g., Cantata's next button)
-                let queue = state.queue.read().await;
-                if let Some(next_item) = queue.get(next_pos + 1) {
-                    status.next_song = Some(rmpd_core::state::QueuePosition {
-                        position: next_pos + 1,
-                        id: next_item.id,
-                    });
-                } else {
-                    status.next_song = None;
-                }
-
-                ResponseBuilder::new().ok()
-            }
-            Err(e) => ResponseBuilder::error(50, 0, "next", &format!("Playback error: {}", e)),
-        }
-    } else {
-        ResponseBuilder::error(50, 0, "next", "No next song")
-    }
-}
-
-async fn handle_previous_command(state: &AppState) -> String {
-    let queue = state.queue.read().await;
-    let status = state.status.read().await;
-
-    let prev_pos = if let Some(current) = status.current_song {
-        if current.position > 0 {
-            current.position - 1
-        } else {
-            return ResponseBuilder::error(50, 0, "previous", "Already at first song");
-        }
-    } else {
-        0
-    };
-
-    if let Some(item) = queue.get(prev_pos) {
-        let song = item.song.clone();
-        let item_id = item.id;
-        drop(queue);
-        drop(status);
-
-        // Resolve relative path to absolute for playback
-        let mut playback_song = song.clone();
-        let absolute_path = resolve_path(song.path.as_str(), state.music_dir.as_deref());
-        playback_song.path = absolute_path.into();
-
-        match state.engine.write().await.play(playback_song).await {
-            Ok(_) => {
-                let mut status = state.status.write().await;
-                status.current_song = Some(rmpd_core::state::QueuePosition {
-                    position: prev_pos,
-                    id: item_id,
-                });
-
-                // Set next_song for UI (e.g., Cantata's next button)
-                let queue = state.queue.read().await;
-                if let Some(next_item) = queue.get(prev_pos + 1) {
-                    status.next_song = Some(rmpd_core::state::QueuePosition {
-                        position: prev_pos + 1,
-                        id: next_item.id,
-                    });
-                } else {
-                    status.next_song = None;
-                }
-
-                ResponseBuilder::new().ok()
-            }
-            Err(e) => ResponseBuilder::error(50, 0, "previous", &format!("Playback error: {}", e)),
-        }
-    } else {
-        ResponseBuilder::error(50, 0, "previous", "No previous song")
-    }
-}
-
-async fn handle_seek_command(state: &AppState, position: u32, time: f64) -> String {
-    // Get song at position
-    let queue = state.queue.read().await;
-    let status = state.status.read().await;
-
-    // Check if this is the current song
-    if let Some(current) = status.current_song {
-        if current.position == position {
-            drop(queue);
-            drop(status);
-            // Seek in current song
-            match state.engine.read().await.seek(time).await {
-                Ok(_) => {
-                    // Update status elapsed time
-                    state.status.write().await.elapsed =
-                        Some(std::time::Duration::from_secs_f64(time));
-                    ResponseBuilder::new().ok()
-                }
-                Err(e) => ResponseBuilder::error(50, 0, "seek", &format!("Seek failed: {}", e)),
-            }
-        } else {
-            ResponseBuilder::error(50, 0, "seek", "Can only seek in current song")
-        }
-    } else {
-        ResponseBuilder::error(50, 0, "seek", "Not playing")
-    }
-}
-
-async fn handle_seekid_command(state: &AppState, id: u32, time: f64) -> String {
-    let status = state.status.read().await;
-
-    // Check if this is the current song
-    if let Some(current) = status.current_song {
-        if current.id == id {
-            drop(status);
-            // Seek in current song
-            match state.engine.read().await.seek(time).await {
-                Ok(_) => {
-                    // Update status elapsed time
-                    state.status.write().await.elapsed =
-                        Some(std::time::Duration::from_secs_f64(time));
-                    ResponseBuilder::new().ok()
-                }
-                Err(e) => ResponseBuilder::error(50, 0, "seekid", &format!("Seek failed: {}", e)),
-            }
-        } else {
-            ResponseBuilder::error(50, 0, "seekid", "Can only seek in current song")
-        }
-    } else {
-        ResponseBuilder::error(50, 0, "seekid", "Not playing")
-    }
-}
-
-async fn handle_seekcur_command(state: &AppState, time: f64, relative: bool) -> String {
-    let status = state.status.read().await;
-
-    if status.current_song.is_some() {
-        let current_elapsed = status
-            .elapsed
-            .unwrap_or(std::time::Duration::ZERO)
-            .as_secs_f64();
-        drop(status);
-
-        // Calculate actual seek position
-        let seek_position = if relative {
-            // Relative seek: add to current position
-            (current_elapsed + time).max(0.0)
-        } else {
-            // Absolute seek
-            time.max(0.0)
-        };
-
-        // Seek in current song
-        match state.engine.read().await.seek(seek_position).await {
-            Ok(_) => {
-                // Update status elapsed time
-                state.status.write().await.elapsed =
-                    Some(std::time::Duration::from_secs_f64(seek_position));
-                ResponseBuilder::new().ok()
-            }
-            Err(e) => ResponseBuilder::error(50, 0, "seekcur", &format!("Seek failed: {}", e)),
-        }
-    } else {
-        ResponseBuilder::error(50, 0, "seekcur", "Not playing")
-    }
-}
-
-async fn handle_setvol_command(state: &AppState, volume: u8) -> String {
-    match state.engine.write().await.set_volume(volume).await {
-        Ok(_) => {
-            let mut status = state.status.write().await;
-            status.volume = volume;
-            ResponseBuilder::new().ok()
-        }
-        Err(e) => ResponseBuilder::error(50, 0, "setvol", &format!("Volume error: {}", e)),
-    }
-}
-
 async fn handle_add_command(state: &AppState, uri: &str, position: Option<u32>) -> String {
     debug!("Add command received with URI: [{}]", uri);
     // Get song from database
@@ -1762,7 +1380,7 @@ async fn handle_playid_command(state: &AppState, id: Option<u32>) -> String {
         }
     } else {
         // Resume playback (same as play with no args)
-        handle_play_command(state, None).await
+        playback::handle_play_command(state, None).await
     }
 }
 
@@ -1877,57 +1495,6 @@ async fn handle_playlistid_command(state: &AppState, id: Option<u32>) -> String 
     }
 
     resp.ok()
-}
-
-// Playback options
-async fn handle_repeat_command(state: &AppState, enabled: bool) -> String {
-    state.status.write().await.repeat = enabled;
-    ResponseBuilder::new().ok()
-}
-
-async fn handle_random_command(state: &AppState, enabled: bool) -> String {
-    state.status.write().await.random = enabled;
-    ResponseBuilder::new().ok()
-}
-
-async fn handle_single_command(state: &AppState, mode: &str) -> String {
-    let single_mode = match mode {
-        "0" => rmpd_core::state::SingleMode::Off,
-        "1" => rmpd_core::state::SingleMode::On,
-        "oneshot" => rmpd_core::state::SingleMode::Oneshot,
-        _ => return ResponseBuilder::error(2, 0, "single", "Invalid mode"),
-    };
-    state.status.write().await.single = single_mode;
-    ResponseBuilder::new().ok()
-}
-
-async fn handle_consume_command(state: &AppState, mode: &str) -> String {
-    let consume_mode = match mode {
-        "0" => rmpd_core::state::ConsumeMode::Off,
-        "1" => rmpd_core::state::ConsumeMode::On,
-        "oneshot" => rmpd_core::state::ConsumeMode::Oneshot,
-        _ => return ResponseBuilder::error(2, 0, "consume", "Invalid mode"),
-    };
-    state.status.write().await.consume = consume_mode;
-    ResponseBuilder::new().ok()
-}
-
-async fn handle_crossfade_command(state: &AppState, seconds: u32) -> String {
-    state.status.write().await.crossfade = seconds;
-    ResponseBuilder::new().ok()
-}
-
-async fn handle_volume_command(state: &AppState, change: i8) -> String {
-    let current_vol = state.status.read().await.volume;
-    let new_vol = (current_vol as i16 + change as i16).clamp(0, 100) as u8;
-
-    match state.engine.write().await.set_volume(new_vol).await {
-        Ok(_) => {
-            state.status.write().await.volume = new_vol;
-            ResponseBuilder::new().ok()
-        }
-        Err(e) => ResponseBuilder::error(50, 0, "volume", &format!("Volume error: {}", e)),
-    }
 }
 
 // Queue inspection
@@ -3178,18 +2745,6 @@ async fn handle_kill_command() -> String {
     ResponseBuilder::new().ok()
 }
 
-async fn handle_mixrampdb_command(state: &AppState, decibels: f32) -> String {
-    let mut status = state.status.write().await;
-    status.mixramp_db = decibels;
-    ResponseBuilder::new().ok()
-}
-
-async fn handle_mixrampdelay_command(state: &AppState, seconds: f32) -> String {
-    let mut status = state.status.write().await;
-    status.mixramp_delay = seconds;
-    ResponseBuilder::new().ok()
-}
-
 // Queue inspection commands
 async fn handle_plchanges_command(
     state: &AppState,
@@ -3325,22 +2880,6 @@ async fn handle_playlistsearch_command(state: &AppState, tag: &str, value: &str)
             resp.song(&item.song, Some(item.position), Some(item.id));
         }
     }
-    resp.ok()
-}
-
-// ReplayGain commands
-async fn handle_replaygain_mode_command(state: &AppState, mode: &str) -> String {
-    // Set ReplayGain mode (off, track, album, auto)
-    // Store in player status or engine config
-    let _ = (state, mode);
-    ResponseBuilder::new().ok()
-}
-
-async fn handle_replaygain_status_command(state: &AppState) -> String {
-    // Return current ReplayGain status
-    let _ = state;
-    let mut resp = ResponseBuilder::new();
-    resp.field("replay_gain_mode", "off");
     resp.ok()
 }
 
