@@ -1,7 +1,8 @@
-//! Client-to-client messaging system
+//! Publish-subscribe messaging system
 //!
-//! Implements MPD's publish-subscribe messaging protocol where clients can
-//! subscribe to channels and send/receive messages.
+//! A generic message broker that allows clients to subscribe to named channels
+//! and send/receive messages. Originally designed for MPD protocol but can be
+//! used for any pub-sub messaging needs.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;

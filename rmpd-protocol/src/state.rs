@@ -1,5 +1,5 @@
-use crate::messaging::MessageBroker;
 use rmpd_core::event::EventBus;
+use rmpd_core::messaging::MessageBroker;
 use rmpd_core::queue::Queue;
 use rmpd_core::state::PlayerStatus;
 use rmpd_player::PlaybackEngine;
