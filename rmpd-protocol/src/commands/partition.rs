@@ -2,15 +2,25 @@
 //!
 //! MPD supports multiple queues called "partitions" to allow independent playback
 //! contexts. This module handles partition management commands.
+//!
+//! IMPLEMENTATION STATUS: Stubs only
+//! Full partition support requires major architectural changes:
+//! - Multiple AppState instances (one per partition)
+//! - Per-partition queues, players, and outputs
+//! - Client session partition tracking
+//! - Output migration between partitions
 
 use super::{AppState, ResponseBuilder};
 
 /// Switch to a specific partition
 ///
-/// TODO: Implement full partition support with per-partition state
-pub async fn handle_partition_command(_state: &AppState, _name: &str) -> String {
-    // Switch to partition (not fully implemented)
-    ResponseBuilder::new().ok()
+/// Stub: Only "default" partition exists. Returns error for non-existent partitions.
+pub async fn handle_partition_command(_state: &AppState, name: &str) -> String {
+    if name == "default" {
+        ResponseBuilder::new().ok()
+    } else {
+        ResponseBuilder::error(50, 0, "partition", "No such partition")
+    }
 }
 
 /// List all available partitions
@@ -25,24 +35,25 @@ pub async fn handle_listpartitions_command() -> String {
 
 /// Create a new partition
 ///
-/// TODO: Implement partition creation with isolated state
+/// Stub: Partition creation requires major architectural changes. Returns error.
 pub async fn handle_newpartition_command(_name: &str) -> String {
-    // Create new partition (not fully implemented)
-    ResponseBuilder::new().ok()
+    ResponseBuilder::error(50, 0, "newpartition", "Partition creation not implemented")
 }
 
 /// Delete an existing partition
 ///
-/// TODO: Implement partition deletion with cleanup
-pub async fn handle_delpartition_command(_name: &str) -> String {
-    // Delete partition (not fully implemented)
-    ResponseBuilder::new().ok()
+/// Stub: Returns error. Cannot delete default partition.
+pub async fn handle_delpartition_command(name: &str) -> String {
+    if name == "default" {
+        ResponseBuilder::error(50, 0, "delpartition", "Cannot delete default partition")
+    } else {
+        ResponseBuilder::error(50, 0, "delpartition", "No such partition")
+    }
 }
 
 /// Move an output to the current partition
 ///
-/// TODO: Implement output assignment to partitions
+/// Stub: Output migration not implemented. Returns error.
 pub async fn handle_moveoutput_command(_name: &str) -> String {
-    // Move output to current partition (not fully implemented)
-    ResponseBuilder::new().ok()
+    ResponseBuilder::error(50, 0, "moveoutput", "Output migration not implemented")
 }

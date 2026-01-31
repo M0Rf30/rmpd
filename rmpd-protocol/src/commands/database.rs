@@ -787,10 +787,33 @@ pub async fn handle_searchcount_command(
 
 /// Generate chromaprint fingerprint for audio file
 ///
-/// TODO: Implement chromaprint integration for audio fingerprinting
-/// Requires linking to chromaprint library and processing audio data
+/// IMPLEMENTATION NOTE:
+/// Chromaprint support requires:
+/// 1. chromaprint-sys-next crate (Rust bindings to libchromaprint)
+/// 2. System libchromaprint library installed (apt-get install libchromaprint-dev)
+/// 3. Audio decoding to PCM samples (integrate with decoder.rs)
+/// 4. Generate fingerprint from PCM data
+/// 5. Return base64-encoded fingerprint string
+///
+/// This is a stub implementation that validates the file exists but
+/// returns "not available" until full chromaprint integration is added.
 pub async fn handle_getfingerprint_command(state: &AppState, uri: &str) -> String {
-    let _ = (state, uri);
+    // Resolve the file path
+    let file_path = if uri.starts_with('/') {
+        uri.to_string()
+    } else {
+        match &state.music_dir {
+            Some(music_dir) => format!("{}/{}", music_dir, uri),
+            None => uri.to_string(),
+        }
+    };
+
+    // Check if file exists
+    if !std::path::Path::new(&file_path).exists() {
+        return ResponseBuilder::error(50, 0, "getfingerprint", "No such file");
+    }
+
+    // Chromaprint library not yet integrated
     ResponseBuilder::error(50, 0, "getfingerprint", "chromaprint not available")
 }
 
