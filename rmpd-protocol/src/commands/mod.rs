@@ -6,12 +6,12 @@
 pub mod database;
 pub mod options;
 pub mod playback;
+pub mod playlists;
 pub mod queue;
 
 // TODO: Extract remaining command modules
 // pub mod connection;
 // pub mod outputs;
-// pub mod playlists;
 // pub mod reflection;
 // pub mod status;
 // pub mod stickers;
