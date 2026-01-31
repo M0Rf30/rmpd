@@ -507,6 +507,12 @@ pub async fn handle_playlistfind_command(state: &AppState, tag: &str, value: &st
 
         if matches {
             resp.song(&item.song, Some(item.position), Some(item.id));
+            if item.priority > 0 {
+                resp.field("Prio", item.priority);
+            }
+            if let Some((start, end)) = item.range {
+                resp.field("Range", format!("{:.3}-{:.3}", start, end));
+            }
         }
     }
     resp.ok()
@@ -549,6 +555,12 @@ pub async fn handle_playlistsearch_command(state: &AppState, tag: &str, value: &
 
         if matches {
             resp.song(&item.song, Some(item.position), Some(item.id));
+            if item.priority > 0 {
+                resp.field("Prio", item.priority);
+            }
+            if let Some((start, end)) = item.range {
+                resp.field("Range", format!("{:.3}-{:.3}", start, end));
+            }
         }
     }
     resp.ok()

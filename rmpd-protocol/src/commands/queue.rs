@@ -234,6 +234,9 @@ pub async fn handle_playlistid_command(state: &AppState, id: Option<u32>) -> Str
             if item.priority > 0 {
                 resp.field("Prio", item.priority);
             }
+            if let Some((start, end)) = item.range {
+                resp.field("Range", format!("{:.3}-{:.3}", start, end));
+            }
         } else {
             return ResponseBuilder::error(50, 0, "playlistid", "No such song");
         }
@@ -243,6 +246,9 @@ pub async fn handle_playlistid_command(state: &AppState, id: Option<u32>) -> Str
             resp.song(&item.song, Some(item.position), Some(item.id));
             if item.priority > 0 {
                 resp.field("Prio", item.priority);
+            }
+            if let Some((start, end)) = item.range {
+                resp.field("Range", format!("{:.3}-{:.3}", start, end));
             }
         }
     }
@@ -272,6 +278,9 @@ pub async fn handle_playlistinfo_command(state: &AppState, range: Option<(u32, u
         resp.song(&item.song, Some(item.position), Some(item.id));
         if item.priority > 0 {
             resp.field("Prio", item.priority);
+        }
+        if let Some((start, end)) = item.range {
+            resp.field("Range", format!("{:.3}-{:.3}", start, end));
         }
     }
 
@@ -373,32 +382,50 @@ pub async fn handle_prioid_command(state: &AppState, priority: u8, ids: &[u32]) 
 
 /// Set playback range for a song
 ///
-/// TODO: Implement playback range (start/end time) in QueueItem
-pub async fn handle_rangeid_command(state: &AppState, _id: u32, _range: (f64, f64)) -> String {
-    // Set playback range for song (stub)
-    let mut status = state.status.write().await;
-    status.playlist_version += 1;
-    ResponseBuilder::new().ok()
+/// Sets a playback range (start and end time in seconds) for a song.
+pub async fn handle_rangeid_command(state: &AppState, id: u32, range: (f64, f64)) -> String {
+    let mut queue = state.queue.write().await;
+
+    if queue.set_range_by_id(id, Some(range)) {
+        drop(queue);
+        let mut status = state.status.write().await;
+        status.playlist_version += 1;
+        ResponseBuilder::new().ok()
+    } else {
+        ResponseBuilder::error(50, 0, "rangeid", "No such song")
+    }
 }
 
 /// Add a tag to a queue item
 ///
-/// TODO: Implement per-item tag storage in QueueItem
-pub async fn handle_addtagid_command(state: &AppState, _id: u32, _tag: &str, _value: &str) -> String {
-    // Add tag to queue item (stub)
-    let mut status = state.status.write().await;
-    status.playlist_version += 1;
-    ResponseBuilder::new().ok()
+/// Adds a custom tag to a queue item.
+pub async fn handle_addtagid_command(state: &AppState, id: u32, tag: &str, value: &str) -> String {
+    let mut queue = state.queue.write().await;
+
+    if queue.add_tag_by_id(id, tag.to_string(), value.to_string()) {
+        drop(queue);
+        let mut status = state.status.write().await;
+        status.playlist_version += 1;
+        ResponseBuilder::new().ok()
+    } else {
+        ResponseBuilder::error(50, 0, "addtagid", "No such song")
+    }
 }
 
 /// Clear tags from a queue item
 ///
-/// TODO: Implement per-item tag storage in QueueItem
-pub async fn handle_cleartagid_command(state: &AppState, _id: u32, _tag: Option<&str>) -> String {
-    // Clear tags from queue item (stub)
-    let mut status = state.status.write().await;
-    status.playlist_version += 1;
-    ResponseBuilder::new().ok()
+/// If tag is specified, clears only that tag. Otherwise clears all tags.
+pub async fn handle_cleartagid_command(state: &AppState, id: u32, tag: Option<&str>) -> String {
+    let mut queue = state.queue.write().await;
+
+    if queue.clear_tags_by_id(id, tag) {
+        drop(queue);
+        let mut status = state.status.write().await;
+        status.playlist_version += 1;
+        ResponseBuilder::new().ok()
+    } else {
+        ResponseBuilder::error(50, 0, "cleartagid", "No such song")
+    }
 }
 
 /// Return changes in queue since version
@@ -499,6 +526,9 @@ pub async fn handle_playlistfind_command(state: &AppState, tag: &str, value: &st
             if item.priority > 0 {
                 resp.field("Prio", item.priority);
             }
+            if let Some((start, end)) = item.range {
+                resp.field("Range", format!("{:.3}-{:.3}", start, end));
+            }
         }
     }
     resp.ok()
@@ -543,6 +573,9 @@ pub async fn handle_playlistsearch_command(state: &AppState, tag: &str, value: &
             resp.song(&item.song, Some(item.position), Some(item.id));
             if item.priority > 0 {
                 resp.field("Prio", item.priority);
+            }
+            if let Some((start, end)) = item.range {
+                resp.field("Range", format!("{:.3}-{:.3}", start, end));
             }
         }
     }

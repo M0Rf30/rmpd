@@ -1,5 +1,6 @@
 use crate::song::Song;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QueueItem {
@@ -8,6 +9,11 @@ pub struct QueueItem {
     pub song: Song,
     /// Priority (0-255, default 0). Higher values have higher priority.
     pub priority: u8,
+    /// Optional playback range (start, end) in seconds
+    pub range: Option<(f64, f64)>,
+    /// Custom tags attached to this queue item
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tags: Option<HashMap<String, String>>,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -32,6 +38,8 @@ impl Queue {
             position,
             song,
             priority: 0, // Default priority
+            range: None, // No range restriction by default
+            tags: None, // No custom tags by default
         });
 
         self.version += 1;
@@ -173,6 +181,8 @@ impl Queue {
             position: pos,
             song,
             priority: 0, // Default priority
+            range: None, // No range restriction by default
+            tags: None, // No custom tags by default
         };
 
         if pos as usize >= self.items.len() {
@@ -214,6 +224,60 @@ impl Queue {
             self.version += 1;
         }
         any_changed
+    }
+
+    /// Set playback range for a song with the given ID
+    ///
+    /// The range is specified in seconds as (start, end).
+    /// Returns true if the item was found and updated.
+    pub fn set_range_by_id(&mut self, id: u32, range: Option<(f64, f64)>) -> bool {
+        if let Some(item) = self.items.iter_mut().find(|item| item.id == id) {
+            item.range = range;
+            self.version += 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Add a custom tag to a queue item
+    ///
+    /// Returns true if the item was found and updated.
+    pub fn add_tag_by_id(&mut self, id: u32, tag: String, value: String) -> bool {
+        if let Some(item) = self.items.iter_mut().find(|item| item.id == id) {
+            let tags = item.tags.get_or_insert_with(HashMap::new);
+            tags.insert(tag, value);
+            self.version += 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Clear tags from a queue item
+    ///
+    /// If tag is Some, clears only that tag. If None, clears all tags.
+    /// Returns true if the item was found.
+    pub fn clear_tags_by_id(&mut self, id: u32, tag: Option<&str>) -> bool {
+        if let Some(item) = self.items.iter_mut().find(|item| item.id == id) {
+            if let Some(tag_name) = tag {
+                // Clear specific tag
+                if let Some(tags) = &mut item.tags {
+                    tags.remove(tag_name);
+                    // If no tags left, remove the HashMap
+                    if tags.is_empty() {
+                        item.tags = None;
+                    }
+                }
+            } else {
+                // Clear all tags
+                item.tags = None;
+            }
+            self.version += 1;
+            true
+        } else {
+            false
+        }
     }
 
     /// Get mutable reference to an item by ID
