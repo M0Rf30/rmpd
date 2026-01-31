@@ -208,10 +208,10 @@ mod tests {
     use super::*;
 
     #[test]
-    #[ignore] // TODO: Fix DOP encoder planar format handling
     fn test_dop_encoder_dsd64() {
+        // Test with MSB-first bit order (no reversal needed)
         let mut encoder =
-            DopEncoder::new(2822400, 2, ChannelDataLayout::Planar, BitOrder::LsbFirst).unwrap();
+            DopEncoder::new(2822400, 2, ChannelDataLayout::Planar, BitOrder::MsbFirst).unwrap();
         assert_eq!(encoder.pcm_sample_rate(), 176400);
 
         // Test data: 4 bytes planar format (all left, then all right)
@@ -240,8 +240,9 @@ mod tests {
 
     #[test]
     fn test_marker_alternation() {
+        // Test with MSB-first bit order
         let mut encoder =
-            DopEncoder::new(2822400, 1, ChannelDataLayout::Planar, BitOrder::LsbFirst).unwrap();
+            DopEncoder::new(2822400, 1, ChannelDataLayout::Planar, BitOrder::MsbFirst).unwrap();
         let dsd_data = vec![0xAA, 0xBB, 0xCC, 0xDD];
         let mut output = Vec::new();
 
