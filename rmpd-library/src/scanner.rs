@@ -65,7 +65,7 @@ impl Scanner {
 
     fn scan_recursive(&self, db: &Database, path: &Path, stats: &mut ScanStats) -> Result<()> {
         let entries = fs::read_dir(path)
-            .map_err(|e| RmpdError::Library(format!("Failed to read directory: {}", e)))?;
+            .map_err(|e| RmpdError::Library(format!("Failed to read directory: {e}")))?;
 
         for entry in entries {
             let entry = match entry {

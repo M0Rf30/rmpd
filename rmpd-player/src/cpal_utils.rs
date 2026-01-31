@@ -51,7 +51,7 @@ impl CpalDeviceConfig {
         let supported_configs = self
             .device
             .supported_output_configs()
-            .map_err(|e| RmpdError::Player(format!("Failed to get supported configs: {}", e)))?;
+            .map_err(|e| RmpdError::Player(format!("Failed to get supported configs: {e}")))?;
 
         let mut found_format = None;
         tracing::info!(

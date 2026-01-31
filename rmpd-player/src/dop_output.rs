@@ -105,7 +105,7 @@ impl DopOutput {
                         },
                         None,
                     )
-                    .map_err(|e| RmpdError::Player(format!("Failed to build DoP stream: {}", e)))?
+                    .map_err(|e| RmpdError::Player(format!("Failed to build DoP stream: {e}")))?
             }
             _ => {
                 // Fallback: convert I32 to the native format
@@ -141,13 +141,13 @@ impl DopOutput {
                         },
                         None,
                     )
-                    .map_err(|e| RmpdError::Player(format!("Failed to build DoP stream: {}", e)))?
+                    .map_err(|e| RmpdError::Player(format!("Failed to build DoP stream: {e}")))?
             }
         };
 
         stream
             .play()
-            .map_err(|e| RmpdError::Player(format!("Failed to start DoP stream: {}", e)))?;
+            .map_err(|e| RmpdError::Player(format!("Failed to start DoP stream: {e}")))?;
 
         self.stream = Some(stream);
         self.sample_sender = Some(tx.clone());
@@ -191,7 +191,7 @@ impl DopOutput {
         let chunk_size = self.config.sample_rate as usize / 50 * self.config.channels as usize; // ~20ms chunks
         for chunk in primer_samples.chunks(chunk_size) {
             tx.send(chunk.to_vec()).map_err(|e| {
-                RmpdError::Player(format!("Failed to send DoP primer chunk: {}", e))
+                RmpdError::Player(format!("Failed to send DoP primer chunk: {e}"))
             })?;
         }
 
@@ -224,7 +224,7 @@ impl DopOutput {
         if let Some(ref stream) = self.stream {
             stream
                 .pause()
-                .map_err(|e| RmpdError::Player(format!("Failed to pause: {}", e)))?;
+                .map_err(|e| RmpdError::Player(format!("Failed to pause: {e}")))?;
             self.is_paused = true;
         }
         Ok(())
@@ -234,7 +234,7 @@ impl DopOutput {
         if let Some(ref stream) = self.stream {
             stream
                 .play()
-                .map_err(|e| RmpdError::Player(format!("Failed to resume: {}", e)))?;
+                .map_err(|e| RmpdError::Player(format!("Failed to resume: {e}")))?;
             self.is_paused = false;
         }
         Ok(())

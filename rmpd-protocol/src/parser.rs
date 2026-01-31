@@ -712,7 +712,7 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
                             subcommand: Some(ProtocolSubcommand::Disable { features }),
                         })
                     }
-                    _ => Ok(Command::Unknown(format!("protocol {}", subcommand_str))),
+                    _ => Ok(Command::Unknown(format!("protocol {subcommand_str}"))),
                 }
             }
         }
@@ -770,7 +770,7 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
                             subcommand: Some(TagTypesSubcommand::Reset { tags }),
                         })
                     }
-                    _ => Ok(Command::Unknown(format!("tagtypes {}", subcommand_str))),
+                    _ => Ok(Command::Unknown(format!("tagtypes {subcommand_str}"))),
                 }
             }
         }
@@ -1312,7 +1312,7 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
                     .parse_next(input)?;
                     Ok(Command::StickerDec { uri, name, delta })
                 }
-                _ => Ok(Command::Unknown(format!("sticker {}", operation))),
+                _ => Ok(Command::Unknown(format!("sticker {operation}"))),
             }
         }
         "stickernames" => {

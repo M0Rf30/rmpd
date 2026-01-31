@@ -685,7 +685,7 @@ impl Database {
             "title" => "title",
             "composer" => "composer",
             "performer" => "performer",
-            _ => return Err(RmpdError::Database(format!("unsupported tag: {}", tag))),
+            _ => return Err(RmpdError::Database(format!("unsupported tag: {tag}"))),
         };
 
         let filter_col = match filter_tag.to_lowercase().as_str() {
@@ -699,15 +699,13 @@ impl Database {
             "performer" => "performer",
             _ => {
                 return Err(RmpdError::Database(format!(
-                    "unsupported filter tag: {}",
-                    filter_tag
+                    "unsupported filter tag: {filter_tag}"
                 )))
             }
         };
 
         let query = format!(
-            "SELECT DISTINCT {} FROM songs WHERE {} = ? AND {} IS NOT NULL ORDER BY {} COLLATE NOCASE",
-            tag_col, filter_col, tag_col, tag_col
+            "SELECT DISTINCT {tag_col} FROM songs WHERE {filter_col} = ? AND {tag_col} IS NOT NULL ORDER BY {tag_col} COLLATE NOCASE"
         );
 
         let mut stmt = self
@@ -756,7 +754,7 @@ impl Database {
                     replay_gain_album_gain, replay_gain_album_peak,
                     added_at, last_modified
              FROM songs WHERE genre = ?1 ORDER BY artist, album, track",
-            _ => return Err(RmpdError::Library(format!("Unsupported tag: {}", tag))),
+            _ => return Err(RmpdError::Library(format!("Unsupported tag: {tag}"))),
         };
 
         let mut stmt = self
@@ -827,8 +825,7 @@ impl Database {
                     replay_gain_track_gain, replay_gain_track_peak,
                     replay_gain_album_gain, replay_gain_album_peak,
                     added_at, last_modified
-             FROM songs WHERE {} ORDER BY album, track",
-            where_clause
+             FROM songs WHERE {where_clause} ORDER BY album, track"
         );
 
         let mut stmt = self
@@ -1251,7 +1248,7 @@ impl Database {
             )
             .optional()
             ?
-            .ok_or_else(|| RmpdError::Library(format!("Playlist not found: {}", name)))?;
+            .ok_or_else(|| RmpdError::Library(format!("Playlist not found: {name}")))?;
 
         let mut stmt = self.conn.prepare(
             "SELECT s.id, s.path, s.duration,
@@ -1363,7 +1360,7 @@ impl Database {
             ?;
 
         if affected == 0 {
-            return Err(RmpdError::Library(format!("Playlist not found: {}", name)));
+            return Err(RmpdError::Library(format!("Playlist not found: {name}")));
         }
 
         Ok(())
@@ -1380,7 +1377,7 @@ impl Database {
             ?;
 
         if affected == 0 {
-            return Err(RmpdError::Library(format!("Playlist not found: {}", from)));
+            return Err(RmpdError::Library(format!("Playlist not found: {from}")));
         }
 
         Ok(())
@@ -1398,12 +1395,12 @@ impl Database {
             )
             .optional()
             ?
-            .ok_or_else(|| RmpdError::Library(format!("Playlist not found: {}", name)))?;
+            .ok_or_else(|| RmpdError::Library(format!("Playlist not found: {name}")))?;
 
         // Get song by URI
         let song = self
             .get_song_by_path(uri)?
-            .ok_or_else(|| RmpdError::Library(format!("Song not found: {}", uri)))?;
+            .ok_or_else(|| RmpdError::Library(format!("Song not found: {uri}")))?;
 
         // Get next position
         let next_pos: i64 = self
@@ -1443,7 +1440,7 @@ impl Database {
             )
             .optional()
             ?
-            .ok_or_else(|| RmpdError::Library(format!("Playlist not found: {}", name)))?;
+            .ok_or_else(|| RmpdError::Library(format!("Playlist not found: {name}")))?;
 
         self.conn
             .execute(
@@ -1474,7 +1471,7 @@ impl Database {
             )
             .optional()
             ?
-            .ok_or_else(|| RmpdError::Library(format!("Playlist not found: {}", name)))?;
+            .ok_or_else(|| RmpdError::Library(format!("Playlist not found: {name}")))?;
 
         let affected = self
             .conn
@@ -1486,8 +1483,7 @@ impl Database {
 
         if affected == 0 {
             return Err(RmpdError::Library(format!(
-                "Position not found: {}",
-                position
+                "Position not found: {position}"
             )));
         }
 
@@ -1522,7 +1518,7 @@ impl Database {
             )
             .optional()
             ?
-            .ok_or_else(|| RmpdError::Library(format!("Playlist not found: {}", name)))?;
+            .ok_or_else(|| RmpdError::Library(format!("Playlist not found: {name}")))?;
 
         if from == to {
             return Ok(());
@@ -1543,7 +1539,7 @@ impl Database {
             )
             .optional()
             ?
-            .ok_or_else(|| RmpdError::Library(format!("Position not found: {}", from)))?;
+            .ok_or_else(|| RmpdError::Library(format!("Position not found: {from}")))?;
 
         // Move logic similar to queue
         if from < to {
@@ -1658,7 +1654,7 @@ impl Database {
         let search_pattern = if uri.is_empty() {
             "%".to_string()
         } else {
-            format!("{}%", uri)
+            format!("{uri}%")
         };
 
         let sticker_rows = stmt

@@ -16,7 +16,7 @@ fn resolve_path(rel_path: &str, music_dir: Option<&str>) -> String {
     // Otherwise, prepend music_directory
     if let Some(music_dir) = music_dir {
         let music_dir = music_dir.trim_end_matches('/');
-        format!("{}/{}", music_dir, rel_path)
+        format!("{music_dir}/{rel_path}")
     } else {
         // Fallback: return as-is if no music_dir
         rel_path.to_string()
@@ -106,7 +106,7 @@ pub async fn handle_play_command(state: &AppState, position: Option<u32>) -> Str
 
             ResponseBuilder::new().ok()
         }
-        Err(e) => ResponseBuilder::error(50, 0, "play", &format!("Playback error: {}", e)),
+        Err(e) => ResponseBuilder::error(50, 0, "play", &format!("Playback error: {e}")),
     }
 }
 
@@ -175,7 +175,7 @@ pub async fn handle_pause_command(state: &AppState, pause_state: Option<bool>) -
         }
         Err(e) => {
             error!("Pause failed: {}", e);
-            ResponseBuilder::error(50, 0, "pause", &format!("Pause error: {}", e))
+            ResponseBuilder::error(50, 0, "pause", &format!("Pause error: {e}"))
         }
     }
 }
@@ -202,7 +202,7 @@ pub async fn handle_stop_command(state: &AppState) -> String {
 
             ResponseBuilder::new().ok()
         }
-        Err(e) => ResponseBuilder::error(50, 0, "stop", &format!("Stop error: {}", e)),
+        Err(e) => ResponseBuilder::error(50, 0, "stop", &format!("Stop error: {e}")),
     }
 }
 
@@ -248,7 +248,7 @@ pub async fn handle_next_command(state: &AppState) -> String {
 
                 ResponseBuilder::new().ok()
             }
-            Err(e) => ResponseBuilder::error(50, 0, "next", &format!("Playback error: {}", e)),
+            Err(e) => ResponseBuilder::error(50, 0, "next", &format!("Playback error: {e}")),
         }
     } else {
         ResponseBuilder::error(50, 0, "next", "No next song")
@@ -301,7 +301,7 @@ pub async fn handle_previous_command(state: &AppState) -> String {
 
                 ResponseBuilder::new().ok()
             }
-            Err(e) => ResponseBuilder::error(50, 0, "previous", &format!("Playback error: {}", e)),
+            Err(e) => ResponseBuilder::error(50, 0, "previous", &format!("Playback error: {e}")),
         }
     } else {
         ResponseBuilder::error(50, 0, "previous", "No previous song")
@@ -326,7 +326,7 @@ pub async fn handle_seek_command(state: &AppState, position: u32, time: f64) -> 
                         Some(std::time::Duration::from_secs_f64(time));
                     ResponseBuilder::new().ok()
                 }
-                Err(e) => ResponseBuilder::error(50, 0, "seek", &format!("Seek failed: {}", e)),
+                Err(e) => ResponseBuilder::error(50, 0, "seek", &format!("Seek failed: {e}")),
             }
         } else {
             ResponseBuilder::error(50, 0, "seek", "Can only seek in current song")
@@ -351,7 +351,7 @@ pub async fn handle_seekid_command(state: &AppState, id: u32, time: f64) -> Stri
                         Some(std::time::Duration::from_secs_f64(time));
                     ResponseBuilder::new().ok()
                 }
-                Err(e) => ResponseBuilder::error(50, 0, "seekid", &format!("Seek failed: {}", e)),
+                Err(e) => ResponseBuilder::error(50, 0, "seekid", &format!("Seek failed: {e}")),
             }
         } else {
             ResponseBuilder::error(50, 0, "seekid", "Can only seek in current song")
@@ -388,7 +388,7 @@ pub async fn handle_seekcur_command(state: &AppState, time: f64, relative: bool)
                     Some(std::time::Duration::from_secs_f64(seek_position));
                 ResponseBuilder::new().ok()
             }
-            Err(e) => ResponseBuilder::error(50, 0, "seekcur", &format!("Seek failed: {}", e)),
+            Err(e) => ResponseBuilder::error(50, 0, "seekcur", &format!("Seek failed: {e}")),
         }
     } else {
         ResponseBuilder::error(50, 0, "seekcur", "Not playing")

@@ -87,7 +87,7 @@ impl CpalOutput {
                         },
                         None,
                     )
-                    .map_err(|e| RmpdError::Player(format!("Failed to build F32 stream: {}", e)))?
+                    .map_err(|e| RmpdError::Player(format!("Failed to build F32 stream: {e}")))?
             }
             SampleFormat::I16 => {
                 self.device
@@ -122,7 +122,7 @@ impl CpalOutput {
                         },
                         None,
                     )
-                    .map_err(|e| RmpdError::Player(format!("Failed to build I16 stream: {}", e)))?
+                    .map_err(|e| RmpdError::Player(format!("Failed to build I16 stream: {e}")))?
             }
             SampleFormat::I32 => {
                 self.device
@@ -157,19 +157,18 @@ impl CpalOutput {
                         },
                         None,
                     )
-                    .map_err(|e| RmpdError::Player(format!("Failed to build I32 stream: {}", e)))?
+                    .map_err(|e| RmpdError::Player(format!("Failed to build I32 stream: {e}")))?
             }
             _ => {
                 return Err(RmpdError::Player(format!(
-                    "Unsupported sample format: {:?}",
-                    sample_format
+                    "Unsupported sample format: {sample_format:?}"
                 )));
             }
         };
 
         stream
             .play()
-            .map_err(|e| RmpdError::Player(format!("Failed to start stream: {}", e)))?;
+            .map_err(|e| RmpdError::Player(format!("Failed to start stream: {e}")))?;
 
         self.stream = Some(stream);
         self.sample_sender = Some(tx);
@@ -199,7 +198,7 @@ impl CpalOutput {
         if let Some(ref stream) = self.stream {
             stream
                 .pause()
-                .map_err(|e| RmpdError::Player(format!("Failed to pause: {}", e)))?;
+                .map_err(|e| RmpdError::Player(format!("Failed to pause: {e}")))?;
             self.is_paused = true;
         }
         Ok(())
@@ -209,7 +208,7 @@ impl CpalOutput {
         if let Some(ref stream) = self.stream {
             stream
                 .play()
-                .map_err(|e| RmpdError::Player(format!("Failed to resume: {}", e)))?;
+                .map_err(|e| RmpdError::Player(format!("Failed to resume: {e}")))?;
             self.is_paused = false;
         }
         Ok(())

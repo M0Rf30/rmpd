@@ -238,10 +238,10 @@ impl Config {
 
     pub fn load_from_path<P: AsRef<Path>>(path: P) -> Result<Self> {
         let content = std::fs::read_to_string(path.as_ref())
-            .map_err(|e| RmpdError::Config(format!("Failed to read config: {}", e)))?;
+            .map_err(|e| RmpdError::Config(format!("Failed to read config: {e}")))?;
 
         let mut config: Config = toml::from_str(&content)
-            .map_err(|e| RmpdError::Config(format!("Failed to parse config: {}", e)))?;
+            .map_err(|e| RmpdError::Config(format!("Failed to parse config: {e}")))?;
 
         config.expand_paths();
         config.validate()?;

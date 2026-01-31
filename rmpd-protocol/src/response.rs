@@ -91,13 +91,12 @@ impl ResponseBuilder {
 
     pub fn error(code: i32, command_list_num: i32, command: &str, message: &str) -> String {
         format!(
-            "ACK [{}@{}] {{{}}} {}\n",
-            code, command_list_num, command, message
+            "ACK [{code}@{command_list_num}] {{{command}}} {message}\n"
         )
     }
 
     pub fn field(&mut self, key: &str, value: impl std::fmt::Display) -> &mut Self {
-        writeln!(self.buffer, "{}: {}", key, value)
+        writeln!(self.buffer, "{key}: {value}")
             .expect("writing to String buffer cannot fail");
         self
     }

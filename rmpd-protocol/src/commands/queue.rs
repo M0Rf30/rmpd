@@ -16,13 +16,13 @@ pub async fn handle_add_command(state: &AppState, uri: &str, position: Option<u3
 
     let db = match rmpd_library::Database::open(db_path) {
         Ok(d) => d,
-        Err(e) => return ResponseBuilder::error(50, 0, "add", &format!("database error: {}", e)),
+        Err(e) => return ResponseBuilder::error(50, 0, "add", &format!("database error: {e}")),
     };
 
     let song = match db.get_song_by_path(uri) {
         Ok(Some(s)) => s,
         Ok(None) => return ResponseBuilder::error(50, 0, "add", "song not found in database"),
-        Err(e) => return ResponseBuilder::error(50, 0, "add", &format!("query error: {}", e)),
+        Err(e) => return ResponseBuilder::error(50, 0, "add", &format!("query error: {e}")),
     };
 
     // Add to queue at specified position or at end
@@ -103,13 +103,13 @@ pub async fn handle_addid_command(state: &AppState, uri: &str, position: Option<
 
     let db = match rmpd_library::Database::open(db_path) {
         Ok(d) => d,
-        Err(e) => return ResponseBuilder::error(50, 0, "addid", &format!("database error: {}", e)),
+        Err(e) => return ResponseBuilder::error(50, 0, "addid", &format!("database error: {e}")),
     };
 
     let song = match db.get_song_by_path(uri) {
         Ok(Some(s)) => s,
         Ok(None) => return ResponseBuilder::error(50, 0, "addid", "song not found in database"),
-        Err(e) => return ResponseBuilder::error(50, 0, "addid", &format!("query error: {}", e)),
+        Err(e) => return ResponseBuilder::error(50, 0, "addid", &format!("query error: {e}")),
     };
 
     // Add to queue at specific position
@@ -235,7 +235,7 @@ pub async fn handle_playlistid_command(state: &AppState, id: Option<u32>) -> Str
                 resp.field("Prio", item.priority);
             }
             if let Some((start, end)) = item.range {
-                resp.field("Range", format!("{:.3}-{:.3}", start, end));
+                resp.field("Range", format!("{start:.3}-{end:.3}"));
             }
         } else {
             return ResponseBuilder::error(50, 0, "playlistid", "No such song");
@@ -248,7 +248,7 @@ pub async fn handle_playlistid_command(state: &AppState, id: Option<u32>) -> Str
                 resp.field("Prio", item.priority);
             }
             if let Some((start, end)) = item.range {
-                resp.field("Range", format!("{:.3}-{:.3}", start, end));
+                resp.field("Range", format!("{start:.3}-{end:.3}"));
             }
         }
     }
@@ -280,7 +280,7 @@ pub async fn handle_playlistinfo_command(state: &AppState, range: Option<(u32, u
             resp.field("Prio", item.priority);
         }
         if let Some((start, end)) = item.range {
-            resp.field("Range", format!("{:.3}-{:.3}", start, end));
+            resp.field("Range", format!("{start:.3}-{end:.3}"));
         }
     }
 
@@ -295,7 +295,7 @@ fn resolve_path(rel_path: &str, music_dir: Option<&str>) -> String {
 
     if let Some(music_dir) = music_dir {
         let music_dir = music_dir.trim_end_matches('/');
-        format!("{}/{}", music_dir, rel_path)
+        format!("{music_dir}/{rel_path}")
     } else {
         rel_path.to_string()
     }
@@ -338,7 +338,7 @@ pub async fn handle_playid_command(state: &AppState, id: Option<u32>) -> String 
                     ResponseBuilder::new().ok()
                 }
                 Err(e) => {
-                    ResponseBuilder::error(50, 0, "playid", &format!("Playback error: {}", e))
+                    ResponseBuilder::error(50, 0, "playid", &format!("Playback error: {e}"))
                 }
             }
         } else {
@@ -527,7 +527,7 @@ pub async fn handle_playlistfind_command(state: &AppState, tag: &str, value: &st
                 resp.field("Prio", item.priority);
             }
             if let Some((start, end)) = item.range {
-                resp.field("Range", format!("{:.3}-{:.3}", start, end));
+                resp.field("Range", format!("{start:.3}-{end:.3}"));
             }
         }
     }
@@ -575,7 +575,7 @@ pub async fn handle_playlistsearch_command(state: &AppState, tag: &str, value: &
                 resp.field("Prio", item.priority);
             }
             if let Some((start, end)) = item.range {
-                resp.field("Range", format!("{:.3}-{:.3}", start, end));
+                resp.field("Range", format!("{start:.3}-{end:.3}"));
             }
         }
     }

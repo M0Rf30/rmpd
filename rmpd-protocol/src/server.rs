@@ -91,7 +91,7 @@ async fn handle_client(mut stream: TcpStream, state: AppState) -> Result<()> {
 
     // Send greeting
     stream
-        .write_all(format!("OK MPD {}\n", PROTOCOL_VERSION).as_bytes())
+        .write_all(format!("OK MPD {PROTOCOL_VERSION}\n").as_bytes())
         .await?;
 
     let (reader, mut writer) = stream.into_split();
@@ -200,7 +200,7 @@ async fn execute_command_list(commands: &[String], state: &AppState, conn_state:
                 if cmd_response_str.starts_with("ACK") {
                     // Return error with command list index
                     return Response::Text(
-                        cmd_response_str.replace("ACK [", &format!("ACK [{}@", index)),
+                        cmd_response_str.replace("ACK [", &format!("ACK [{index}@")),
                     );
                 }
 
@@ -282,7 +282,7 @@ async fn handle_idle(
                             // Return changed subsystem
                             let subsystem_name = subsystem_to_string(event_subsystems[0]);
                             debug!("Idle returning: changed: {}", subsystem_name);
-                            return format!("changed: {}\nOK\n", subsystem_name);
+                            return format!("changed: {subsystem_name}\nOK\n");
                         }
                     }
                     Err(RecvError::Lagged(skipped)) => {

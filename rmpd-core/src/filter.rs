@@ -79,33 +79,33 @@ impl FilterExpression {
                     CompareOp::GreaterEqual => (">=", value.clone()),
                     CompareOp::Contains => {
                         // contains: substring match -> LIKE '%value%'
-                        let pattern = format!("%{}%", value);
+                        let pattern = format!("%{value}%");
                         ("LIKE", pattern)
                     }
                     CompareOp::StartsWith => {
                         // starts_with: prefix match -> LIKE 'value%'
-                        let pattern = format!("{}%", value);
+                        let pattern = format!("{value}%");
                         ("LIKE", pattern)
                     }
                 };
 
-                (format!("{} {} ?", column, sql_op), vec![value_param])
+                (format!("{column} {sql_op} ?"), vec![value_param])
             }
             FilterExpression::And(left, right) => {
                 let (left_sql, mut left_params) = left.to_sql();
                 let (right_sql, right_params) = right.to_sql();
                 left_params.extend(right_params);
-                (format!("({} AND {})", left_sql, right_sql), left_params)
+                (format!("({left_sql} AND {right_sql})"), left_params)
             }
             FilterExpression::Or(left, right) => {
                 let (left_sql, mut left_params) = left.to_sql();
                 let (right_sql, right_params) = right.to_sql();
                 left_params.extend(right_params);
-                (format!("({} OR {})", left_sql, right_sql), left_params)
+                (format!("({left_sql} OR {right_sql})"), left_params)
             }
             FilterExpression::Not(expr) => {
                 let (sql, params) = expr.to_sql();
-                (format!("NOT ({})", sql), params)
+                (format!("NOT ({sql})"), params)
             }
         }
     }
@@ -306,7 +306,7 @@ impl<'a> Parser<'a> {
             self.pos += s.len();
             Ok(())
         } else {
-            Err(RmpdError::ParseError(format!("Expected '{}'", s)))
+            Err(RmpdError::ParseError(format!("Expected '{s}'")))
         }
     }
 }

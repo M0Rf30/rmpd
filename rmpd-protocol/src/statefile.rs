@@ -29,7 +29,7 @@ impl StateFile {
             PlayerState::Play => "play",
             PlayerState::Pause => "pause",
         };
-        content.push_str(&format!("state: {}\n", state_str));
+        content.push_str(&format!("state: {state_str}\n"));
 
         // Current song position
         if let Some(current) = &status.current_song {
@@ -50,14 +50,14 @@ impl StateFile {
             rmpd_core::state::SingleMode::On => 1,
             rmpd_core::state::SingleMode::Oneshot => 2,
         };
-        content.push_str(&format!("single: {}\n", single_val));
+        content.push_str(&format!("single: {single_val}\n"));
 
         let consume_val = match status.consume {
             rmpd_core::state::ConsumeMode::Off => 0,
             rmpd_core::state::ConsumeMode::On => 1,
             rmpd_core::state::ConsumeMode::Oneshot => 2,
         };
-        content.push_str(&format!("consume: {}\n", consume_val));
+        content.push_str(&format!("consume: {consume_val}\n"));
 
         // Crossfade and mixramp
         content.push_str(&format!("crossfade: {}\n", status.crossfade));

@@ -23,7 +23,7 @@ fn main() -> anyhow::Result<()> {
         .nth(1)
         .unwrap_or_else(|| "/home/gianluca/Music".to_string());
 
-    println!("Scanning: {}", music_dir);
+    println!("Scanning: {music_dir}");
 
     let stats = scanner.scan_directory(&db, Path::new(&music_dir))?;
 

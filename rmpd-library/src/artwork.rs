@@ -30,7 +30,7 @@ impl AlbumArtExtractor {
         // Not in cache, extract from file using absolute path
         let abs_path = Path::new(file_path);
         let tagged_file = lofty::read_from_path(abs_path)
-            .map_err(|e| RmpdError::Library(format!("Failed to read file: {}", e)))?;
+            .map_err(|e| RmpdError::Library(format!("Failed to read file: {e}")))?;
 
         // Try to find front cover
         let picture = if let Some(primary_tag) = tagged_file.primary_tag() {
@@ -129,7 +129,7 @@ impl AlbumArtExtractor {
     pub fn extract_all_pictures(&self, path: &str) -> Result<Vec<ExtractedPicture>> {
         let file_path = Path::new(path);
         let tagged_file = lofty::read_from_path(file_path)
-            .map_err(|e| RmpdError::Library(format!("Failed to read file: {}", e)))?;
+            .map_err(|e| RmpdError::Library(format!("Failed to read file: {e}")))?;
 
         let mut pictures = Vec::new();
 

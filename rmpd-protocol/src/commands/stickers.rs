@@ -16,18 +16,18 @@ pub async fn handle_sticker_get_command(state: &AppState, uri: &str, name: &str)
     let db = match rmpd_library::Database::open(db_path) {
         Ok(d) => d,
         Err(e) => {
-            return ResponseBuilder::error(50, 0, "sticker get", &format!("database error: {}", e))
+            return ResponseBuilder::error(50, 0, "sticker get", &format!("database error: {e}"))
         }
     };
 
     match db.get_sticker(uri, name) {
         Ok(Some(value)) => {
             let mut resp = ResponseBuilder::new();
-            resp.field("sticker", format!("{}={}", name, value));
+            resp.field("sticker", format!("{name}={value}"));
             resp.ok()
         }
         Ok(None) => ResponseBuilder::error(50, 0, "sticker get", "no such sticker"),
-        Err(e) => ResponseBuilder::error(50, 0, "sticker get", &format!("Error: {}", e)),
+        Err(e) => ResponseBuilder::error(50, 0, "sticker get", &format!("Error: {e}")),
     }
 }
 
@@ -45,13 +45,13 @@ pub async fn handle_sticker_set_command(
     let db = match rmpd_library::Database::open(db_path) {
         Ok(d) => d,
         Err(e) => {
-            return ResponseBuilder::error(50, 0, "sticker set", &format!("database error: {}", e))
+            return ResponseBuilder::error(50, 0, "sticker set", &format!("database error: {e}"))
         }
     };
 
     match db.set_sticker(uri, name, value) {
         Ok(_) => ResponseBuilder::new().ok(),
-        Err(e) => ResponseBuilder::error(50, 0, "sticker set", &format!("Error: {}", e)),
+        Err(e) => ResponseBuilder::error(50, 0, "sticker set", &format!("Error: {e}")),
     }
 }
 
@@ -68,14 +68,14 @@ pub async fn handle_sticker_delete_command(state: &AppState, uri: &str, name: Op
                 50,
                 0,
                 "sticker delete",
-                &format!("database error: {}", e),
+                &format!("database error: {e}"),
             )
         }
     };
 
     match db.delete_sticker(uri, name) {
         Ok(_) => ResponseBuilder::new().ok(),
-        Err(e) => ResponseBuilder::error(50, 0, "sticker delete", &format!("Error: {}", e)),
+        Err(e) => ResponseBuilder::error(50, 0, "sticker delete", &format!("Error: {e}")),
     }
 }
 
@@ -88,7 +88,7 @@ pub async fn handle_sticker_list_command(state: &AppState, uri: &str) -> String 
     let db = match rmpd_library::Database::open(db_path) {
         Ok(d) => d,
         Err(e) => {
-            return ResponseBuilder::error(50, 0, "sticker list", &format!("database error: {}", e))
+            return ResponseBuilder::error(50, 0, "sticker list", &format!("database error: {e}"))
         }
     };
 
@@ -96,11 +96,11 @@ pub async fn handle_sticker_list_command(state: &AppState, uri: &str) -> String 
         Ok(stickers) => {
             let mut resp = ResponseBuilder::new();
             for (name, value) in stickers {
-                resp.field("sticker", format!("{}={}", name, value));
+                resp.field("sticker", format!("{name}={value}"));
             }
             resp.ok()
         }
-        Err(e) => ResponseBuilder::error(50, 0, "sticker list", &format!("Error: {}", e)),
+        Err(e) => ResponseBuilder::error(50, 0, "sticker list", &format!("Error: {e}")),
     }
 }
 
@@ -118,7 +118,7 @@ pub async fn handle_sticker_find_command(
     let db = match rmpd_library::Database::open(db_path) {
         Ok(d) => d,
         Err(e) => {
-            return ResponseBuilder::error(50, 0, "sticker find", &format!("database error: {}", e))
+            return ResponseBuilder::error(50, 0, "sticker find", &format!("database error: {e}"))
         }
     };
 
@@ -127,11 +127,11 @@ pub async fn handle_sticker_find_command(
             let mut resp = ResponseBuilder::new();
             for (file_uri, sticker_value) in results {
                 resp.field("file", file_uri);
-                resp.field("sticker", format!("{}={}", name, sticker_value));
+                resp.field("sticker", format!("{name}={sticker_value}"));
             }
             resp.ok()
         }
-        Err(e) => ResponseBuilder::error(50, 0, "sticker find", &format!("Error: {}", e)),
+        Err(e) => ResponseBuilder::error(50, 0, "sticker find", &format!("Error: {e}")),
     }
 }
 
@@ -156,7 +156,7 @@ pub async fn handle_sticker_inc_command(
             let new_value = current + increment;
             if db.set_sticker(uri, name, &new_value.to_string()).is_ok() {
                 let mut resp = ResponseBuilder::new();
-                resp.field("sticker", format!("{}={}", name, new_value));
+                resp.field("sticker", format!("{name}={new_value}"));
                 return resp.ok();
             }
         }
@@ -185,7 +185,7 @@ pub async fn handle_sticker_dec_command(
             let new_value = current - decrement;
             if db.set_sticker(uri, name, &new_value.to_string()).is_ok() {
                 let mut resp = ResponseBuilder::new();
-                resp.field("sticker", format!("{}={}", name, new_value));
+                resp.field("sticker", format!("{name}={new_value}"));
                 return resp.ok();
             }
         }
@@ -228,7 +228,7 @@ pub async fn handle_sticker_namestypes_command(state: &AppState, uri: Option<&st
                 if let Ok(stickers) = db.list_stickers(uri_str) {
                     let mut resp = ResponseBuilder::new();
                     for (name, _) in stickers {
-                        resp.field("sticker", format!("{} song", name));
+                        resp.field("sticker", format!("{name} song"));
                     }
                     return resp.ok();
                 }

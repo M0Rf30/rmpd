@@ -64,13 +64,13 @@ impl FilesystemWatcher {
                 });
             },
         )
-        .map_err(|e| RmpdError::Library(format!("Failed to create watcher: {}", e)))?;
+        .map_err(|e| RmpdError::Library(format!("Failed to create watcher: {e}")))?;
 
         // Watch the music directory recursively
         let mut watcher = debouncer;
         watcher
             .watch(&self.music_dir, RecursiveMode::Recursive)
-            .map_err(|e| RmpdError::Library(format!("Failed to watch directory: {}", e)))?;
+            .map_err(|e| RmpdError::Library(format!("Failed to watch directory: {e}")))?;
 
         self.debouncer = Some(watcher);
 

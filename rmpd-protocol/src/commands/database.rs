@@ -69,8 +69,7 @@ fn format_iso8601_timestamp(timestamp: i64) -> String {
     let day = days + 1;
 
     format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
-        year, month, day, hours, minutes, seconds
+        "{year:04}-{month:02}-{day:02}T{hours:02}:{minutes:02}:{seconds:02}Z"
     )
 }
 
@@ -103,7 +102,7 @@ pub async fn handle_find_command(
 
     let db = match rmpd_library::Database::open(db_path) {
         Ok(d) => d,
-        Err(e) => return ResponseBuilder::error(50, 0, "find", &format!("database error: {}", e)),
+        Err(e) => return ResponseBuilder::error(50, 0, "find", &format!("database error: {e}")),
     };
 
     if filters.is_empty() {
@@ -117,18 +116,18 @@ pub async fn handle_find_command(
             Ok(filter) => match db.find_songs_filter(&filter) {
                 Ok(s) => s,
                 Err(e) => {
-                    return ResponseBuilder::error(50, 0, "find", &format!("query error: {}", e))
+                    return ResponseBuilder::error(50, 0, "find", &format!("query error: {e}"))
                 }
             },
             Err(e) => {
-                return ResponseBuilder::error(2, 0, "find", &format!("filter parse error: {}", e))
+                return ResponseBuilder::error(2, 0, "find", &format!("filter parse error: {e}"))
             }
         }
     } else if filters.len() == 1 {
         // Simple single tag/value search
         match db.find_songs(&filters[0].0, &filters[0].1) {
             Ok(s) => s,
-            Err(e) => return ResponseBuilder::error(50, 0, "find", &format!("query error: {}", e)),
+            Err(e) => return ResponseBuilder::error(50, 0, "find", &format!("query error: {e}")),
         }
     } else {
         // Multiple tag/value pairs - build filter expression with AND
@@ -150,7 +149,7 @@ pub async fn handle_find_command(
 
         match db.find_songs_filter(&expr) {
             Ok(s) => s,
-            Err(e) => return ResponseBuilder::error(50, 0, "find", &format!("query error: {}", e)),
+            Err(e) => return ResponseBuilder::error(50, 0, "find", &format!("query error: {e}")),
         }
     };
 
@@ -197,7 +196,7 @@ pub async fn handle_search_command(
     let db = match rmpd_library::Database::open(db_path) {
         Ok(d) => d,
         Err(e) => {
-            return ResponseBuilder::error(50, 0, "search", &format!("database error: {}", e))
+            return ResponseBuilder::error(50, 0, "search", &format!("database error: {e}"))
         }
     };
 
@@ -212,7 +211,7 @@ pub async fn handle_search_command(
             Ok(filter) => match db.find_songs_filter(&filter) {
                 Ok(s) => s,
                 Err(e) => {
-                    return ResponseBuilder::error(50, 0, "search", &format!("query error: {}", e))
+                    return ResponseBuilder::error(50, 0, "search", &format!("query error: {e}"))
                 }
             },
             Err(e) => {
@@ -220,7 +219,7 @@ pub async fn handle_search_command(
                     2,
                     0,
                     "search",
-                    &format!("filter parse error: {}", e),
+                    &format!("filter parse error: {e}"),
                 )
             }
         }
@@ -233,7 +232,7 @@ pub async fn handle_search_command(
             match db.search_songs(value) {
                 Ok(s) => s,
                 Err(e) => {
-                    return ResponseBuilder::error(50, 0, "search", &format!("search error: {}", e))
+                    return ResponseBuilder::error(50, 0, "search", &format!("search error: {e}"))
                 }
             }
         } else {
@@ -241,7 +240,7 @@ pub async fn handle_search_command(
             match db.find_songs(tag, value) {
                 Ok(s) => s,
                 Err(e) => {
-                    return ResponseBuilder::error(50, 0, "search", &format!("query error: {}", e))
+                    return ResponseBuilder::error(50, 0, "search", &format!("query error: {e}"))
                 }
             }
         }
@@ -266,7 +265,7 @@ pub async fn handle_search_command(
         match db.find_songs_filter(&expr) {
             Ok(s) => s,
             Err(e) => {
-                return ResponseBuilder::error(50, 0, "search", &format!("query error: {}", e))
+                return ResponseBuilder::error(50, 0, "search", &format!("query error: {e}"))
             }
         }
     };
@@ -313,14 +312,14 @@ pub async fn handle_list_command(
 
     let db = match rmpd_library::Database::open(db_path) {
         Ok(d) => d,
-        Err(e) => return ResponseBuilder::error(50, 0, "list", &format!("database error: {}", e)),
+        Err(e) => return ResponseBuilder::error(50, 0, "list", &format!("database error: {e}")),
     };
 
     // If filter is provided, get filtered results
     let values = if let (Some(ft), Some(fv)) = (filter_tag, filter_value) {
         match db.list_filtered(tag, ft, fv) {
             Ok(v) => v,
-            Err(e) => return ResponseBuilder::error(50, 0, "list", &format!("query error: {}", e)),
+            Err(e) => return ResponseBuilder::error(50, 0, "list", &format!("query error: {e}")),
         }
     } else {
         // No filter, list all values
@@ -329,12 +328,12 @@ pub async fn handle_list_command(
             "album" => db.list_albums(),
             "albumartist" => db.list_album_artists(),
             "genre" => db.list_genres(),
-            _ => return ResponseBuilder::error(2, 0, "list", &format!("unsupported tag: {}", tag)),
+            _ => return ResponseBuilder::error(2, 0, "list", &format!("unsupported tag: {tag}")),
         };
 
         match result {
             Ok(v) => v,
-            Err(e) => return ResponseBuilder::error(50, 0, "list", &format!("query error: {}", e)),
+            Err(e) => return ResponseBuilder::error(50, 0, "list", &format!("query error: {e}")),
         }
     };
 
@@ -365,7 +364,7 @@ pub async fn handle_count_command(
 
     let db = match rmpd_library::Database::open(db_path) {
         Ok(d) => d,
-        Err(e) => return ResponseBuilder::error(50, 0, "count", &format!("database error: {}", e)),
+        Err(e) => return ResponseBuilder::error(50, 0, "count", &format!("database error: {e}")),
     };
 
     if filters.is_empty() {
@@ -377,7 +376,7 @@ pub async fn handle_count_command(
         match db.find_songs(&filters[0].0, &filters[0].1) {
             Ok(s) => s,
             Err(e) => {
-                return ResponseBuilder::error(50, 0, "count", &format!("query error: {}", e))
+                return ResponseBuilder::error(50, 0, "count", &format!("query error: {e}"))
             }
         }
     } else {
@@ -401,7 +400,7 @@ pub async fn handle_count_command(
         match db.find_songs_filter(&expr) {
             Ok(s) => s,
             Err(e) => {
-                return ResponseBuilder::error(50, 0, "count", &format!("query error: {}", e))
+                return ResponseBuilder::error(50, 0, "count", &format!("query error: {e}"))
             }
         }
     };
@@ -508,7 +507,7 @@ pub async fn handle_albumart_command(state: &AppState, uri: &str, offset: usize)
                 50,
                 0,
                 "albumart",
-                &format!("database error: {}", e),
+                &format!("database error: {e}"),
             ))
         }
     };
@@ -522,7 +521,7 @@ pub async fn handle_albumart_command(state: &AppState, uri: &str, offset: usize)
         // Relative to music directory
         match &state.music_dir {
             Some(music_dir) => {
-                let path = format!("{}/{}", music_dir, uri);
+                let path = format!("{music_dir}/{uri}");
                 debug!("Resolved relative path: {} -> {}", uri, path);
                 path
             }
@@ -558,7 +557,7 @@ pub async fn handle_albumart_command(state: &AppState, uri: &str, offset: usize)
             50,
             0,
             "albumart",
-            &format!("Error: {}", e),
+            &format!("Error: {e}"),
         )),
     }
 }
@@ -596,7 +595,7 @@ pub async fn handle_lsinfo_command(state: &AppState, path: Option<&str>) -> Stri
     let db = match rmpd_library::Database::open(db_path) {
         Ok(d) => d,
         Err(e) => {
-            return ResponseBuilder::error(50, 0, "lsinfo", &format!("database error: {}", e))
+            return ResponseBuilder::error(50, 0, "lsinfo", &format!("database error: {e}"))
         }
     };
 
@@ -636,7 +635,7 @@ pub async fn handle_lsinfo_command(state: &AppState, path: Option<&str>) -> Stri
 
             resp.ok()
         }
-        Err(e) => ResponseBuilder::error(50, 0, "lsinfo", &format!("Error: {}", e)),
+        Err(e) => ResponseBuilder::error(50, 0, "lsinfo", &format!("Error: {e}")),
     }
 }
 
@@ -649,7 +648,7 @@ pub async fn handle_listall_command(state: &AppState, path: Option<&str>) -> Str
     let db = match rmpd_library::Database::open(db_path) {
         Ok(d) => d,
         Err(e) => {
-            return ResponseBuilder::error(50, 0, "listall", &format!("database error: {}", e))
+            return ResponseBuilder::error(50, 0, "listall", &format!("database error: {e}"))
         }
     };
 
@@ -663,7 +662,7 @@ pub async fn handle_listall_command(state: &AppState, path: Option<&str>) -> Str
             }
             resp.ok()
         }
-        Err(e) => ResponseBuilder::error(50, 0, "listall", &format!("Error: {}", e)),
+        Err(e) => ResponseBuilder::error(50, 0, "listall", &format!("Error: {e}")),
     }
 }
 
@@ -676,7 +675,7 @@ pub async fn handle_listallinfo_command(state: &AppState, path: Option<&str>) ->
     let db = match rmpd_library::Database::open(db_path) {
         Ok(d) => d,
         Err(e) => {
-            return ResponseBuilder::error(50, 0, "listallinfo", &format!("database error: {}", e))
+            return ResponseBuilder::error(50, 0, "listallinfo", &format!("database error: {e}"))
         }
     };
 
@@ -690,7 +689,7 @@ pub async fn handle_listallinfo_command(state: &AppState, path: Option<&str>) ->
             }
             resp.ok()
         }
-        Err(e) => ResponseBuilder::error(50, 0, "listallinfo", &format!("Error: {}", e)),
+        Err(e) => ResponseBuilder::error(50, 0, "listallinfo", &format!("Error: {e}")),
     }
 }
 
@@ -703,7 +702,7 @@ pub async fn handle_searchadd_command(state: &AppState, tag: &str, value: &str) 
     let db = match rmpd_library::Database::open(db_path) {
         Ok(d) => d,
         Err(e) => {
-            return ResponseBuilder::error(50, 0, "searchadd", &format!("database error: {}", e))
+            return ResponseBuilder::error(50, 0, "searchadd", &format!("database error: {e}"))
         }
     };
 
@@ -712,14 +711,14 @@ pub async fn handle_searchadd_command(state: &AppState, tag: &str, value: &str) 
         match db.search_songs(value) {
             Ok(s) => s,
             Err(e) => {
-                return ResponseBuilder::error(50, 0, "searchadd", &format!("search error: {}", e))
+                return ResponseBuilder::error(50, 0, "searchadd", &format!("search error: {e}"))
             }
         }
     } else {
         match db.find_songs(tag, value) {
             Ok(s) => s,
             Err(e) => {
-                return ResponseBuilder::error(50, 0, "searchadd", &format!("query error: {}", e))
+                return ResponseBuilder::error(50, 0, "searchadd", &format!("query error: {e}"))
             }
         }
     };
@@ -751,7 +750,7 @@ pub async fn handle_listfiles_command(state: &AppState, uri: Option<&str>) -> St
     let db = match rmpd_library::Database::open(db_path) {
         Ok(d) => d,
         Err(e) => {
-            return ResponseBuilder::error(50, 0, "listfiles", &format!("database error: {}", e))
+            return ResponseBuilder::error(50, 0, "listfiles", &format!("database error: {e}"))
         }
     };
 
@@ -768,7 +767,7 @@ pub async fn handle_listfiles_command(state: &AppState, uri: Option<&str>) -> St
             }
             resp.ok()
         }
-        Err(e) => ResponseBuilder::error(50, 0, "listfiles", &format!("Error: {}", e)),
+        Err(e) => ResponseBuilder::error(50, 0, "listfiles", &format!("Error: {e}")),
     }
 }
 
@@ -803,7 +802,7 @@ pub async fn handle_getfingerprint_command(state: &AppState, uri: &str) -> Strin
         uri.to_string()
     } else {
         match &state.music_dir {
-            Some(music_dir) => format!("{}/{}", music_dir, uri),
+            Some(music_dir) => format!("{music_dir}/{uri}"),
             None => uri.to_string(),
         }
     };

@@ -52,7 +52,7 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|| config.network.bind_address.clone());
     let port = args.port.unwrap_or(config.network.port);
 
-    let full_address = format!("{}:{}", bind_address, port);
+    let full_address = format!("{bind_address}:{port}");
 
     info!("Configuration loaded");
     info!("Music directory: {}", config.general.music_directory);

@@ -34,7 +34,7 @@ impl SymphoniaDecoder {
     pub fn open(path: &Path) -> Result<Self> {
         // Open the media source
         let file = std::fs::File::open(path)
-            .map_err(|e| RmpdError::Player(format!("Failed to open file: {}", e)))?;
+            .map_err(|e| RmpdError::Player(format!("Failed to open file: {e}")))?;
 
         let mss = MediaSourceStream::new(Box::new(file), Default::default());
 
@@ -52,7 +52,7 @@ impl SymphoniaDecoder {
                 &FormatOptions::default(),
                 &MetadataOptions::default(),
             )
-            .map_err(|e| RmpdError::Player(format!("Failed to probe format: {}", e)))?;
+            .map_err(|e| RmpdError::Player(format!("Failed to probe format: {e}")))?;
 
         let reader = probed.format;
 
@@ -96,7 +96,7 @@ impl SymphoniaDecoder {
         // Create decoder
         let decoder = symphonia::default::get_codecs()
             .make(codec_params, &DecoderOptions::default())
-            .map_err(|e| RmpdError::Player(format!("Failed to create decoder: {}", e)))?;
+            .map_err(|e| RmpdError::Player(format!("Failed to create decoder: {e}")))?;
 
         Ok(Self {
             reader,
@@ -174,7 +174,7 @@ impl SymphoniaDecoder {
                 }
                 Err(e) => {
                     tracing::error!("Failed to read packet: {}", e);
-                    return Err(RmpdError::Player(format!("Failed to read packet: {}", e)));
+                    return Err(RmpdError::Player(format!("Failed to read packet: {e}")));
                 }
             };
 
@@ -209,7 +209,7 @@ impl SymphoniaDecoder {
                     continue;
                 }
                 Err(e) => {
-                    return Err(RmpdError::Player(format!("Failed to decode packet: {}", e)));
+                    return Err(RmpdError::Player(format!("Failed to decode packet: {e}")));
                 }
             };
 
@@ -254,7 +254,7 @@ impl SymphoniaDecoder {
                     track_id: self.track_id,
                 },
             )
-            .map_err(|e| RmpdError::Player(format!("Seek failed: {}", e)))?;
+            .map_err(|e| RmpdError::Player(format!("Seek failed: {e}")))?;
 
         self.decoder.reset();
         self.sample_buf = None;
@@ -319,8 +319,7 @@ impl SymphoniaDecoder {
             }
             Err(e) => {
                 return Err(RmpdError::Player(format!(
-                    "Failed to read DSD packet: {}",
-                    e
+                    "Failed to read DSD packet: {e}"
                 )));
             }
         };

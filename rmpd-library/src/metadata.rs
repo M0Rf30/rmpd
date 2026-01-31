@@ -13,7 +13,7 @@ impl MetadataExtractor {
     pub fn extract_from_file(path: &Utf8PathBuf) -> Result<Song> {
         // Get file metadata (mtime)
         let metadata = fs::metadata(path.as_str())
-            .map_err(|e| RmpdError::Library(format!("Failed to read file metadata: {}", e)))?;
+            .map_err(|e| RmpdError::Library(format!("Failed to read file metadata: {e}")))?;
 
         let mtime = metadata
             .modified()
@@ -27,9 +27,9 @@ impl MetadataExtractor {
 
         // Parse audio file with lofty (now supports DSF/DFF with ID3v2 tags)
         let tagged_file = Probe::open(path.as_str())
-            .map_err(|e| RmpdError::Library(format!("Failed to open file: {}", e)))?
+            .map_err(|e| RmpdError::Library(format!("Failed to open file: {e}")))?
             .read()
-            .map_err(|e| RmpdError::Library(format!("Failed to read file: {}", e)))?;
+            .map_err(|e| RmpdError::Library(format!("Failed to read file: {e}")))?;
 
         // Extract audio properties
         let properties = tagged_file.properties();

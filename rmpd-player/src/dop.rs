@@ -59,8 +59,7 @@ impl DopEncoder {
             }
             _ => {
                 return Err(RmpdError::Player(format!(
-                    "Unsupported DSD sample rate: {}",
-                    dsd_sample_rate
+                    "Unsupported DSD sample rate: {dsd_sample_rate}"
                 )))
             }
         }
