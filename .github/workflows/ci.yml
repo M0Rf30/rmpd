@@ -103,16 +103,28 @@ jobs:
       - name: Run database compatibility tests
         run: cargo test --package rmpd-library --test compatibility_suite
 
+      - name: Run decoder validation tests
+        run: |
+          cargo test --package rmpd-player --test decoder_tests
+          cargo test --package rmpd-player --test edge_cases
+          cargo test --package rmpd-player --test format_specific_tests
+
       - name: Test summary
         if: always()
         run: |
           echo "Compatibility test results:"
           echo "✓ State persistence tests (41 tests)"
-          echo "✓ Metadata extraction tests (12 tests with pre-generated fixtures)"
-          echo "✓ Database/search/edge tests (may require FFmpeg)"
+          echo "✓ Metadata extraction tests (12 tests)"
+          echo "✓ Database/search/edge tests (74 tests)"
+          echo "✓ Decoder validation tests (25 tests)"
+          echo "✓ Decoder edge cases (22 tests)"
+          echo "✓ DSD/DoP tests (23 tests)"
           echo ""
-          echo "Pre-generated fixtures: 344KB in tests/fixtures/samples/"
-          echo "No FFmpeg required for core metadata tests!"
+          echo "Pre-generated fixtures:"
+          echo "  - Library: 344KB in rmpd-library/tests/fixtures/samples/"
+          echo "  - Player: 668KB in rmpd-player/tests/fixtures/samples/"
+          echo "  - Total: ~1MB"
+          echo "No FFmpeg required for core tests!"
 
   coverage:
     name: Code Coverage
