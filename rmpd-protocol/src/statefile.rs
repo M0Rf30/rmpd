@@ -194,3 +194,510 @@ pub struct SavedState {
     pub mixramp_delay: f32,
     pub playlist_paths: Vec<String>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rmpd_core::queue::Queue;
+    use rmpd_core::song::Song;
+    use rmpd_core::state::{ConsumeMode, PlayerState, PlayerStatus, QueuePosition, SingleMode};
+    use std::time::Duration;
+    use tempfile::TempDir;
+
+    fn create_test_song(path: &str, position: u32) -> Song {
+        Song {
+            id: position as u64,
+            path: path.into(),
+            duration: Some(Duration::from_secs(180)),
+            title: Some(format!("Song {position}")),
+            artist: Some("Test Artist".to_string()),
+            album: Some("Test Album".to_string()),
+            album_artist: None,
+            track: Some(position),
+            disc: None,
+            date: None,
+            genre: Some("Rock".to_string()),
+            composer: None,
+            performer: None,
+            comment: None,
+            musicbrainz_trackid: None,
+            musicbrainz_albumid: None,
+            musicbrainz_artistid: None,
+            musicbrainz_albumartistid: None,
+            musicbrainz_releasegroupid: None,
+            musicbrainz_releasetrackid: None,
+            artist_sort: None,
+            album_artist_sort: None,
+            original_date: None,
+            label: None,
+            sample_rate: Some(44100),
+            channels: Some(2),
+            bits_per_sample: Some(16),
+            bitrate: Some(320),
+            replay_gain_track_gain: None,
+            replay_gain_track_peak: None,
+            replay_gain_album_gain: None,
+            replay_gain_album_peak: None,
+            added_at: 0,
+            last_modified: 0,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_save_and_load_basic() {
+        let temp_dir = TempDir::new().unwrap();
+        let state_path = temp_dir.path().join("state").to_str().unwrap().to_string();
+        let statefile = StateFile::new(state_path);
+
+        let mut queue = Queue::new();
+        queue.add(create_test_song("/music/song1.mp3", 0));
+        queue.add(create_test_song("/music/song2.mp3", 1));
+
+        let status = PlayerStatus {
+            volume: 75,
+            state: PlayerState::Play,
+            current_song: Some(QueuePosition {
+                position: 0,
+                id: 0,
+            }),
+            next_song: None,
+            elapsed: Some(Duration::from_secs(42)),
+            duration: Some(Duration::from_secs(180)),
+            bitrate: Some(320),
+            audio_format: Some(rmpd_core::song::AudioFormat {
+                sample_rate: 44100,
+                channels: 2,
+                bits_per_sample: 16,
+            }),
+            random: false,
+            repeat: true,
+            single: SingleMode::Off,
+            consume: ConsumeMode::Off,
+            crossfade: 0,
+            mixramp_db: 0.0,
+            mixramp_delay: -1.0,
+            playlist_version: 1,
+            playlist_length: 2,
+            updating_db: None,
+            error: None,
+        };
+
+        statefile.save(&status, &queue).await.unwrap();
+
+        let loaded = statefile.load().unwrap().unwrap();
+        assert_eq!(loaded.volume, 75);
+        assert_eq!(loaded.state, Some(PlayerState::Play));
+        assert_eq!(loaded.current_position, Some(0));
+        assert_eq!(loaded.elapsed_seconds, Some(42.0));
+        assert_eq!(loaded.repeat, true);
+        assert_eq!(loaded.random, false);
+        assert_eq!(loaded.playlist_paths.len(), 2);
+        assert_eq!(loaded.playlist_paths[0], "/music/song1.mp3");
+        assert_eq!(loaded.playlist_paths[1], "/music/song2.mp3");
+    }
+
+    #[tokio::test]
+    async fn test_save_and_load_all_playback_modes() {
+        let temp_dir = TempDir::new().unwrap();
+        let state_path = temp_dir.path().join("state").to_str().unwrap().to_string();
+        let statefile = StateFile::new(state_path);
+
+        let queue = Queue::new();
+
+        // Test Play state
+        let mut status = PlayerStatus {
+            volume: 100,
+            state: PlayerState::Play,
+            current_song: None,
+            next_song: None,
+            elapsed: None,
+            duration: None,
+            bitrate: None,
+            audio_format: None,
+            random: true,
+            repeat: true,
+            single: SingleMode::On,
+            consume: ConsumeMode::Oneshot,
+            crossfade: 5,
+            mixramp_db: -17.0,
+            mixramp_delay: 2.0,
+            playlist_version: 1,
+            playlist_length: 0,
+            updating_db: None,
+            error: None,
+        };
+
+        statefile.save(&status, &queue).await.unwrap();
+        let loaded = statefile.load().unwrap().unwrap();
+        assert_eq!(loaded.state, Some(PlayerState::Play));
+        assert_eq!(loaded.random, true);
+        assert_eq!(loaded.repeat, true);
+        assert_eq!(loaded.single, SingleMode::On);
+        assert_eq!(loaded.consume, ConsumeMode::Oneshot);
+        assert_eq!(loaded.crossfade, 5);
+        assert_eq!(loaded.mixramp_db, -17.0);
+        assert_eq!(loaded.mixramp_delay, 2.0);
+
+        // Test Pause state
+        status.state = PlayerState::Pause;
+        statefile.save(&status, &queue).await.unwrap();
+        let loaded = statefile.load().unwrap().unwrap();
+        assert_eq!(loaded.state, Some(PlayerState::Pause));
+
+        // Test Stop state
+        status.state = PlayerState::Stop;
+        statefile.save(&status, &queue).await.unwrap();
+        let loaded = statefile.load().unwrap().unwrap();
+        assert_eq!(loaded.state, Some(PlayerState::Stop));
+    }
+
+    #[tokio::test]
+    async fn test_save_and_load_single_modes() {
+        let temp_dir = TempDir::new().unwrap();
+        let state_path = temp_dir.path().join("state").to_str().unwrap().to_string();
+        let statefile = StateFile::new(state_path);
+
+        let queue = Queue::new();
+        let mut status = PlayerStatus {
+            volume: 100,
+            state: PlayerState::Stop,
+            current_song: None,
+            next_song: None,
+            elapsed: None,
+            duration: None,
+            bitrate: None,
+            audio_format: None,
+            random: false,
+            repeat: false,
+            single: SingleMode::Off,
+            consume: ConsumeMode::Off,
+            crossfade: 0,
+            mixramp_db: 0.0,
+            mixramp_delay: -1.0,
+            playlist_version: 1,
+            playlist_length: 0,
+            updating_db: None,
+            error: None,
+        };
+
+        // Test SingleMode::Off
+        statefile.save(&status, &queue).await.unwrap();
+        let loaded = statefile.load().unwrap().unwrap();
+        assert_eq!(loaded.single, SingleMode::Off);
+
+        // Test SingleMode::On
+        status.single = SingleMode::On;
+        statefile.save(&status, &queue).await.unwrap();
+        let loaded = statefile.load().unwrap().unwrap();
+        assert_eq!(loaded.single, SingleMode::On);
+
+        // Test SingleMode::Oneshot
+        status.single = SingleMode::Oneshot;
+        statefile.save(&status, &queue).await.unwrap();
+        let loaded = statefile.load().unwrap().unwrap();
+        assert_eq!(loaded.single, SingleMode::Oneshot);
+    }
+
+    #[tokio::test]
+    async fn test_save_and_load_consume_modes() {
+        let temp_dir = TempDir::new().unwrap();
+        let state_path = temp_dir.path().join("state").to_str().unwrap().to_string();
+        let statefile = StateFile::new(state_path);
+
+        let queue = Queue::new();
+        let mut status = PlayerStatus {
+            volume: 100,
+            state: PlayerState::Stop,
+            current_song: None,
+            next_song: None,
+            elapsed: None,
+            duration: None,
+            bitrate: None,
+            audio_format: None,
+            random: false,
+            repeat: false,
+            single: SingleMode::Off,
+            consume: ConsumeMode::Off,
+            crossfade: 0,
+            mixramp_db: 0.0,
+            mixramp_delay: -1.0,
+            playlist_version: 1,
+            playlist_length: 0,
+            updating_db: None,
+            error: None,
+        };
+
+        // Test ConsumeMode::Off
+        statefile.save(&status, &queue).await.unwrap();
+        let loaded = statefile.load().unwrap().unwrap();
+        assert_eq!(loaded.consume, ConsumeMode::Off);
+
+        // Test ConsumeMode::On
+        status.consume = ConsumeMode::On;
+        statefile.save(&status, &queue).await.unwrap();
+        let loaded = statefile.load().unwrap().unwrap();
+        assert_eq!(loaded.consume, ConsumeMode::On);
+
+        // Test ConsumeMode::Oneshot
+        status.consume = ConsumeMode::Oneshot;
+        statefile.save(&status, &queue).await.unwrap();
+        let loaded = statefile.load().unwrap().unwrap();
+        assert_eq!(loaded.consume, ConsumeMode::Oneshot);
+    }
+
+    #[tokio::test]
+    async fn test_empty_queue() {
+        let temp_dir = TempDir::new().unwrap();
+        let state_path = temp_dir.path().join("state").to_str().unwrap().to_string();
+        let statefile = StateFile::new(state_path);
+
+        let queue = Queue::new();
+        let status = PlayerStatus {
+            volume: 100,
+            state: PlayerState::Stop,
+            current_song: None,
+            next_song: None,
+            elapsed: None,
+            duration: None,
+            bitrate: None,
+            audio_format: None,
+            random: false,
+            repeat: false,
+            single: SingleMode::Off,
+            consume: ConsumeMode::Off,
+            crossfade: 0,
+            mixramp_db: 0.0,
+            mixramp_delay: -1.0,
+            playlist_version: 1,
+            playlist_length: 0,
+            updating_db: None,
+            error: None,
+        };
+
+        statefile.save(&status, &queue).await.unwrap();
+        let loaded = statefile.load().unwrap().unwrap();
+        assert_eq!(loaded.playlist_paths.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_large_queue() {
+        let temp_dir = TempDir::new().unwrap();
+        let state_path = temp_dir.path().join("state").to_str().unwrap().to_string();
+        let statefile = StateFile::new(state_path);
+
+        let mut queue = Queue::new();
+        for i in 0..1000 {
+            queue.add(create_test_song(&format!("/music/song{i}.mp3"), i));
+        }
+
+        let status = PlayerStatus {
+            volume: 100,
+            state: PlayerState::Stop,
+            current_song: None,
+            next_song: None,
+            elapsed: None,
+            duration: None,
+            bitrate: None,
+            audio_format: None,
+            random: false,
+            repeat: false,
+            single: SingleMode::Off,
+            consume: ConsumeMode::Off,
+            crossfade: 0,
+            mixramp_db: 0.0,
+            mixramp_delay: -1.0,
+            playlist_version: 1,
+            playlist_length: 1000,
+            updating_db: None,
+            error: None,
+        };
+
+        statefile.save(&status, &queue).await.unwrap();
+        let loaded = statefile.load().unwrap().unwrap();
+        assert_eq!(loaded.playlist_paths.len(), 1000);
+        assert_eq!(loaded.playlist_paths[0], "/music/song0.mp3");
+        assert_eq!(loaded.playlist_paths[999], "/music/song999.mp3");
+    }
+
+    #[tokio::test]
+    async fn test_atomic_write() {
+        let temp_dir = TempDir::new().unwrap();
+        let state_path = temp_dir.path().join("state").to_str().unwrap().to_string();
+        let statefile = StateFile::new(state_path.clone());
+
+        let queue = Queue::new();
+        let status = PlayerStatus {
+            volume: 50,
+            state: PlayerState::Stop,
+            current_song: None,
+            next_song: None,
+            elapsed: None,
+            duration: None,
+            bitrate: None,
+            audio_format: None,
+            random: false,
+            repeat: false,
+            single: SingleMode::Off,
+            consume: ConsumeMode::Off,
+            crossfade: 0,
+            mixramp_db: 0.0,
+            mixramp_delay: -1.0,
+            playlist_version: 1,
+            playlist_length: 0,
+            updating_db: None,
+            error: None,
+        };
+
+        statefile.save(&status, &queue).await.unwrap();
+
+        // Verify temp file doesn't exist
+        let temp_path = format!("{state_path}.tmp");
+        assert!(!std::path::Path::new(&temp_path).exists());
+
+        // Verify main file exists
+        assert!(std::path::Path::new(&state_path).exists());
+    }
+
+    #[test]
+    fn test_load_nonexistent_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let state_path = temp_dir
+            .path()
+            .join("nonexistent")
+            .to_str()
+            .unwrap()
+            .to_string();
+        let statefile = StateFile::new(state_path);
+
+        let result = statefile.load().unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_parse_malformed_volume() {
+        let temp_dir = TempDir::new().unwrap();
+        let state_path = temp_dir.path().join("state").to_str().unwrap().to_string();
+        std::fs::write(&state_path, "sw_volume: invalid\n").unwrap();
+
+        let statefile = StateFile::new(state_path);
+        let loaded = statefile.load().unwrap().unwrap();
+        assert_eq!(loaded.volume, 100); // Should default to 100
+    }
+
+    #[test]
+    fn test_parse_unknown_keys() {
+        let temp_dir = TempDir::new().unwrap();
+        let state_path = temp_dir.path().join("state").to_str().unwrap().to_string();
+        std::fs::write(
+            &state_path,
+            "sw_volume: 80\nfuture_key: some_value\nstate: play\n",
+        )
+        .unwrap();
+
+        let statefile = StateFile::new(state_path);
+        let loaded = statefile.load().unwrap().unwrap();
+        assert_eq!(loaded.volume, 80);
+        assert_eq!(loaded.state, Some(PlayerState::Play));
+    }
+
+    #[test]
+    fn test_parse_invalid_state() {
+        let temp_dir = TempDir::new().unwrap();
+        let state_path = temp_dir.path().join("state").to_str().unwrap().to_string();
+        std::fs::write(&state_path, "state: invalid\n").unwrap();
+
+        let statefile = StateFile::new(state_path);
+        let loaded = statefile.load().unwrap().unwrap();
+        assert_eq!(loaded.state, None);
+    }
+
+    #[test]
+    fn test_parse_playlist_with_colons() {
+        let temp_dir = TempDir::new().unwrap();
+        let state_path = temp_dir.path().join("state").to_str().unwrap().to_string();
+        std::fs::write(
+            &state_path,
+            "sw_volume: 100\nplaylist_begin\n0:/music/artist:album/song.mp3\nplaylist_end\n",
+        )
+        .unwrap();
+
+        let statefile = StateFile::new(state_path);
+        let loaded = statefile.load().unwrap().unwrap();
+        assert_eq!(loaded.playlist_paths.len(), 1);
+        assert_eq!(loaded.playlist_paths[0], "/music/artist:album/song.mp3");
+    }
+
+    #[test]
+    fn test_parse_empty_lines() {
+        let temp_dir = TempDir::new().unwrap();
+        let state_path = temp_dir.path().join("state").to_str().unwrap().to_string();
+        std::fs::write(
+            &state_path,
+            "\n\nsw_volume: 90\n\nstate: play\n\n",
+        )
+        .unwrap();
+
+        let statefile = StateFile::new(state_path);
+        let loaded = statefile.load().unwrap().unwrap();
+        assert_eq!(loaded.volume, 90);
+        assert_eq!(loaded.state, Some(PlayerState::Play));
+    }
+
+    #[tokio::test]
+    async fn test_elapsed_time_precision() {
+        let temp_dir = TempDir::new().unwrap();
+        let state_path = temp_dir.path().join("state").to_str().unwrap().to_string();
+        let statefile = StateFile::new(state_path);
+
+        let queue = Queue::new();
+        let status = PlayerStatus {
+            volume: 100,
+            state: PlayerState::Play,
+            current_song: None,
+            next_song: None,
+            elapsed: Some(Duration::from_millis(12345)),
+            duration: None,
+            bitrate: None,
+            audio_format: None,
+            random: false,
+            repeat: false,
+            single: SingleMode::Off,
+            consume: ConsumeMode::Off,
+            crossfade: 0,
+            mixramp_db: 0.0,
+            mixramp_delay: -1.0,
+            playlist_version: 1,
+            playlist_length: 0,
+            updating_db: None,
+            error: None,
+        };
+
+        statefile.save(&status, &queue).await.unwrap();
+        let loaded = statefile.load().unwrap().unwrap();
+        assert!(loaded.elapsed_seconds.is_some());
+        let elapsed = loaded.elapsed_seconds.unwrap();
+        assert!((elapsed - 12.345).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_default_values() {
+        let temp_dir = TempDir::new().unwrap();
+        let state_path = temp_dir.path().join("state").to_str().unwrap().to_string();
+        std::fs::write(&state_path, "").unwrap();
+
+        let statefile = StateFile::new(state_path);
+        let loaded = statefile.load().unwrap().unwrap();
+        assert_eq!(loaded.volume, 0);
+        assert_eq!(loaded.state, None);
+        assert_eq!(loaded.current_position, None);
+        assert_eq!(loaded.elapsed_seconds, None);
+        assert_eq!(loaded.random, false);
+        assert_eq!(loaded.repeat, false);
+        assert_eq!(loaded.single, SingleMode::Off);
+        assert_eq!(loaded.consume, ConsumeMode::Off);
+        assert_eq!(loaded.crossfade, 0);
+        assert_eq!(loaded.mixramp_db, 0.0);
+        assert_eq!(loaded.mixramp_delay, 0.0);
+        assert_eq!(loaded.playlist_paths.len(), 0);
+    }
+}

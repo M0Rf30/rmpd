@@ -553,10 +553,35 @@ impl Database {
         Ok(self.conn.last_insert_rowid())
     }
 
+    /// Escape FTS5 query to handle special characters and reserved words
+    fn escape_fts_query(query: &str) -> String {
+        // List of FTS5 reserved words that need escaping
+        let reserved_words = ["AND", "OR", "NOT", "NEAR"];
+        let query_upper = query.to_uppercase();
+
+        // Check if query contains special FTS5 characters or reserved words
+        let needs_escaping = query.contains('"')
+            || query.contains('\'')
+            || query.contains('(')
+            || query.contains(')')
+            || reserved_words.iter().any(|&word| query_upper == word);
+
+        if needs_escaping {
+            // Wrap in double quotes and escape internal double quotes
+            format!("\"{}\"", query.replace('"', "\"\""))
+        } else {
+            query.to_string()
+        }
+    }
+
     pub fn search_songs(&self, query: &str) -> Result<Vec<Song>> {
+        let escaped_query = Self::escape_fts_query(query);
         let mut stmt = self.conn.prepare(
             "SELECT s.id, s.path, s.mtime, s.duration,
                     s.title, s.artist, s.album, s.album_artist, s.track, s.disc, s.date, s.genre, s.composer, s.performer, s.comment,
+                    s.musicbrainz_trackid, s.musicbrainz_albumid, s.musicbrainz_artistid, s.musicbrainz_albumartistid,
+                    s.musicbrainz_releasegroupid, s.musicbrainz_releasetrackid,
+                    s.artist_sort, s.album_artist_sort, s.original_date, s.label,
                     s.sample_rate, s.channels, s.bits_per_sample, s.bitrate,
                     s.replay_gain_track_gain, s.replay_gain_track_peak,
                     s.replay_gain_album_gain, s.replay_gain_album_peak,
@@ -568,7 +593,7 @@ impl Database {
         )?;
 
         let songs = stmt
-            .query_map(params![query], |row| {
+            .query_map(params![escaped_query], |row| {
                 Ok(Song {
                     id: row.get::<_, i64>(0)? as u64,
                     path: row.get::<_, String>(1)?.into(),

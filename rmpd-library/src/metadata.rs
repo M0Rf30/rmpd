@@ -1,10 +1,19 @@
 use camino::Utf8PathBuf;
+use lofty::picture::PictureType;
 use lofty::prelude::*;
 use lofty::probe::Probe;
 use rmpd_core::error::{Result, RmpdError};
 use rmpd_core::song::Song;
 use std::fs;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+/// Represents extracted artwork from an audio file
+#[derive(Debug, Clone)]
+pub struct Artwork {
+    pub picture_type: String,
+    pub mime_type: String,
+    pub data: Vec<u8>,
+}
 
 #[derive(Debug, Copy, Clone)]
 pub struct MetadataExtractor;
@@ -171,6 +180,58 @@ impl MetadataExtractor {
             added_at: mtime,
             last_modified: mtime,
         })
+    }
+
+    /// Extract artwork/album art from an audio file
+    pub fn extract_artwork_from_file(path: &Utf8PathBuf) -> Result<Vec<Artwork>> {
+        let tagged_file = Probe::open(path.as_str())
+            .map_err(|e| RmpdError::Library(format!("Failed to open file: {e}")))?
+            .read()
+            .map_err(|e| RmpdError::Library(format!("Failed to read file: {e}")))?;
+
+        let tag = tagged_file
+            .primary_tag()
+            .or_else(|| tagged_file.first_tag());
+
+        let mut artworks = Vec::new();
+
+        if let Some(tag) = tag {
+            for picture in tag.pictures() {
+                let picture_type = match picture.pic_type() {
+                    PictureType::Other => "Other",
+                    PictureType::Icon => "Icon",
+                    PictureType::OtherIcon => "OtherIcon",
+                    PictureType::CoverFront => "Front",
+                    PictureType::CoverBack => "Back",
+                    PictureType::Leaflet => "Leaflet",
+                    PictureType::Media => "Media",
+                    PictureType::LeadArtist => "LeadArtist",
+                    PictureType::Artist => "Artist",
+                    PictureType::Conductor => "Conductor",
+                    PictureType::Band => "Band",
+                    PictureType::Composer => "Composer",
+                    PictureType::Lyricist => "Lyricist",
+                    PictureType::RecordingLocation => "RecordingLocation",
+                    PictureType::DuringRecording => "DuringRecording",
+                    PictureType::DuringPerformance => "DuringPerformance",
+                    PictureType::ScreenCapture => "ScreenCapture",
+                    PictureType::BrightFish => "BrightFish",
+                    PictureType::Illustration => "Illustration",
+                    PictureType::BandLogo => "BandLogo",
+                    PictureType::PublisherLogo => "PublisherLogo",
+                    PictureType::Undefined(_) => "Undefined",
+                    _ => "Other",
+                };
+
+                artworks.push(Artwork {
+                    picture_type: picture_type.to_string(),
+                    mime_type: picture.mime_type().map(|m| m.to_string()).unwrap_or_else(|| "image/jpeg".to_string()),
+                    data: picture.data().to_vec(),
+                });
+            }
+        }
+
+        Ok(artworks)
     }
 
     pub fn is_supported_file(path: &Utf8PathBuf) -> bool {
