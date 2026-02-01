@@ -289,8 +289,8 @@ mod tests {
         assert_eq!(loaded.state, Some(PlayerState::Play));
         assert_eq!(loaded.current_position, Some(0));
         assert_eq!(loaded.elapsed_seconds, Some(42.0));
-        assert_eq!(loaded.repeat, true);
-        assert_eq!(loaded.random, false);
+        assert!(loaded.repeat);
+        assert!(!loaded.random);
         assert_eq!(loaded.playlist_paths.len(), 2);
         assert_eq!(loaded.playlist_paths[0], "/music/song1.mp3");
         assert_eq!(loaded.playlist_paths[1], "/music/song2.mp3");
@@ -330,8 +330,8 @@ mod tests {
         statefile.save(&status, &queue).await.unwrap();
         let loaded = statefile.load().unwrap().unwrap();
         assert_eq!(loaded.state, Some(PlayerState::Play));
-        assert_eq!(loaded.random, true);
-        assert_eq!(loaded.repeat, true);
+        assert!(loaded.random);
+        assert!(loaded.repeat);
         assert_eq!(loaded.single, SingleMode::On);
         assert_eq!(loaded.consume, ConsumeMode::Oneshot);
         assert_eq!(loaded.crossfade, 5);
@@ -691,8 +691,8 @@ mod tests {
         assert_eq!(loaded.state, None);
         assert_eq!(loaded.current_position, None);
         assert_eq!(loaded.elapsed_seconds, None);
-        assert_eq!(loaded.random, false);
-        assert_eq!(loaded.repeat, false);
+        assert!(!loaded.random);
+        assert!(!loaded.repeat);
         assert_eq!(loaded.single, SingleMode::Off);
         assert_eq!(loaded.consume, ConsumeMode::Off);
         assert_eq!(loaded.crossfade, 0);

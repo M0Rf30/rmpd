@@ -245,7 +245,7 @@ fn test_sample_value_range() {
 
         for &sample in &buffer[..read] {
             assert!(
-                sample >= -1.0 && sample <= 1.0,
+                (-1.0..=1.0).contains(&sample),
                 "Sample {} out of valid range [-1.0, 1.0]",
                 sample
             );

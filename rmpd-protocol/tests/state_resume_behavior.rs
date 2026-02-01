@@ -144,8 +144,8 @@ async fn test_restore_playback_options() {
 
     let restored = simulate_restart(&status, &queue).await;
 
-    assert_eq!(restored.random, true);
-    assert_eq!(restored.repeat, true);
+    assert!(restored.random);
+    assert!(restored.repeat);
     assert_eq!(restored.single, SingleMode::Oneshot);
     assert_eq!(restored.consume, ConsumeMode::On);
     assert_eq!(restored.crossfade, 10);
@@ -270,8 +270,8 @@ playlist_end
     assert_eq!(restored.volume, 85);
     assert_eq!(restored.state, Some(PlayerState::Pause));
     assert_eq!(restored.current_position, Some(5));
-    assert_eq!(restored.random, false);
-    assert_eq!(restored.repeat, true);
+    assert!(!restored.random);
+    assert!(restored.repeat);
     assert_eq!(restored.playlist_paths.len(), 6);
     assert!(restored.playlist_paths[0].ends_with("01-track.flac"));
 }

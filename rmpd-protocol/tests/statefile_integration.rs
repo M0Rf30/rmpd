@@ -21,7 +21,7 @@ async fn test_save_and_load_with_queue() {
     assert_eq!(loaded.state, Some(PlayerState::Play));
     assert_eq!(loaded.current_position, Some(2));
     assert_eq!(loaded.elapsed_seconds, Some(42.0));
-    assert_eq!(loaded.repeat, true);
+    assert!(loaded.repeat);
     assert_eq!(loaded.playlist_paths.len(), 5);
 }
 
@@ -46,8 +46,8 @@ async fn test_all_playback_options_roundtrip() {
 
     assert_eq!(loaded.volume, 75);
     assert_eq!(loaded.state, Some(PlayerState::Pause));
-    assert_eq!(loaded.random, true);
-    assert_eq!(loaded.repeat, true);
+    assert!(loaded.random);
+    assert!(loaded.repeat);
     assert_eq!(loaded.single, SingleMode::Oneshot);
     assert_eq!(loaded.consume, ConsumeMode::On);
     assert_eq!(loaded.crossfade, 5);
@@ -117,8 +117,8 @@ playlist_end
     assert_eq!(loaded.state, Some(PlayerState::Play));
     assert_eq!(loaded.current_position, Some(1));
     assert_eq!(loaded.elapsed_seconds, Some(42.5));
-    assert_eq!(loaded.random, true);
-    assert_eq!(loaded.repeat, false);
+    assert!(loaded.random);
+    assert!(!loaded.repeat);
     assert_eq!(loaded.single, SingleMode::Oneshot);
     assert_eq!(loaded.consume, ConsumeMode::On);
     assert_eq!(loaded.crossfade, 3);
@@ -179,8 +179,8 @@ playlist_end
     assert_eq!(loaded.volume, 100); // default on parse error
     assert_eq!(loaded.state, None); // invalid state
     assert_eq!(loaded.current_position, None); // invalid parse
-    assert_eq!(loaded.random, false); // invalid bool
-    assert_eq!(loaded.repeat, false); // invalid bool
+    assert!(!loaded.random); // invalid bool
+    assert!(!loaded.repeat); // invalid bool
 
     // Valid playlist entry should be parsed
     assert_eq!(loaded.playlist_paths.len(), 1);

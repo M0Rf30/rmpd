@@ -13,8 +13,6 @@ pub enum AudioFormat {
     Flac,
     Mp3,
     Ogg,
-    Opus,
-    M4a,
     Wav,
 }
 
@@ -24,8 +22,6 @@ impl AudioFormat {
             AudioFormat::Flac => "flac",
             AudioFormat::Mp3 => "mp3",
             AudioFormat::Ogg => "ogg",
-            AudioFormat::Opus => "opus",
-            AudioFormat::M4a => "m4a",
             AudioFormat::Wav => "wav",
         }
     }
@@ -35,8 +31,6 @@ impl AudioFormat {
             AudioFormat::Flac => "flac",
             AudioFormat::Mp3 => "libmp3lame",
             AudioFormat::Ogg => "libvorbis",
-            AudioFormat::Opus => "libopus",
-            AudioFormat::M4a => "aac",
             AudioFormat::Wav => "pcm_s16le",
         }
     }
@@ -158,12 +152,8 @@ impl FixtureGenerator {
             .arg("-ac").arg("2") // Stereo
             .arg("-y"); // Overwrite output
 
-        // Set sample rate (Opus requires 48kHz)
-        let sample_rate = match format {
-            AudioFormat::Opus => "48000",
-            _ => "44100",
-        };
-        cmd.arg("-ar").arg(sample_rate);
+        // Set sample rate
+        cmd.arg("-ar").arg("44100");
 
         // Add codec
         cmd.arg("-codec:a").arg(format.codec());
@@ -173,11 +163,8 @@ impl FixtureGenerator {
             AudioFormat::Mp3 => {
                 cmd.arg("-q:a").arg("2"); // VBR quality 2
             }
-            AudioFormat::Ogg | AudioFormat::Opus => {
+            AudioFormat::Ogg => {
                 cmd.arg("-b:a").arg("128k");
-            }
-            AudioFormat::M4a => {
-                cmd.arg("-b:a").arg("192k");
             }
             _ => {}
         }
@@ -259,20 +246,6 @@ impl FixtureGenerator {
         self.generate(format, &metadata)
     }
 
-    /// Generate a test file with ReplayGain tags
-    pub fn generate_with_replaygain(&self, format: AudioFormat) -> Result<PathBuf, String> {
-        // Note: FFmpeg doesn't directly support ReplayGain metadata in all formats
-        // This would need post-processing with tools like metaflac or mp3gain
-        // For now, generate a basic file
-        let metadata = TestMetadata {
-            title: "ReplayGain Test".to_string(),
-            ..Default::default()
-        };
-
-        self.generate(format, &metadata)
-    }
-
-    /// Generate a test file with MusicBrainz IDs
     /// Generate an audio file with embedded artwork
     pub fn generate_with_artwork(
         &self,
@@ -299,7 +272,7 @@ impl FixtureGenerator {
                 .map_err(|e| format!("Failed to create artwork: {}", e))?;
 
             if !output.status.success() {
-                return Err(format!("Failed to generate artwork image"));
+                return Err("Failed to generate artwork image".to_string());
             }
         }
 
@@ -343,11 +316,7 @@ impl FixtureGenerator {
             .arg("-y");
 
         // Set sample rate
-        let sample_rate = match format {
-            AudioFormat::Opus => "48000",
-            _ => "44100",
-        };
-        cmd.arg("-ar").arg(sample_rate);
+        cmd.arg("-ar").arg("44100");
 
         // Add codec
         cmd.arg("-codec:a").arg(format.codec());
@@ -357,11 +326,8 @@ impl FixtureGenerator {
             AudioFormat::Mp3 => {
                 cmd.arg("-q:a").arg("2");
             }
-            AudioFormat::Ogg | AudioFormat::Opus => {
+            AudioFormat::Ogg => {
                 cmd.arg("-b:a").arg("128k");
-            }
-            AudioFormat::M4a => {
-                cmd.arg("-b:a").arg("192k");
             }
             _ => {}
         }
@@ -399,28 +365,6 @@ impl FixtureGenerator {
         }
 
         Ok(cached_path)
-    }
-
-    pub fn generate_with_musicbrainz(&self, format: AudioFormat) -> Result<PathBuf, String> {
-        // MusicBrainz IDs need to be added via format-specific tools
-        // For FLAC: metaflac --set-tag=MUSICBRAINZ_TRACKID=...
-        // For MP3: id3v2 --TXXX MUSICBRAINZ_TRACKID:...
-        // This is a placeholder that generates a basic file
-        let metadata = TestMetadata {
-            title: "MusicBrainz Test".to_string(),
-            ..Default::default()
-        };
-
-        self.generate(format, &metadata)
-    }
-
-    /// Clear the fixture cache
-    pub fn clear_cache(&self) -> Result<(), String> {
-        std::fs::remove_dir_all(&self.cache_dir)
-            .map_err(|e| format!("Failed to clear cache: {}", e))?;
-        std::fs::create_dir_all(&self.cache_dir)
-            .map_err(|e| format!("Failed to recreate cache dir: {}", e))?;
-        Ok(())
     }
 }
 

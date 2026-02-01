@@ -8,6 +8,7 @@ use std::process::Command;
 
 /// Audio format for test fixtures
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum AudioFormat {
     Flac,
     Mp3,
@@ -18,6 +19,7 @@ pub enum AudioFormat {
 }
 
 impl AudioFormat {
+    #[allow(dead_code)]
     pub fn extension(&self) -> &'static str {
         match self {
             AudioFormat::Flac => "flac",
@@ -29,6 +31,7 @@ impl AudioFormat {
         }
     }
 
+    #[allow(dead_code)]
     pub fn codec(&self) -> &'static str {
         match self {
             AudioFormat::Flac => "flac",
@@ -43,6 +46,7 @@ impl AudioFormat {
 
 /// Test audio pattern metadata
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct TestMetadata {
     pub pattern: String,      // "sine_440hz", "impulse", "silence"
     pub sample_rate: u32,     // 44100, 48000, 96000, etc.
@@ -63,12 +67,14 @@ impl Default for TestMetadata {
     }
 }
 
+#[allow(dead_code)]
 pub struct FixtureGenerator {
     cache_dir: PathBuf,
 }
 
 impl FixtureGenerator {
     /// Create a new fixture generator with caching
+    #[allow(dead_code)]
     pub fn new() -> Result<Self, String> {
         // Check if FFmpeg is available
         if !Self::is_ffmpeg_available() {
@@ -84,6 +90,7 @@ impl FixtureGenerator {
         Ok(Self { cache_dir })
     }
 
+    #[allow(dead_code)]
     fn is_ffmpeg_available() -> bool {
         Command::new("ffmpeg")
             .arg("-version")
@@ -92,6 +99,7 @@ impl FixtureGenerator {
     }
 
     /// Generate a test audio file with the specified pattern
+    #[allow(dead_code)]
     pub fn generate(
         &self,
         format: AudioFormat,
@@ -121,6 +129,7 @@ impl FixtureGenerator {
         Ok(cache_path)
     }
 
+    #[allow(dead_code)]
     fn sanitize_for_filename(s: &str) -> String {
         s.chars()
             .map(|c| match c {
@@ -131,6 +140,7 @@ impl FixtureGenerator {
             .collect()
     }
 
+    #[allow(dead_code)]
     fn generate_file(
         &self,
         format: AudioFormat,
@@ -228,6 +238,7 @@ impl FixtureGenerator {
     }
 
     /// Generate a high-resolution audio file (24-bit, 96kHz)
+    #[allow(dead_code)]
     pub fn generate_high_res(&self, format: AudioFormat) -> Result<PathBuf, String> {
         let metadata = TestMetadata {
             pattern: "sine_1000hz".to_string(),
@@ -240,6 +251,7 @@ impl FixtureGenerator {
     }
 
     /// Generate a mono file
+    #[allow(dead_code)]
     pub fn generate_mono(&self, format: AudioFormat) -> Result<PathBuf, String> {
         let metadata = TestMetadata {
             pattern: "sine_440hz".to_string(),
@@ -252,6 +264,7 @@ impl FixtureGenerator {
     }
 
     /// Generate a file with specific frequency
+    #[allow(dead_code)]
     pub fn generate_sine(&self, format: AudioFormat, frequency: u32) -> Result<PathBuf, String> {
         let metadata = TestMetadata {
             pattern: format!("sine_{}hz", frequency),
@@ -263,6 +276,7 @@ impl FixtureGenerator {
         self.generate(format, &metadata)
     }
 
+    #[allow(dead_code)]
     pub fn cache_dir(&self) -> &Path {
         &self.cache_dir
     }

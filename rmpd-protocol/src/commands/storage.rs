@@ -234,7 +234,7 @@ pub async fn handle_listneighbors_command(state: &AppState) -> String {
 
             for neighbor in neighbors {
                 // Format: neighbor: protocol://address
-                resp.field("neighbor", &format!("{}://{}", neighbor.protocol, neighbor.address));
+                resp.field("neighbor", format!("{}://{}", neighbor.protocol, neighbor.address));
                 resp.field("name", &neighbor.name);
             }
 

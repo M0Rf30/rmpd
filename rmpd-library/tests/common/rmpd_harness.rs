@@ -44,22 +44,6 @@ impl RmpdTestHarness {
         self.database.add_song(song)
     }
 
-    /// Add a file to the music directory and scan it
-    pub async fn add_and_scan_file(&self, filename: &str, content: &[u8]) -> Result<Song> {
-        let file_path = self.music_dir.join(filename);
-
-        // Write the file
-        std::fs::write(&file_path, content)?;
-
-        // Extract metadata
-        let song = self.extract_metadata(file_path.to_str().unwrap())?;
-
-        // Add to database
-        self.add_song(&song)?;
-
-        Ok(song)
-    }
-
     /// List all artists in the database
     pub fn list_artists(&self) -> Result<Vec<String>> {
         self.database.list_artists()

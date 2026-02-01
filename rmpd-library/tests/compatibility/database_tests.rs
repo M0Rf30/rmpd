@@ -24,7 +24,7 @@ fn test_list_artists() {
     let harness = RmpdTestHarness::new().unwrap();
 
     // Add songs from different artists
-    let artists = vec!["Artist A", "Artist B", "Artist C"];
+    let artists = ["Artist A", "Artist B", "Artist C"];
 
     for (i, artist) in artists.iter().enumerate() {
         let metadata = TestMetadata {
@@ -61,7 +61,7 @@ fn test_list_albums() {
     let harness = RmpdTestHarness::new().unwrap();
 
     // Add songs from different albums
-    let albums = vec!["Album X", "Album Y", "Album Z"];
+    let albums = ["Album X", "Album Y", "Album Z"];
 
     for (i, album) in albums.iter().enumerate() {
         let metadata = TestMetadata {

@@ -202,7 +202,7 @@ fn test_mp3_sine_wave_reasonable() {
     // All samples should be in valid range
     for &sample in &samples {
         assert!(
-            sample >= -1.0 && sample <= 1.0,
+            (-1.0..=1.0).contains(&sample),
             "MP3 sample {} out of valid range",
             sample
         );
@@ -274,7 +274,7 @@ fn test_seek_to_middle() {
 
     // Verify samples are in valid range
     for &sample in &buffer[..read] {
-        assert!(sample >= -1.0 && sample <= 1.0, "Sample out of valid range");
+        assert!((-1.0..=1.0).contains(&sample), "Sample out of valid range");
     }
 }
 
@@ -299,7 +299,7 @@ fn test_seek_accuracy() {
     // Verify samples are in valid range
     for &sample in &buffer[..read] {
         assert!(
-            sample >= -1.0 && sample <= 1.0,
+            (-1.0..=1.0).contains(&sample),
             "Sample {} out of valid range after seek",
             sample
         );
@@ -359,7 +359,7 @@ fn test_multiple_reads() {
         // Verify all samples are in valid range
         for &sample in &buffer[..read] {
             assert!(
-                sample >= -1.0 && sample <= 1.0,
+                (-1.0..=1.0).contains(&sample),
                 "Sample {} out of valid range",
                 sample
             );
@@ -445,7 +445,7 @@ fn test_decoder_format_consistency() {
         // All samples should be in valid range
         for &sample in &samples {
             assert!(
-                sample >= -1.0 && sample <= 1.0,
+                (-1.0..=1.0).contains(&sample),
                 "{} produced out-of-range sample: {}",
                 name,
                 sample

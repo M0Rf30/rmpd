@@ -112,10 +112,10 @@ fn test_partial_word_search() {
 
     // Prefix matching works in FTS5
     let results = harness.search("Super*").unwrap();
-    assert!(results.len() >= 1, "Should find songs starting with 'Super'");
+    assert!(!results.is_empty(), "Should find songs starting with 'Super'");
 
     let results = harness.search("Stev*").unwrap();
-    assert!(results.len() >= 1, "Should find songs with artist starting with 'Stev'");
+    assert!(!results.is_empty(), "Should find songs with artist starting with 'Stev'");
 }
 
 #[test]
@@ -299,10 +299,10 @@ fn test_search_with_special_characters() {
 
     // Search should handle apostrophes
     let results = harness.search("Don't").unwrap();
-    assert!(results.len() >= 1);
+    assert!(!results.is_empty());
 
     let results = harness.search("Believin").unwrap();
-    assert!(results.len() >= 1);
+    assert!(!results.is_empty());
 }
 
 #[test]

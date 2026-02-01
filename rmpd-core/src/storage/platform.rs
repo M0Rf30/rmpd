@@ -19,6 +19,13 @@ pub trait MountBackend: Send + Sync {
 pub struct LinuxMountBackend;
 
 #[cfg(target_os = "linux")]
+impl Default for LinuxMountBackend {
+    fn default() -> Self {
+        Self
+    }
+}
+
+#[cfg(target_os = "linux")]
 impl LinuxMountBackend {
     pub fn new() -> Self {
         Self

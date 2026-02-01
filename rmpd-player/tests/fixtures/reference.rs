@@ -53,8 +53,8 @@ pub fn generate_pattern(
         }
         AudioPattern::Impulse => {
             // First sample is 1.0, rest are 0.0
-            for ch in 0..channels as usize {
-                samples[ch] = 1.0;
+            for sample in samples.iter_mut().take(channels as usize) {
+                *sample = 1.0;
             }
         }
         AudioPattern::Silence => {

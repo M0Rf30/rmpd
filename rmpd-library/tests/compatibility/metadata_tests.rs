@@ -29,7 +29,7 @@ fn test_flac_metadata_extraction() {
 
     // Duration should be ~1 second (±100ms tolerance)
     let duration_secs = song.duration.unwrap().as_secs_f64();
-    assert!(duration_secs >= 0.9 && duration_secs <= 1.1,
+    assert!((0.9..=1.1).contains(&duration_secs),
         "Duration {} not within expected range", duration_secs);
 }
 

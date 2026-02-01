@@ -203,11 +203,11 @@ fn test_mixed_case_searches() {
     harness.add_song(&song).unwrap();
 
     // Search should be case-insensitive
-    let variations = vec!["mixed", "MIXED", "Mixed", "mIxEd"];
+    let variations = ["mixed", "MIXED", "Mixed", "mIxEd"];
     for query in variations {
         let results = harness.search(query).unwrap();
         assert!(
-            results.len() >= 1,
+            !results.is_empty(),
             "Search for '{}' should find the song",
             query
         );
@@ -234,8 +234,8 @@ fn test_leading_trailing_whitespace() {
 
     // Whitespace handling varies by format and tagger
     // Just verify we can store and retrieve the song
-    let results = harness.find_by_artist("Tabs").unwrap();
-    assert!(results.len() >= 0); // May or may not find depending on whitespace handling
+    let _results = harness.find_by_artist("Tabs").unwrap();
+    // Results may or may not find depending on whitespace handling
 }
 
 #[test]
@@ -343,7 +343,7 @@ fn test_fts_special_operators() {
 
     // FTS operators in metadata should be treated as literals when escaped
     let results = harness.search("AND").unwrap();
-    assert!(results.len() >= 1);
+    assert!(!results.is_empty());
 }
 
 #[test]
@@ -415,7 +415,7 @@ fn test_multiple_spaces_in_search() {
 
     // Search should handle multiple spaces
     let results = harness.search("Multiple Spaces").unwrap();
-    assert!(results.len() >= 1);
+    assert!(!results.is_empty());
 }
 
 #[test]
@@ -497,5 +497,5 @@ fn test_genre_with_special_chars() {
 
     // Genre with slash should work
     let results = harness.search("Rock").unwrap();
-    assert!(results.len() >= 1);
+    assert!(!results.is_empty());
 }

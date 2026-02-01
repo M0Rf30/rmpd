@@ -93,11 +93,9 @@ pub struct PartitionManager {
 impl PartitionManager {
     /// Create a new partition manager with a default partition
     pub fn new() -> Arc<Self> {
-        let manager = Arc::new(Self {
+        Arc::new(Self {
             partitions: RwLock::new(HashMap::new()),
-        });
-
-        manager
+        })
     }
 
     /// Create a new partition
