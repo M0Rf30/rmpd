@@ -174,7 +174,8 @@ impl CpalOutput {
         self.sample_sender = Some(tx);
         self.is_paused = false;
 
-        tracing::info!("PCM output started successfully");
+        tracing::info!("PCM output started: {:?} format, {} Hz, {} channels",
+                      sample_format, self.config.sample_rate, self.config.channels);
 
         Ok(())
     }

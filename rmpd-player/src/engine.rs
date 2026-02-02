@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration as StdDuration;
 use tokio::sync::RwLock;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 const BUFFER_SIZE: usize = 4096;
 
@@ -209,25 +209,85 @@ impl PlaybackEngine {
         volume: Arc<RwLock<u8>>,
         command_rx: mpsc::Receiver<PlaybackCommand>,
     ) -> Result<()> {
-        // Open decoder
+        // Open decoder (pass-through mode by default)
         let mut decoder = SymphoniaDecoder::open(path)?;
 
-        // Check if this is a DSD file
-        let is_dsd = decoder.is_dsd();
+        // Check if this is a DSD file - try DoP first, then fall back to PCM conversion
+        if decoder.is_dsd() {
+            info!("DSD file detected, attempting DoP output...");
 
-        if is_dsd {
-            // Handle DSD playback with DoP encoding
-            return Self::playback_thread_dsd(
-                decoder,
-                atomic_state,
-                event_bus,
-                stop_flag,
-                volume,
-                command_rx,
-            );
+            // Try to create DoP output and play
+            match Self::try_dop_playback(&decoder) {
+                Ok(()) => {
+                    info!("DoP output available, using native DSD playback");
+                    return Self::playback_thread_dsd(
+                        decoder,
+                        atomic_state,
+                        event_bus,
+                        stop_flag,
+                        volume,
+                        command_rx,
+                    );
+                }
+                Err(e) => {
+                    warn!("DoP playback not available: {}", e);
+                    info!("Falling back to DSD-to-PCM conversion");
+
+                    // Try PCM conversion rates in order of preference (highest to lowest)
+                    // Test both decoder conversion AND output creation at each rate
+                    // All rates are in the 44.1kHz family (standard DSD)
+                    // - 705.6kHz: Ultra quality (DSD512: 32x, DSD256: 16x, DSD128: 8x decimation)
+                    // - 352.8kHz: Best quality (DSD512: 64x, DSD256: 32x, DSD128: 16x, DSD64: 8x)
+                    // - 176.4kHz: High quality (DSD512: 128x, DSD256: 64x, DSD128: 32x, DSD64: 16x)
+                    // - 88.2kHz: Good quality (DSD256: 128x, DSD128: 64x, DSD64: 32x)
+                    // - 44.1kHz: Standard quality (DSD128: 128x, DSD64: 64x)
+                    let preferred_rates = [705600, 352800, 176400, 88200, 44100];
+
+                    let mut conversion_success = false;
+                    for &rate in &preferred_rates {
+                        // Try to enable PCM conversion at this rate
+                        if let Err(e) = decoder.enable_pcm_conversion(rate) {
+                            debug!("Failed to enable PCM conversion at {} Hz: {}", rate, e);
+                            continue;
+                        }
+
+                        // Test if hardware actually supports this rate
+                        // Need to test both new() and start() since ALSA checks rate in start()
+                        let format = decoder.format();
+                        let mut test_output = match CpalOutput::new(format) {
+                            Ok(output) => output,
+                            Err(e) => {
+                                debug!("Failed to create output at {} Hz: {}", rate, e);
+                                continue;
+                            }
+                        };
+
+                        match test_output.start() {
+                            Ok(()) => {
+                                info!("Successfully configured DSD-to-PCM conversion at {} Hz", rate);
+                                // Stop test output - we'll create a new one later
+                                let _ = test_output.stop();
+                                conversion_success = true;
+                                break;
+                            }
+                            Err(e) => {
+                                debug!("Hardware doesn't support {} Hz: {}", rate, e);
+                                let _ = test_output.stop();
+                                continue;
+                            }
+                        }
+                    }
+
+                    if !conversion_success {
+                        return Err(rmpd_core::error::RmpdError::Player(
+                            "Failed to enable DSD-to-PCM conversion at any supported rate (hardware limitation)".to_owned()
+                        ));
+                    }
+                }
+            }
         }
 
-        // Standard PCM playback
+        // Standard PCM playback (works for all formats including DSD with PCM conversion)
         let format = decoder.format();
 
         debug!(
@@ -339,19 +399,10 @@ impl PlaybackEngine {
         Ok(())
     }
 
-    /// Playback thread for DSD files with DoP encoding
-    fn playback_thread_dsd(
-        mut decoder: SymphoniaDecoder,
-        atomic_state: Arc<AtomicU8>,
-        event_bus: EventBus,
-        stop_flag: Arc<AtomicBool>,
-        _volume: Arc<RwLock<u8>>, // Unused: DoP volume controlled by system mixer
-        command_rx: mpsc::Receiver<PlaybackCommand>,
-    ) -> Result<()> {
+    /// Try to create DoP output (test if hardware supports it)
+    fn try_dop_playback(decoder: &SymphoniaDecoder) -> Result<()> {
         let dsd_sample_rate = decoder.sample_rate();
         let channels = decoder.channels();
-
-        // Get DSD metadata for proper encoding
         let channel_layout = decoder
             .channel_data_layout()
             .unwrap_or(symphonia::core::codecs::ChannelDataLayout::Planar);
@@ -359,47 +410,48 @@ impl PlaybackEngine {
             .bit_order()
             .unwrap_or(symphonia::core::codecs::BitOrder::LsbFirst);
 
-        info!(
-            "DSD playback: {} Hz, {} channels",
-            dsd_sample_rate, channels
-        );
-        info!(
-            "DSD format: channel_layout={:?}, bit_order={:?}",
-            channel_layout, bit_order
-        );
-
-        // Create DoP encoder
-        let mut dop_encoder = DopEncoder::new(
-            dsd_sample_rate,
-            channels as usize,
-            channel_layout,
-            bit_order,
-        )?;
+        // Try to create DoP encoder (validates DSD rate)
+        let dop_encoder = DopEncoder::new(dsd_sample_rate, channels as usize, channel_layout, bit_order)?;
         let pcm_sample_rate = dop_encoder.pcm_sample_rate();
 
-        info!(
-            "DoP encoding: DSD {} Hz -> PCM {} Hz",
-            dsd_sample_rate, pcm_sample_rate
-        );
+        // Try to create DoP output (will fail if hardware doesn't support the rate)
+        let _test_output = DopOutput::new(pcm_sample_rate, channels)?;
 
-        info!("Creating DoP output with {} Hz", pcm_sample_rate);
+        Ok(())
+    }
 
-        // Create DoP output (uses integer samples to preserve marker precision)
-        let mut output = match DopOutput::new(pcm_sample_rate, channels) {
-            Ok(output) => {
-                info!("DoP output created successfully");
-                output
-            }
-            Err(e) => {
-                error!("Failed to create DoP output: {}", e);
-                return Err(e);
-            }
-        };
+    /// DSD playback thread using DoP encoding
+    fn playback_thread_dsd(
+        mut decoder: SymphoniaDecoder,
+        atomic_state: Arc<AtomicU8>,
+        event_bus: EventBus,
+        stop_flag: Arc<AtomicBool>,
+        _volume: Arc<RwLock<u8>>, // Volume controlled by system mixer for DoP
+        command_rx: mpsc::Receiver<PlaybackCommand>,
+    ) -> Result<()> {
+        let dsd_sample_rate = decoder.sample_rate();
+        let channels = decoder.channels();
+        let channel_layout = decoder
+            .channel_data_layout()
+            .unwrap_or(symphonia::core::codecs::ChannelDataLayout::Planar);
+        let bit_order = decoder
+            .bit_order()
+            .unwrap_or(symphonia::core::codecs::BitOrder::LsbFirst);
 
-        info!("Starting DoP output...");
+        info!("DSD playback: {} Hz, {} channels", dsd_sample_rate, channels);
+        info!("DSD format: channel_layout={:?}, bit_order={:?}", channel_layout, bit_order);
+
+        // Create DoP encoder
+        let mut dop_encoder = DopEncoder::new(dsd_sample_rate, channels as usize, channel_layout, bit_order)?;
+        let pcm_sample_rate = dop_encoder.pcm_sample_rate();
+
+        info!("DoP encoding: DSD {} Hz -> PCM {} Hz", dsd_sample_rate, pcm_sample_rate);
+
+        // Create DoP output
+        let mut output = DopOutput::new(pcm_sample_rate, channels)?;
         output.start()?;
 
-        info!("DoP output started successfully");
+        info!("DoP output started");
 
         // Playback loop
         let mut dsd_buffer = Vec::new();
@@ -407,13 +459,7 @@ impl PlaybackEngine {
         let mut total_dsd_bytes: u64 = 0;
         let dsd_bytes_per_second = (dsd_sample_rate / 8) as u64 * channels as u64;
 
-        info!("Entering DSD playback loop");
-
         while !stop_flag.load(Ordering::SeqCst) {
-            // Log first iteration
-            if total_dsd_bytes == 0 {
-                info!("First iteration of DSD playback loop");
-            }
             // Check for commands
             if let Ok(cmd) = command_rx.try_recv() {
                 match cmd {
@@ -449,74 +495,22 @@ impl PlaybackEngine {
             }
 
             // Read raw DSD data
-            if total_dsd_bytes == 0 {
-                info!("Reading first DSD packet...");
-            }
             let bytes_read = decoder.read_dsd_raw(&mut dsd_buffer)?;
-            if total_dsd_bytes == 0 {
-                info!("Read {} bytes of DSD data", bytes_read);
-            }
 
             if bytes_read == 0 {
-                info!("End of DSD stream reached");
+                debug!("End of DSD stream reached");
                 event_bus.emit(Event::SongFinished);
                 break;
             }
 
             // Encode to DoP
-            if total_dsd_bytes == 0 {
-                info!("Encoding {} bytes to DoP...", dsd_buffer.len());
-            }
             dop_encoder.encode(&dsd_buffer, &mut dop_i32_buffer);
-            if total_dsd_bytes == 0 {
-                info!("Encoded to {} DoP samples", dop_i32_buffer.len());
-                // Log first few samples to verify DoP markers
-                if dop_i32_buffer.len() >= 4 {
-                    info!(
-                        "First DoP samples (left-aligned): 0x{:08x}, 0x{:08x}, 0x{:08x}, 0x{:08x}",
-                        dop_i32_buffer[0], dop_i32_buffer[1], dop_i32_buffer[2], dop_i32_buffer[3]
-                    );
-                    info!(
-                        "Marker bytes (MSB): 0x{:02x}, 0x{:02x}, 0x{:02x}, 0x{:02x}",
-                        (dop_i32_buffer[0] >> 24) & 0xFF,
-                        (dop_i32_buffer[1] >> 24) & 0xFF,
-                        (dop_i32_buffer[2] >> 24) & 0xFF,
-                        (dop_i32_buffer[3] >> 24) & 0xFF
-                    );
-                }
-            }
 
-            // Write i32 DoP samples directly to preserve marker precision
-            // Note: Volume control for DoP is handled by the system mixer
-            if total_dsd_bytes == 0 {
-                info!(
-                    "Writing {} i32 DoP samples to output...",
-                    dop_i32_buffer.len()
-                );
-            }
-            match output.write(&dop_i32_buffer) {
-                Ok(_) => {
-                    if total_dsd_bytes == 0 {
-                        info!("First DoP write complete");
-                    }
-                }
-                Err(e) => {
-                    error!("Failed to write DoP samples: {}", e);
-                    return Err(e);
-                }
-            }
+            // Write DoP samples (i32 to preserve marker precision)
+            output.write(&dop_i32_buffer)?;
 
             // Update elapsed time
             total_dsd_bytes += bytes_read as u64;
-
-            // Log every few seconds
-            if total_dsd_bytes % (dsd_bytes_per_second * 5) < (bytes_read as u64) {
-                info!(
-                    "DSD playback progress: {:.1}s, {} bytes processed",
-                    total_dsd_bytes as f64 / dsd_bytes_per_second as f64,
-                    total_dsd_bytes
-                );
-            }
 
             // Emit position update every ~1 second
             if total_dsd_bytes % dsd_bytes_per_second < (bytes_read as u64) {
@@ -525,20 +519,18 @@ impl PlaybackEngine {
                     elapsed_seconds,
                 )));
 
-                // DSD has fixed bitrate
-                let bitrate_kbps = (dsd_sample_rate / 1000) * channels as u32;
-                event_bus.emit(Event::BitrateChanged(Some(bitrate_kbps)));
+                let current_bitrate = decoder.current_bitrate();
+                event_bus.emit(Event::BitrateChanged(current_bitrate));
             }
         }
-
-        info!("DSD playback loop exited, total bytes: {}", total_dsd_bytes);
 
         // Stop output
         output.stop()?;
 
-        debug!("DSD playback thread finished");
+        debug!("DoP playback thread finished");
         Ok(())
     }
+
 }
 
 impl Drop for PlaybackEngine {

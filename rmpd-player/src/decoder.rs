@@ -2,7 +2,7 @@ use rmpd_core::error::{Result, RmpdError};
 use rmpd_core::song::AudioFormat;
 use std::path::Path;
 use symphonia::core::codecs::{
-    BitOrder, ChannelDataLayout, CodecType, DecoderOptions, CODEC_TYPE_NULL,
+    BitOrder, ChannelDataLayout, DecoderOptions, CODEC_TYPE_NULL,
 };
 use symphonia::core::errors::Error as SymphoniaError;
 use symphonia::core::formats::{FormatOptions, FormatReader};
@@ -18,7 +18,7 @@ pub struct SymphoniaDecoder {
     reader: Box<dyn FormatReader>,
     decoder: Box<dyn symphonia::core::codecs::Decoder>,
     track_id: u32,
-    codec_type: CodecType,
+    codec_type: symphonia::core::codecs::CodecType,
     sample_rate: u32,
     channels: Option<u8>,
     total_duration: Option<f64>,
@@ -28,6 +28,7 @@ pub struct SymphoniaDecoder {
     time_base: Option<TimeBase>,
     channel_data_layout: Option<ChannelDataLayout>,
     bit_order: Option<BitOrder>,
+    uses_pcm_conversion: bool,
 }
 
 impl SymphoniaDecoder {
@@ -93,7 +94,8 @@ impl SymphoniaDecoder {
             None
         };
 
-        // Create decoder
+        // Create decoder in pass-through mode (no PCM conversion)
+        // PCM conversion can be enabled later if needed
         let decoder = symphonia::default::get_codecs()
             .make(codec_params, &DecoderOptions::default())
             .map_err(|e| RmpdError::Player(format!("Failed to create decoder: {e}")))?;
@@ -112,12 +114,62 @@ impl SymphoniaDecoder {
             time_base,
             channel_data_layout,
             bit_order,
+            uses_pcm_conversion: false,
         })
     }
 
     /// Check if this is a DSD file
     pub fn is_dsd(&self) -> bool {
         self.codec_type == CODEC_TYPE_DSD
+    }
+
+    /// Enable PCM conversion for DSD (can be called multiple times with different rates)
+    pub fn enable_pcm_conversion(&mut self, output_rate: u32) -> Result<()> {
+        if self.codec_type != CODEC_TYPE_DSD {
+            return Ok(()); // Not DSD, nothing to do
+        }
+
+        // If already enabled at the same rate, nothing to do
+        if self.uses_pcm_conversion && self.sample_rate == output_rate {
+            return Ok(());
+        }
+
+        // We need to recreate the decoder with PCM conversion enabled
+        // Get current track
+        let track = self.reader
+            .tracks()
+            .iter()
+            .find(|t| t.id == self.track_id)
+            .ok_or_else(|| RmpdError::Player("Track not found".to_owned()))?;
+
+        let codec_params = &track.codec_params;
+        let input_rate = codec_params.sample_rate
+            .ok_or_else(|| RmpdError::Player("Sample rate not available".to_owned()))?;
+
+        // Clone params and add PCM conversion mode via extra_data
+        let mut params_with_pcm = codec_params.clone();
+        params_with_pcm.extra_data = Some(
+            output_rate.to_le_bytes().to_vec().into_boxed_slice()
+        );
+
+        tracing::info!("Enabling DSD-to-PCM conversion: {} Hz DSD -> {} Hz PCM",
+                      input_rate, output_rate);
+
+        // Create new decoder with PCM conversion
+        let decoder = symphonia::default::get_codecs()
+            .make(&params_with_pcm, &DecoderOptions::default())
+            .map_err(|e| RmpdError::Player(format!("Failed to create PCM decoder: {e}")))?;
+
+        // Get actual output sample rate from decoder
+        let actual_sample_rate = decoder.codec_params().sample_rate
+            .ok_or_else(|| RmpdError::Player("Decoder sample rate not available".to_owned()))?;
+
+        // Replace decoder
+        self.decoder = decoder;
+        self.sample_rate = actual_sample_rate;
+        self.uses_pcm_conversion = true;
+
+        Ok(())
     }
 
     pub fn read(&mut self, buffer: &mut [f32]) -> Result<usize> {
@@ -213,9 +265,31 @@ impl SymphoniaDecoder {
                 }
             };
 
+            // Check format for DSD with PCM conversion (should be F32)
+            if self.uses_pcm_conversion {
+                use symphonia::core::audio::AudioBufferRef;
+                let is_f32 = matches!(decoded, AudioBufferRef::F32(_));
+                let is_u8 = matches!(decoded, AudioBufferRef::U8(_));
+
+                if !is_f32 {
+                    tracing::error!("DSD-to-PCM decoder returned wrong format! Expected F32, got U8={}", is_u8);
+                    return Err(RmpdError::Player("DSD decoder returned wrong sample format".to_owned()));
+                }
+            }
+
+            // Log first packet's sample info
+            static mut LOGGED: bool = false;
+            unsafe {
+                if !LOGGED {
+                    tracing::info!("First packet: format=F32, frames={}, spec={:?}",
+                                  decoded.frames(), decoded.spec());
+                    LOGGED = true;
+                }
+            }
+
             // Convert to f32 samples
             let spec = *decoded.spec();
-            let duration = decoded.capacity() as u64;
+            let duration = decoded.frames() as u64;
 
             // Update channels if not yet known
             if self.channels.is_none() {
