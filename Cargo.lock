@@ -1688,7 +1688,7 @@ dependencies = [
 [[package]]
 name = "lofty"
 version = "0.22.4"
-source = "git+https://github.com/M0Rf30/lofty-rs?branch=feat%2Fdsd-support#e05788d01fbca4319427882f7fa889ab344961f0"
+source = "git+https://github.com/M0Rf30/lofty-rs?branch=custom#5b888dfa40d24a4ec7985b438d22722cfb9b4858"
 dependencies = [
  "byteorder",
  "data-encoding",
@@ -1702,7 +1702,7 @@ dependencies = [
 [[package]]
 name = "lofty_attr"
 version = "0.11.1"
-source = "git+https://github.com/M0Rf30/lofty-rs?branch=feat%2Fdsd-support#e05788d01fbca4319427882f7fa889ab344961f0"
+source = "git+https://github.com/M0Rf30/lofty-rs?branch=custom#5b888dfa40d24a4ec7985b438d22722cfb9b4858"
 dependencies = [
  "proc-macro2",
  "quote",
