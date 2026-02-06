@@ -208,15 +208,12 @@ jobs:
         target:
           - x86_64-unknown-linux-gnu
           - aarch64-unknown-linux-gnu
-          - x86_64-apple-darwin
           - aarch64-apple-darwin
         include:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
-          - target: x86_64-apple-darwin
-            os: macos-15-intel
           - target: aarch64-apple-darwin
             os: macos-latest
     runs-on: ${{ matrix.os }}
@@ -237,8 +234,36 @@ jobs:
       - name: Setup cross-compilation (Linux ARM64)
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: |
-          sudo apt-get install -y gcc-aarch64-linux-gnu
-          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+          # Completely remove and recreate apt sources
+          sudo mv /etc/apt/sources.list.d /etc/apt/sources.list.d.bak
+          sudo mkdir -p /etc/apt/sources.list.d
+
+          # Restore Microsoft repos
+          sudo cp /etc/apt/sources.list.d.bak/microsoft*.list /etc/apt/sources.list.d/ 2>/dev/null || true
+
+          # Create clean sources.list with architecture-specific repos
+          sudo tee /etc/apt/sources.list > /dev/null <<EOF
+          # AMD64 repositories
+          deb [arch=amd64] http://azure.archive.ubuntu.com/ubuntu/ noble main restricted universe multiverse
+          deb [arch=amd64] http://azure.archive.ubuntu.com/ubuntu/ noble-updates main restricted universe multiverse
+          deb [arch=amd64] http://azure.archive.ubuntu.com/ubuntu/ noble-security main restricted universe multiverse
+
+          # ARM64 repositories
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ noble main restricted universe multiverse
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ noble-updates main restricted universe multiverse
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ noble-security main restricted universe multiverse
+          EOF
+
+          sudo dpkg --add-architecture arm64
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+          sudo apt-get install -y libpipewire-0.3-dev:arm64 libspa-0.2-dev:arm64 libasound2-dev:arm64
+
+          {
+            echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc"
+            echo "PKG_CONFIG_ALLOW_CROSS=1"
+            echo "PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig"
+          } >> "$GITHUB_ENV"
 
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@v2

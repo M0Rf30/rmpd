@@ -23,7 +23,7 @@ use tracing::{debug, info};
 ///
 /// Returns:
 /// - OK if partition exists
-/// - ACK [50@0] {partition} No such partition
+/// - ACK `[50@0]` {partition} No such partition
 pub async fn handle_partition_command(
     state: &AppState,
     conn_state: &mut ConnectionState,
@@ -86,8 +86,8 @@ pub async fn handle_listpartitions_command(state: &AppState) -> String {
 ///
 /// Returns:
 /// - OK if partition created successfully
-/// - ACK [50@0] {newpartition} Partition already exists
-/// - ACK [50@0] {newpartition} Invalid partition name
+/// - ACK `[50@0]` {newpartition} Partition already exists
+/// - ACK `[50@0]` {newpartition} Invalid partition name
 pub async fn handle_newpartition_command(state: &AppState, name: &str) -> String {
     // Validate partition name
     if name.is_empty() {
@@ -130,8 +130,8 @@ pub async fn handle_newpartition_command(state: &AppState, name: &str) -> String
 ///
 /// Returns:
 /// - OK if partition deleted successfully
-/// - ACK [50@0] {delpartition} Cannot delete default partition
-/// - ACK [50@0] {delpartition} No such partition
+/// - ACK `[50@0]` {delpartition} Cannot delete default partition
+/// - ACK `[50@0]` {delpartition} No such partition
 pub async fn handle_delpartition_command(state: &AppState, name: &str) -> String {
     let manager = match &state.partition_manager {
         Some(m) => m,
@@ -165,8 +165,8 @@ pub async fn handle_delpartition_command(state: &AppState, name: &str) -> String
 ///
 /// Returns:
 /// - OK if output moved successfully
-/// - ACK [50@0] {moveoutput} No such output
-/// - ACK [50@0] {moveoutput} Output move failed
+/// - ACK `[50@0]` {moveoutput} No such output
+/// - ACK `[50@0]` {moveoutput} Output move failed
 pub async fn handle_moveoutput_command(
     state: &AppState,
     conn_state: &ConnectionState,
