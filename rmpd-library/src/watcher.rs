@@ -1,5 +1,5 @@
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode};
-use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, NoCache};
+use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, RecommendedCache};
 use rmpd_core::error::{Result, RmpdError};
 use rmpd_core::event::{Event as RmpdEvent, EventBus};
 use std::fmt;
@@ -19,7 +19,7 @@ pub struct FilesystemWatcher {
     music_dir: PathBuf,
     db: Arc<Mutex<Database>>,
     event_bus: EventBus,
-    debouncer: Option<Debouncer<RecommendedWatcher, NoCache>>,
+    debouncer: Option<Debouncer<RecommendedWatcher, RecommendedCache>>,
 }
 
 impl fmt::Debug for FilesystemWatcher {
