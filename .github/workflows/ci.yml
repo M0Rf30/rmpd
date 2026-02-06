@@ -21,7 +21,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev pkg-config
+          sudo apt-get install -y libasound2-dev pkg-config libpipewire-0.3-dev libspa-0.2-dev
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -58,7 +58,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev pkg-config
+          sudo apt-get install -y libasound2-dev pkg-config libpipewire-0.3-dev libspa-0.2-dev
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@master
@@ -72,7 +72,7 @@ jobs:
           key: ${{ matrix.rust }}
 
       - name: Run tests
-        run: cargo test --workspace --all-features
+        run: cargo test --workspace --all-features -- --test-threads=1
 
       - name: Run doc tests
         run: cargo test --workspace --doc --all-features
@@ -86,7 +86,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev pkg-config
+          sudo apt-get install -y libasound2-dev pkg-config libpipewire-0.3-dev libspa-0.2-dev
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -135,7 +135,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev pkg-config
+          sudo apt-get install -y libasound2-dev pkg-config libpipewire-0.3-dev libspa-0.2-dev
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -188,7 +188,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev pkg-config
+          sudo apt-get install -y libasound2-dev pkg-config libpipewire-0.3-dev libspa-0.2-dev
 
       - name: Setup Rust toolchain (1.88.0)
         uses: dtolnay/rust-toolchain@master
@@ -227,7 +227,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev pkg-config
+          sudo apt-get install -y libasound2-dev pkg-config libpipewire-0.3-dev libspa-0.2-dev
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable

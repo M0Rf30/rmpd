@@ -628,7 +628,7 @@ dependencies = [
 [[package]]
 name = "cpal"
 version = "0.17.1"
-source = "git+https://github.com/M0Rf30/cpal?branch=feat%2Fpipewire#fcb23ba028d5bfb0490e7f98da9f154c85aeb895"
+source = "git+https://github.com/M0Rf30/cpal?branch=pipewire#30e37b6d30064457e190aff792f9110c22b55bec"
 dependencies = [
  "alsa",
  "coreaudio-rs",
