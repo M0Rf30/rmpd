@@ -9,7 +9,10 @@ fn test_listplaylists_command() {
     // listplaylists should return list of playlists
     let response = "playlist: favorites\nLast-Modified: 2024-01-01T00:00:00Z\nOK\n";
     assert!(TestClient::is_ok(response));
-    assert_eq!(TestClient::get_field(response, "playlist"), Some("favorites"));
+    assert_eq!(
+        TestClient::get_field(response, "playlist"),
+        Some("favorites")
+    );
 }
 
 #[test]
@@ -43,7 +46,8 @@ fn test_listplaylist_command() {
 #[test]
 fn test_listplaylistinfo_command() {
     // listplaylistinfo should return playlist files with metadata
-    let response = "file: song1.mp3\nTitle: Song 1\nArtist: Artist 1\nfile: song2.mp3\nTitle: Song 2\nOK\n";
+    let response =
+        "file: song1.mp3\nTitle: Song 1\nArtist: Artist 1\nfile: song2.mp3\nTitle: Song 2\nOK\n";
     assert!(TestClient::is_ok(response));
     assert_eq!(TestClient::get_field(response, "Title"), Some("Song 1"));
 }

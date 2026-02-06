@@ -36,7 +36,8 @@ fn test_listall_command() {
 #[test]
 fn test_listallinfo_command() {
     // listallinfo should return files with metadata
-    let response = "directory: music/album\nfile: music/album/song.mp3\nTitle: Song\nArtist: Artist\nOK\n";
+    let response =
+        "directory: music/album\nfile: music/album/song.mp3\nTitle: Song\nArtist: Artist\nOK\n";
     assert!(TestClient::is_ok(response));
 }
 
@@ -104,7 +105,10 @@ fn test_readcomments_command() {
     // readcomments should return file metadata
     let response = "comment: This is a comment\nOK\n";
     assert!(TestClient::is_ok(response));
-    assert_eq!(TestClient::get_field(response, "comment"), Some("This is a comment"));
+    assert_eq!(
+        TestClient::get_field(response, "comment"),
+        Some("This is a comment")
+    );
 }
 
 #[test]

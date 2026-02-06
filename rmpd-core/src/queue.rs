@@ -39,7 +39,7 @@ impl Queue {
             song,
             priority: 0, // Default priority
             range: None, // No range restriction by default
-            tags: None, // No custom tags by default
+            tags: None,  // No custom tags by default
         });
 
         self.version += 1;
@@ -182,7 +182,7 @@ impl Queue {
             song,
             priority: 0, // Default priority
             range: None, // No range restriction by default
-            tags: None, // No custom tags by default
+            tags: None,  // No custom tags by default
         };
 
         if pos as usize >= self.items.len() {

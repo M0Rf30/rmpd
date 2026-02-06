@@ -5,7 +5,6 @@
 /// - Sample-accurate decoding
 /// - Seek accuracy
 /// - Multi-format consistency
-
 mod common;
 mod fixtures;
 
@@ -17,8 +16,8 @@ use std::path::Path;
 
 /// Helper to decode entire file to buffer
 fn decode_entire_file(path: &Path) -> Result<(Vec<f32>, u32, u8), String> {
-    let mut decoder = SymphoniaDecoder::open(path)
-        .map_err(|e| format!("Failed to open decoder: {e}"))?;
+    let mut decoder =
+        SymphoniaDecoder::open(path).map_err(|e| format!("Failed to open decoder: {e}"))?;
 
     let sample_rate = decoder.sample_rate();
     let channels = decoder.channels();
@@ -27,7 +26,8 @@ fn decode_entire_file(path: &Path) -> Result<(Vec<f32>, u32, u8), String> {
     let mut buffer = vec![0.0f32; 4096];
 
     loop {
-        let samples_read = decoder.read(&mut buffer)
+        let samples_read = decoder
+            .read(&mut buffer)
             .map_err(|e| format!("Failed to read samples: {e}"))?;
 
         if samples_read == 0 {
@@ -144,8 +144,8 @@ fn test_flac_sine_wave_accuracy() {
         return;
     }
 
-    let (samples, sample_rate, channels) = decode_entire_file(&path)
-        .expect("Failed to decode FLAC file");
+    let (samples, sample_rate, channels) =
+        decode_entire_file(&path).expect("Failed to decode FLAC file");
 
     // FLAC is lossless, so decoded sine wave should match perfectly
     assert!(
@@ -167,8 +167,8 @@ fn test_wav_sine_wave_accuracy() {
         return;
     }
 
-    let (samples, sample_rate, channels) = decode_entire_file(&path)
-        .expect("Failed to decode WAV file");
+    let (samples, sample_rate, channels) =
+        decode_entire_file(&path).expect("Failed to decode WAV file");
 
     // WAV/PCM is lossless
     assert!(
@@ -189,15 +189,19 @@ fn test_mp3_sine_wave_reasonable() {
         return;
     }
 
-    let (samples, _sample_rate, _channels) = decode_entire_file(&path)
-        .expect("Failed to decode MP3 file");
+    let (samples, _sample_rate, _channels) =
+        decode_entire_file(&path).expect("Failed to decode MP3 file");
 
     // MP3 is lossy, so we don't verify exact sine wave pattern
     // Instead, just verify output is reasonable (not silence, not corrupted)
 
     // RMS should be reasonable (0.565 ± 30% for lossy codec)
     let rms = calculate_rms(&samples);
-    assert!(rms > 0.3 && rms < 0.8, "MP3 RMS {} out of expected range", rms);
+    assert!(
+        rms > 0.3 && rms < 0.8,
+        "MP3 RMS {} out of expected range",
+        rms
+    );
 
     // All samples should be in valid range
     for &sample in &samples {
@@ -250,7 +254,9 @@ fn test_seek_to_beginning() {
 
     // Read again and verify we're at the start
     let mut buffer2 = vec![0.0f32; 1000];
-    let read = decoder.read(&mut buffer2).expect("Failed to read after seek");
+    let read = decoder
+        .read(&mut buffer2)
+        .expect("Failed to read after seek");
     assert!(read > 0, "Should read samples after seeking to start");
 }
 
@@ -269,7 +275,9 @@ fn test_seek_to_middle() {
 
     // Read samples and verify they're valid
     let mut buffer = vec![0.0f32; 1000];
-    let read = decoder.read(&mut buffer).expect("Failed to read after seek");
+    let read = decoder
+        .read(&mut buffer)
+        .expect("Failed to read after seek");
     assert!(read > 0, "Should read samples after seeking");
 
     // Verify samples are in valid range
@@ -307,7 +315,11 @@ fn test_seek_accuracy() {
 
     // Verify we're getting reasonable audio (not silence)
     let rms = calculate_rms(&buffer[..read]);
-    assert!(rms > 0.1, "RMS {} too low after seek (possibly silence)", rms);
+    assert!(
+        rms > 0.1,
+        "RMS {} too low after seek (possibly silence)",
+        rms
+    );
 
     // Seek should be roughly accurate - if we seek to 0.5s and read 0.1s more,
     // we should have about 0.4s left in the file
@@ -325,8 +337,8 @@ fn test_seek_accuracy() {
     // At 44.1kHz stereo, that's about 44100 samples (stereo interleaved)
     // Allow 20% tolerance for codec frame boundaries and rounding
     let expected_remaining = 44100usize;
-    let diff_ratio = (remaining_samples as f32 - expected_remaining as f32).abs()
-        / expected_remaining as f32;
+    let diff_ratio =
+        (remaining_samples as f32 - expected_remaining as f32).abs() / expected_remaining as f32;
     assert!(
         diff_ratio < 0.2,
         "Seek accuracy off by more than 20%: expected ~{}, got {}",
@@ -406,12 +418,15 @@ fn test_silence_detection() {
         return;
     }
 
-    let (samples, _, _) = decode_entire_file(&path)
-        .expect("Failed to decode silence file");
+    let (samples, _, _) = decode_entire_file(&path).expect("Failed to decode silence file");
 
     // Verify RMS is very low (near silence)
     let rms = calculate_rms(&samples);
-    assert!(rms < 0.01, "Silence file should have very low RMS, got {}", rms);
+    assert!(
+        rms < 0.01,
+        "Silence file should have very low RMS, got {}",
+        rms
+    );
 }
 
 #[test]

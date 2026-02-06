@@ -2,7 +2,6 @@
 ///
 /// This harness provides a convenient interface for testing the Scanner,
 /// Database, and MetadataExtractor in isolation.
-
 use rmpd_core::error::Result;
 use rmpd_core::song::Song;
 use rmpd_library::database::Database;

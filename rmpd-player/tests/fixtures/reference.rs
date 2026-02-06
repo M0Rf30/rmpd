@@ -4,7 +4,6 @@
 /// - Pure sine waves at known frequencies
 /// - Impulse responses for sample-accurate testing
 /// - Silence for detecting artifacts
-
 use std::f32::consts::PI;
 
 /// Audio pattern type

@@ -148,8 +148,13 @@ async fn handle_client(mut stream: TcpStream, state: AppState) -> Result<()> {
                         "not in command list",
                     ))
                 } else {
-                    let response =
-                        execute_command_list(&batch_commands, &state, &mut conn_state, batch_ok_mode).await;
+                    let response = execute_command_list(
+                        &batch_commands,
+                        &state,
+                        &mut conn_state,
+                        batch_ok_mode,
+                    )
+                    .await;
                     batch_mode = false;
                     batch_ok_mode = false;
                     batch_commands.clear();
@@ -175,7 +180,12 @@ async fn handle_client(mut stream: TcpStream, state: AppState) -> Result<()> {
     Ok(())
 }
 
-async fn execute_command_list(commands: &[String], state: &AppState, conn_state: &mut crate::ConnectionState, ok_mode: bool) -> Response {
+async fn execute_command_list(
+    commands: &[String],
+    state: &AppState,
+    conn_state: &mut crate::ConnectionState,
+    ok_mode: bool,
+) -> Response {
     let mut response = String::new();
 
     for (index, cmd_str) in commands.iter().enumerate() {
@@ -333,7 +343,11 @@ fn subsystem_to_string(subsystem: rmpd_core::event::Subsystem) -> &'static str {
     }
 }
 
-async fn handle_command(cmd: Command, state: &AppState, conn_state: &mut crate::ConnectionState) -> Response {
+async fn handle_command(
+    cmd: Command,
+    state: &AppState,
+    conn_state: &mut crate::ConnectionState,
+) -> Response {
     // Special handling for binary commands
     match cmd {
         Command::AlbumArt { uri, offset } => {
@@ -354,7 +368,9 @@ async fn handle_command(cmd: Command, state: &AppState, conn_state: &mut crate::
         }
         Command::Commands => reflection::handle_commands_command().await,
         Command::NotCommands => reflection::handle_notcommands_command().await,
-        Command::TagTypes { subcommand } => reflection::handle_tagtypes_command(conn_state, subcommand).await,
+        Command::TagTypes { subcommand } => {
+            reflection::handle_tagtypes_command(conn_state, subcommand).await
+        }
         Command::UrlHandlers => reflection::handle_urlhandlers_command().await,
         Command::Decoders => reflection::handle_decoders_command().await,
         Command::Status => {
@@ -439,12 +455,22 @@ async fn handle_command(cmd: Command, state: &AppState, conn_state: &mut crate::
             filter_tag,
             filter_value,
             group: _,
-        } => database::handle_list_command(state, &tag, filter_tag.as_deref(), filter_value.as_deref()).await,
+        } => {
+            database::handle_list_command(
+                state,
+                &tag,
+                filter_tag.as_deref(),
+                filter_value.as_deref(),
+            )
+            .await
+        }
         Command::Count { filters, group } => {
             database::handle_count_command(state, &filters, group.as_deref()).await
         }
         Command::ListAll { path } => database::handle_listall_command(state, path.as_deref()).await,
-        Command::ListAllInfo { path } => database::handle_listallinfo_command(state, path.as_deref()).await,
+        Command::ListAllInfo { path } => {
+            database::handle_listallinfo_command(state, path.as_deref()).await
+        }
         Command::LsInfo { path } => database::handle_lsinfo_command(state, path.as_deref()).await,
         Command::CurrentSong => database::handle_currentsong_command(state).await,
         Command::PlaylistInfo { range } => queue::handle_playlistinfo_command(state, range).await,
@@ -466,19 +492,27 @@ async fn handle_command(cmd: Command, state: &AppState, conn_state: &mut crate::
         }
         // Playback commands
         Command::Play { position } => playback::handle_play_command(state, position).await,
-        Command::Pause { state: pause_state } => playback::handle_pause_command(state, pause_state).await,
+        Command::Pause { state: pause_state } => {
+            playback::handle_pause_command(state, pause_state).await
+        }
         Command::Stop => playback::handle_stop_command(state).await,
         Command::Next => playback::handle_next_command(state).await,
         Command::Previous => playback::handle_previous_command(state).await,
-        Command::Seek { position, time } => playback::handle_seek_command(state, position, time).await,
+        Command::Seek { position, time } => {
+            playback::handle_seek_command(state, position, time).await
+        }
         Command::SeekId { id, time } => playback::handle_seekid_command(state, id, time).await,
-        Command::SeekCur { time, relative } => playback::handle_seekcur_command(state, time, relative).await,
+        Command::SeekCur { time, relative } => {
+            playback::handle_seekcur_command(state, time, relative).await
+        }
         Command::SetVol { volume } => options::handle_setvol_command(state, volume).await,
         Command::Add { uri, position } => queue::handle_add_command(state, &uri, position).await,
         Command::Clear => queue::handle_clear_command(state).await,
         Command::Delete { target } => queue::handle_delete_command(state, target).await,
         Command::DeleteId { id } => queue::handle_deleteid_command(state, id).await,
-        Command::AddId { uri, position } => queue::handle_addid_command(state, &uri, position).await,
+        Command::AddId { uri, position } => {
+            queue::handle_addid_command(state, &uri, position).await
+        }
         Command::PlayId { id } => queue::handle_playid_command(state, id).await,
         Command::MoveId { id, to } => queue::handle_moveid_command(state, id, to).await,
         Command::Swap { pos1, pos2 } => queue::handle_swap_command(state, pos1, pos2).await,
@@ -507,7 +541,9 @@ async fn handle_command(cmd: Command, state: &AppState, conn_state: &mut crate::
             resp.field("volume", status.volume.to_string());
             resp.ok()
         }
-        Command::ReplayGainMode { mode } => options::handle_replaygain_mode_command(state, &mode).await,
+        Command::ReplayGainMode { mode } => {
+            options::handle_replaygain_mode_command(state, &mode).await
+        }
         Command::ReplayGainStatus => options::handle_replaygain_status_command(state).await,
         Command::BinaryLimit { size } => {
             // Set binary limit (for large responses like images)
@@ -515,7 +551,9 @@ async fn handle_command(cmd: Command, state: &AppState, conn_state: &mut crate::
             let _ = size;
             ResponseBuilder::new().ok()
         }
-        Command::Protocol { subcommand } => reflection::handle_protocol_command(conn_state, subcommand).await,
+        Command::Protocol { subcommand } => {
+            reflection::handle_protocol_command(conn_state, subcommand).await
+        }
         // Stored playlists
         Command::Save { name, mode } => playlists::handle_save_command(state, &name, mode).await,
         Command::Load {
@@ -535,7 +573,9 @@ async fn handle_command(cmd: Command, state: &AppState, conn_state: &mut crate::
             uri,
             position,
         } => playlists::handle_playlistadd_command(state, &name, &uri, position).await,
-        Command::PlaylistClear { name } => playlists::handle_playlistclear_command(state, &name).await,
+        Command::PlaylistClear { name } => {
+            playlists::handle_playlistclear_command(state, &name).await
+        }
         Command::PlaylistDelete { name, position } => {
             playlists::handle_playlistdelete_command(state, &name, position).await
         }
@@ -547,7 +587,9 @@ async fn handle_command(cmd: Command, state: &AppState, conn_state: &mut crate::
         Command::SearchPlaylist { name, tag, value } => {
             playlists::handle_searchplaylist_command(state, &name, &tag, &value).await
         }
-        Command::PlaylistLength { name } => playlists::handle_playlistlength_command(state, &name).await,
+        Command::PlaylistLength { name } => {
+            playlists::handle_playlistlength_command(state, &name).await
+        }
         // Output control
         Command::Outputs => outputs::handle_outputs_command(state).await,
         Command::EnableOutput { id } => outputs::handle_enableoutput_command(state, id).await,
@@ -557,19 +599,29 @@ async fn handle_command(cmd: Command, state: &AppState, conn_state: &mut crate::
             outputs::handle_outputset_command(state, id, &name, &value).await
         }
         // Advanced database
-        Command::SearchAdd { tag, value } => database::handle_searchadd_command(state, &tag, &value).await,
+        Command::SearchAdd { tag, value } => {
+            database::handle_searchadd_command(state, &tag, &value).await
+        }
         Command::SearchAddPl { name, tag, value } => {
             playlists::handle_searchaddpl_command(state, &name, &tag, &value).await
         }
-        Command::FindAdd { tag, value } => database::handle_findadd_command(state, &tag, &value).await,
-        Command::ListFiles { uri } => database::handle_listfiles_command(state, uri.as_deref()).await,
+        Command::FindAdd { tag, value } => {
+            database::handle_findadd_command(state, &tag, &value).await
+        }
+        Command::ListFiles { uri } => {
+            database::handle_listfiles_command(state, uri.as_deref()).await
+        }
         Command::SearchCount { tag, value, group } => {
             database::handle_searchcount_command(state, &tag, &value, group.as_deref()).await
         }
-        Command::GetFingerprint { uri } => fingerprint::handle_getfingerprint_command(state, &uri).await,
+        Command::GetFingerprint { uri } => {
+            fingerprint::handle_getfingerprint_command(state, &uri).await
+        }
         Command::ReadComments { uri } => database::handle_readcomments_command(state, &uri).await,
         // Stickers
-        Command::StickerGet { uri, name } => stickers::handle_sticker_get_command(state, &uri, &name).await,
+        Command::StickerGet { uri, name } => {
+            stickers::handle_sticker_get_command(state, &uri, &name).await
+        }
         Command::StickerSet { uri, name, value } => {
             stickers::handle_sticker_set_command(state, &uri, &name, &value).await
         }
@@ -586,33 +638,51 @@ async fn handle_command(cmd: Command, state: &AppState, conn_state: &mut crate::
         Command::StickerDec { uri, name, delta } => {
             stickers::handle_sticker_dec_command(state, &uri, &name, delta).await
         }
-        Command::StickerNames { uri } => stickers::handle_sticker_names_command(state, uri.as_deref()).await,
+        Command::StickerNames { uri } => {
+            stickers::handle_sticker_names_command(state, uri.as_deref()).await
+        }
         Command::StickerTypes => stickers::handle_sticker_types_command().await,
         Command::StickerNamesTypes { uri } => {
             stickers::handle_sticker_namestypes_command(state, uri.as_deref()).await
         }
         // Partitions
-        Command::Partition { name } => partition::handle_partition_command(state, conn_state, &name).await,
+        Command::Partition { name } => {
+            partition::handle_partition_command(state, conn_state, &name).await
+        }
         Command::ListPartitions => partition::handle_listpartitions_command(state).await,
-        Command::NewPartition { name } => partition::handle_newpartition_command(state, &name).await,
-        Command::DelPartition { name } => partition::handle_delpartition_command(state, &name).await,
-        Command::MoveOutput { name } => partition::handle_moveoutput_command(state, conn_state, &name).await,
+        Command::NewPartition { name } => {
+            partition::handle_newpartition_command(state, &name).await
+        }
+        Command::DelPartition { name } => {
+            partition::handle_delpartition_command(state, &name).await
+        }
+        Command::MoveOutput { name } => {
+            partition::handle_moveoutput_command(state, conn_state, &name).await
+        }
         // Mounts
         Command::Mount { path, uri } => storage::handle_mount_command(state, &path, &uri).await,
         Command::Unmount { path } => storage::handle_unmount_command(state, &path).await,
         Command::ListMounts => storage::handle_listmounts_command(state).await,
         Command::ListNeighbors => storage::handle_listneighbors_command(state).await,
         // Client messaging
-        Command::Subscribe { channel } => messaging::handle_subscribe_command(conn_state, &channel).await,
-        Command::Unsubscribe { channel } => messaging::handle_unsubscribe_command(conn_state, &channel).await,
+        Command::Subscribe { channel } => {
+            messaging::handle_subscribe_command(conn_state, &channel).await
+        }
+        Command::Unsubscribe { channel } => {
+            messaging::handle_unsubscribe_command(conn_state, &channel).await
+        }
         Command::Channels => messaging::handle_channels_command(state).await,
         Command::ReadMessages => messaging::handle_readmessages_command(state, conn_state).await,
         Command::SendMessage { channel, message } => {
             messaging::handle_sendmessage_command(state, &channel, &message).await
         }
         // Advanced queue
-        Command::Prio { priority, ranges } => queue::handle_prio_command(state, priority, &ranges).await,
-        Command::PrioId { priority, ids } => queue::handle_prioid_command(state, priority, &ids).await,
+        Command::Prio { priority, ranges } => {
+            queue::handle_prio_command(state, priority, &ranges).await
+        }
+        Command::PrioId { priority, ids } => {
+            queue::handle_prioid_command(state, priority, &ids).await
+        }
         Command::RangeId { id, range } => queue::handle_rangeid_command(state, id, range).await,
         Command::AddTagId { id, tag, value } => {
             queue::handle_addtagid_command(state, id, &tag, &value).await
@@ -624,7 +694,9 @@ async fn handle_command(cmd: Command, state: &AppState, conn_state: &mut crate::
         Command::Config => connection::handle_config_command(state).await,
         Command::Kill => connection::handle_kill_command(state).await,
         Command::MixRampDb { decibels } => options::handle_mixrampdb_command(state, decibels).await,
-        Command::MixRampDelay { seconds } => options::handle_mixrampdelay_command(state, seconds).await,
+        Command::MixRampDelay { seconds } => {
+            options::handle_mixrampdelay_command(state, seconds).await
+        }
         _ => {
             // Unimplemented commands
             ResponseBuilder::error(5, 0, "command", "not yet implemented")

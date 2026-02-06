@@ -2,13 +2,11 @@
 ///
 /// These files are committed to the repository and do not require FFmpeg.
 /// All files are ~1 second of audio with various metadata.
-
 use std::path::PathBuf;
 
 /// Get the path to the fixtures directory
 pub fn fixtures_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/samples")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/samples")
 }
 
 /// Get path to a specific fixture file

@@ -6,7 +6,6 @@
 /// - Special characters in paths and metadata
 /// - Corrupted or invalid audio files
 /// - Boundary conditions
-
 use crate::common::rmpd_harness::RmpdTestHarness;
 use crate::fixtures::{AudioFormat, FixtureGenerator, TestMetadata};
 
@@ -114,12 +113,12 @@ fn test_unicode_in_all_fields() {
     let harness = RmpdTestHarness::new().unwrap();
 
     let metadata = TestMetadata {
-        title: "テストソング".to_string(),        // Japanese
+        title: "テストソング".to_string(),          // Japanese
         artist: "Тестовый исполнитель".to_string(), // Russian
-        album: "Τεστ Άλμπουμ".to_string(),      // Greek
-        genre: Some("الموسيقى".to_string()),     // Arabic
-        composer: Some("测试作曲家".to_string()),  // Chinese
-        comment: Some("🎵🎶🎸".to_string()),      // Emojis
+        album: "Τεστ Άλμπουμ".to_string(),          // Greek
+        genre: Some("الموسيقى".to_string()),        // Arabic
+        composer: Some("测试作曲家".to_string()),   // Chinese
+        comment: Some("🎵🎶🎸".to_string()),        // Emojis
         ..Default::default()
     };
 
@@ -266,7 +265,10 @@ fn test_duplicate_paths_update() {
     assert_eq!(count, 1);
 
     // Should have the updated title
-    let retrieved = harness.get_song_by_path(song1.path.as_str()).unwrap().unwrap();
+    let retrieved = harness
+        .get_song_by_path(song1.path.as_str())
+        .unwrap()
+        .unwrap();
     assert_eq!(retrieved.title, Some("Updated Title".to_string()));
 }
 

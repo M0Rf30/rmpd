@@ -17,7 +17,10 @@ fn test_listpartitions_command() {
     // listpartitions should return list of partitions
     let response = "partition: default\nOK\n";
     assert!(TestClient::is_ok(response));
-    assert_eq!(TestClient::get_field(response, "partition"), Some("default"));
+    assert_eq!(
+        TestClient::get_field(response, "partition"),
+        Some("default")
+    );
 }
 
 #[test]

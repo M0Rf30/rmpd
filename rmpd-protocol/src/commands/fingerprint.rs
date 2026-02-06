@@ -27,12 +27,7 @@ pub async fn handle_getfingerprint_command(state: &AppState, uri: &str) -> Strin
 
     // Check if file exists
     if !path.exists() {
-        return ResponseBuilder::error(
-            50,
-            0,
-            "getfingerprint",
-            &format!("File not found: {uri}"),
-        );
+        return ResponseBuilder::error(50, 0, "getfingerprint", &format!("File not found: {uri}"));
     }
 
     debug!("Generating fingerprint for: {}", path.display());
@@ -61,12 +56,7 @@ pub async fn handle_getfingerprint_command(state: &AppState, uri: &str) -> Strin
         }
         Err(_) => {
             error!("Fingerprinting task panicked");
-            ResponseBuilder::error(
-                50,
-                0,
-                "getfingerprint",
-                "Fingerprinting task panicked",
-            )
+            ResponseBuilder::error(50, 0, "getfingerprint", "Fingerprinting task panicked")
         }
     }
 }

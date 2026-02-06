@@ -172,7 +172,10 @@ async fn handle_fs_event(
                         let db_guard = match db.lock() {
                             Ok(guard) => guard,
                             Err(poisoned) => {
-                                tracing::error!("Database mutex poisoned, recovering: {}", poisoned);
+                                tracing::error!(
+                                    "Database mutex poisoned, recovering: {}",
+                                    poisoned
+                                );
                                 poisoned.into_inner()
                             }
                         };

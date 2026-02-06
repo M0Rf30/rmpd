@@ -6,7 +6,6 @@
 /// - Invalid formats
 /// - Boundary conditions
 /// - Very large/small values
-
 mod common;
 mod fixtures;
 
@@ -138,7 +137,9 @@ fn test_read_after_eof() {
     assert!(total_read > 0, "Should have read some samples");
 
     // Try to read more (should return 0, not error)
-    let read = decoder.read(&mut buffer).expect("Read after EOF should not error");
+    let read = decoder
+        .read(&mut buffer)
+        .expect("Read after EOF should not error");
     assert_eq!(read, 0, "Should return 0 samples after EOF");
 }
 
@@ -199,7 +200,9 @@ fn test_zero_length_read() {
 
     // Try to read 0 samples
     let mut buffer = vec![];
-    let read = decoder.read(&mut buffer).expect("Zero-length read should not error");
+    let read = decoder
+        .read(&mut buffer)
+        .expect("Zero-length read should not error");
     assert_eq!(read, 0, "Should read 0 samples from 0-length buffer");
 }
 
@@ -282,8 +285,12 @@ fn test_multiple_decoders_same_file() {
     let mut buffer1 = vec![0.0f32; 1000];
     let mut buffer2 = vec![0.0f32; 1000];
 
-    let read1 = decoder1.read(&mut buffer1).expect("Failed to read from decoder 1");
-    let read2 = decoder2.read(&mut buffer2).expect("Failed to read from decoder 2");
+    let read1 = decoder1
+        .read(&mut buffer1)
+        .expect("Failed to read from decoder 1");
+    let read2 = decoder2
+        .read(&mut buffer2)
+        .expect("Failed to read from decoder 2");
 
     assert!(read1 > 0, "Decoder 1 should read samples");
     assert!(read2 > 0, "Decoder 2 should read samples");
@@ -315,7 +322,9 @@ fn test_seek_then_decode_consistency() {
     let mut decoder2 = SymphoniaDecoder::open(&path).expect("Failed to open decoder");
     decoder2.seek(0.0).expect("Failed to seek");
     let mut buffer2 = vec![0.0f32; 10000];
-    let read2 = decoder2.read(&mut buffer2).expect("Failed to read after seek");
+    let read2 = decoder2
+        .read(&mut buffer2)
+        .expect("Failed to read after seek");
 
     // Should produce similar output (small differences acceptable due to codec behavior)
     assert!(
@@ -355,5 +364,8 @@ fn test_decoder_format_info_before_read() {
     assert_eq!(format.channels, 2);
 
     let duration = decoder.duration();
-    assert!(duration.is_some(), "Duration should be available before reading");
+    assert!(
+        duration.is_some(),
+        "Duration should be available before reading"
+    );
 }

@@ -143,7 +143,10 @@ mod tests {
         let registry = MountRegistry::new();
 
         let result = registry
-            .register("remote/nas".to_string(), "nfs://192.168.1.100/music".to_string())
+            .register(
+                "remote/nas".to_string(),
+                "nfs://192.168.1.100/music".to_string(),
+            )
             .await;
 
         assert!(result.is_ok());
@@ -159,12 +162,18 @@ mod tests {
         let registry = MountRegistry::new();
 
         registry
-            .register("remote/nas".to_string(), "nfs://192.168.1.100/music".to_string())
+            .register(
+                "remote/nas".to_string(),
+                "nfs://192.168.1.100/music".to_string(),
+            )
             .await
             .unwrap();
 
         let result = registry
-            .register("remote/nas".to_string(), "nfs://192.168.1.200/music".to_string())
+            .register(
+                "remote/nas".to_string(),
+                "nfs://192.168.1.200/music".to_string(),
+            )
             .await;
 
         assert!(result.is_err());
@@ -176,7 +185,10 @@ mod tests {
         let registry = MountRegistry::new();
 
         registry
-            .register("remote/nas".to_string(), "nfs://192.168.1.100/music".to_string())
+            .register(
+                "remote/nas".to_string(),
+                "nfs://192.168.1.100/music".to_string(),
+            )
             .await
             .unwrap();
 
@@ -200,14 +212,20 @@ mod tests {
         let registry = MountRegistry::new();
 
         registry
-            .register("remote/nas".to_string(), "nfs://192.168.1.100/music".to_string())
+            .register(
+                "remote/nas".to_string(),
+                "nfs://192.168.1.100/music".to_string(),
+            )
             .await
             .unwrap();
 
         assert!(!registry.is_mounted("remote/nas").await);
 
         registry
-            .register_mounted("remote/nas2".to_string(), "nfs://192.168.1.200/music".to_string())
+            .register_mounted(
+                "remote/nas2".to_string(),
+                "nfs://192.168.1.200/music".to_string(),
+            )
             .await
             .unwrap();
 

@@ -20,9 +20,8 @@ impl Database {
 
     pub fn init_schema(&self) -> Result<()> {
         // Songs table
-        self.conn
-            .execute(
-                "CREATE TABLE IF NOT EXISTS songs (
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS songs (
                 id INTEGER PRIMARY KEY,
                 path TEXT NOT NULL UNIQUE,
                 directory_id INTEGER NOT NULL,
@@ -60,14 +59,12 @@ impl Database {
 
                 FOREIGN KEY (directory_id) REFERENCES directories(id)
             )",
-                [],
-            )
-            ?;
+            [],
+        )?;
 
         // Directories table
-        self.conn
-            .execute(
-                "CREATE TABLE IF NOT EXISTS directories (
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS directories (
                 id INTEGER PRIMARY KEY,
                 path TEXT NOT NULL UNIQUE,
                 parent_id INTEGER,
@@ -75,25 +72,21 @@ impl Database {
 
                 FOREIGN KEY (parent_id) REFERENCES directories(id)
             )",
-                [],
-            )
-            ?;
+            [],
+        )?;
 
         // Artists table (normalized)
-        self.conn
-            .execute(
-                "CREATE TABLE IF NOT EXISTS artists (
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS artists (
                 id INTEGER PRIMARY KEY,
                 name TEXT NOT NULL UNIQUE COLLATE NOCASE
             )",
-                [],
-            )
-            ?;
+            [],
+        )?;
 
         // Albums table (normalized)
-        self.conn
-            .execute(
-                "CREATE TABLE IF NOT EXISTS albums (
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS albums (
                 id INTEGER PRIMARY KEY,
                 name TEXT NOT NULL,
                 artist_id INTEGER,
@@ -102,26 +95,22 @@ impl Database {
                 UNIQUE(name, artist_id),
                 FOREIGN KEY (artist_id) REFERENCES artists(id)
             )",
-                [],
-            )
-            ?;
+            [],
+        )?;
 
         // Playlists table
-        self.conn
-            .execute(
-                "CREATE TABLE IF NOT EXISTS playlists (
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS playlists (
                 id INTEGER PRIMARY KEY,
                 name TEXT NOT NULL UNIQUE,
                 mtime INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
             )",
-                [],
-            )
-            ?;
+            [],
+        )?;
 
         // Playlist items
-        self.conn
-            .execute(
-                "CREATE TABLE IF NOT EXISTS playlist_items (
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS playlist_items (
                 id INTEGER PRIMARY KEY,
                 playlist_id INTEGER NOT NULL,
                 position INTEGER NOT NULL,
@@ -131,14 +120,12 @@ impl Database {
                 FOREIGN KEY (playlist_id) REFERENCES playlists(id) ON DELETE CASCADE,
                 FOREIGN KEY (song_id) REFERENCES songs(id) ON DELETE SET NULL
             )",
-                [],
-            )
-            ?;
+            [],
+        )?;
 
         // Stickers (arbitrary key-value metadata)
-        self.conn
-            .execute(
-                "CREATE TABLE IF NOT EXISTS stickers (
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS stickers (
                 id INTEGER PRIMARY KEY,
                 uri TEXT NOT NULL,
                 name TEXT NOT NULL,
@@ -146,14 +133,12 @@ impl Database {
 
                 UNIQUE(uri, name)
             )",
-                [],
-            )
-            ?;
+            [],
+        )?;
 
         // Artwork table (album art cache)
-        self.conn
-            .execute(
-                "CREATE TABLE IF NOT EXISTS artwork (
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS artwork (
                 id INTEGER PRIMARY KEY,
                 song_path TEXT NOT NULL,
                 picture_type TEXT NOT NULL,
@@ -165,71 +150,54 @@ impl Database {
                 UNIQUE(song_path, picture_type),
                 FOREIGN KEY (song_path) REFERENCES songs(path) ON DELETE CASCADE
             )",
-                [],
-            )
-            ?;
+            [],
+        )?;
 
         // Full-text search using FTS5
-        self.conn
-            .execute(
-                "CREATE VIRTUAL TABLE IF NOT EXISTS songs_fts USING fts5(
+        self.conn.execute(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS songs_fts USING fts5(
                 title, artist, album, album_artist, genre, composer,
                 content='songs',
                 content_rowid='id'
             )",
-                [],
-            )
-            ?;
+            [],
+        )?;
 
         // Create indexes
-        self.conn
-            .execute(
-                "CREATE INDEX IF NOT EXISTS idx_songs_artist ON songs(artist)",
-                [],
-            )
-            ?;
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_songs_artist ON songs(artist)",
+            [],
+        )?;
 
-        self.conn
-            .execute(
-                "CREATE INDEX IF NOT EXISTS idx_songs_album ON songs(album)",
-                [],
-            )
-            ?;
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_songs_album ON songs(album)",
+            [],
+        )?;
 
-        self.conn
-            .execute(
-                "CREATE INDEX IF NOT EXISTS idx_songs_album_artist ON songs(album_artist)",
-                [],
-            )
-            ?;
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_songs_album_artist ON songs(album_artist)",
+            [],
+        )?;
 
-        self.conn
-            .execute(
-                "CREATE INDEX IF NOT EXISTS idx_songs_directory ON songs(directory_id)",
-                [],
-            )
-            ?;
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_songs_directory ON songs(directory_id)",
+            [],
+        )?;
 
-        self.conn
-            .execute(
-                "CREATE INDEX IF NOT EXISTS idx_directories_parent ON directories(parent_id)",
-                [],
-            )
-            ?;
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_directories_parent ON directories(parent_id)",
+            [],
+        )?;
 
-        self.conn
-            .execute(
-                "CREATE INDEX IF NOT EXISTS idx_artwork_path ON artwork(song_path)",
-                [],
-            )
-            ?;
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_artwork_path ON artwork(song_path)",
+            [],
+        )?;
 
-        self.conn
-            .execute(
-                "CREATE INDEX IF NOT EXISTS idx_artwork_hash ON artwork(hash)",
-                [],
-            )
-            ?;
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_artwork_hash ON artwork(hash)",
+            [],
+        )?;
 
         // Run migrations for new fields
         self.migrate_add_musicbrainz_fields()?;
@@ -243,14 +211,12 @@ impl Database {
             [],
         )?;
 
-        self.conn
-            .execute(
-                "CREATE TRIGGER IF NOT EXISTS songs_fts_delete AFTER DELETE ON songs BEGIN
+        self.conn.execute(
+            "CREATE TRIGGER IF NOT EXISTS songs_fts_delete AFTER DELETE ON songs BEGIN
                 DELETE FROM songs_fts WHERE rowid = old.id;
             END",
-                [],
-            )
-            ?;
+            [],
+        )?;
 
         self.conn.execute(
             "CREATE TRIGGER IF NOT EXISTS songs_fts_update AFTER UPDATE ON songs BEGIN
@@ -277,9 +243,8 @@ impl Database {
         }
 
         // Add new columns
-        self.conn
-            .execute_batch(
-                "
+        self.conn.execute_batch(
+            "
             ALTER TABLE songs ADD COLUMN musicbrainz_trackid TEXT;
             ALTER TABLE songs ADD COLUMN musicbrainz_albumid TEXT;
             ALTER TABLE songs ADD COLUMN musicbrainz_artistid TEXT;
@@ -294,8 +259,7 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_songs_musicbrainz_trackid ON songs(musicbrainz_trackid);
             CREATE INDEX IF NOT EXISTS idx_songs_musicbrainz_albumid ON songs(musicbrainz_albumid);
         ",
-            )
-            ?;
+        )?;
 
         Ok(())
     }
@@ -475,30 +439,30 @@ impl Database {
     }
 
     pub fn count_songs(&self) -> Result<u32> {
-        Ok(self.conn
+        Ok(self
+            .conn
             .query_row("SELECT COUNT(*) FROM songs", [], |row| row.get(0))?)
     }
 
     pub fn count_artists(&self) -> Result<u32> {
-        Ok(self.conn
-            .query_row(
-                "SELECT COUNT(DISTINCT artist) FROM songs WHERE artist IS NOT NULL",
-                [],
-                |row| row.get(0),
-            )?)
+        Ok(self.conn.query_row(
+            "SELECT COUNT(DISTINCT artist) FROM songs WHERE artist IS NOT NULL",
+            [],
+            |row| row.get(0),
+        )?)
     }
 
     pub fn count_albums(&self) -> Result<u32> {
-        Ok(self.conn
-            .query_row(
-                "SELECT COUNT(DISTINCT album) FROM songs WHERE album IS NOT NULL",
-                [],
-                |row| row.get(0),
-            )?)
+        Ok(self.conn.query_row(
+            "SELECT COUNT(DISTINCT album) FROM songs WHERE album IS NOT NULL",
+            [],
+            |row| row.get(0),
+        )?)
     }
 
     pub fn get_db_playtime(&self) -> Result<u64> {
-        Ok(self.conn
+        Ok(self
+            .conn
             .query_row("SELECT COALESCE(SUM(duration), 0) FROM songs", [], |row| {
                 let duration: f64 = row.get(0)?;
                 Ok(duration as u64)
@@ -506,7 +470,8 @@ impl Database {
     }
 
     pub fn get_db_update(&self) -> Result<i64> {
-        Ok(self.conn
+        Ok(self
+            .conn
             .query_row("SELECT COALESCE(MAX(added_at), 0) FROM songs", [], |row| {
                 row.get(0)
             })?)
@@ -521,8 +486,7 @@ impl Database {
                 params![path.as_str()],
                 |row| row.get::<_, i64>(0),
             )
-            .optional()
-            ?
+            .optional()?
         {
             return Ok(id);
         }
@@ -543,12 +507,10 @@ impl Database {
             })
             .as_secs() as i64;
 
-        self.conn
-            .execute(
-                "INSERT INTO directories (path, parent_id, mtime) VALUES (?1, ?2, ?3)",
-                params![path.as_str(), parent_id, now],
-            )
-            ?;
+        self.conn.execute(
+            "INSERT INTO directories (path, parent_id, mtime) VALUES (?1, ?2, ?3)",
+            params![path.as_str(), parent_id, now],
+        )?;
 
         Ok(self.conn.last_insert_rowid())
     }
@@ -630,10 +592,8 @@ impl Database {
                     added_at: row.get(33)?,
                     last_modified: row.get(34)?,
                 })
-            })
-            ?
-            .collect::<std::result::Result<Vec<_>, _>>()
-            ?;
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
 
         Ok(songs)
     }
@@ -644,10 +604,8 @@ impl Database {
         )?;
 
         let artists = stmt
-            .query_map([], |row| row.get(0))
-            ?
-            .collect::<std::result::Result<Vec<_>, _>>()
-            ?;
+            .query_map([], |row| row.get(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
 
         Ok(artists)
     }
@@ -658,10 +616,8 @@ impl Database {
         )?;
 
         let albums = stmt
-            .query_map([], |row| row.get(0))
-            ?
-            .collect::<std::result::Result<Vec<_>, _>>()
-            ?;
+            .query_map([], |row| row.get(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
 
         Ok(albums)
     }
@@ -672,10 +628,8 @@ impl Database {
         )?;
 
         let genres = stmt
-            .query_map([], |row| row.get(0))
-            ?
-            .collect::<std::result::Result<Vec<_>, _>>()
-            ?;
+            .query_map([], |row| row.get(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
 
         Ok(genres)
     }
@@ -686,10 +640,8 @@ impl Database {
         )?;
 
         let album_artists = stmt
-            .query_map([], |row| row.get(0))
-            ?
-            .collect::<std::result::Result<Vec<_>, _>>()
-            ?;
+            .query_map([], |row| row.get(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
 
         Ok(album_artists)
     }
@@ -733,16 +685,11 @@ impl Database {
             "SELECT DISTINCT {tag_col} FROM songs WHERE {filter_col} = ? AND {tag_col} IS NOT NULL ORDER BY {tag_col} COLLATE NOCASE"
         );
 
-        let mut stmt = self
-            .conn
-            .prepare(&query)
-            ?;
+        let mut stmt = self.conn.prepare(&query)?;
 
         let values = stmt
-            .query_map([filter_value], |row| row.get(0))
-            ?
-            .collect::<std::result::Result<Vec<_>, _>>()
-            ?;
+            .query_map([filter_value], |row| row.get(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
 
         Ok(values)
     }
@@ -782,10 +729,7 @@ impl Database {
             _ => return Err(RmpdError::Library(format!("Unsupported tag: {tag}"))),
         };
 
-        let mut stmt = self
-            .conn
-            .prepare(query)
-            ?;
+        let mut stmt = self.conn.prepare(query)?;
 
         let songs = stmt
             .query_map(params![value], |row| {
@@ -825,10 +769,8 @@ impl Database {
                     added_at: row.get(33)?,
                     last_modified: row.get(34)?,
                 })
-            })
-            ?
-            .collect::<std::result::Result<Vec<_>, _>>()
-            ?;
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
 
         Ok(songs)
     }
@@ -853,10 +795,7 @@ impl Database {
              FROM songs WHERE {where_clause} ORDER BY album, track"
         );
 
-        let mut stmt = self
-            .conn
-            .prepare(&query)
-            ?;
+        let mut stmt = self.conn.prepare(&query)?;
 
         // Convert Vec<String> to params that rusqlite can use
         let params_refs: Vec<&dyn rusqlite::ToSql> = params
@@ -905,10 +844,8 @@ impl Database {
                     added_at: row.get(33)?,
                     last_modified: row.get(34)?,
                 })
-            })
-            ?
-            .collect::<std::result::Result<Vec<_>, _>>()
-            ?;
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
 
         Ok(songs)
     }
@@ -966,24 +903,22 @@ impl Database {
                     added_at: row.get(33)?,
                     last_modified: row.get(34)?,
                 })
-            })
-            ?
-            .collect::<std::result::Result<Vec<_>, _>>()
-            ?;
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
 
         Ok(songs)
     }
 
     pub fn delete_song_by_path(&self, path: &str) -> Result<()> {
         self.conn
-            .execute("DELETE FROM songs WHERE path = ?1", params![path])
-            ?;
+            .execute("DELETE FROM songs WHERE path = ?1", params![path])?;
         Ok(())
     }
 
     // Artwork methods
     pub fn get_artwork(&self, path: &str, picture_type: &str) -> Result<Option<Vec<u8>>> {
-        Ok(self.conn
+        Ok(self
+            .conn
             .query_row(
                 "SELECT data FROM artwork WHERE song_path = ?1 AND picture_type = ?2",
                 params![path, picture_type],
@@ -1009,14 +944,11 @@ impl Database {
     }
 
     pub fn has_artwork(&self, path: &str, picture_type: &str) -> Result<bool> {
-        let count: i64 = self
-            .conn
-            .query_row(
-                "SELECT COUNT(*) FROM artwork WHERE song_path = ?1 AND picture_type = ?2",
-                params![path, picture_type],
-                |row| row.get(0),
-            )
-            ?;
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM artwork WHERE song_path = ?1 AND picture_type = ?2",
+            params![path, picture_type],
+            |row| row.get(0),
+        )?;
         Ok(count > 0)
     }
 
@@ -1042,8 +974,7 @@ impl Database {
                         [],
                         |row| row.get(0),
                     )
-                    .optional()
-                    ?
+                    .optional()?
             } else {
                 id
             }
@@ -1056,8 +987,7 @@ impl Database {
                     params![path],
                     |row| row.get(0),
                 )
-                .optional()
-                ?;
+                .optional()?;
             id
         };
 
@@ -1066,22 +996,16 @@ impl Database {
         if let Some(id) = dir_id {
             let mut stmt = self
                 .conn
-                .prepare("SELECT path FROM directories WHERE parent_id = ?1 ORDER BY path")
-                ?;
-            let rows = stmt
-                .query_map(params![id], |row| row.get::<_, String>(0))
-                ?;
+                .prepare("SELECT path FROM directories WHERE parent_id = ?1 ORDER BY path")?;
+            let rows = stmt.query_map(params![id], |row| row.get::<_, String>(0))?;
             for row in rows {
                 directories.push(row?);
             }
         } else {
             let mut stmt = self
                 .conn
-                .prepare("SELECT path FROM directories WHERE parent_id IS NULL ORDER BY path")
-                ?;
-            let rows = stmt
-                .query_map([], |row| row.get::<_, String>(0))
-                ?;
+                .prepare("SELECT path FROM directories WHERE parent_id IS NULL ORDER BY path")?;
+            let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
             for row in rows {
                 directories.push(row?);
             }
@@ -1101,51 +1025,46 @@ impl Database {
                     added_at, last_modified
                 FROM songs WHERE directory_id = ?1 ORDER BY path";
 
-            let mut stmt = self
-                .conn
-                .prepare(query)
-                ?;
+            let mut stmt = self.conn.prepare(query)?;
 
-            let song_rows = stmt
-                .query_map(params![dir_id.unwrap_or(0)], |row| {
-                    Ok(Song {
-                        id: row.get::<_, i64>(0)? as u64,
-                        path: Utf8PathBuf::from(row.get::<_, String>(1)?),
-                        duration: row.get::<_, Option<f64>>(2)?.map(Duration::from_secs_f64),
-                        title: row.get(3).ok(),
-                        artist: row.get(4).ok(),
-                        album: row.get(5).ok(),
-                        album_artist: row.get(6).ok(),
-                        track: row.get(7).ok(),
-                        disc: row.get(8).ok(),
-                        date: row.get(9).ok(),
-                        genre: row.get(10).ok(),
-                        composer: row.get(11).ok(),
-                        performer: row.get(12).ok(),
-                        comment: row.get(13).ok(),
-                        musicbrainz_trackid: row.get(14).ok(),
-                        musicbrainz_albumid: row.get(15).ok(),
-                        musicbrainz_artistid: row.get(16).ok(),
-                        musicbrainz_albumartistid: row.get(17).ok(),
-                        musicbrainz_releasegroupid: row.get(18).ok(),
-                        musicbrainz_releasetrackid: row.get(19).ok(),
-                        artist_sort: row.get(20).ok(),
-                        album_artist_sort: row.get(21).ok(),
-                        original_date: row.get(22).ok(),
-                        label: row.get(23).ok(),
-                        sample_rate: row.get(24).ok(),
-                        channels: row.get(25).ok(),
-                        bits_per_sample: row.get(26).ok(),
-                        bitrate: row.get(27).ok(),
-                        replay_gain_track_gain: row.get(28).ok(),
-                        replay_gain_track_peak: row.get(29).ok(),
-                        replay_gain_album_gain: row.get(30).ok(),
-                        replay_gain_album_peak: row.get(31).ok(),
-                        added_at: row.get(32)?,
-                        last_modified: row.get(33)?,
-                    })
+            let song_rows = stmt.query_map(params![dir_id.unwrap_or(0)], |row| {
+                Ok(Song {
+                    id: row.get::<_, i64>(0)? as u64,
+                    path: Utf8PathBuf::from(row.get::<_, String>(1)?),
+                    duration: row.get::<_, Option<f64>>(2)?.map(Duration::from_secs_f64),
+                    title: row.get(3).ok(),
+                    artist: row.get(4).ok(),
+                    album: row.get(5).ok(),
+                    album_artist: row.get(6).ok(),
+                    track: row.get(7).ok(),
+                    disc: row.get(8).ok(),
+                    date: row.get(9).ok(),
+                    genre: row.get(10).ok(),
+                    composer: row.get(11).ok(),
+                    performer: row.get(12).ok(),
+                    comment: row.get(13).ok(),
+                    musicbrainz_trackid: row.get(14).ok(),
+                    musicbrainz_albumid: row.get(15).ok(),
+                    musicbrainz_artistid: row.get(16).ok(),
+                    musicbrainz_albumartistid: row.get(17).ok(),
+                    musicbrainz_releasegroupid: row.get(18).ok(),
+                    musicbrainz_releasetrackid: row.get(19).ok(),
+                    artist_sort: row.get(20).ok(),
+                    album_artist_sort: row.get(21).ok(),
+                    original_date: row.get(22).ok(),
+                    label: row.get(23).ok(),
+                    sample_rate: row.get(24).ok(),
+                    channels: row.get(25).ok(),
+                    bits_per_sample: row.get(26).ok(),
+                    bitrate: row.get(27).ok(),
+                    replay_gain_track_gain: row.get(28).ok(),
+                    replay_gain_track_peak: row.get(29).ok(),
+                    replay_gain_album_gain: row.get(30).ok(),
+                    replay_gain_album_peak: row.get(31).ok(),
+                    added_at: row.get(32)?,
+                    last_modified: row.get(33)?,
                 })
-                ?;
+            })?;
 
             for row in song_rows {
                 songs.push(row?);
@@ -1168,53 +1087,48 @@ impl Database {
                 added_at, last_modified
             FROM songs WHERE path LIKE ?1 || '%' ORDER BY path";
 
-        let mut stmt = self
-            .conn
-            .prepare(query)
-            ?;
+        let mut stmt = self.conn.prepare(query)?;
 
         let search_path = if path.is_empty() { "%" } else { path };
 
-        let song_rows = stmt
-            .query_map(params![search_path], |row| {
-                Ok(Song {
-                    id: row.get::<_, i64>(0)? as u64,
-                    path: Utf8PathBuf::from(row.get::<_, String>(1)?),
-                    duration: row.get::<_, Option<f64>>(2)?.map(Duration::from_secs_f64),
-                    title: row.get(3).ok(),
-                    artist: row.get(4).ok(),
-                    album: row.get(5).ok(),
-                    album_artist: row.get(6).ok(),
-                    track: row.get(7).ok(),
-                    disc: row.get(8).ok(),
-                    date: row.get(9).ok(),
-                    genre: row.get(10).ok(),
-                    composer: row.get(11).ok(),
-                    performer: row.get(12).ok(),
-                    comment: row.get(13).ok(),
-                    musicbrainz_trackid: row.get(14).ok(),
-                    musicbrainz_albumid: row.get(15).ok(),
-                    musicbrainz_artistid: row.get(16).ok(),
-                    musicbrainz_albumartistid: row.get(17).ok(),
-                    musicbrainz_releasegroupid: row.get(18).ok(),
-                    musicbrainz_releasetrackid: row.get(19).ok(),
-                    artist_sort: row.get(20).ok(),
-                    album_artist_sort: row.get(21).ok(),
-                    original_date: row.get(22).ok(),
-                    label: row.get(23).ok(),
-                    sample_rate: row.get(24).ok(),
-                    channels: row.get(25).ok(),
-                    bits_per_sample: row.get(26).ok(),
-                    bitrate: row.get(27).ok(),
-                    replay_gain_track_gain: row.get(28).ok(),
-                    replay_gain_track_peak: row.get(29).ok(),
-                    replay_gain_album_gain: row.get(30).ok(),
-                    replay_gain_album_peak: row.get(31).ok(),
-                    added_at: row.get(32)?,
-                    last_modified: row.get(33)?,
-                })
+        let song_rows = stmt.query_map(params![search_path], |row| {
+            Ok(Song {
+                id: row.get::<_, i64>(0)? as u64,
+                path: Utf8PathBuf::from(row.get::<_, String>(1)?),
+                duration: row.get::<_, Option<f64>>(2)?.map(Duration::from_secs_f64),
+                title: row.get(3).ok(),
+                artist: row.get(4).ok(),
+                album: row.get(5).ok(),
+                album_artist: row.get(6).ok(),
+                track: row.get(7).ok(),
+                disc: row.get(8).ok(),
+                date: row.get(9).ok(),
+                genre: row.get(10).ok(),
+                composer: row.get(11).ok(),
+                performer: row.get(12).ok(),
+                comment: row.get(13).ok(),
+                musicbrainz_trackid: row.get(14).ok(),
+                musicbrainz_albumid: row.get(15).ok(),
+                musicbrainz_artistid: row.get(16).ok(),
+                musicbrainz_albumartistid: row.get(17).ok(),
+                musicbrainz_releasegroupid: row.get(18).ok(),
+                musicbrainz_releasetrackid: row.get(19).ok(),
+                artist_sort: row.get(20).ok(),
+                album_artist_sort: row.get(21).ok(),
+                original_date: row.get(22).ok(),
+                label: row.get(23).ok(),
+                sample_rate: row.get(24).ok(),
+                channels: row.get(25).ok(),
+                bits_per_sample: row.get(26).ok(),
+                bitrate: row.get(27).ok(),
+                replay_gain_track_gain: row.get(28).ok(),
+                replay_gain_track_peak: row.get(29).ok(),
+                replay_gain_album_gain: row.get(30).ok(),
+                replay_gain_album_peak: row.get(31).ok(),
+                added_at: row.get(32)?,
+                last_modified: row.get(33)?,
             })
-            ?;
+        })?;
 
         let mut songs = Vec::new();
         for row in song_rows {
@@ -1227,29 +1141,22 @@ impl Database {
     /// Save current queue as a playlist
     pub fn save_playlist(&self, name: &str, songs: &[Song]) -> Result<()> {
         // Create or replace playlist
-        self.conn
-            .execute(
-                "INSERT OR REPLACE INTO playlists (name, mtime) VALUES (?1, strftime('%s', 'now'))",
-                params![name],
-            )
-            ?;
+        self.conn.execute(
+            "INSERT OR REPLACE INTO playlists (name, mtime) VALUES (?1, strftime('%s', 'now'))",
+            params![name],
+        )?;
 
-        let playlist_id: i64 = self
-            .conn
-            .query_row(
-                "SELECT id FROM playlists WHERE name = ?1",
-                params![name],
-                |row| row.get(0),
-            )
-            ?;
+        let playlist_id: i64 = self.conn.query_row(
+            "SELECT id FROM playlists WHERE name = ?1",
+            params![name],
+            |row| row.get(0),
+        )?;
 
         // Clear existing items
-        self.conn
-            .execute(
-                "DELETE FROM playlist_items WHERE playlist_id = ?1",
-                params![playlist_id],
-            )
-            ?;
+        self.conn.execute(
+            "DELETE FROM playlist_items WHERE playlist_id = ?1",
+            params![playlist_id],
+        )?;
 
         // Add songs
         for (position, song) in songs.iter().enumerate() {
@@ -1271,8 +1178,7 @@ impl Database {
                 params![name],
                 |row| row.get(0),
             )
-            .optional()
-            ?
+            .optional()?
             .ok_or_else(|| RmpdError::Library(format!("Playlist not found: {name}")))?;
 
         let mut stmt = self.conn.prepare(
@@ -1292,46 +1198,44 @@ impl Database {
              ORDER BY pi.position"
         )?;
 
-        let song_rows = stmt
-            .query_map(params![playlist_id], |row| {
-                Ok(Song {
-                    id: row.get::<_, i64>(0)? as u64,
-                    path: Utf8PathBuf::from(row.get::<_, String>(1)?),
-                    duration: row.get::<_, Option<f64>>(2)?.map(Duration::from_secs_f64),
-                    title: row.get(3).ok(),
-                    artist: row.get(4).ok(),
-                    album: row.get(5).ok(),
-                    album_artist: row.get(6).ok(),
-                    track: row.get(7).ok(),
-                    disc: row.get(8).ok(),
-                    date: row.get(9).ok(),
-                    genre: row.get(10).ok(),
-                    composer: row.get(11).ok(),
-                    performer: row.get(12).ok(),
-                    comment: row.get(13).ok(),
-                    musicbrainz_trackid: row.get(14).ok(),
-                    musicbrainz_albumid: row.get(15).ok(),
-                    musicbrainz_artistid: row.get(16).ok(),
-                    musicbrainz_albumartistid: row.get(17).ok(),
-                    musicbrainz_releasegroupid: row.get(18).ok(),
-                    musicbrainz_releasetrackid: row.get(19).ok(),
-                    artist_sort: row.get(20).ok(),
-                    album_artist_sort: row.get(21).ok(),
-                    original_date: row.get(22).ok(),
-                    label: row.get(23).ok(),
-                    sample_rate: row.get(24).ok(),
-                    channels: row.get(25).ok(),
-                    bits_per_sample: row.get(26).ok(),
-                    bitrate: row.get(27).ok(),
-                    replay_gain_track_gain: row.get(28).ok(),
-                    replay_gain_track_peak: row.get(29).ok(),
-                    replay_gain_album_gain: row.get(30).ok(),
-                    replay_gain_album_peak: row.get(31).ok(),
-                    added_at: row.get(32)?,
-                    last_modified: row.get(33)?,
-                })
+        let song_rows = stmt.query_map(params![playlist_id], |row| {
+            Ok(Song {
+                id: row.get::<_, i64>(0)? as u64,
+                path: Utf8PathBuf::from(row.get::<_, String>(1)?),
+                duration: row.get::<_, Option<f64>>(2)?.map(Duration::from_secs_f64),
+                title: row.get(3).ok(),
+                artist: row.get(4).ok(),
+                album: row.get(5).ok(),
+                album_artist: row.get(6).ok(),
+                track: row.get(7).ok(),
+                disc: row.get(8).ok(),
+                date: row.get(9).ok(),
+                genre: row.get(10).ok(),
+                composer: row.get(11).ok(),
+                performer: row.get(12).ok(),
+                comment: row.get(13).ok(),
+                musicbrainz_trackid: row.get(14).ok(),
+                musicbrainz_albumid: row.get(15).ok(),
+                musicbrainz_artistid: row.get(16).ok(),
+                musicbrainz_albumartistid: row.get(17).ok(),
+                musicbrainz_releasegroupid: row.get(18).ok(),
+                musicbrainz_releasetrackid: row.get(19).ok(),
+                artist_sort: row.get(20).ok(),
+                album_artist_sort: row.get(21).ok(),
+                original_date: row.get(22).ok(),
+                label: row.get(23).ok(),
+                sample_rate: row.get(24).ok(),
+                channels: row.get(25).ok(),
+                bits_per_sample: row.get(26).ok(),
+                bitrate: row.get(27).ok(),
+                replay_gain_track_gain: row.get(28).ok(),
+                replay_gain_track_peak: row.get(29).ok(),
+                replay_gain_album_gain: row.get(30).ok(),
+                replay_gain_album_peak: row.get(31).ok(),
+                added_at: row.get(32)?,
+                last_modified: row.get(33)?,
             })
-            ?;
+        })?;
 
         let mut songs = Vec::new();
         for row in song_rows {
@@ -1343,26 +1247,21 @@ impl Database {
 
     /// List all playlists
     pub fn list_playlists(&self) -> Result<Vec<PlaylistInfo>> {
-        let mut stmt = self
-            .conn
-            .prepare(
-                "SELECT p.name, p.mtime, COUNT(pi.id) as song_count
+        let mut stmt = self.conn.prepare(
+            "SELECT p.name, p.mtime, COUNT(pi.id) as song_count
              FROM playlists p
              LEFT JOIN playlist_items pi ON p.id = pi.playlist_id
              GROUP BY p.id
              ORDER BY p.name",
-            )
-            ?;
+        )?;
 
-        let playlist_rows = stmt
-            .query_map([], |row| {
-                Ok(PlaylistInfo {
-                    name: row.get(0)?,
-                    last_modified: row.get(1)?,
-                    song_count: row.get(2)?,
-                })
+        let playlist_rows = stmt.query_map([], |row| {
+            Ok(PlaylistInfo {
+                name: row.get(0)?,
+                last_modified: row.get(1)?,
+                song_count: row.get(2)?,
             })
-            ?;
+        })?;
 
         let mut playlists = Vec::new();
         for row in playlist_rows {
@@ -1381,8 +1280,7 @@ impl Database {
     pub fn delete_playlist(&self, name: &str) -> Result<()> {
         let affected = self
             .conn
-            .execute("DELETE FROM playlists WHERE name = ?1", params![name])
-            ?;
+            .execute("DELETE FROM playlists WHERE name = ?1", params![name])?;
 
         if affected == 0 {
             return Err(RmpdError::Library(format!("Playlist not found: {name}")));
@@ -1393,13 +1291,10 @@ impl Database {
 
     /// Rename a playlist
     pub fn rename_playlist(&self, from: &str, to: &str) -> Result<()> {
-        let affected = self
-            .conn
-            .execute(
-                "UPDATE playlists SET name = ?1, mtime = strftime('%s', 'now') WHERE name = ?2",
-                params![to, from],
-            )
-            ?;
+        let affected = self.conn.execute(
+            "UPDATE playlists SET name = ?1, mtime = strftime('%s', 'now') WHERE name = ?2",
+            params![to, from],
+        )?;
 
         if affected == 0 {
             return Err(RmpdError::Library(format!("Playlist not found: {from}")));
@@ -1418,8 +1313,7 @@ impl Database {
                 params![name],
                 |row| row.get(0),
             )
-            .optional()
-            ?
+            .optional()?
             .ok_or_else(|| RmpdError::Library(format!("Playlist not found: {name}")))?;
 
         // Get song by URI
@@ -1428,14 +1322,11 @@ impl Database {
             .ok_or_else(|| RmpdError::Library(format!("Song not found: {uri}")))?;
 
         // Get next position
-        let next_pos: i64 = self
-            .conn
-            .query_row(
-                "SELECT COALESCE(MAX(position), -1) + 1 FROM playlist_items WHERE playlist_id = ?1",
-                params![playlist_id],
-                |row| row.get(0),
-            )
-            ?;
+        let next_pos: i64 = self.conn.query_row(
+            "SELECT COALESCE(MAX(position), -1) + 1 FROM playlist_items WHERE playlist_id = ?1",
+            params![playlist_id],
+            |row| row.get(0),
+        )?;
 
         // Add song
         self.conn.execute(
@@ -1444,12 +1335,10 @@ impl Database {
         )?;
 
         // Update mtime
-        self.conn
-            .execute(
-                "UPDATE playlists SET mtime = strftime('%s', 'now') WHERE id = ?1",
-                params![playlist_id],
-            )
-            ?;
+        self.conn.execute(
+            "UPDATE playlists SET mtime = strftime('%s', 'now') WHERE id = ?1",
+            params![playlist_id],
+        )?;
 
         Ok(())
     }
@@ -1463,24 +1352,19 @@ impl Database {
                 params![name],
                 |row| row.get(0),
             )
-            .optional()
-            ?
+            .optional()?
             .ok_or_else(|| RmpdError::Library(format!("Playlist not found: {name}")))?;
 
-        self.conn
-            .execute(
-                "DELETE FROM playlist_items WHERE playlist_id = ?1",
-                params![playlist_id],
-            )
-            ?;
+        self.conn.execute(
+            "DELETE FROM playlist_items WHERE playlist_id = ?1",
+            params![playlist_id],
+        )?;
 
         // Update mtime
-        self.conn
-            .execute(
-                "UPDATE playlists SET mtime = strftime('%s', 'now') WHERE id = ?1",
-                params![playlist_id],
-            )
-            ?;
+        self.conn.execute(
+            "UPDATE playlists SET mtime = strftime('%s', 'now') WHERE id = ?1",
+            params![playlist_id],
+        )?;
 
         Ok(())
     }
@@ -1494,17 +1378,13 @@ impl Database {
                 params![name],
                 |row| row.get(0),
             )
-            .optional()
-            ?
+            .optional()?
             .ok_or_else(|| RmpdError::Library(format!("Playlist not found: {name}")))?;
 
-        let affected = self
-            .conn
-            .execute(
-                "DELETE FROM playlist_items WHERE playlist_id = ?1 AND position = ?2",
-                params![playlist_id, position],
-            )
-            ?;
+        let affected = self.conn.execute(
+            "DELETE FROM playlist_items WHERE playlist_id = ?1 AND position = ?2",
+            params![playlist_id, position],
+        )?;
 
         if affected == 0 {
             return Err(RmpdError::Library(format!(
@@ -1513,21 +1393,17 @@ impl Database {
         }
 
         // Reindex positions
-        self.conn
-            .execute(
-                "UPDATE playlist_items SET position = position - 1
+        self.conn.execute(
+            "UPDATE playlist_items SET position = position - 1
              WHERE playlist_id = ?1 AND position > ?2",
-                params![playlist_id, position],
-            )
-            ?;
+            params![playlist_id, position],
+        )?;
 
         // Update mtime
-        self.conn
-            .execute(
-                "UPDATE playlists SET mtime = strftime('%s', 'now') WHERE id = ?1",
-                params![playlist_id],
-            )
-            ?;
+        self.conn.execute(
+            "UPDATE playlists SET mtime = strftime('%s', 'now') WHERE id = ?1",
+            params![playlist_id],
+        )?;
 
         Ok(())
     }
@@ -1541,8 +1417,7 @@ impl Database {
                 params![name],
                 |row| row.get(0),
             )
-            .optional()
-            ?
+            .optional()?
             .ok_or_else(|| RmpdError::Library(format!("Playlist not found: {name}")))?;
 
         if from == to {
@@ -1562,46 +1437,37 @@ impl Database {
                 params![playlist_id, from],
                 |row| row.get(0),
             )
-            .optional()
-            ?
+            .optional()?
             .ok_or_else(|| RmpdError::Library(format!("Position not found: {from}")))?;
 
         // Move logic similar to queue
         if from < to {
             // Moving down: shift items between from+1 and to down by 1
-            self.conn
-                .execute(
-                    "UPDATE playlist_items SET position = position - 1
+            self.conn.execute(
+                "UPDATE playlist_items SET position = position - 1
                  WHERE playlist_id = ?1 AND position > ?2 AND position <= ?3",
-                    params![playlist_id, from, to],
-                )
-                ?;
+                params![playlist_id, from, to],
+            )?;
         } else {
             // Moving up: shift items between to and from-1 up by 1
-            self.conn
-                .execute(
-                    "UPDATE playlist_items SET position = position + 1
+            self.conn.execute(
+                "UPDATE playlist_items SET position = position + 1
                  WHERE playlist_id = ?1 AND position >= ?2 AND position < ?3",
-                    params![playlist_id, to, from],
-                )
-                ?;
+                params![playlist_id, to, from],
+            )?;
         }
 
         // Set the item's new position
-        self.conn
-            .execute(
-                "UPDATE playlist_items SET position = ?1 WHERE id = ?2",
-                params![to, item_id],
-            )
-            ?;
+        self.conn.execute(
+            "UPDATE playlist_items SET position = ?1 WHERE id = ?2",
+            params![to, item_id],
+        )?;
 
         // Update mtime
-        self.conn
-            .execute(
-                "UPDATE playlists SET mtime = strftime('%s', 'now') WHERE id = ?1",
-                params![playlist_id],
-            )
-            ?;
+        self.conn.execute(
+            "UPDATE playlists SET mtime = strftime('%s', 'now') WHERE id = ?1",
+            params![playlist_id],
+        )?;
 
         Ok(())
     }
@@ -1610,7 +1476,8 @@ impl Database {
 
     /// Get a sticker value by URI and name
     pub fn get_sticker(&self, uri: &str, name: &str) -> Result<Option<String>> {
-        Ok(self.conn
+        Ok(self
+            .conn
             .query_row(
                 "SELECT value FROM stickers WHERE uri = ?1 AND name = ?2",
                 params![uri, name],
@@ -1621,12 +1488,10 @@ impl Database {
 
     /// Set a sticker value
     pub fn set_sticker(&self, uri: &str, name: &str, value: &str) -> Result<()> {
-        self.conn
-            .execute(
-                "INSERT OR REPLACE INTO stickers (uri, name, value) VALUES (?1, ?2, ?3)",
-                params![uri, name, value],
-            )
-            ?;
+        self.conn.execute(
+            "INSERT OR REPLACE INTO stickers (uri, name, value) VALUES (?1, ?2, ?3)",
+            params![uri, name, value],
+        )?;
         Ok(())
     }
 
@@ -1635,16 +1500,13 @@ impl Database {
     /// If name is None, delete all stickers for the URI
     pub fn delete_sticker(&self, uri: &str, name: Option<&str>) -> Result<()> {
         if let Some(sticker_name) = name {
-            self.conn
-                .execute(
-                    "DELETE FROM stickers WHERE uri = ?1 AND name = ?2",
-                    params![uri, sticker_name],
-                )
-                ?;
+            self.conn.execute(
+                "DELETE FROM stickers WHERE uri = ?1 AND name = ?2",
+                params![uri, sticker_name],
+            )?;
         } else {
             self.conn
-                .execute("DELETE FROM stickers WHERE uri = ?1", params![uri])
-                ?;
+                .execute("DELETE FROM stickers WHERE uri = ?1", params![uri])?;
         }
         Ok(())
     }
@@ -1653,12 +1515,9 @@ impl Database {
     pub fn list_stickers(&self, uri: &str) -> Result<Vec<(String, String)>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT name, value FROM stickers WHERE uri = ?1 ORDER BY name")
-            ?;
+            .prepare("SELECT name, value FROM stickers WHERE uri = ?1 ORDER BY name")?;
 
-        let sticker_rows = stmt
-            .query_map(params![uri], |row| Ok((row.get(0)?, row.get(1)?)))
-            ?;
+        let sticker_rows = stmt.query_map(params![uri], |row| Ok((row.get(0)?, row.get(1)?)))?;
 
         let mut stickers = Vec::new();
         for row in sticker_rows {
@@ -1671,10 +1530,9 @@ impl Database {
     /// Find all URIs that have a sticker with the given name
     /// Returns (uri, value) pairs
     pub fn find_stickers(&self, uri: &str, name: &str) -> Result<Vec<(String, String)>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT uri, value FROM stickers WHERE uri LIKE ?1 AND name = ?2 ORDER BY uri")
-            ?;
+        let mut stmt = self.conn.prepare(
+            "SELECT uri, value FROM stickers WHERE uri LIKE ?1 AND name = ?2 ORDER BY uri",
+        )?;
 
         let search_pattern = if uri.is_empty() {
             "%".to_string()
@@ -1682,11 +1540,9 @@ impl Database {
             format!("{uri}%")
         };
 
-        let sticker_rows = stmt
-            .query_map(params![search_pattern, name], |row| {
-                Ok((row.get(0)?, row.get(1)?))
-            })
-            ?;
+        let sticker_rows = stmt.query_map(params![search_pattern, name], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })?;
 
         let mut results = Vec::new();
         for row in sticker_rows {

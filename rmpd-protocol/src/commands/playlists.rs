@@ -43,9 +43,7 @@ fn format_iso8601_timestamp(timestamp: i64) -> String {
     }
     let day = days + 1;
 
-    format!(
-        "{year:04}-{month:02}-{day:02}T{hours:02}:{minutes:02}:{seconds:02}Z"
-    )
+    format!("{year:04}-{month:02}-{day:02}T{hours:02}:{minutes:02}:{seconds:02}Z")
 }
 
 pub async fn handle_listplaylists_command(state: &AppState) -> String {
@@ -57,12 +55,7 @@ pub async fn handle_listplaylists_command(state: &AppState) -> String {
     let db = match rmpd_library::Database::open(db_path) {
         Ok(d) => d,
         Err(e) => {
-            return ResponseBuilder::error(
-                50,
-                0,
-                "listplaylists",
-                &format!("database error: {e}"),
-            )
+            return ResponseBuilder::error(50, 0, "listplaylists", &format!("database error: {e}"))
         }
     };
 
@@ -159,7 +152,6 @@ pub async fn handle_save_command(
     }
 }
 
-
 pub async fn handle_load_command(
     state: &AppState,
     name: &str,
@@ -216,7 +208,6 @@ pub async fn handle_load_command(
     }
 }
 
-
 pub async fn handle_searchaddpl_command(
     state: &AppState,
     name: &str,
@@ -240,12 +231,7 @@ pub async fn handle_searchaddpl_command(
         match db.search_songs(value) {
             Ok(s) => s,
             Err(e) => {
-                return ResponseBuilder::error(
-                    50,
-                    0,
-                    "searchaddpl",
-                    &format!("search error: {e}"),
-                )
+                return ResponseBuilder::error(50, 0, "searchaddpl", &format!("search error: {e}"))
             }
         }
     } else {
@@ -265,8 +251,6 @@ pub async fn handle_searchaddpl_command(
 
     ResponseBuilder::new().ok()
 }
-
-
 
 pub async fn handle_listplaylist_command(
     state: &AppState,
@@ -396,12 +380,7 @@ pub async fn handle_playlistclear_command(state: &AppState, name: &str) -> Strin
     let db = match rmpd_library::Database::open(db_path) {
         Ok(d) => d,
         Err(e) => {
-            return ResponseBuilder::error(
-                50,
-                0,
-                "playlistclear",
-                &format!("database error: {e}"),
-            )
+            return ResponseBuilder::error(50, 0, "playlistclear", &format!("database error: {e}"))
         }
     };
 
@@ -420,12 +399,7 @@ pub async fn handle_playlistdelete_command(state: &AppState, name: &str, positio
     let db = match rmpd_library::Database::open(db_path) {
         Ok(d) => d,
         Err(e) => {
-            return ResponseBuilder::error(
-                50,
-                0,
-                "playlistdelete",
-                &format!("database error: {e}"),
-            )
+            return ResponseBuilder::error(50, 0, "playlistdelete", &format!("database error: {e}"))
         }
     };
 
@@ -435,7 +409,12 @@ pub async fn handle_playlistdelete_command(state: &AppState, name: &str, positio
     }
 }
 
-pub async fn handle_playlistmove_command(state: &AppState, name: &str, from: u32, to: u32) -> String {
+pub async fn handle_playlistmove_command(
+    state: &AppState,
+    name: &str,
+    from: u32,
+    to: u32,
+) -> String {
     let db_path = match &state.db_path {
         Some(p) => p,
         None => return ResponseBuilder::error(50, 0, "playlistmove", "database not configured"),
@@ -479,9 +458,7 @@ pub async fn handle_rename_command(state: &AppState, from: &str, to: &str) -> St
 
     let db = match rmpd_library::Database::open(db_path) {
         Ok(d) => d,
-        Err(e) => {
-            return ResponseBuilder::error(50, 0, "rename", &format!("database error: {e}"))
-        }
+        Err(e) => return ResponseBuilder::error(50, 0, "rename", &format!("database error: {e}")),
     };
 
     match db.rename_playlist(from, to) {

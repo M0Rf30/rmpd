@@ -38,7 +38,7 @@ impl ConnectionState {
     /// starts in the "default" partition
     pub fn new() -> Self {
         Self {
-            enabled_tags: None, // All enabled
+            enabled_tags: None,     // All enabled
             enabled_features: None, // All enabled
             subscribed_channels: Vec::new(),
             current_partition: "default".to_string(),

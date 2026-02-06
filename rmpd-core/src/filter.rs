@@ -122,10 +122,9 @@ impl<'a> Parser<'a> {
     }
 
     fn peek_char(&self) -> Result<char> {
-        self.input.chars().nth(self.pos)
-            .ok_or_else(|| RmpdError::ParseError(
-                format!("Unexpected end of input at position {}", self.pos)
-            ))
+        self.input.chars().nth(self.pos).ok_or_else(|| {
+            RmpdError::ParseError(format!("Unexpected end of input at position {}", self.pos))
+        })
     }
 
     fn parse_expression(&mut self) -> Result<FilterExpression> {

@@ -2,7 +2,6 @@
 ///
 /// These tests validate that rmpd correctly extracts embedded artwork
 /// from audio files and stores it in the database.
-
 use crate::common::rmpd_harness::RmpdTestHarness;
 use crate::fixtures::{AudioFormat, FixtureGenerator, TestMetadata};
 
@@ -31,7 +30,9 @@ fn test_embedded_artwork_extraction() {
     };
 
     // Generate audio file with embedded artwork
-    let path = gen.generate_with_artwork(AudioFormat::Flac, &metadata).unwrap();
+    let path = gen
+        .generate_with_artwork(AudioFormat::Flac, &metadata)
+        .unwrap();
 
     // Extract artwork
     let artworks = harness.extract_artwork(path.to_str().unwrap()).unwrap();
@@ -42,7 +43,10 @@ fn test_embedded_artwork_extraction() {
     if !artworks.is_empty() {
         let artwork = &artworks[0];
         assert!(!artwork.data.is_empty(), "Artwork data should not be empty");
-        assert!(!artwork.mime_type.is_empty(), "MIME type should not be empty");
+        assert!(
+            !artwork.mime_type.is_empty(),
+            "MIME type should not be empty"
+        );
     }
 }
 
@@ -67,7 +71,11 @@ fn test_no_artwork_in_file() {
     let artworks = harness.extract_artwork(path.to_str().unwrap()).unwrap();
 
     // Should have no artwork
-    assert_eq!(artworks.len(), 0, "Should not extract artwork from files without it");
+    assert_eq!(
+        artworks.len(),
+        0,
+        "Should not extract artwork from files without it"
+    );
 }
 
 #[test]
@@ -84,7 +92,9 @@ fn test_artwork_mime_types() {
         ..Default::default()
     };
 
-    let path = gen.generate_with_artwork(AudioFormat::Flac, &metadata).unwrap();
+    let path = gen
+        .generate_with_artwork(AudioFormat::Flac, &metadata)
+        .unwrap();
     let artworks = harness.extract_artwork(path.to_str().unwrap()).unwrap();
 
     if !artworks.is_empty() {
@@ -112,7 +122,9 @@ fn test_artwork_database_storage() {
         ..Default::default()
     };
 
-    let path = gen.generate_with_artwork(AudioFormat::Flac, &metadata).unwrap();
+    let path = gen
+        .generate_with_artwork(AudioFormat::Flac, &metadata)
+        .unwrap();
     let song = harness.extract_metadata(path.to_str().unwrap()).unwrap();
     harness.add_song(&song).unwrap();
 
@@ -124,7 +136,9 @@ fn test_artwork_database_storage() {
 
         // Verify it was stored
         assert!(
-            harness.has_artwork(song.path.as_str(), &artwork.picture_type).unwrap(),
+            harness
+                .has_artwork(song.path.as_str(), &artwork.picture_type)
+                .unwrap(),
             "Artwork should be in database"
         );
 
@@ -134,7 +148,11 @@ fn test_artwork_database_storage() {
             .unwrap()
             .expect("Should retrieve artwork");
 
-        assert_eq!(retrieved.len(), artwork.data.len(), "Retrieved artwork size should match");
+        assert_eq!(
+            retrieved.len(),
+            artwork.data.len(),
+            "Retrieved artwork size should match"
+        );
     }
 }
 
@@ -152,7 +170,9 @@ fn test_artwork_cache_hit() {
         ..Default::default()
     };
 
-    let path = gen.generate_with_artwork(AudioFormat::Flac, &metadata).unwrap();
+    let path = gen
+        .generate_with_artwork(AudioFormat::Flac, &metadata)
+        .unwrap();
     let song = harness.extract_metadata(path.to_str().unwrap()).unwrap();
     harness.add_song(&song).unwrap();
 
@@ -190,12 +210,17 @@ fn test_multiple_picture_types() {
 
     // Note: Most audio files will only have one picture type (front cover)
     // This test validates we can handle files with multiple pictures
-    let path = gen.generate_with_artwork(AudioFormat::Flac, &metadata).unwrap();
+    let path = gen
+        .generate_with_artwork(AudioFormat::Flac, &metadata)
+        .unwrap();
     let artworks = harness.extract_artwork(path.to_str().unwrap()).unwrap();
 
     // Verify each artwork has a picture type
     for artwork in &artworks {
-        assert!(!artwork.picture_type.is_empty(), "Each artwork should have a type");
+        assert!(
+            !artwork.picture_type.is_empty(),
+            "Each artwork should have a type"
+        );
     }
 }
 
@@ -213,15 +238,23 @@ fn test_artwork_size_validation() {
         ..Default::default()
     };
 
-    let path = gen.generate_with_artwork(AudioFormat::Flac, &metadata).unwrap();
+    let path = gen
+        .generate_with_artwork(AudioFormat::Flac, &metadata)
+        .unwrap();
     let artworks = harness.extract_artwork(path.to_str().unwrap()).unwrap();
 
     if !artworks.is_empty() {
         let artwork = &artworks[0];
         // Artwork should be reasonable size (> 100 bytes for a real image)
-        assert!(artwork.data.len() > 100, "Artwork should be at least 100 bytes");
+        assert!(
+            artwork.data.len() > 100,
+            "Artwork should be at least 100 bytes"
+        );
         // And not absurdly large (< 10MB for test fixtures)
-        assert!(artwork.data.len() < 10 * 1024 * 1024, "Artwork should be under 10MB");
+        assert!(
+            artwork.data.len() < 10 * 1024 * 1024,
+            "Artwork should be under 10MB"
+        );
     }
 }
 

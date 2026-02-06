@@ -68,9 +68,7 @@ fn format_iso8601_timestamp(timestamp: i64) -> String {
     }
     let day = days + 1;
 
-    format!(
-        "{year:04}-{month:02}-{day:02}T{hours:02}:{minutes:02}:{seconds:02}Z"
-    )
+    format!("{year:04}-{month:02}-{day:02}T{hours:02}:{minutes:02}:{seconds:02}Z")
 }
 
 /// Helper function to get tag value for sorting
@@ -195,9 +193,7 @@ pub async fn handle_search_command(
 
     let db = match rmpd_library::Database::open(db_path) {
         Ok(d) => d,
-        Err(e) => {
-            return ResponseBuilder::error(50, 0, "search", &format!("database error: {e}"))
-        }
+        Err(e) => return ResponseBuilder::error(50, 0, "search", &format!("database error: {e}")),
     };
 
     if filters.is_empty() {
@@ -215,12 +211,7 @@ pub async fn handle_search_command(
                 }
             },
             Err(e) => {
-                return ResponseBuilder::error(
-                    2,
-                    0,
-                    "search",
-                    &format!("filter parse error: {e}"),
-                )
+                return ResponseBuilder::error(2, 0, "search", &format!("filter parse error: {e}"))
             }
         }
     } else if filters.len() == 1 {
@@ -264,9 +255,7 @@ pub async fn handle_search_command(
 
         match db.find_songs_filter(&expr) {
             Ok(s) => s,
-            Err(e) => {
-                return ResponseBuilder::error(50, 0, "search", &format!("query error: {e}"))
-            }
+            Err(e) => return ResponseBuilder::error(50, 0, "search", &format!("query error: {e}")),
         }
     };
 
@@ -375,9 +364,7 @@ pub async fn handle_count_command(
     let songs = if filters.len() == 1 {
         match db.find_songs(&filters[0].0, &filters[0].1) {
             Ok(s) => s,
-            Err(e) => {
-                return ResponseBuilder::error(50, 0, "count", &format!("query error: {e}"))
-            }
+            Err(e) => return ResponseBuilder::error(50, 0, "count", &format!("query error: {e}")),
         }
     } else {
         // Multiple filters - build AND expression
@@ -399,9 +386,7 @@ pub async fn handle_count_command(
 
         match db.find_songs_filter(&expr) {
             Ok(s) => s,
-            Err(e) => {
-                return ResponseBuilder::error(50, 0, "count", &format!("query error: {e}"))
-            }
+            Err(e) => return ResponseBuilder::error(50, 0, "count", &format!("query error: {e}")),
         }
     };
 
@@ -594,9 +579,7 @@ pub async fn handle_lsinfo_command(state: &AppState, path: Option<&str>) -> Stri
 
     let db = match rmpd_library::Database::open(db_path) {
         Ok(d) => d,
-        Err(e) => {
-            return ResponseBuilder::error(50, 0, "lsinfo", &format!("database error: {e}"))
-        }
+        Err(e) => return ResponseBuilder::error(50, 0, "lsinfo", &format!("database error: {e}")),
     };
 
     let path_str = path.unwrap_or("");
@@ -647,9 +630,7 @@ pub async fn handle_listall_command(state: &AppState, path: Option<&str>) -> Str
 
     let db = match rmpd_library::Database::open(db_path) {
         Ok(d) => d,
-        Err(e) => {
-            return ResponseBuilder::error(50, 0, "listall", &format!("database error: {e}"))
-        }
+        Err(e) => return ResponseBuilder::error(50, 0, "listall", &format!("database error: {e}")),
     };
 
     let path_str = path.unwrap_or("");

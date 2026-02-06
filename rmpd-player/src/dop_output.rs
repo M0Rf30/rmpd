@@ -20,10 +20,7 @@ impl DopOutput {
     pub fn new(sample_rate: u32, channels: u8) -> Result<Self> {
         tracing::info!("Using default ALSA device (should be configured as hw: device)");
 
-        let device_config = CpalDeviceConfig::new(
-            sample_rate,
-            channels as u16,
-        )?;
+        let device_config = CpalDeviceConfig::new(sample_rate, channels as u16)?;
 
         tracing::info!(
             "DoP output config: {}Hz, {} channels",
@@ -190,9 +187,8 @@ impl DopOutput {
         // Send primer data in smaller chunks to avoid blocking
         let chunk_size = self.config.sample_rate as usize / 50 * self.config.channels as usize; // ~20ms chunks
         for chunk in primer_samples.chunks(chunk_size) {
-            tx.send(chunk.to_vec()).map_err(|e| {
-                RmpdError::Player(format!("Failed to send DoP primer chunk: {e}"))
-            })?;
+            tx.send(chunk.to_vec())
+                .map_err(|e| RmpdError::Player(format!("Failed to send DoP primer chunk: {e}")))?;
         }
 
         tracing::info!(

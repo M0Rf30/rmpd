@@ -37,12 +37,7 @@ pub async fn handle_mount_command(state: &AppState, path: &str, uri: &str) -> St
     let music_dir = match &state.music_dir {
         Some(dir) => dir,
         None => {
-            return ResponseBuilder::error(
-                50,
-                0,
-                "mount",
-                "Music directory not configured",
-            );
+            return ResponseBuilder::error(50, 0, "mount", "Music directory not configured");
         }
     };
 
@@ -88,7 +83,12 @@ pub async fn handle_mount_command(state: &AppState, path: &str, uri: &str) -> St
                     .await
                 {
                     tracing::error!("Failed to register mount: {}", e);
-                    return ResponseBuilder::error(50, 0, "mount", &format!("Mount succeeded but registration failed: {e}"));
+                    return ResponseBuilder::error(
+                        50,
+                        0,
+                        "mount",
+                        &format!("Mount succeeded but registration failed: {e}"),
+                    );
                 }
 
                 ResponseBuilder::new().ok()
@@ -104,7 +104,11 @@ pub async fn handle_mount_command(state: &AppState, path: &str, uri: &str) -> St
         }
     } else {
         // Tier 1: Only register mount without actual mounting
-        tracing::info!("Registering mount (actual mounting disabled): {} -> {}", path, uri);
+        tracing::info!(
+            "Registering mount (actual mounting disabled): {} -> {}",
+            path,
+            uri
+        );
 
         match state
             .mount_registry
@@ -112,7 +116,9 @@ pub async fn handle_mount_command(state: &AppState, path: &str, uri: &str) -> St
             .await
         {
             Ok(_) => ResponseBuilder::new().ok(),
-            Err(e) => ResponseBuilder::error(50, 0, "mount", &format!("Mount registration failed: {e}")),
+            Err(e) => {
+                ResponseBuilder::error(50, 0, "mount", &format!("Mount registration failed: {e}"))
+            }
         }
     }
 }
@@ -128,12 +134,7 @@ pub async fn handle_unmount_command(state: &AppState, path: &str) -> String {
     let music_dir = match &state.music_dir {
         Some(dir) => dir,
         None => {
-            return ResponseBuilder::error(
-                50,
-                0,
-                "unmount",
-                "Music directory not configured",
-            );
+            return ResponseBuilder::error(50, 0, "unmount", "Music directory not configured");
         }
     };
 
@@ -234,7 +235,10 @@ pub async fn handle_listneighbors_command(state: &AppState) -> String {
 
             for neighbor in neighbors {
                 // Format: neighbor: protocol://address
-                resp.field("neighbor", format!("{}://{}", neighbor.protocol, neighbor.address));
+                resp.field(
+                    "neighbor",
+                    format!("{}://{}", neighbor.protocol, neighbor.address),
+                );
                 resp.field("name", &neighbor.name);
             }
 

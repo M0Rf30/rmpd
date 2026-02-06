@@ -2,7 +2,6 @@
 ///
 /// Generates minimal audio files with known patterns for validating decoder output.
 /// Caches generated files to avoid regenerating on every test run.
-
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -48,11 +47,11 @@ impl AudioFormat {
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct TestMetadata {
-    pub pattern: String,      // "sine_440hz", "impulse", "silence"
-    pub sample_rate: u32,     // 44100, 48000, 96000, etc.
-    pub channels: u8,         // 1 or 2
-    pub duration_secs: f32,   // Duration in seconds
-    pub bits_per_sample: u8,  // 16, 24, 32 (for WAV/FLAC)
+    pub pattern: String,     // "sine_440hz", "impulse", "silence"
+    pub sample_rate: u32,    // 44100, 48000, 96000, etc.
+    pub channels: u8,        // 1 or 2
+    pub duration_secs: f32,  // Duration in seconds
+    pub bits_per_sample: u8, // 16, 24, 32 (for WAV/FLAC)
 }
 
 impl Default for TestMetadata {
@@ -82,8 +81,8 @@ impl FixtureGenerator {
         }
 
         // Use target/test-fixtures for caching
-        let cache_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../target/test-fixtures/player");
+        let cache_dir =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../target/test-fixtures/player");
         std::fs::create_dir_all(&cache_dir)
             .map_err(|e| format!("Failed to create cache directory: {e}"))?;
 
@@ -92,10 +91,7 @@ impl FixtureGenerator {
 
     #[allow(dead_code)]
     fn is_ffmpeg_available() -> bool {
-        Command::new("ffmpeg")
-            .arg("-version")
-            .output()
-            .is_ok()
+        Command::new("ffmpeg").arg("-version").output().is_ok()
     }
 
     /// Generate a test audio file with the specified pattern
@@ -116,7 +112,9 @@ impl FixtureGenerator {
             metadata.bits_per_sample
         );
 
-        let cache_path = self.cache_dir.join(format!("{}.{}", cache_key, format.extension()));
+        let cache_path = self
+            .cache_dir
+            .join(format!("{}.{}", cache_key, format.extension()));
 
         // Return cached file if it exists
         if cache_path.exists() {
@@ -154,7 +152,8 @@ impl FixtureGenerator {
         // Input source based on pattern
         if metadata.pattern.starts_with("sine_") {
             // Extract frequency from pattern (e.g., "sine_440hz" -> 440)
-            let freq: u32 = metadata.pattern
+            let freq: u32 = metadata
+                .pattern
                 .trim_start_matches("sine_")
                 .trim_end_matches("hz")
                 .parse()
@@ -167,10 +166,8 @@ impl FixtureGenerator {
             ));
         } else if metadata.pattern == "silence" {
             cmd.arg("-f").arg("lavfi");
-            cmd.arg("-i").arg(format!(
-                "anullsrc=duration={}",
-                metadata.duration_secs
-            ));
+            cmd.arg("-i")
+                .arg(format!("anullsrc=duration={}", metadata.duration_secs));
         } else {
             return Err(format!("Unsupported pattern: {}", metadata.pattern));
         }

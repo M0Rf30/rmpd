@@ -62,12 +62,18 @@ impl DiscoveryService {
             cache.update(neighbors.clone());
         }
 
-        info!("Discovery scan complete, found {} neighbors", neighbors.len());
+        info!(
+            "Discovery scan complete, found {} neighbors",
+            neighbors.len()
+        );
         Ok(neighbors)
     }
 
     /// Browse a specific service type
-    async fn browse_service(&self, service_type: &str) -> Result<Vec<NetworkNeighbor>, anyhow::Error> {
+    async fn browse_service(
+        &self,
+        service_type: &str,
+    ) -> Result<Vec<NetworkNeighbor>, anyhow::Error> {
         let receiver = self.mdns.browse(service_type)?;
         let mut neighbors = Vec::new();
 

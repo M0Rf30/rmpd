@@ -17,10 +17,7 @@ pub struct CpalOutput {
 
 impl CpalOutput {
     pub fn new(format: AudioFormat) -> Result<Self> {
-        let device_config = CpalDeviceConfig::new(
-            format.sample_rate,
-            format.channels as u16,
-        )?;
+        let device_config = CpalDeviceConfig::new(format.sample_rate, format.channels as u16)?;
 
         Ok(Self {
             device: device_config.device,
@@ -174,8 +171,12 @@ impl CpalOutput {
         self.sample_sender = Some(tx);
         self.is_paused = false;
 
-        tracing::info!("PCM output started: {:?} format, {} Hz, {} channels",
-                      sample_format, self.config.sample_rate, self.config.channels);
+        tracing::info!(
+            "PCM output started: {:?} format, {} Hz, {} channels",
+            sample_format,
+            self.config.sample_rate,
+            self.config.channels
+        );
 
         Ok(())
     }

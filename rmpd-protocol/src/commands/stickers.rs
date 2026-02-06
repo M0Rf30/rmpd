@@ -55,7 +55,11 @@ pub async fn handle_sticker_set_command(
     }
 }
 
-pub async fn handle_sticker_delete_command(state: &AppState, uri: &str, name: Option<&str>) -> String {
+pub async fn handle_sticker_delete_command(
+    state: &AppState,
+    uri: &str,
+    name: Option<&str>,
+) -> String {
     let db_path = match &state.db_path {
         Some(p) => p,
         None => return ResponseBuilder::error(50, 0, "sticker delete", "database not configured"),
@@ -64,12 +68,7 @@ pub async fn handle_sticker_delete_command(state: &AppState, uri: &str, name: Op
     let db = match rmpd_library::Database::open(db_path) {
         Ok(d) => d,
         Err(e) => {
-            return ResponseBuilder::error(
-                50,
-                0,
-                "sticker delete",
-                &format!("database error: {e}"),
-            )
+            return ResponseBuilder::error(50, 0, "sticker delete", &format!("database error: {e}"))
         }
     };
 

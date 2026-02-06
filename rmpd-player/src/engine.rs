@@ -264,7 +264,10 @@ impl PlaybackEngine {
 
                         match test_output.start() {
                             Ok(()) => {
-                                info!("Successfully configured DSD-to-PCM conversion at {} Hz", rate);
+                                info!(
+                                    "Successfully configured DSD-to-PCM conversion at {} Hz",
+                                    rate
+                                );
                                 // Stop test output - we'll create a new one later
                                 let _ = test_output.stop();
                                 conversion_success = true;
@@ -411,7 +414,12 @@ impl PlaybackEngine {
             .unwrap_or(symphonia::core::codecs::BitOrder::LsbFirst);
 
         // Try to create DoP encoder (validates DSD rate)
-        let dop_encoder = DopEncoder::new(dsd_sample_rate, channels as usize, channel_layout, bit_order)?;
+        let dop_encoder = DopEncoder::new(
+            dsd_sample_rate,
+            channels as usize,
+            channel_layout,
+            bit_order,
+        )?;
         let pcm_sample_rate = dop_encoder.pcm_sample_rate();
 
         // Try to create DoP output (will fail if hardware doesn't support the rate)
@@ -438,14 +446,28 @@ impl PlaybackEngine {
             .bit_order()
             .unwrap_or(symphonia::core::codecs::BitOrder::LsbFirst);
 
-        info!("DSD playback: {} Hz, {} channels", dsd_sample_rate, channels);
-        info!("DSD format: channel_layout={:?}, bit_order={:?}", channel_layout, bit_order);
+        info!(
+            "DSD playback: {} Hz, {} channels",
+            dsd_sample_rate, channels
+        );
+        info!(
+            "DSD format: channel_layout={:?}, bit_order={:?}",
+            channel_layout, bit_order
+        );
 
         // Create DoP encoder
-        let mut dop_encoder = DopEncoder::new(dsd_sample_rate, channels as usize, channel_layout, bit_order)?;
+        let mut dop_encoder = DopEncoder::new(
+            dsd_sample_rate,
+            channels as usize,
+            channel_layout,
+            bit_order,
+        )?;
         let pcm_sample_rate = dop_encoder.pcm_sample_rate();
 
-        info!("DoP encoding: DSD {} Hz -> PCM {} Hz", dsd_sample_rate, pcm_sample_rate);
+        info!(
+            "DoP encoding: DSD {} Hz -> PCM {} Hz",
+            dsd_sample_rate, pcm_sample_rate
+        );
 
         // Create DoP output
         let mut output = DopOutput::new(pcm_sample_rate, channels)?;
@@ -530,7 +552,6 @@ impl PlaybackEngine {
         debug!("DoP playback thread finished");
         Ok(())
     }
-
 }
 
 impl Drop for PlaybackEngine {

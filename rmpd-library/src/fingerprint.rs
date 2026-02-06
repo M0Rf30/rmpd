@@ -39,11 +39,7 @@ impl Fingerprinter {
 
         // Initialize chromaprint with audio format
         let result = unsafe {
-            chromaprint_sys_next::chromaprint_start(
-                self.ctx,
-                sample_rate as i32,
-                channels as i32,
-            )
+            chromaprint_sys_next::chromaprint_start(self.ctx, sample_rate as i32, channels as i32)
         };
 
         if result == 0 {
@@ -53,7 +49,8 @@ impl Fingerprinter {
         }
 
         // Calculate maximum samples to process (120 seconds)
-        let max_samples = (sample_rate as u64 * channels as u64 * MAX_FINGERPRINT_DURATION_SECS) as usize;
+        let max_samples =
+            (sample_rate as u64 * channels as u64 * MAX_FINGERPRINT_DURATION_SECS) as usize;
         let mut total_samples = 0;
 
         // Buffer for reading audio data
@@ -119,17 +116,11 @@ impl Fingerprinter {
         // or chromaprint_get_fingerprint for the compressed base64 string
         let mut fp_str: *mut std::os::raw::c_char = std::ptr::null_mut();
 
-        let result = unsafe {
-            chromaprint_sys_next::chromaprint_get_fingerprint(
-                self.ctx,
-                &mut fp_str,
-            )
-        };
+        let result =
+            unsafe { chromaprint_sys_next::chromaprint_get_fingerprint(self.ctx, &mut fp_str) };
 
         if result == 0 || fp_str.is_null() {
-            return Err(RmpdError::Library(
-                "Failed to get fingerprint".to_string(),
-            ));
+            return Err(RmpdError::Library("Failed to get fingerprint".to_string()));
         }
 
         // Convert C string to Rust String

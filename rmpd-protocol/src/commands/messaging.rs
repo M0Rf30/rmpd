@@ -40,10 +40,7 @@ pub async fn handle_channels_command(state: &AppState) -> String {
 ///
 /// Returns all messages from channels this client is subscribed to,
 /// and removes them from the queue.
-pub async fn handle_readmessages_command(
-    state: &AppState,
-    conn_state: &ConnectionState,
-) -> String {
+pub async fn handle_readmessages_command(state: &AppState, conn_state: &ConnectionState) -> String {
     let messages = state
         .message_broker
         .read_messages(conn_state.subscribed_channels())

@@ -58,9 +58,9 @@ impl LinuxMountBackend {
             cmd.arg("-o").arg(options.join(","));
         }
 
-        let output = cmd.output().map_err(|e| {
-            RmpdError::Storage(format!("Failed to execute mount command: {e}"))
-        })?;
+        let output = cmd
+            .output()
+            .map_err(|e| RmpdError::Storage(format!("Failed to execute mount command: {e}")))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -108,17 +108,10 @@ impl MountBackend for LinuxMountBackend {
             "webdav" | "http" | "https" => {
                 // WebDAV would require davfs2 to be installed
                 // mount -t davfs http://server/path /mountpoint
-                tracing::warn!(
-                    "WebDAV mounting requires davfs2 to be installed and configured"
-                );
+                tracing::warn!("WebDAV mounting requires davfs2 to be installed and configured");
 
                 // Try with davfs
-                self.execute_mount_command(
-                    "davfs",
-                    uri,
-                    mountpoint.to_str().unwrap(),
-                    options,
-                )
+                self.execute_mount_command("davfs", uri, mountpoint.to_str().unwrap(), options)
             }
             _ => Err(RmpdError::Storage(format!(
                 "Unsupported protocol: {protocol}"

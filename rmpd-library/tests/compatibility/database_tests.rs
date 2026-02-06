@@ -2,7 +2,6 @@
 ///
 /// These tests validate that rmpd's database operations produce
 /// the same results as MPD for common query patterns.
-
 use crate::common::rmpd_harness::RmpdTestHarness;
 use crate::fixtures::{AudioFormat, FixtureGenerator, TestMetadata};
 
@@ -114,7 +113,9 @@ fn test_find_by_artist() {
         ..Default::default()
     };
     let other_path = gen.generate(AudioFormat::Flac, &other_metadata).unwrap();
-    let other_song = harness.extract_metadata(other_path.to_str().unwrap()).unwrap();
+    let other_song = harness
+        .extract_metadata(other_path.to_str().unwrap())
+        .unwrap();
     harness.add_song(&other_song).unwrap();
 
     // Find songs by target artist
@@ -386,13 +387,18 @@ fn test_get_song_by_path() {
 
     let metadata = TestMetadata::default();
     let fixture_path = gen.generate(AudioFormat::Flac, &metadata).unwrap();
-    let song = harness.extract_metadata(fixture_path.to_str().unwrap()).unwrap();
+    let song = harness
+        .extract_metadata(fixture_path.to_str().unwrap())
+        .unwrap();
 
     let song_path = song.path.clone();
     harness.add_song(&song).unwrap();
 
     // Retrieve by path
-    let retrieved = harness.get_song_by_path(song_path.as_str()).unwrap().unwrap();
+    let retrieved = harness
+        .get_song_by_path(song_path.as_str())
+        .unwrap()
+        .unwrap();
     assert_eq!(retrieved.path, song_path);
 
     // Non-existent path

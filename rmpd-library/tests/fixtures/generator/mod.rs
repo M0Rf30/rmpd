@@ -2,7 +2,6 @@
 ///
 /// This module generates minimal audio files for testing metadata extraction.
 /// Files are cached in target/test-fixtures/ to avoid regenerating on each test run.
-
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use tempfile::TempDir;
@@ -85,10 +84,7 @@ impl FixtureGenerator {
 
     /// Check if FFmpeg is available
     pub fn is_ffmpeg_available() -> bool {
-        Command::new("ffmpeg")
-            .arg("-version")
-            .output()
-            .is_ok()
+        Command::new("ffmpeg").arg("-version").output().is_ok()
     }
 
     /// Sanitize a string for use in filenames
@@ -124,7 +120,10 @@ impl FixtureGenerator {
             cache_key.truncate(200);
         }
 
-        let cached_path = self.cache_dir.join(&cache_key).with_extension(format.extension());
+        let cached_path = self
+            .cache_dir
+            .join(&cache_key)
+            .with_extension(format.extension());
 
         // Return cached file if it exists
         if cached_path.exists() {
@@ -143,7 +142,9 @@ impl FixtureGenerator {
         output_path: &Path,
     ) -> Result<(), String> {
         if !Self::is_ffmpeg_available() {
-            return Err("FFmpeg not available - install with: sudo apt-get install ffmpeg".to_string());
+            return Err(
+                "FFmpeg not available - install with: sudo apt-get install ffmpeg".to_string(),
+            );
         }
 
         let mut cmd = Command::new("ffmpeg");
@@ -170,12 +171,16 @@ impl FixtureGenerator {
         }
 
         // Add metadata
-        cmd.arg("-metadata").arg(format!("title={}", metadata.title));
-        cmd.arg("-metadata").arg(format!("artist={}", metadata.artist));
-        cmd.arg("-metadata").arg(format!("album={}", metadata.album));
+        cmd.arg("-metadata")
+            .arg(format!("title={}", metadata.title));
+        cmd.arg("-metadata")
+            .arg(format!("artist={}", metadata.artist));
+        cmd.arg("-metadata")
+            .arg(format!("album={}", metadata.album));
 
         if let Some(ref album_artist) = metadata.album_artist {
-            cmd.arg("-metadata").arg(format!("album_artist={}", album_artist));
+            cmd.arg("-metadata")
+                .arg(format!("album_artist={}", album_artist));
         }
 
         if let Some(ref genre) = metadata.genre {
@@ -205,7 +210,8 @@ impl FixtureGenerator {
         cmd.arg(output_path);
 
         // Execute FFmpeg
-        let output = cmd.output()
+        let output = cmd
+            .output()
             .map_err(|e| format!("Failed to run FFmpeg: {}", e))?;
 
         if !output.status.success() {
@@ -222,8 +228,7 @@ impl FixtureGenerator {
         format: AudioFormat,
         metadata: &TestMetadata,
     ) -> Result<(TempDir, PathBuf), String> {
-        let temp_dir = TempDir::new()
-            .map_err(|e| format!("Failed to create temp dir: {}", e))?;
+        let temp_dir = TempDir::new().map_err(|e| format!("Failed to create temp dir: {}", e))?;
 
         let file_name = format!("test.{}", format.extension());
         let file_path = temp_dir.path().join(&file_name);
@@ -236,10 +241,10 @@ impl FixtureGenerator {
     /// Generate a test file with unicode metadata
     pub fn generate_unicode(&self, format: AudioFormat) -> Result<PathBuf, String> {
         let metadata = TestMetadata {
-            title: "テストソング".to_string(), // Japanese
+            title: "テストソング".to_string(),          // Japanese
             artist: "Тестовый исполнитель".to_string(), // Russian
-            album: "Τεστ Άλμπουμ".to_string(), // Greek
-            genre: Some("الموسيقى".to_string()), // Arabic
+            album: "Τεστ Άλμπουμ".to_string(),          // Greek
+            genre: Some("الموسيقى".to_string()),        // Arabic
             ..Default::default()
         };
 
@@ -292,7 +297,10 @@ impl FixtureGenerator {
             cache_key.truncate(200);
         }
 
-        let cached_path = self.cache_dir.join(&cache_key).with_extension(format.extension());
+        let cached_path = self
+            .cache_dir
+            .join(&cache_key)
+            .with_extension(format.extension());
 
         // Return cached file if it exists
         if cached_path.exists() {

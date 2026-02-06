@@ -250,7 +250,10 @@ mod tests {
     async fn test_cannot_delete_default_partition() {
         let manager = PartitionManager::new();
 
-        manager.create_partition("default".to_string()).await.unwrap();
+        manager
+            .create_partition("default".to_string())
+            .await
+            .unwrap();
         let result = manager.delete_partition("default").await;
 
         assert!(result.is_err());

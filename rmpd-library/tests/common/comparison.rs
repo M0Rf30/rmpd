@@ -2,9 +2,7 @@
 ///
 /// This module provides tiered comparison strategies for different types
 /// of metadata and behavioral outputs.
-
 use rmpd_core::song::Song;
-
 
 /// Configuration for metadata comparison with tolerances
 #[derive(Debug, Clone)]
@@ -40,7 +38,10 @@ pub enum ComparisonResult {
 
 impl ComparisonResult {
     pub fn is_ok(&self) -> bool {
-        matches!(self, ComparisonResult::Exact | ComparisonResult::Acceptable(_))
+        matches!(
+            self,
+            ComparisonResult::Exact | ComparisonResult::Acceptable(_)
+        )
     }
 }
 
@@ -75,11 +76,17 @@ pub fn compare_songs(
         // MusicBrainz IDs (should be exact)
         (
             "musicbrainz_trackid".to_string(),
-            compare_option_exact(&rmpd_song.musicbrainz_trackid, &mpd_song.musicbrainz_trackid),
+            compare_option_exact(
+                &rmpd_song.musicbrainz_trackid,
+                &mpd_song.musicbrainz_trackid,
+            ),
         ),
         (
             "musicbrainz_albumid".to_string(),
-            compare_option_exact(&rmpd_song.musicbrainz_albumid, &mpd_song.musicbrainz_albumid),
+            compare_option_exact(
+                &rmpd_song.musicbrainz_albumid,
+                &mpd_song.musicbrainz_albumid,
+            ),
         ),
         // Level 2: Fuzzy comparisons (duration, bitrate, dates)
         (
@@ -112,10 +119,7 @@ pub fn compare_songs(
         ),
         (
             "comment".to_string(),
-            compare_presence(
-                rmpd_song.comment.is_some(),
-                mpd_song.comment.is_some(),
-            ),
+            compare_presence(rmpd_song.comment.is_some(), mpd_song.comment.is_some()),
         ),
         // Audio properties
         (
@@ -230,10 +234,7 @@ fn compare_date(
                     "Date format differs (\"{a}\" vs \"{b}\") but year matches"
                 ))
             } else {
-                ComparisonResult::Mismatch(format!(
-                    "Date year mismatch: \"{}\" vs \"{}\"",
-                    a, b
-                ))
+                ComparisonResult::Mismatch(format!("Date year mismatch: \"{}\" vs \"{}\"", a, b))
             }
         }
         (None, None) => ComparisonResult::Exact,
@@ -347,8 +348,15 @@ mod tests {
 
     #[test]
     fn test_date_format_flexibility() {
-        let result = compare_date(&Some("2024".to_string()), &Some("2024-01-15".to_string()), false);
-        assert!(result.is_ok(), "Should match year even with different formats");
+        let result = compare_date(
+            &Some("2024".to_string()),
+            &Some("2024-01-15".to_string()),
+            false,
+        );
+        assert!(
+            result.is_ok(),
+            "Should match year even with different formats"
+        );
     }
 
     #[test]

@@ -98,7 +98,8 @@ async fn test_partition_switch_nonexistent() {
     let state = AppState::new();
     let mut conn_state = ConnectionState::new();
 
-    let response = partition::handle_partition_command(&state, &mut conn_state, "nonexistent").await;
+    let response =
+        partition::handle_partition_command(&state, &mut conn_state, "nonexistent").await;
 
     assert!(response.contains("ACK"));
     assert!(response.contains("No such partition"));
@@ -160,7 +161,8 @@ async fn test_moveoutput_same_partition() {
     let conn_state = ConnectionState::new();
 
     // Default output exists, moving to default (same partition) should succeed
-    let response = partition::handle_moveoutput_command(&state, &conn_state, "Default Output").await;
+    let response =
+        partition::handle_moveoutput_command(&state, &conn_state, "Default Output").await;
 
     // Should succeed (no-op)
     assert_eq!(response, "OK\n");

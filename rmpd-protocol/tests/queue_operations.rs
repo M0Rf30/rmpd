@@ -13,7 +13,10 @@ fn test_add_and_playlistinfo() {
     // Test playlistinfo after adding a song
     let info_response = "file: test.mp3\nPos: 0\nId: 1\nOK\n";
     assert!(TestClient::is_ok(info_response));
-    assert_eq!(TestClient::get_field(info_response, "file"), Some("test.mp3"));
+    assert_eq!(
+        TestClient::get_field(info_response, "file"),
+        Some("test.mp3")
+    );
     assert_eq!(TestClient::get_field(info_response, "Pos"), Some("0"));
     assert_eq!(TestClient::get_field(info_response, "Id"), Some("1"));
 }
@@ -89,7 +92,10 @@ fn test_playlistfind_command() {
     let response = "file: test.mp3\nTitle: Test Song\nArtist: Test Artist\nPos: 0\nId: 1\nOK\n";
     assert!(TestClient::is_ok(response));
     assert_eq!(TestClient::get_field(response, "Title"), Some("Test Song"));
-    assert_eq!(TestClient::get_field(response, "Artist"), Some("Test Artist"));
+    assert_eq!(
+        TestClient::get_field(response, "Artist"),
+        Some("Test Artist")
+    );
 }
 
 #[test]

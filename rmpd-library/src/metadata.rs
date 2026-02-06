@@ -225,7 +225,10 @@ impl MetadataExtractor {
 
                 artworks.push(Artwork {
                     picture_type: picture_type.to_string(),
-                    mime_type: picture.mime_type().map(|m| m.to_string()).unwrap_or_else(|| "image/jpeg".to_string()),
+                    mime_type: picture
+                        .mime_type()
+                        .map(|m| m.to_string())
+                        .unwrap_or_else(|| "image/jpeg".to_string()),
                     data: picture.data().to_vec(),
                 });
             }

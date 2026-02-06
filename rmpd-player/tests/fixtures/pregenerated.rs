@@ -2,14 +2,12 @@
 ///
 /// These fixtures are small audio files committed to the repository
 /// to enable decoder tests without requiring FFmpeg installation.
-
 use std::path::PathBuf;
 
 /// Get the fixtures directory path
 #[allow(dead_code)]
 pub fn fixtures_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/samples")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/samples")
 }
 
 /// Get a specific fixture file

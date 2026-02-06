@@ -33,12 +33,7 @@ pub async fn handle_partition_command(
     let manager = match &state.partition_manager {
         Some(m) => m,
         None => {
-            return ResponseBuilder::error(
-                50,
-                0,
-                "partition",
-                "Partition support not initialized",
-            );
+            return ResponseBuilder::error(50, 0, "partition", "Partition support not initialized");
         }
     };
 
@@ -242,7 +237,7 @@ pub async fn handle_moveoutput_command(
     match move_result {
         Ok(_) => {
             // Update OutputInfo to reflect new partition ownership
-            drop(outputs);  // Release read lock
+            drop(outputs); // Release read lock
             let mut outputs_mut = state.outputs.write().await;
             if let Some(output) = outputs_mut.iter_mut().find(|o| o.id == output_id) {
                 output.partition = Some(to.clone());

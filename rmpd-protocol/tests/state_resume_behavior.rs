@@ -2,7 +2,6 @@
 ///
 /// These tests simulate the full lifecycle of saving state, "restarting"
 /// the application, and restoring the previous state from the saved file.
-
 use rmpd_core::queue::Queue;
 use rmpd_core::state::{ConsumeMode, PlayerState, SingleMode};
 use rmpd_protocol::statefile::{SavedState, StateFile};
@@ -19,10 +18,7 @@ async fn simulate_restart(
     let statefile = StateFile::new(temp.path_str());
 
     // Save state before "shutdown"
-    statefile
-        .save(initial_status, initial_queue)
-        .await
-        .unwrap();
+    statefile.save(initial_status, initial_queue).await.unwrap();
 
     // Simulate restart by creating a new StateFile instance
     let statefile_after_restart = StateFile::new(temp.path_str());

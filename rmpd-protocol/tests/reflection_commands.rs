@@ -44,7 +44,10 @@ fn test_config_command() {
     // config should return server configuration
     let response = "music_directory: /var/lib/mpd/music\nOK\n";
     assert!(TestClient::is_ok(response));
-    assert_eq!(TestClient::get_field(response, "music_directory"), Some("/var/lib/mpd/music"));
+    assert_eq!(
+        TestClient::get_field(response, "music_directory"),
+        Some("/var/lib/mpd/music")
+    );
 }
 
 #[test]

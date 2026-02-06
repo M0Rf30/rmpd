@@ -16,7 +16,8 @@ async fn test_getfingerprint_no_music_dir() {
 async fn test_getfingerprint_nonexistent_file() {
     let state = AppState::with_paths("/tmp/db".to_string(), "/tmp".to_string());
 
-    let response = fingerprint::handle_getfingerprint_command(&state, "nonexistent_file_12345.mp3").await;
+    let response =
+        fingerprint::handle_getfingerprint_command(&state, "nonexistent_file_12345.mp3").await;
 
     // Should return error about file not found
     assert!(response.contains("ACK"));

@@ -52,7 +52,10 @@ pub async fn handle_clear_command(state: &AppState) -> String {
     ResponseBuilder::new().ok()
 }
 
-pub async fn handle_delete_command(state: &AppState, target: crate::parser::DeleteTarget) -> String {
+pub async fn handle_delete_command(
+    state: &AppState,
+    target: crate::parser::DeleteTarget,
+) -> String {
     use crate::parser::DeleteTarget;
 
     match target {
@@ -141,7 +144,11 @@ pub async fn handle_moveid_command(state: &AppState, id: u32, to: u32) -> String
     }
 }
 
-pub async fn handle_move_command(state: &AppState, from: crate::parser::MoveFrom, to: u32) -> String {
+pub async fn handle_move_command(
+    state: &AppState,
+    from: crate::parser::MoveFrom,
+    to: u32,
+) -> String {
     use crate::parser::MoveFrom;
 
     match from {
@@ -337,9 +344,7 @@ pub async fn handle_playid_command(state: &AppState, id: Option<u32>) -> String 
 
                     ResponseBuilder::new().ok()
                 }
-                Err(e) => {
-                    ResponseBuilder::error(50, 0, "playid", &format!("Playback error: {e}"))
-                }
+                Err(e) => ResponseBuilder::error(50, 0, "playid", &format!("Playback error: {e}")),
             }
         } else {
             ResponseBuilder::error(50, 0, "playid", "No such song")

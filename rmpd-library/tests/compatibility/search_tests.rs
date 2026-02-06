@@ -2,7 +2,6 @@
 ///
 /// These tests validate that rmpd's FTS5-based search produces
 /// expected results for various query patterns.
-
 use crate::common::rmpd_harness::RmpdTestHarness;
 use crate::fixtures::{AudioFormat, FixtureGenerator, TestMetadata};
 
@@ -82,12 +81,7 @@ fn test_case_insensitive_search() {
 
     for query in test_queries {
         let results = harness.search(query).unwrap();
-        assert_eq!(
-            results.len(),
-            1,
-            "Query '{}' should find 1 result",
-            query
-        );
+        assert_eq!(results.len(), 1, "Query '{}' should find 1 result", query);
         assert_eq!(results[0].title, Some("Thunder Road".to_string()));
     }
 }
@@ -112,10 +106,16 @@ fn test_partial_word_search() {
 
     // Prefix matching works in FTS5
     let results = harness.search("Super*").unwrap();
-    assert!(!results.is_empty(), "Should find songs starting with 'Super'");
+    assert!(
+        !results.is_empty(),
+        "Should find songs starting with 'Super'"
+    );
 
     let results = harness.search("Stev*").unwrap();
-    assert!(!results.is_empty(), "Should find songs with artist starting with 'Stev'");
+    assert!(
+        !results.is_empty(),
+        "Should find songs with artist starting with 'Stev'"
+    );
 }
 
 #[test]
@@ -166,7 +166,7 @@ fn test_unicode_search() {
 
     // Add song with unicode metadata
     let metadata = TestMetadata {
-        title: "さくら".to_string(), // "Sakura" in Japanese
+        title: "さくら".to_string(),          // "Sakura" in Japanese
         artist: "いきものがかり".to_string(), // "Ikimonogakari" in Japanese
         album: "桜咲く".to_string(),
         ..Default::default()

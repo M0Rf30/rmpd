@@ -66,7 +66,12 @@ pub async fn handle_toggleoutput_command(state: &AppState, id: u32) -> String {
     }
 }
 
-pub async fn handle_outputset_command(state: &AppState, id: u32, _name: &str, _value: &str) -> String {
+pub async fn handle_outputset_command(
+    state: &AppState,
+    id: u32,
+    _name: &str,
+    _value: &str,
+) -> String {
     // Verify output exists
     let outputs = state.outputs.read().await;
     if outputs.iter().any(|o| o.id == id) {

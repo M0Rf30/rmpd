@@ -6,8 +6,7 @@
 /// - Bit order handling (LSB-first vs MSB-first)
 /// - Channel layout (planar vs interleaved)
 /// - Sample rate conversions (DSD64 → 176.4kHz, DSD128 → 352.8kHz)
-
-use rmpd_player::dop::{DopEncoder};
+use rmpd_player::dop::DopEncoder;
 use symphonia::core::codecs::{BitOrder, ChannelDataLayout};
 
 const DOP_MARKER_1: u8 = 0x05;
@@ -48,9 +47,8 @@ fn test_dop_encoder_rejects_invalid_rate() {
 
 #[test]
 fn test_dop_encoding_planar_msb_first() {
-    let mut encoder =
-        DopEncoder::new(2822400, 2, ChannelDataLayout::Planar, BitOrder::MsbFirst)
-            .expect("Failed to create encoder");
+    let mut encoder = DopEncoder::new(2822400, 2, ChannelDataLayout::Planar, BitOrder::MsbFirst)
+        .expect("Failed to create encoder");
 
     // Test data: 4 bytes planar (2 bytes left, 2 bytes right)
     // Left channel: [0x12, 0x34]
@@ -65,18 +63,28 @@ fn test_dop_encoding_planar_msb_first() {
 
     // Left channel: [marker1][0x12][0x34][0x00] (left-aligned 24-bit)
     let expected_left = (DOP_MARKER_1 as i32) << 24 | 0x12 << 16 | 0x34 << 8;
-    assert_eq!(output[0], expected_left, "Left channel DoP sample incorrect");
+    assert_eq!(
+        output[0], expected_left,
+        "Left channel DoP sample incorrect"
+    );
 
     // Right channel: [marker1][0x56][0x78][0x00]
     let expected_right = (DOP_MARKER_1 as i32) << 24 | 0x56 << 16 | 0x78 << 8;
-    assert_eq!(output[1], expected_right, "Right channel DoP sample incorrect");
+    assert_eq!(
+        output[1], expected_right,
+        "Right channel DoP sample incorrect"
+    );
 }
 
 #[test]
 fn test_dop_encoding_interleaved_msb_first() {
-    let mut encoder =
-        DopEncoder::new(2822400, 2, ChannelDataLayout::Interleaved, BitOrder::MsbFirst)
-            .expect("Failed to create encoder");
+    let mut encoder = DopEncoder::new(
+        2822400,
+        2,
+        ChannelDataLayout::Interleaved,
+        BitOrder::MsbFirst,
+    )
+    .expect("Failed to create encoder");
 
     // Test data: 4 bytes interleaved (L0, R0, L1, R1)
     // Frame 0: Left [0x12], Right [0x34]
@@ -98,9 +106,8 @@ fn test_dop_encoding_interleaved_msb_first() {
 
 #[test]
 fn test_dop_marker_alternation() {
-    let mut encoder =
-        DopEncoder::new(2822400, 1, ChannelDataLayout::Planar, BitOrder::MsbFirst)
-            .expect("Failed to create encoder");
+    let mut encoder = DopEncoder::new(2822400, 1, ChannelDataLayout::Planar, BitOrder::MsbFirst)
+        .expect("Failed to create encoder");
 
     // Generate 2 frames (4 bytes, 1 channel, 2 bytes per frame)
     let dsd_data = vec![0xAA, 0xBB, 0xCC, 0xDD];
@@ -115,14 +122,16 @@ fn test_dop_marker_alternation() {
     let marker2 = (output[1] >> 24) as u8;
 
     assert_eq!(marker1, DOP_MARKER_1, "First frame should have marker 0x05");
-    assert_eq!(marker2, DOP_MARKER_2, "Second frame should have marker 0xFA");
+    assert_eq!(
+        marker2, DOP_MARKER_2,
+        "Second frame should have marker 0xFA"
+    );
 }
 
 #[test]
 fn test_dop_marker_continues_alternating() {
-    let mut encoder =
-        DopEncoder::new(2822400, 1, ChannelDataLayout::Planar, BitOrder::MsbFirst)
-            .expect("Failed to create encoder");
+    let mut encoder = DopEncoder::new(2822400, 1, ChannelDataLayout::Planar, BitOrder::MsbFirst)
+        .expect("Failed to create encoder");
 
     // Encode first batch
     let dsd_data1 = vec![0x00, 0x01, 0x02, 0x03]; // 2 frames
@@ -148,9 +157,8 @@ fn test_dop_marker_continues_alternating() {
 #[test]
 fn test_bit_reversal_lsb_first() {
     // When bit order is LSB-first, encoder should reverse bits
-    let mut encoder =
-        DopEncoder::new(2822400, 1, ChannelDataLayout::Planar, BitOrder::LsbFirst)
-            .expect("Failed to create encoder");
+    let mut encoder = DopEncoder::new(2822400, 1, ChannelDataLayout::Planar, BitOrder::LsbFirst)
+        .expect("Failed to create encoder");
 
     // Test byte: 0b10101010 (0xAA)
     // Reversed: 0b01010101 (0x55)
@@ -174,9 +182,8 @@ fn test_bit_reversal_lsb_first() {
 #[test]
 fn test_bit_no_reversal_msb_first() {
     // When bit order is MSB-first, no reversal needed
-    let mut encoder =
-        DopEncoder::new(2822400, 1, ChannelDataLayout::Planar, BitOrder::MsbFirst)
-            .expect("Failed to create encoder");
+    let mut encoder = DopEncoder::new(2822400, 1, ChannelDataLayout::Planar, BitOrder::MsbFirst)
+        .expect("Failed to create encoder");
 
     let dsd_data = vec![0xAA, 0xBB];
     let mut output = Vec::new();
@@ -201,9 +208,8 @@ fn test_to_f32_samples_conversion() {
     // 24-bit audio data, but DoP markers extend into the full 32-bit range
 
     // Create some actual DoP samples
-    let mut encoder =
-        DopEncoder::new(2822400, 1, ChannelDataLayout::Planar, BitOrder::MsbFirst)
-            .expect("Failed to create encoder");
+    let mut encoder = DopEncoder::new(2822400, 1, ChannelDataLayout::Planar, BitOrder::MsbFirst)
+        .expect("Failed to create encoder");
 
     let dsd_data = vec![0x00, 0x00]; // Silence
     let mut output = Vec::new();
@@ -220,9 +226,8 @@ fn test_to_f32_samples_conversion() {
 
 #[test]
 fn test_dop_encoding_stereo() {
-    let mut encoder =
-        DopEncoder::new(2822400, 2, ChannelDataLayout::Planar, BitOrder::MsbFirst)
-            .expect("Failed to create encoder");
+    let mut encoder = DopEncoder::new(2822400, 2, ChannelDataLayout::Planar, BitOrder::MsbFirst)
+        .expect("Failed to create encoder");
 
     // 4 bytes: 2 for left, 2 for right
     let dsd_data = vec![0x11, 0x22, 0x33, 0x44];
@@ -236,14 +241,16 @@ fn test_dop_encoding_stereo() {
     // Verify both samples have the same marker (same frame)
     let marker_left = (output[0] >> 24) as u8;
     let marker_right = (output[1] >> 24) as u8;
-    assert_eq!(marker_left, marker_right, "Both channels in same frame should have same marker");
+    assert_eq!(
+        marker_left, marker_right,
+        "Both channels in same frame should have same marker"
+    );
 }
 
 #[test]
 fn test_dop_encoding_mono() {
-    let mut encoder =
-        DopEncoder::new(2822400, 1, ChannelDataLayout::Planar, BitOrder::MsbFirst)
-            .expect("Failed to create encoder");
+    let mut encoder = DopEncoder::new(2822400, 1, ChannelDataLayout::Planar, BitOrder::MsbFirst)
+        .expect("Failed to create encoder");
 
     let dsd_data = vec![0xFF, 0xEE];
     let mut output = Vec::new();
@@ -265,9 +272,8 @@ fn test_dop_encoding_mono() {
 
 #[test]
 fn test_multiple_frames_encoding() {
-    let mut encoder =
-        DopEncoder::new(2822400, 2, ChannelDataLayout::Planar, BitOrder::MsbFirst)
-            .expect("Failed to create encoder");
+    let mut encoder = DopEncoder::new(2822400, 2, ChannelDataLayout::Planar, BitOrder::MsbFirst)
+        .expect("Failed to create encoder");
 
     // 8 bytes: 4 for left channel, 4 for right channel = 2 frames
     // Left: [0x01, 0x02, 0x03, 0x04]
@@ -278,7 +284,11 @@ fn test_multiple_frames_encoding() {
     encoder.encode(&dsd_data, &mut output);
 
     // Should produce 4 samples (2 frames × 2 channels)
-    assert_eq!(output.len(), 4, "Should produce 4 DoP samples (2 frames × 2 channels)");
+    assert_eq!(
+        output.len(),
+        4,
+        "Should produce 4 DoP samples (2 frames × 2 channels)"
+    );
 
     // Frame 0: Left, Right
     // Frame 1: Left, Right
@@ -289,17 +299,22 @@ fn test_multiple_frames_encoding() {
     let marker_f1_r = (output[3] >> 24) as u8;
 
     assert_eq!(marker_f0_l, DOP_MARKER_1, "Frame 0 should have marker 1");
-    assert_eq!(marker_f0_r, DOP_MARKER_1, "Frame 0 right channel same marker");
+    assert_eq!(
+        marker_f0_r, DOP_MARKER_1,
+        "Frame 0 right channel same marker"
+    );
     assert_eq!(marker_f1_l, DOP_MARKER_2, "Frame 1 should have marker 2");
-    assert_eq!(marker_f1_r, DOP_MARKER_2, "Frame 1 right channel same marker");
+    assert_eq!(
+        marker_f1_r, DOP_MARKER_2,
+        "Frame 1 right channel same marker"
+    );
 }
 
 #[test]
 fn test_dop_sample_range() {
     // Verify DoP i32 samples are in valid signed 32-bit range
-    let mut encoder =
-        DopEncoder::new(2822400, 1, ChannelDataLayout::Planar, BitOrder::MsbFirst)
-            .expect("Failed to create encoder");
+    let mut encoder = DopEncoder::new(2822400, 1, ChannelDataLayout::Planar, BitOrder::MsbFirst)
+        .expect("Failed to create encoder");
 
     // Use various byte patterns
     let dsd_data = vec![0x00, 0xFF, 0xAA, 0x55, 0x12, 0x34];

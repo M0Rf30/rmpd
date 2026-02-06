@@ -256,10 +256,7 @@ mod tests {
         let status = PlayerStatus {
             volume: 75,
             state: PlayerState::Play,
-            current_song: Some(QueuePosition {
-                position: 0,
-                id: 0,
-            }),
+            current_song: Some(QueuePosition { position: 0, id: 0 }),
             next_song: None,
             elapsed: Some(Duration::from_secs(42)),
             duration: Some(Duration::from_secs(180)),
@@ -631,11 +628,7 @@ mod tests {
     fn test_parse_empty_lines() {
         let temp_dir = TempDir::new().unwrap();
         let state_path = temp_dir.path().join("state").to_str().unwrap().to_string();
-        std::fs::write(
-            &state_path,
-            "\n\nsw_volume: 90\n\nstate: play\n\n",
-        )
-        .unwrap();
+        std::fs::write(&state_path, "\n\nsw_volume: 90\n\nstate: play\n\n").unwrap();
 
         let statefile = StateFile::new(state_path);
         let loaded = statefile.load().unwrap().unwrap();

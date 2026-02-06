@@ -18,7 +18,7 @@ pub struct OutputInfo {
     pub name: String,
     pub plugin: String,
     pub enabled: bool,
-    pub partition: Option<String>,  // Which partition owns this output
+    pub partition: Option<String>, // Which partition owns this output
 }
 
 /// Shared application state

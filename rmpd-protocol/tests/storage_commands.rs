@@ -17,7 +17,8 @@ use rmpd_protocol::AppState;
 async fn test_mount_command() {
     let state = AppState::with_paths("/tmp/test_db".to_string(), "/tmp/test_music".to_string());
 
-    let response = storage::handle_mount_command(&state, "remote/nas", "nfs://192.168.1.100/music").await;
+    let response =
+        storage::handle_mount_command(&state, "remote/nas", "nfs://192.168.1.100/music").await;
 
     assert_eq!(response, "OK\n");
 
@@ -34,11 +35,13 @@ async fn test_mount_duplicate() {
     let state = AppState::with_paths("/tmp/test_db".to_string(), "/tmp/test_music".to_string());
 
     // First mount should succeed
-    let response1 = storage::handle_mount_command(&state, "remote/nas", "nfs://192.168.1.100/music").await;
+    let response1 =
+        storage::handle_mount_command(&state, "remote/nas", "nfs://192.168.1.100/music").await;
     assert_eq!(response1, "OK\n");
 
     // Second mount to same path should fail
-    let response2 = storage::handle_mount_command(&state, "remote/nas", "nfs://192.168.1.200/music").await;
+    let response2 =
+        storage::handle_mount_command(&state, "remote/nas", "nfs://192.168.1.200/music").await;
     assert!(response2.contains("ACK"));
     assert!(response2.contains("already exists"));
 }
@@ -48,12 +51,14 @@ async fn test_mount_path_validation() {
     let state = AppState::with_paths("/tmp/test_db".to_string(), "/tmp/test_music".to_string());
 
     // Absolute path should be rejected
-    let response1 = storage::handle_mount_command(&state, "/etc/passwd", "nfs://server/share").await;
+    let response1 =
+        storage::handle_mount_command(&state, "/etc/passwd", "nfs://server/share").await;
     assert!(response1.contains("ACK"));
     assert!(response1.contains("Invalid path"));
 
     // Path traversal should be rejected
-    let response2 = storage::handle_mount_command(&state, "../etc/passwd", "nfs://server/share").await;
+    let response2 =
+        storage::handle_mount_command(&state, "../etc/passwd", "nfs://server/share").await;
     assert!(response2.contains("ACK"));
     assert!(response2.contains("Invalid path"));
 }

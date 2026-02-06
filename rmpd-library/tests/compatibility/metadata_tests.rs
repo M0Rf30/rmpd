@@ -2,7 +2,6 @@
 ///
 /// These tests use pre-generated audio files (no FFmpeg required)
 /// and validate that rmpd extracts metadata correctly from various formats.
-
 use std::time::Duration;
 
 use crate::common::rmpd_harness::RmpdTestHarness;
@@ -29,8 +28,11 @@ fn test_flac_metadata_extraction() {
 
     // Duration should be ~1 second (±100ms tolerance)
     let duration_secs = song.duration.unwrap().as_secs_f64();
-    assert!((0.9..=1.1).contains(&duration_secs),
-        "Duration {} not within expected range", duration_secs);
+    assert!(
+        (0.9..=1.1).contains(&duration_secs),
+        "Duration {} not within expected range",
+        duration_secs
+    );
 }
 
 #[test]
@@ -159,9 +161,12 @@ fn test_metadata_extraction_performance() {
         let elapsed = start.elapsed();
 
         // Extraction should be fast (< 100ms)
-        assert!(elapsed < Duration::from_millis(100),
+        assert!(
+            elapsed < Duration::from_millis(100),
             "Metadata extraction for {:?} took {:?} (> 100ms)",
-            path.file_name().unwrap(), elapsed);
+            path.file_name().unwrap(),
+            elapsed
+        );
 
         // Verify at least basic metadata was extracted
         assert!(song.title.is_some());
@@ -174,13 +179,17 @@ fn test_audio_properties_accuracy() {
     let harness = RmpdTestHarness::new().unwrap();
 
     // Test FLAC (lossless, 44.1kHz stereo)
-    let flac_song = harness.extract_metadata(pregenerated::basic_flac().to_str().unwrap()).unwrap();
+    let flac_song = harness
+        .extract_metadata(pregenerated::basic_flac().to_str().unwrap())
+        .unwrap();
     assert_eq!(flac_song.sample_rate, Some(44100));
     assert_eq!(flac_song.channels, Some(2));
     assert!(flac_song.bits_per_sample.is_some());
 
     // Test MP3 (lossy)
-    let mp3_song = harness.extract_metadata(pregenerated::basic_mp3().to_str().unwrap()).unwrap();
+    let mp3_song = harness
+        .extract_metadata(pregenerated::basic_mp3().to_str().unwrap())
+        .unwrap();
     assert_eq!(mp3_song.sample_rate, Some(44100));
     assert_eq!(mp3_song.channels, Some(2));
     assert!(mp3_song.bitrate.is_some());
@@ -200,9 +209,21 @@ fn test_multiple_formats_consistency() {
         let song = harness.extract_metadata(path.to_str().unwrap()).unwrap();
 
         // All should have basic metadata
-        assert!(song.title.is_some(), "Missing title for {:?}", path.file_name());
-        assert!(song.artist.is_some(), "Missing artist for {:?}", path.file_name());
-        assert!(song.album.is_some(), "Missing album for {:?}", path.file_name());
+        assert!(
+            song.title.is_some(),
+            "Missing title for {:?}",
+            path.file_name()
+        );
+        assert!(
+            song.artist.is_some(),
+            "Missing artist for {:?}",
+            path.file_name()
+        );
+        assert!(
+            song.album.is_some(),
+            "Missing album for {:?}",
+            path.file_name()
+        );
 
         // All should have audio properties
         assert!(song.sample_rate.is_some());

@@ -150,7 +150,10 @@ fn test_replaygain_status_command() {
     // replay_gain_status should return replay gain mode
     let response = "replay_gain_mode: off\nOK\n";
     assert!(TestClient::is_ok(response));
-    assert_eq!(TestClient::get_field(response, "replay_gain_mode"), Some("off"));
+    assert_eq!(
+        TestClient::get_field(response, "replay_gain_mode"),
+        Some("off")
+    );
 }
 
 #[test]
