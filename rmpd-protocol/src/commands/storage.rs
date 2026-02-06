@@ -13,6 +13,12 @@ use crate::state::AppState;
 use rmpd_core::storage::platform::get_default_backend;
 use std::path::PathBuf;
 
+fn is_actual_mount_disabled() -> bool {
+    std::env::var("RMPD_DISABLE_ACTUAL_MOUNT")
+        .map(|v| v == "1" || v.to_lowercase() == "true")
+        .unwrap_or(false)
+}
+
 /// Mount a storage location
 ///
 /// Tier 2 Implementation: Performs actual filesystem mounting using platform backends.
@@ -45,12 +51,7 @@ pub async fn handle_mount_command(state: &AppState, path: &str, uri: &str) -> St
     // Create full mountpoint path
     let mountpoint = PathBuf::from(music_dir).join(path);
 
-    // Check if actual mounting is disabled
-    let disable_actual_mount = std::env::var("RMPD_DISABLE_ACTUAL_MOUNT")
-        .map(|v| v == "1" || v.to_lowercase() == "true")
-        .unwrap_or(false);
-
-    if !disable_actual_mount {
+    if !is_actual_mount_disabled() {
         // Tier 2: Perform actual mounting
         tracing::info!("Mounting {} to {}", uri, mountpoint.display());
 
@@ -142,12 +143,7 @@ pub async fn handle_unmount_command(state: &AppState, path: &str) -> String {
     // Create full mountpoint path
     let mountpoint = PathBuf::from(music_dir).join(path);
 
-    // Check if actual mounting is disabled
-    let disable_actual_mount = std::env::var("RMPD_DISABLE_ACTUAL_MOUNT")
-        .map(|v| v == "1" || v.to_lowercase() == "true")
-        .unwrap_or(false);
-
-    if !disable_actual_mount {
+    if !is_actual_mount_disabled() {
         // Tier 2: Perform actual unmounting
         tracing::info!("Unmounting {}", mountpoint.display());
 

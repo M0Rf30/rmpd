@@ -5,7 +5,7 @@ use tracing::{debug, error, info};
 use crate::response::ResponseBuilder;
 use crate::state::AppState;
 
-use super::utils::{prepare_song_for_playback, ACK_ERROR_SYSTEM};
+use super::utils::{prepare_song_for_playback, update_next_song, ACK_ERROR_SYSTEM};
 
 pub async fn handle_play_command(state: &AppState, position: Option<u32>) -> String {
     let queue = state.queue.read().await;
@@ -60,16 +60,8 @@ pub async fn handle_play_command(state: &AppState, position: Option<u32>) -> Str
             if let Some((pos, id)) = actual_position {
                 status.current_song = Some(rmpd_core::state::QueuePosition { position: pos, id });
 
-                // Set next_song for UI (e.g., Cantata's next button)
                 let queue = state.queue.read().await;
-                if let Some(next_item) = queue.get(pos + 1) {
-                    status.next_song = Some(rmpd_core::state::QueuePosition {
-                        position: pos + 1,
-                        id: next_item.id,
-                    });
-                } else {
-                    status.next_song = None;
-                }
+                update_next_song(&mut status, &queue, pos);
             }
             drop(status);
 
@@ -204,16 +196,8 @@ pub async fn handle_next_command(state: &AppState) -> String {
                     id: item_id,
                 });
 
-                // Set next_song for UI (e.g., Cantata's next button)
                 let queue = state.queue.read().await;
-                if let Some(next_item) = queue.get(next_pos + 1) {
-                    status.next_song = Some(rmpd_core::state::QueuePosition {
-                        position: next_pos + 1,
-                        id: next_item.id,
-                    });
-                } else {
-                    status.next_song = None;
-                }
+                update_next_song(&mut status, &queue, next_pos);
 
                 ResponseBuilder::new().ok()
             }
@@ -254,16 +238,8 @@ pub async fn handle_previous_command(state: &AppState) -> String {
                     id: item_id,
                 });
 
-                // Set next_song for UI (e.g., Cantata's next button)
                 let queue = state.queue.read().await;
-                if let Some(next_item) = queue.get(prev_pos + 1) {
-                    status.next_song = Some(rmpd_core::state::QueuePosition {
-                        position: prev_pos + 1,
-                        id: next_item.id,
-                    });
-                } else {
-                    status.next_song = None;
-                }
+                update_next_song(&mut status, &queue, prev_pos);
 
                 ResponseBuilder::new().ok()
             }

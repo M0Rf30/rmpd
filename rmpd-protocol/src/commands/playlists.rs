@@ -3,7 +3,7 @@
 use crate::response::ResponseBuilder;
 use crate::state::AppState;
 
-use super::utils::{apply_range, format_iso8601_timestamp, open_db, song_tag_contains, song_tag_eq, ACK_ERROR_SYSTEM};
+use super::utils::{apply_range, format_iso8601_timestamp, open_db, song_tag_contains, ACK_ERROR_SYSTEM};
 
 pub async fn handle_listplaylists_command(state: &AppState) -> String {
     let db = match open_db(state, "listplaylists") {
@@ -320,47 +320,6 @@ pub async fn handle_rename_command(state: &AppState, from: &str, to: &str) -> St
         Ok(_) => ResponseBuilder::new().ok(),
         Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "rename", &format!("Error: {e}")),
     }
-}
-
-pub async fn handle_playlistfind_command(state: &AppState, tag: &str, value: &str) -> String {
-    // Search queue for exact matches
-    let queue = state.queue.read().await;
-    let mut resp = ResponseBuilder::new();
-    let tag_lower = tag.to_lowercase();
-
-    for item in queue.items() {
-        if song_tag_eq(&item.song, &tag_lower, value) {
-            resp.song(&item.song, Some(item.position), Some(item.id));
-            if item.priority > 0 {
-                resp.field("Prio", item.priority);
-            }
-            if let Some((start, end)) = item.range {
-                resp.field("Range", format!("{start:.3}-{end:.3}"));
-            }
-        }
-    }
-    resp.ok()
-}
-
-pub async fn handle_playlistsearch_command(state: &AppState, tag: &str, value: &str) -> String {
-    // Case-insensitive search in queue
-    let queue = state.queue.read().await;
-    let mut resp = ResponseBuilder::new();
-    let value_lower = value.to_lowercase();
-    let tag_lower = tag.to_lowercase();
-
-    for item in queue.items() {
-        if song_tag_contains(&item.song, &tag_lower, &value_lower) {
-            resp.song(&item.song, Some(item.position), Some(item.id));
-            if item.priority > 0 {
-                resp.field("Prio", item.priority);
-            }
-            if let Some((start, end)) = item.range {
-                resp.field("Range", format!("{start:.3}-{end:.3}"));
-            }
-        }
-    }
-    resp.ok()
 }
 
 // Stored playlist search and utility commands

@@ -6,7 +6,7 @@ use crate::commands::playback;
 use crate::response::ResponseBuilder;
 use crate::state::AppState;
 
-use super::utils::{apply_range, open_db, prepare_song_for_playback, song_tag_contains, song_tag_eq, ACK_ERROR_SYSTEM};
+use super::utils::{add_queue_item_metadata, apply_range, open_db, prepare_song_for_playback, song_tag_contains, song_tag_eq, update_next_song, ACK_ERROR_SYSTEM};
 
 pub async fn handle_add_command(state: &AppState, uri: &str, position: Option<u32>) -> String {
     debug!("Add command received with URI: [{}]", uri);
@@ -231,12 +231,7 @@ pub async fn handle_playlistid_command(state: &AppState, id: Option<u32>) -> Str
         // Get specific song by ID
         if let Some(item) = queue.get_by_id(song_id) {
             resp.song(&item.song, Some(item.position), Some(item.id));
-            if item.priority > 0 {
-                resp.field("Prio", item.priority);
-            }
-            if let Some((start, end)) = item.range {
-                resp.field("Range", format!("{start:.3}-{end:.3}"));
-            }
+            add_queue_item_metadata(&mut resp, item);
         } else {
             return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "playlistid", "No such song");
         }
@@ -244,12 +239,7 @@ pub async fn handle_playlistid_command(state: &AppState, id: Option<u32>) -> Str
         // Get all songs with IDs
         for item in queue.items() {
             resp.song(&item.song, Some(item.position), Some(item.id));
-            if item.priority > 0 {
-                resp.field("Prio", item.priority);
-            }
-            if let Some((start, end)) = item.range {
-                resp.field("Range", format!("{start:.3}-{end:.3}"));
-            }
+            add_queue_item_metadata(&mut resp, item);
         }
     }
 
@@ -265,12 +255,7 @@ pub async fn handle_playlistinfo_command(state: &AppState, range: Option<(u32, u
 
     for item in filtered {
         resp.song(&item.song, Some(item.position), Some(item.id));
-        if item.priority > 0 {
-            resp.field("Prio", item.priority);
-        }
-        if let Some((start, end)) = item.range {
-            resp.field("Range", format!("{start:.3}-{end:.3}"));
-        }
+        add_queue_item_metadata(&mut resp, item);
     }
 
     resp.ok()
@@ -296,16 +281,8 @@ pub async fn handle_playid_command(state: &AppState, id: Option<u32>) -> String 
                         id: song_id,
                     });
 
-                    // Set next_song for UI (e.g., Cantata's next button)
                     let queue = state.queue.read().await;
-                    if let Some(next_item) = queue.get(position + 1) {
-                        status.next_song = Some(rmpd_core::state::QueuePosition {
-                            position: position + 1,
-                            id: next_item.id,
-                        });
-                    } else {
-                        status.next_song = None;
-                    }
+                    update_next_song(&mut status, &queue, position);
 
                     ResponseBuilder::new().ok()
                 }
@@ -468,12 +445,7 @@ pub async fn handle_playlistfind_command(state: &AppState, tag: &str, value: &st
     for item in queue.items() {
         if song_tag_eq(&item.song, &tag_lower, value) {
             resp.song(&item.song, Some(item.position), Some(item.id));
-            if item.priority > 0 {
-                resp.field("Prio", item.priority);
-            }
-            if let Some((start, end)) = item.range {
-                resp.field("Range", format!("{start:.3}-{end:.3}"));
-            }
+            add_queue_item_metadata(&mut resp, item);
         }
     }
     resp.ok()
@@ -489,12 +461,7 @@ pub async fn handle_playlistsearch_command(state: &AppState, tag: &str, value: &
     for item in queue.items() {
         if song_tag_contains(&item.song, &tag_lower, &value_lower) {
             resp.song(&item.song, Some(item.position), Some(item.id));
-            if item.priority > 0 {
-                resp.field("Prio", item.priority);
-            }
-            if let Some((start, end)) = item.range {
-                resp.field("Range", format!("{start:.3}-{end:.3}"));
-            }
+            add_queue_item_metadata(&mut resp, item);
         }
     }
     resp.ok()

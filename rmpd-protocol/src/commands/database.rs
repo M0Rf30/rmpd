@@ -28,19 +28,20 @@ fn strip_music_dir_prefix<'a>(path: &'a str, music_dir: Option<&str>) -> &'a str
 
 use super::utils::{apply_range, build_and_filter, format_iso8601_timestamp, open_db, ACK_ERROR_ARG, ACK_ERROR_SYSTEM};
 
-/// Helper function to get tag value for sorting
-fn get_tag_value(song: &rmpd_core::song::Song, tag: &str) -> String {
+/// Helper function to get tag value for sorting (avoids allocation for most tags)
+fn get_tag_value<'a>(song: &'a rmpd_core::song::Song, tag: &str) -> std::borrow::Cow<'a, str> {
+    use std::borrow::Cow;
     match tag.to_lowercase().as_str() {
-        "artist" => song.artist.as_deref().unwrap_or_default().to_string(),
-        "album" => song.album.as_deref().unwrap_or_default().to_string(),
-        "albumartist" => song.album_artist.as_deref().unwrap_or_default().to_string(),
-        "title" => song.title.as_deref().unwrap_or_default().to_string(),
-        "track" => song.track.map(|t| t.to_string()).unwrap_or_default(),
-        "date" => song.date.as_deref().unwrap_or_default().to_string(),
-        "genre" => song.genre.as_deref().unwrap_or_default().to_string(),
-        "composer" => song.composer.as_deref().unwrap_or_default().to_string(),
-        "performer" => song.performer.as_deref().unwrap_or_default().to_string(),
-        _ => String::new(),
+        "artist" => Cow::Borrowed(song.artist.as_deref().unwrap_or_default()),
+        "album" => Cow::Borrowed(song.album.as_deref().unwrap_or_default()),
+        "albumartist" => Cow::Borrowed(song.album_artist.as_deref().unwrap_or_default()),
+        "title" => Cow::Borrowed(song.title.as_deref().unwrap_or_default()),
+        "track" => song.track.map_or(Cow::Borrowed(""), |t| Cow::Owned(t.to_string())),
+        "date" => Cow::Borrowed(song.date.as_deref().unwrap_or_default()),
+        "genre" => Cow::Borrowed(song.genre.as_deref().unwrap_or_default()),
+        "composer" => Cow::Borrowed(song.composer.as_deref().unwrap_or_default()),
+        "performer" => Cow::Borrowed(song.performer.as_deref().unwrap_or_default()),
+        _ => Cow::Borrowed(""),
     }
 }
 
@@ -265,8 +266,8 @@ pub async fn handle_count_command(
         let mut groups: HashMap<String, (usize, u64)> = HashMap::new();
 
         for song in &songs {
-            let group_value = get_tag_value(song, group_tag);
-            let entry = groups.entry(group_value.clone()).or_insert((0, 0));
+            let group_value = get_tag_value(song, group_tag).into_owned();
+            let entry = groups.entry(group_value).or_insert((0, 0));
             entry.0 += 1;
             if let Some(duration) = song.duration {
                 entry.1 += duration.as_secs();

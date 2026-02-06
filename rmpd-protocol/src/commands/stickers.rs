@@ -9,6 +9,14 @@ use crate::state::AppState;
 
 use super::utils::{open_db, ACK_ERROR_SYSTEM};
 
+fn get_sticker_i32(db: &rmpd_library::Database, uri: &str, name: &str) -> i32 {
+    db.get_sticker(uri, name)
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0)
+}
+
 pub async fn handle_sticker_get_command(state: &AppState, uri: &str, name: &str) -> String {
     let db = match open_db(state, "sticker get") {
         Ok(d) => d,
@@ -114,11 +122,7 @@ pub async fn handle_sticker_inc_command(
     };
 
     let increment = delta.unwrap_or(1);
-    let current = if let Ok(Some(val)) = db.get_sticker(uri, name) {
-        val.parse::<i32>().unwrap_or(0)
-    } else {
-        0
-    };
+    let current = get_sticker_i32(&db, uri, name);
 
     let new_value = current + increment;
     match db.set_sticker(uri, name, &new_value.to_string()) {
@@ -144,11 +148,7 @@ pub async fn handle_sticker_dec_command(
     };
 
     let decrement = delta.unwrap_or(1);
-    let current = if let Ok(Some(val)) = db.get_sticker(uri, name) {
-        val.parse::<i32>().unwrap_or(0)
-    } else {
-        0
-    };
+    let current = get_sticker_i32(&db, uri, name);
 
     let new_value = current - decrement;
     match db.set_sticker(uri, name, &new_value.to_string()) {
