@@ -131,15 +131,10 @@ async fn restore_state(
                             position, play_state
                         );
 
-                        // Resolve path for playback
-                        let absolute_path = if song.path.as_str().starts_with('/') {
-                            song.path.to_string()
-                        } else {
-                            format!("{}/{}", music_dir, song.path)
-                        };
-
-                        let mut playback_song = song.clone();
-                        playback_song.path = absolute_path.into();
+                        let playback_song = rmpd_protocol::commands::utils::prepare_song_for_playback(
+                            &song,
+                            Some(music_dir),
+                        );
 
                         // Set current song immediately
                         let mut status = state.status.write().await;

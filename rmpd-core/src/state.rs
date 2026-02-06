@@ -11,6 +11,18 @@ pub enum PlayerState {
     Pause,
 }
 
+impl PlayerState {
+    /// Convert from atomic u8 representation (Stop=0, Play=1, Pause=2)
+    pub fn from_atomic(value: u8) -> Self {
+        match value {
+            0 => Self::Stop,
+            1 => Self::Play,
+            2 => Self::Pause,
+            _ => Self::Stop,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum SingleMode {
     #[default]

@@ -6,33 +6,31 @@ use crate::commands::playback;
 use crate::response::ResponseBuilder;
 use crate::state::AppState;
 
+use super::utils::{apply_range, open_db, prepare_song_for_playback, song_tag_contains, song_tag_eq, ACK_ERROR_SYSTEM};
+
 pub async fn handle_add_command(state: &AppState, uri: &str, position: Option<u32>) -> String {
     debug!("Add command received with URI: [{}]", uri);
     // Get song from database
-    let db_path = match &state.db_path {
-        Some(p) => p,
-        None => return ResponseBuilder::error(50, 0, "add", "database not configured"),
-    };
-
-    let db = match rmpd_library::Database::open(db_path) {
+    let db = match open_db(state, "add") {
         Ok(d) => d,
-        Err(e) => return ResponseBuilder::error(50, 0, "add", &format!("database error: {e}")),
+        Err(e) => return e,
     };
 
     let song = match db.get_song_by_path(uri) {
         Ok(Some(s)) => s,
-        Ok(None) => return ResponseBuilder::error(50, 0, "add", "song not found in database"),
-        Err(e) => return ResponseBuilder::error(50, 0, "add", &format!("query error: {e}")),
+        Ok(None) => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "add", "song not found in database"),
+        Err(e) => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "add", &format!("query error: {e}")),
     };
 
     // Add to queue at specified position or at end
     let id = state.queue.write().await.add_at(song, position);
 
     // Update status to reflect playlist changes
-    let mut status = state.status.write().await;
-    status.playlist_version += 1;
-    status.playlist_length = state.queue.read().await.len() as u32;
-    drop(status); // Release the lock
+    {
+        let mut status = state.status.write().await;
+        status.playlist_version += 1;
+        status.playlist_length = state.queue.read().await.len() as u32;
+    }
 
     let mut resp = ResponseBuilder::new();
     resp.field("Id", id);
@@ -66,7 +64,7 @@ pub async fn handle_delete_command(
                 status.playlist_length = state.queue.read().await.len() as u32;
                 ResponseBuilder::new().ok()
             } else {
-                ResponseBuilder::error(50, 0, "delete", "No such song")
+                ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "delete", "No such song")
             }
         }
         DeleteTarget::Range(start, end) => {
@@ -87,7 +85,7 @@ pub async fn handle_delete_command(
                 status.playlist_length = queue.len() as u32;
                 ResponseBuilder::new().ok()
             } else {
-                ResponseBuilder::error(50, 0, "delete", "No such songs in range")
+                ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "delete", "No such songs in range")
             }
         }
     }
@@ -99,20 +97,15 @@ pub async fn handle_addid_command(state: &AppState, uri: &str, position: Option<
         uri, position
     );
 
-    let db_path = match &state.db_path {
-        Some(p) => p,
-        None => return ResponseBuilder::error(50, 0, "addid", "database not configured"),
-    };
-
-    let db = match rmpd_library::Database::open(db_path) {
+    let db = match open_db(state, "addid") {
         Ok(d) => d,
-        Err(e) => return ResponseBuilder::error(50, 0, "addid", &format!("database error: {e}")),
+        Err(e) => return e,
     };
 
     let song = match db.get_song_by_path(uri) {
         Ok(Some(s)) => s,
-        Ok(None) => return ResponseBuilder::error(50, 0, "addid", "song not found in database"),
-        Err(e) => return ResponseBuilder::error(50, 0, "addid", &format!("query error: {e}")),
+        Ok(None) => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "addid", "song not found in database"),
+        Err(e) => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "addid", &format!("query error: {e}")),
     };
 
     // Add to queue at specific position
@@ -130,7 +123,7 @@ pub async fn handle_deleteid_command(state: &AppState, id: u32) -> String {
         status.playlist_length = state.queue.read().await.len() as u32;
         ResponseBuilder::new().ok()
     } else {
-        ResponseBuilder::error(50, 0, "deleteid", "No such song")
+        ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "deleteid", "No such song")
     }
 }
 
@@ -140,7 +133,7 @@ pub async fn handle_moveid_command(state: &AppState, id: u32, to: u32) -> String
         status.playlist_version += 1;
         ResponseBuilder::new().ok()
     } else {
-        ResponseBuilder::error(50, 0, "moveid", "No such song")
+        ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "moveid", "No such song")
     }
 }
 
@@ -158,7 +151,7 @@ pub async fn handle_move_command(
                 status.playlist_version += 1;
                 ResponseBuilder::new().ok()
             } else {
-                ResponseBuilder::error(50, 0, "move", "Invalid position")
+                ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "move", "Invalid position")
             }
         }
         MoveFrom::Range(start, end) => {
@@ -167,7 +160,7 @@ pub async fn handle_move_command(
             let mut queue = state.queue.write().await;
 
             if start >= end || start >= queue.len() as u32 {
-                return ResponseBuilder::error(50, 0, "move", "Invalid range");
+                return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "move", "Invalid range");
             }
 
             let range_size = end.saturating_sub(start);
@@ -179,7 +172,7 @@ pub async fn handle_move_command(
                 // Moving up in the queue
                 for i in 0..range_size.min(queue.len() as u32 - start) {
                     if !queue.move_item(start, to + i) {
-                        return ResponseBuilder::error(50, 0, "move", "Invalid position");
+                        return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "move", "Invalid position");
                     }
                 }
             } else {
@@ -187,7 +180,7 @@ pub async fn handle_move_command(
                 let actual_end = end.min(queue.len() as u32);
                 for _ in 0..(actual_end - start) {
                     if !queue.move_item(start, to.saturating_sub(1)) {
-                        return ResponseBuilder::error(50, 0, "move", "Invalid position");
+                        return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "move", "Invalid position");
                     }
                 }
             }
@@ -205,7 +198,7 @@ pub async fn handle_swap_command(state: &AppState, pos1: u32, pos2: u32) -> Stri
         status.playlist_version += 1;
         ResponseBuilder::new().ok()
     } else {
-        ResponseBuilder::error(50, 0, "swap", "Invalid position")
+        ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "swap", "Invalid position")
     }
 }
 
@@ -215,7 +208,7 @@ pub async fn handle_swapid_command(state: &AppState, id1: u32, id2: u32) -> Stri
         status.playlist_version += 1;
         ResponseBuilder::new().ok()
     } else {
-        ResponseBuilder::error(50, 0, "swapid", "No such song")
+        ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "swapid", "No such song")
     }
 }
 
@@ -245,7 +238,7 @@ pub async fn handle_playlistid_command(state: &AppState, id: Option<u32>) -> Str
                 resp.field("Range", format!("{start:.3}-{end:.3}"));
             }
         } else {
-            return ResponseBuilder::error(50, 0, "playlistid", "No such song");
+            return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "playlistid", "No such song");
         }
     } else {
         // Get all songs with IDs
@@ -268,18 +261,7 @@ pub async fn handle_playlistinfo_command(state: &AppState, range: Option<(u32, u
     let items = queue.items();
     let mut resp = ResponseBuilder::new();
 
-    // Apply range filter
-    let filtered = if let Some((start, end)) = range {
-        let start_idx = start as usize;
-        let end_idx = end.min(items.len() as u32) as usize;
-        if start_idx < items.len() {
-            &items[start_idx..end_idx]
-        } else {
-            &[]
-        }
-    } else {
-        items
-    };
+    let filtered = apply_range(items, range);
 
     for item in filtered {
         resp.song(&item.song, Some(item.position), Some(item.id));
@@ -294,20 +276,6 @@ pub async fn handle_playlistinfo_command(state: &AppState, range: Option<(u32, u
     resp.ok()
 }
 
-/// Resolve relative path to absolute path using music_directory
-fn resolve_path(rel_path: &str, music_dir: Option<&str>) -> String {
-    if rel_path.starts_with('/') {
-        return rel_path.to_string();
-    }
-
-    if let Some(music_dir) = music_dir {
-        let music_dir = music_dir.trim_end_matches('/');
-        format!("{music_dir}/{rel_path}")
-    } else {
-        rel_path.to_string()
-    }
-}
-
 pub async fn handle_playid_command(state: &AppState, id: Option<u32>) -> String {
     if let Some(song_id) = id {
         // Play specific song by ID
@@ -317,10 +285,7 @@ pub async fn handle_playid_command(state: &AppState, id: Option<u32>) -> String 
             let position = item.position;
             drop(queue);
 
-            // Resolve relative path to absolute for playback
-            let mut playback_song = song.clone();
-            let absolute_path = resolve_path(song.path.as_str(), state.music_dir.as_deref());
-            playback_song.path = absolute_path.into();
+            let playback_song = prepare_song_for_playback(&song, state.music_dir.as_deref());
 
             match state.engine.write().await.play(playback_song).await {
                 Ok(_) => {
@@ -344,10 +309,10 @@ pub async fn handle_playid_command(state: &AppState, id: Option<u32>) -> String 
 
                     ResponseBuilder::new().ok()
                 }
-                Err(e) => ResponseBuilder::error(50, 0, "playid", &format!("Playback error: {e}")),
+                Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "playid", &format!("Playback error: {e}")),
             }
         } else {
-            ResponseBuilder::error(50, 0, "playid", "No such song")
+            ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "playid", "No such song")
         }
     } else {
         // Resume playback (same as play with no args)
@@ -389,15 +354,17 @@ pub async fn handle_prioid_command(state: &AppState, priority: u8, ids: &[u32]) 
 ///
 /// Sets a playback range (start and end time in seconds) for a song.
 pub async fn handle_rangeid_command(state: &AppState, id: u32, range: (f64, f64)) -> String {
-    let mut queue = state.queue.write().await;
+    let found = {
+        let mut queue = state.queue.write().await;
+        queue.set_range_by_id(id, Some(range))
+    };
 
-    if queue.set_range_by_id(id, Some(range)) {
-        drop(queue);
+    if found {
         let mut status = state.status.write().await;
         status.playlist_version += 1;
         ResponseBuilder::new().ok()
     } else {
-        ResponseBuilder::error(50, 0, "rangeid", "No such song")
+        ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "rangeid", "No such song")
     }
 }
 
@@ -405,15 +372,17 @@ pub async fn handle_rangeid_command(state: &AppState, id: u32, range: (f64, f64)
 ///
 /// Adds a custom tag to a queue item.
 pub async fn handle_addtagid_command(state: &AppState, id: u32, tag: &str, value: &str) -> String {
-    let mut queue = state.queue.write().await;
+    let found = {
+        let mut queue = state.queue.write().await;
+        queue.add_tag_by_id(id, tag.to_string(), value.to_string())
+    };
 
-    if queue.add_tag_by_id(id, tag.to_string(), value.to_string()) {
-        drop(queue);
+    if found {
         let mut status = state.status.write().await;
         status.playlist_version += 1;
         ResponseBuilder::new().ok()
     } else {
-        ResponseBuilder::error(50, 0, "addtagid", "No such song")
+        ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "addtagid", "No such song")
     }
 }
 
@@ -421,15 +390,17 @@ pub async fn handle_addtagid_command(state: &AppState, id: u32, tag: &str, value
 ///
 /// If tag is specified, clears only that tag. Otherwise clears all tags.
 pub async fn handle_cleartagid_command(state: &AppState, id: u32, tag: Option<&str>) -> String {
-    let mut queue = state.queue.write().await;
+    let found = {
+        let mut queue = state.queue.write().await;
+        queue.clear_tags_by_id(id, tag)
+    };
 
-    if queue.clear_tags_by_id(id, tag) {
-        drop(queue);
+    if found {
         let mut status = state.status.write().await;
         status.playlist_version += 1;
         ResponseBuilder::new().ok()
     } else {
-        ResponseBuilder::error(50, 0, "cleartagid", "No such song")
+        ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "cleartagid", "No such song")
     }
 }
 
@@ -447,19 +418,7 @@ pub async fn handle_plchanges_command(
 
     if version == 0 || queue.version() > version {
         let items = queue.items();
-
-        // Apply range filter
-        let filtered = if let Some((start, end)) = range {
-            let start_idx = start as usize;
-            let end_idx = end.min(items.len() as u32) as usize;
-            if start_idx < items.len() {
-                &items[start_idx..end_idx]
-            } else {
-                &[]
-            }
-        } else {
-            items
-        };
+        let filtered = apply_range(items, range);
 
         for item in filtered {
             resp.field("file", item.song.path.as_str());
@@ -490,19 +449,7 @@ pub async fn handle_plchangesposid_command(
 
     if version == 0 || queue.version() > version {
         let items = queue.items();
-
-        // Apply range filter
-        let filtered = if let Some((start, end)) = range {
-            let start_idx = start as usize;
-            let end_idx = end.min(items.len() as u32) as usize;
-            if start_idx < items.len() {
-                &items[start_idx..end_idx]
-            } else {
-                &[]
-            }
-        } else {
-            items
-        };
+        let filtered = apply_range(items, range);
 
         for item in filtered {
             resp.field("cpos", item.position.to_string());
@@ -516,17 +463,10 @@ pub async fn handle_plchangesposid_command(
 pub async fn handle_playlistfind_command(state: &AppState, tag: &str, value: &str) -> String {
     let queue = state.queue.read().await;
     let mut resp = ResponseBuilder::new();
+    let tag_lower = tag.to_lowercase();
 
     for item in queue.items() {
-        let matches = match tag.to_lowercase().as_str() {
-            "artist" => item.song.artist.as_deref() == Some(value),
-            "album" => item.song.album.as_deref() == Some(value),
-            "title" => item.song.title.as_deref() == Some(value),
-            "genre" => item.song.genre.as_deref() == Some(value),
-            _ => false,
-        };
-
-        if matches {
+        if song_tag_eq(&item.song, &tag_lower, value) {
             resp.song(&item.song, Some(item.position), Some(item.id));
             if item.priority > 0 {
                 resp.field("Prio", item.priority);
@@ -544,37 +484,10 @@ pub async fn handle_playlistsearch_command(state: &AppState, tag: &str, value: &
     let queue = state.queue.read().await;
     let mut resp = ResponseBuilder::new();
     let value_lower = value.to_lowercase();
+    let tag_lower = tag.to_lowercase();
 
     for item in queue.items() {
-        let matches = match tag.to_lowercase().as_str() {
-            "artist" => item
-                .song
-                .artist
-                .as_ref()
-                .map(|s| s.to_lowercase().contains(&value_lower))
-                .unwrap_or(false),
-            "album" => item
-                .song
-                .album
-                .as_ref()
-                .map(|s| s.to_lowercase().contains(&value_lower))
-                .unwrap_or(false),
-            "title" => item
-                .song
-                .title
-                .as_ref()
-                .map(|s| s.to_lowercase().contains(&value_lower))
-                .unwrap_or(false),
-            "genre" => item
-                .song
-                .genre
-                .as_ref()
-                .map(|s| s.to_lowercase().contains(&value_lower))
-                .unwrap_or(false),
-            _ => false,
-        };
-
-        if matches {
+        if song_tag_contains(&item.song, &tag_lower, &value_lower) {
             resp.song(&item.song, Some(item.position), Some(item.id));
             if item.priority > 0 {
                 resp.field("Prio", item.priority);

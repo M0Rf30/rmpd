@@ -2,6 +2,23 @@ use crate::error::{Result, RmpdError};
 use std::path::Path;
 use std::process::Command;
 
+/// Parse URI into protocol and address (e.g. "nfs://server/path" -> ("nfs", "server/path"))
+fn parse_uri(uri: &str) -> Result<(String, String)> {
+    if let Some(pos) = uri.find("://") {
+        let protocol = uri[..pos].to_lowercase();
+        let address = &uri[pos + 3..];
+        Ok((protocol, address.to_string()))
+    } else {
+        Err(RmpdError::Storage(format!("Invalid URI format: {uri}")))
+    }
+}
+
+/// Convert a Path to a UTF-8 str, returning a descriptive error on failure
+fn path_to_str(path: &Path) -> Result<&str> {
+    path.to_str()
+        .ok_or_else(|| RmpdError::Storage(format!("Invalid UTF-8 in path: {}", path.display())))
+}
+
 /// Platform-agnostic mount backend trait
 pub trait MountBackend: Send + Sync {
     /// Mount a remote filesystem
@@ -29,18 +46,6 @@ impl Default for LinuxMountBackend {
 impl LinuxMountBackend {
     pub fn new() -> Self {
         Self
-    }
-
-    /// Parse URI into filesystem type and address
-    fn parse_uri(uri: &str) -> Result<(String, String)> {
-        if let Some(pos) = uri.find("://") {
-            let protocol = uri[..pos].to_lowercase();
-            let address = &uri[pos + 3..];
-
-            Ok((protocol, address.to_string()))
-        } else {
-            Err(RmpdError::Storage(format!("Invalid URI format: {uri}")))
-        }
     }
 
     /// Execute mount command and check result
@@ -74,13 +79,13 @@ impl LinuxMountBackend {
 #[cfg(target_os = "linux")]
 impl MountBackend for LinuxMountBackend {
     fn mount(&self, uri: &str, mountpoint: &Path, options: &[String]) -> Result<()> {
-        let (protocol, address) = Self::parse_uri(uri)?;
+        let (protocol, address) = parse_uri(uri)?;
 
         match protocol.as_str() {
             "nfs" => {
                 // NFS mount: mount -t nfs server:/path /mountpoint
                 tracing::info!("Mounting NFS: {} -> {}", address, mountpoint.display());
-                self.execute_mount_command("nfs", &address, mountpoint.to_str().unwrap(), options)
+                self.execute_mount_command("nfs", &address, path_to_str(mountpoint)?, options)
             }
             "smb" | "cifs" => {
                 // SMB/CIFS mount: mount -t cifs //server/share /mountpoint
@@ -101,7 +106,7 @@ impl MountBackend for LinuxMountBackend {
                 self.execute_mount_command(
                     "cifs",
                     &cifs_path,
-                    mountpoint.to_str().unwrap(),
+                    path_to_str(mountpoint)?,
                     &mount_options,
                 )
             }
@@ -111,7 +116,7 @@ impl MountBackend for LinuxMountBackend {
                 tracing::warn!("WebDAV mounting requires davfs2 to be installed and configured");
 
                 // Try with davfs
-                self.execute_mount_command("davfs", uri, mountpoint.to_str().unwrap(), options)
+                self.execute_mount_command("davfs", uri, path_to_str(mountpoint)?, options)
             }
             _ => Err(RmpdError::Storage(format!(
                 "Unsupported protocol: {protocol}"
@@ -123,7 +128,7 @@ impl MountBackend for LinuxMountBackend {
         tracing::info!("Unmounting: {}", mountpoint.display());
 
         let output = Command::new("umount")
-            .arg(mountpoint.to_str().unwrap())
+            .arg(path_to_str(mountpoint)?)
             .output()
             .map_err(|e| RmpdError::Storage(format!("Failed to execute umount: {e}")))?;
 
@@ -167,21 +172,12 @@ impl MacOSMountBackend {
         Self
     }
 
-    fn parse_uri(uri: &str) -> Result<(String, String)> {
-        if let Some(pos) = uri.find("://") {
-            let protocol = uri[..pos].to_lowercase();
-            let address = &uri[pos + 3..];
-            Ok((protocol, address.to_string()))
-        } else {
-            Err(RmpdError::Storage(format!("Invalid URI format: {uri}")))
-        }
-    }
 }
 
 #[cfg(target_os = "macos")]
 impl MountBackend for MacOSMountBackend {
     fn mount(&self, uri: &str, mountpoint: &Path, _options: &[String]) -> Result<()> {
-        let (protocol, address) = Self::parse_uri(uri)?;
+        let (protocol, address) = parse_uri(uri)?;
 
         match protocol.as_str() {
             "nfs" => {
@@ -190,7 +186,7 @@ impl MountBackend for MacOSMountBackend {
                     .arg("-t")
                     .arg("nfs")
                     .arg(&address)
-                    .arg(mountpoint.to_str().unwrap())
+                    .arg(path_to_str(mountpoint)?)
                     .output()
                     .map_err(|e| RmpdError::Storage(format!("Mount command failed: {e}")))?;
 
@@ -212,7 +208,7 @@ impl MountBackend for MacOSMountBackend {
                     .arg("-t")
                     .arg("smbfs")
                     .arg(&smb_path)
-                    .arg(mountpoint.to_str().unwrap())
+                    .arg(path_to_str(mountpoint)?)
                     .output()
                     .map_err(|e| RmpdError::Storage(format!("Mount command failed: {e}")))?;
 
@@ -230,7 +226,7 @@ impl MountBackend for MacOSMountBackend {
 
     fn unmount(&self, mountpoint: &Path) -> Result<()> {
         let output = Command::new("umount")
-            .arg(mountpoint.to_str().unwrap())
+            .arg(path_to_str(mountpoint)?)
             .output()
             .map_err(|e| RmpdError::Storage(format!("Unmount command failed: {e}")))?;
 
@@ -305,21 +301,19 @@ mod tests {
     use super::*;
 
     #[test]
-    #[cfg(target_os = "linux")]
     fn test_parse_uri() {
-        let (proto, addr) = LinuxMountBackend::parse_uri("nfs://192.168.1.100/music").unwrap();
+        let (proto, addr) = parse_uri("nfs://192.168.1.100/music").unwrap();
         assert_eq!(proto, "nfs");
         assert_eq!(addr, "192.168.1.100/music");
 
-        let (proto, addr) = LinuxMountBackend::parse_uri("smb://server/share").unwrap();
+        let (proto, addr) = parse_uri("smb://server/share").unwrap();
         assert_eq!(proto, "smb");
         assert_eq!(addr, "server/share");
     }
 
     #[test]
-    #[cfg(target_os = "linux")]
     fn test_parse_uri_invalid() {
-        let result = LinuxMountBackend::parse_uri("invalid_uri");
+        let result = parse_uri("invalid_uri");
         assert!(result.is_err());
     }
 

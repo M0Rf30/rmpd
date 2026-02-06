@@ -3,6 +3,8 @@
 use crate::response::ResponseBuilder;
 use crate::state::AppState;
 
+use super::utils::{ACK_ERROR_ARG, ACK_ERROR_SYSTEM};
+
 pub async fn handle_setvol_command(state: &AppState, volume: u8) -> String {
     match state.engine.write().await.set_volume(volume).await {
         Ok(_) => {
@@ -10,7 +12,7 @@ pub async fn handle_setvol_command(state: &AppState, volume: u8) -> String {
             status.volume = volume;
             ResponseBuilder::new().ok()
         }
-        Err(e) => ResponseBuilder::error(50, 0, "setvol", &format!("Volume error: {e}")),
+        Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "setvol", &format!("Volume error: {e}")),
     }
 }
 
@@ -23,7 +25,7 @@ pub async fn handle_volume_command(state: &AppState, change: i8) -> String {
             state.status.write().await.volume = new_vol;
             ResponseBuilder::new().ok()
         }
-        Err(e) => ResponseBuilder::error(50, 0, "volume", &format!("Volume error: {e}")),
+        Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "volume", &format!("Volume error: {e}")),
     }
 }
 
@@ -42,7 +44,7 @@ pub async fn handle_single_command(state: &AppState, mode: &str) -> String {
         "0" => rmpd_core::state::SingleMode::Off,
         "1" => rmpd_core::state::SingleMode::On,
         "oneshot" => rmpd_core::state::SingleMode::Oneshot,
-        _ => return ResponseBuilder::error(2, 0, "single", "Invalid mode"),
+        _ => return ResponseBuilder::error(ACK_ERROR_ARG, 0, "single", "Invalid mode"),
     };
     state.status.write().await.single = single_mode;
     ResponseBuilder::new().ok()
@@ -53,7 +55,7 @@ pub async fn handle_consume_command(state: &AppState, mode: &str) -> String {
         "0" => rmpd_core::state::ConsumeMode::Off,
         "1" => rmpd_core::state::ConsumeMode::On,
         "oneshot" => rmpd_core::state::ConsumeMode::Oneshot,
-        _ => return ResponseBuilder::error(2, 0, "consume", "Invalid mode"),
+        _ => return ResponseBuilder::error(ACK_ERROR_ARG, 0, "consume", "Invalid mode"),
     };
     state.status.write().await.consume = consume_mode;
     ResponseBuilder::new().ok()

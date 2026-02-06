@@ -10,6 +10,7 @@ use crate::commands::{
 };
 use crate::parser::{parse_command, Command};
 use crate::queue_playback::QueuePlaybackManager;
+use crate::commands::utils::ACK_ERROR_UNKNOWN;
 use crate::response::{Response, ResponseBuilder, Stats};
 use crate::state::AppState;
 
@@ -170,7 +171,7 @@ async fn handle_client(mut stream: TcpStream, state: AppState) -> Result<()> {
                 continue; // Don't send response yet
             }
             Ok(cmd) => handle_command(cmd, &state, &mut conn_state).await,
-            Err(e) => Response::Text(ResponseBuilder::error(5, 0, trimmed, &e)),
+            Err(e) => Response::Text(ResponseBuilder::error(ACK_ERROR_UNKNOWN, 0, trimmed, &e)),
         };
 
         writer.write_all(response.as_bytes()).await?;
@@ -221,7 +222,7 @@ async fn execute_command_list(
             }
             Err(e) => {
                 // Parse error - return ACK with index
-                return Response::Text(ResponseBuilder::error(5, index as i32, cmd_str, &e));
+                return Response::Text(ResponseBuilder::error(ACK_ERROR_UNKNOWN, index as i32, cmd_str, &e));
             }
         }
     }
@@ -374,23 +375,15 @@ async fn handle_command(
         Command::UrlHandlers => reflection::handle_urlhandlers_command().await,
         Command::Decoders => reflection::handle_decoders_command().await,
         Command::Status => {
-            // Read status with lock held
-            let mut status_guard = state.status.write().await;
-
-            // Sync status.state with atomic_state WHILE holding the lock
-            // This prevents race conditions between reading atomic_state and writing to status
-            let atomic_state_val = state.atomic_state.load(std::sync::atomic::Ordering::SeqCst);
-            let atomic_player_state = match atomic_state_val {
-                0 => rmpd_core::state::PlayerState::Stop,
-                1 => rmpd_core::state::PlayerState::Play,
-                2 => rmpd_core::state::PlayerState::Pause,
-                _ => rmpd_core::state::PlayerState::Stop,
+            let status = {
+                let mut guard = state.status.write().await;
+                // Sync status.state with atomic_state WHILE holding the lock
+                // This prevents race conditions between reading atomic_state and writing to status
+                guard.state = rmpd_core::state::PlayerState::from_atomic(
+                    state.atomic_state.load(std::sync::atomic::Ordering::Acquire),
+                );
+                guard.clone()
             };
-            status_guard.state = atomic_player_state;
-
-            // Clone status and release lock
-            let status = status_guard.clone();
-            drop(status_guard);
 
             let mut resp = ResponseBuilder::new();
             resp.status(&status);
@@ -401,13 +394,7 @@ async fn handle_command(
             let (songs, artists, albums, db_playtime, db_update) =
                 if let Some(ref db_path) = state.db_path {
                     if let Ok(db) = rmpd_library::Database::open(db_path) {
-                        let songs = db.count_songs().unwrap_or(0);
-                        let artists = db.count_artists().unwrap_or(0);
-                        let albums = db.count_albums().unwrap_or(0);
-                        let db_playtime = db.get_db_playtime().unwrap_or(0);
-                        let db_update = db.get_db_update().unwrap_or(0);
-
-                        (songs, artists, albums, db_playtime, db_update)
+                        db.get_stats().unwrap_or((0, 0, 0, 0, 0))
                     } else {
                         (0, 0, 0, 0, 0)
                     }
@@ -528,7 +515,7 @@ async fn handle_command(
             // Already handled at the beginning of the function
             unreachable!()
         }
-        Command::Unknown(cmd) => ResponseBuilder::error(5, 0, &cmd, "unknown command"),
+        Command::Unknown(cmd) => ResponseBuilder::error(ACK_ERROR_UNKNOWN, 0, &cmd, "unknown command"),
         Command::Repeat { enabled } => options::handle_repeat_command(state, enabled).await,
         Command::Random { enabled } => options::handle_random_command(state, enabled).await,
         Command::Single { mode } => options::handle_single_command(state, &mode).await,
@@ -699,7 +686,7 @@ async fn handle_command(
         }
         _ => {
             // Unimplemented commands
-            ResponseBuilder::error(5, 0, "command", "not yet implemented")
+            ResponseBuilder::error(ACK_ERROR_UNKNOWN, 0, "command", "not yet implemented")
         }
     };
 

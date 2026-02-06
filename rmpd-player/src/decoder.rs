@@ -286,16 +286,14 @@ impl SymphoniaDecoder {
             }
 
             // Log first packet's sample info
-            static mut LOGGED: bool = false;
-            unsafe {
-                if !LOGGED {
-                    tracing::info!(
-                        "First packet: format=F32, frames={}, spec={:?}",
-                        decoded.frames(),
-                        decoded.spec()
-                    );
-                    LOGGED = true;
-                }
+            use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
+            static LOGGED: AtomicBool = AtomicBool::new(false);
+            if !LOGGED.swap(true, AtomicOrdering::Relaxed) {
+                tracing::info!(
+                    "First packet: format=F32, frames={}, spec={:?}",
+                    decoded.frames(),
+                    decoded.spec()
+                );
             }
 
             // Convert to f32 samples

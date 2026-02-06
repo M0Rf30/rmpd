@@ -1,8 +1,152 @@
 use camino::Utf8PathBuf;
 use rmpd_core::error::{Result, RmpdError};
 use rmpd_core::song::Song;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, Row};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+/// Common SELECT columns for all song queries (with `s.` table alias prefix).
+/// Used with `song_from_row` to construct Song structs from query results.
+const SONG_COLUMNS_ALIASED: &str =
+    "s.id, s.path, s.mtime, s.duration,
+     s.title, s.artist, s.album, s.album_artist, s.track, s.disc, s.date, s.genre, s.composer, s.performer, s.comment,
+     s.musicbrainz_trackid, s.musicbrainz_albumid, s.musicbrainz_artistid, s.musicbrainz_albumartistid,
+     s.musicbrainz_releasegroupid, s.musicbrainz_releasetrackid,
+     s.artist_sort, s.album_artist_sort, s.original_date, s.label,
+     s.sample_rate, s.channels, s.bits_per_sample, s.bitrate,
+     s.replay_gain_track_gain, s.replay_gain_track_peak,
+     s.replay_gain_album_gain, s.replay_gain_album_peak,
+     s.added_at, s.last_modified";
+
+/// Common SELECT columns for song queries (without table alias).
+const SONG_COLUMNS: &str =
+    "id, path, mtime, duration,
+     title, artist, album, album_artist, track, disc, date, genre, composer, performer, comment,
+     musicbrainz_trackid, musicbrainz_albumid, musicbrainz_artistid, musicbrainz_albumartistid,
+     musicbrainz_releasegroupid, musicbrainz_releasetrackid,
+     artist_sort, album_artist_sort, original_date, label,
+     sample_rate, channels, bits_per_sample, bitrate,
+     replay_gain_track_gain, replay_gain_track_peak,
+     replay_gain_album_gain, replay_gain_album_peak,
+     added_at, last_modified";
+
+/// Construct a Song from a database row using `row.get()` with error propagation.
+/// Expects columns in the order defined by `SONG_COLUMNS` / `SONG_COLUMNS_ALIASED`.
+fn song_from_row(row: &Row<'_>) -> rusqlite::Result<Song> {
+    Ok(Song {
+        id: row.get::<_, i64>(0)? as u64,
+        path: row.get::<_, String>(1)?.into(),
+        duration: row.get::<_, Option<f64>>(3)?.map(Duration::from_secs_f64),
+        title: row.get(4)?,
+        artist: row.get(5)?,
+        album: row.get(6)?,
+        album_artist: row.get(7)?,
+        track: row.get(8)?,
+        disc: row.get(9)?,
+        date: row.get(10)?,
+        genre: row.get(11)?,
+        composer: row.get(12)?,
+        performer: row.get(13)?,
+        comment: row.get(14)?,
+        musicbrainz_trackid: row.get(15)?,
+        musicbrainz_albumid: row.get(16)?,
+        musicbrainz_artistid: row.get(17)?,
+        musicbrainz_albumartistid: row.get(18)?,
+        musicbrainz_releasegroupid: row.get(19)?,
+        musicbrainz_releasetrackid: row.get(20)?,
+        artist_sort: row.get(21)?,
+        album_artist_sort: row.get(22)?,
+        original_date: row.get(23)?,
+        label: row.get(24)?,
+        sample_rate: row.get(25)?,
+        channels: row.get(26)?,
+        bits_per_sample: row.get(27)?,
+        bitrate: row.get(28)?,
+        replay_gain_track_gain: row.get(29)?,
+        replay_gain_track_peak: row.get(30)?,
+        replay_gain_album_gain: row.get(31)?,
+        replay_gain_album_peak: row.get(32)?,
+        added_at: row.get(33)?,
+        last_modified: row.get(34)?,
+    })
+}
+
+/// Construct a Song from a database row using `row.get().ok()` for optional fields.
+/// Used for queries where some columns may be missing (e.g., directory listings
+/// that don't include the `mtime` column at index 2).
+fn song_from_row_optional(row: &Row<'_>) -> rusqlite::Result<Song> {
+    Ok(Song {
+        id: row.get::<_, i64>(0)? as u64,
+        path: Utf8PathBuf::from(row.get::<_, String>(1)?),
+        duration: row.get::<_, Option<f64>>(2)?.map(Duration::from_secs_f64),
+        title: row.get(3).ok(),
+        artist: row.get(4).ok(),
+        album: row.get(5).ok(),
+        album_artist: row.get(6).ok(),
+        track: row.get(7).ok(),
+        disc: row.get(8).ok(),
+        date: row.get(9).ok(),
+        genre: row.get(10).ok(),
+        composer: row.get(11).ok(),
+        performer: row.get(12).ok(),
+        comment: row.get(13).ok(),
+        musicbrainz_trackid: row.get(14).ok(),
+        musicbrainz_albumid: row.get(15).ok(),
+        musicbrainz_artistid: row.get(16).ok(),
+        musicbrainz_albumartistid: row.get(17).ok(),
+        musicbrainz_releasegroupid: row.get(18).ok(),
+        musicbrainz_releasetrackid: row.get(19).ok(),
+        artist_sort: row.get(20).ok(),
+        album_artist_sort: row.get(21).ok(),
+        original_date: row.get(22).ok(),
+        label: row.get(23).ok(),
+        sample_rate: row.get(24).ok(),
+        channels: row.get(25).ok(),
+        bits_per_sample: row.get(26).ok(),
+        bitrate: row.get(27).ok(),
+        replay_gain_track_gain: row.get(28).ok(),
+        replay_gain_track_peak: row.get(29).ok(),
+        replay_gain_album_gain: row.get(30).ok(),
+        replay_gain_album_peak: row.get(31).ok(),
+        added_at: row.get(32)?,
+        last_modified: row.get(33)?,
+    })
+}
+
+/// Convert a SystemTime to Unix timestamp (seconds since epoch).
+pub(crate) fn system_time_to_unix_secs(time: SystemTime) -> i64 {
+    time.duration_since(UNIX_EPOCH)
+        .unwrap_or_else(|_| {
+            tracing::warn!("System time before UNIX_EPOCH, using 0");
+            Duration::ZERO
+        })
+        .as_secs() as i64
+}
+
+/// Map a tag name to its database column name.
+fn tag_to_column(tag: &str) -> std::result::Result<&'static str, RmpdError> {
+    match tag.to_lowercase().as_str() {
+        "artist" => Ok("artist"),
+        "album" => Ok("album"),
+        "albumartist" => Ok("album_artist"),
+        "genre" => Ok("genre"),
+        "date" => Ok("date"),
+        "title" => Ok("title"),
+        "composer" => Ok("composer"),
+        "performer" => Ok("performer"),
+        _ => Err(RmpdError::Database(format!("unsupported tag: {tag}"))),
+    }
+}
+
+/// Look up a playlist by name and return its ID.
+fn get_playlist_id(conn: &Connection, name: &str) -> Result<i64> {
+    conn.query_row(
+        "SELECT id FROM playlists WHERE name = ?1",
+        params![name],
+        |row| row.get(0),
+    )
+    .optional()?
+    .ok_or_else(|| RmpdError::Library(format!("Playlist not found: {name}")))
+}
 
 #[derive(Debug)]
 pub struct Database {
@@ -329,113 +473,19 @@ impl Database {
     }
 
     pub fn get_song(&self, id: u64) -> Result<Option<Song>> {
-        Ok(self.conn.query_row(
-            "SELECT id, path, mtime, duration,
-                    title, artist, album, album_artist, track, disc, date, genre, composer, performer, comment,
-                    musicbrainz_trackid, musicbrainz_albumid, musicbrainz_artistid, musicbrainz_albumartistid,
-                    musicbrainz_releasegroupid, musicbrainz_releasetrackid,
-                    artist_sort, album_artist_sort, original_date, label,
-                    sample_rate, channels, bits_per_sample, bitrate,
-                    replay_gain_track_gain, replay_gain_track_peak,
-                    replay_gain_album_gain, replay_gain_album_peak,
-                    added_at, last_modified
-             FROM songs WHERE id = ?1",
-            params![id as i64],
-            |row| {
-                Ok(Song {
-                    id: row.get::<_, i64>(0)? as u64,
-                    path: row.get::<_, String>(1)?.into(),
-                    duration: row.get::<_, Option<f64>>(3)?.map(Duration::from_secs_f64),
-                    title: row.get(4)?,
-                    artist: row.get(5)?,
-                    album: row.get(6)?,
-                    album_artist: row.get(7)?,
-                    track: row.get(8)?,
-                    disc: row.get(9)?,
-                    date: row.get(10)?,
-                    genre: row.get(11)?,
-                    composer: row.get(12)?,
-                    performer: row.get(13)?,
-                    comment: row.get(14)?,
-                    musicbrainz_trackid: row.get(15)?,
-                    musicbrainz_albumid: row.get(16)?,
-                    musicbrainz_artistid: row.get(17)?,
-                    musicbrainz_albumartistid: row.get(18)?,
-                    musicbrainz_releasegroupid: row.get(19)?,
-                    musicbrainz_releasetrackid: row.get(20)?,
-                    artist_sort: row.get(21)?,
-                    album_artist_sort: row.get(22)?,
-                    original_date: row.get(23)?,
-                    label: row.get(24)?,
-                    sample_rate: row.get(25)?,
-                    channels: row.get(26)?,
-                    bits_per_sample: row.get(27)?,
-                    bitrate: row.get(28)?,
-                    replay_gain_track_gain: row.get(29)?,
-                    replay_gain_track_peak: row.get(30)?,
-                    replay_gain_album_gain: row.get(31)?,
-                    replay_gain_album_peak: row.get(32)?,
-                    added_at: row.get(33)?,
-                    last_modified: row.get(34)?,
-                })
-            },
-        )
-        .optional()?)
+        let query = format!("SELECT {SONG_COLUMNS} FROM songs WHERE id = ?1");
+        Ok(self
+            .conn
+            .query_row(&query, params![id as i64], song_from_row)
+            .optional()?)
     }
 
     pub fn get_song_by_path(&self, path: &str) -> Result<Option<Song>> {
-        Ok(self.conn.query_row(
-            "SELECT id, path, mtime, duration,
-                    title, artist, album, album_artist, track, disc, date, genre, composer, performer, comment,
-                    musicbrainz_trackid, musicbrainz_albumid, musicbrainz_artistid, musicbrainz_albumartistid,
-                    musicbrainz_releasegroupid, musicbrainz_releasetrackid,
-                    artist_sort, album_artist_sort, original_date, label,
-                    sample_rate, channels, bits_per_sample, bitrate,
-                    replay_gain_track_gain, replay_gain_track_peak,
-                    replay_gain_album_gain, replay_gain_album_peak,
-                    added_at, last_modified
-             FROM songs WHERE path = ?1",
-            params![path],
-            |row| {
-                Ok(Song {
-                    id: row.get::<_, i64>(0)? as u64,
-                    path: row.get::<_, String>(1)?.into(),
-                    duration: row.get::<_, Option<f64>>(3)?.map(Duration::from_secs_f64),
-                    title: row.get(4)?,
-                    artist: row.get(5)?,
-                    album: row.get(6)?,
-                    album_artist: row.get(7)?,
-                    track: row.get(8)?,
-                    disc: row.get(9)?,
-                    date: row.get(10)?,
-                    genre: row.get(11)?,
-                    composer: row.get(12)?,
-                    performer: row.get(13)?,
-                    comment: row.get(14)?,
-                    musicbrainz_trackid: row.get(15)?,
-                    musicbrainz_albumid: row.get(16)?,
-                    musicbrainz_artistid: row.get(17)?,
-                    musicbrainz_albumartistid: row.get(18)?,
-                    musicbrainz_releasegroupid: row.get(19)?,
-                    musicbrainz_releasetrackid: row.get(20)?,
-                    artist_sort: row.get(21)?,
-                    album_artist_sort: row.get(22)?,
-                    original_date: row.get(23)?,
-                    label: row.get(24)?,
-                    sample_rate: row.get(25)?,
-                    channels: row.get(26)?,
-                    bits_per_sample: row.get(27)?,
-                    bitrate: row.get(28)?,
-                    replay_gain_track_gain: row.get(29)?,
-                    replay_gain_track_peak: row.get(30)?,
-                    replay_gain_album_gain: row.get(31)?,
-                    replay_gain_album_peak: row.get(32)?,
-                    added_at: row.get(33)?,
-                    last_modified: row.get(34)?,
-                })
-            },
-        )
-        .optional()?)
+        let query = format!("SELECT {SONG_COLUMNS} FROM songs WHERE path = ?1");
+        Ok(self
+            .conn
+            .query_row(&query, params![path], song_from_row)
+            .optional()?)
     }
 
     pub fn count_songs(&self) -> Result<u32> {
@@ -460,21 +510,23 @@ impl Database {
         )?)
     }
 
-    pub fn get_db_playtime(&self) -> Result<u64> {
-        Ok(self
-            .conn
-            .query_row("SELECT COALESCE(SUM(duration), 0) FROM songs", [], |row| {
-                let duration: f64 = row.get(0)?;
-                Ok(duration as u64)
-            })?)
-    }
-
-    pub fn get_db_update(&self) -> Result<i64> {
-        Ok(self
-            .conn
-            .query_row("SELECT COALESCE(MAX(added_at), 0) FROM songs", [], |row| {
-                row.get(0)
-            })?)
+    /// Get all database statistics in a single query.
+    /// Returns (songs, artists, albums, playtime_secs, last_update).
+    pub fn get_stats(&self) -> Result<(u32, u32, u32, u64, i64)> {
+        Ok(self.conn.query_row(
+            "SELECT \
+                COUNT(*), \
+                COUNT(DISTINCT CASE WHEN artist IS NOT NULL THEN artist END), \
+                COUNT(DISTINCT CASE WHEN album IS NOT NULL THEN album END), \
+                COALESCE(SUM(duration), 0), \
+                COALESCE(MAX(added_at), 0) \
+             FROM songs",
+            [],
+            |row| {
+                let duration: f64 = row.get(3)?;
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, duration as u64, row.get(4)?))
+            },
+        )?)
     }
 
     fn get_or_create_directory(&self, path: &camino::Utf8Path) -> Result<i64> {
@@ -499,13 +551,7 @@ impl Database {
         };
 
         // Create this directory
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_else(|_| {
-                tracing::warn!("System time before UNIX_EPOCH, using 0");
-                Duration::ZERO
-            })
-            .as_secs() as i64;
+        let now = system_time_to_unix_secs(SystemTime::now());
 
         self.conn.execute(
             "INSERT INTO directories (path, parent_id, mtime) VALUES (?1, ?2, ?3)",
@@ -538,61 +584,17 @@ impl Database {
 
     pub fn search_songs(&self, query: &str) -> Result<Vec<Song>> {
         let escaped_query = Self::escape_fts_query(query);
-        let mut stmt = self.conn.prepare(
-            "SELECT s.id, s.path, s.mtime, s.duration,
-                    s.title, s.artist, s.album, s.album_artist, s.track, s.disc, s.date, s.genre, s.composer, s.performer, s.comment,
-                    s.musicbrainz_trackid, s.musicbrainz_albumid, s.musicbrainz_artistid, s.musicbrainz_albumartistid,
-                    s.musicbrainz_releasegroupid, s.musicbrainz_releasetrackid,
-                    s.artist_sort, s.album_artist_sort, s.original_date, s.label,
-                    s.sample_rate, s.channels, s.bits_per_sample, s.bitrate,
-                    s.replay_gain_track_gain, s.replay_gain_track_peak,
-                    s.replay_gain_album_gain, s.replay_gain_album_peak,
-                    s.added_at, s.last_modified
+        let sql = format!(
+            "SELECT {SONG_COLUMNS_ALIASED}
              FROM songs s
              JOIN songs_fts ON songs_fts.rowid = s.id
              WHERE songs_fts MATCH ?1
              ORDER BY rank"
-        )?;
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
 
         let songs = stmt
-            .query_map(params![escaped_query], |row| {
-                Ok(Song {
-                    id: row.get::<_, i64>(0)? as u64,
-                    path: row.get::<_, String>(1)?.into(),
-                    duration: row.get::<_, Option<f64>>(3)?.map(Duration::from_secs_f64),
-                    title: row.get(4)?,
-                    artist: row.get(5)?,
-                    album: row.get(6)?,
-                    album_artist: row.get(7)?,
-                    track: row.get(8)?,
-                    disc: row.get(9)?,
-                    date: row.get(10)?,
-                    genre: row.get(11)?,
-                    composer: row.get(12)?,
-                    performer: row.get(13)?,
-                    comment: row.get(14)?,
-                    musicbrainz_trackid: row.get(15)?,
-                    musicbrainz_albumid: row.get(16)?,
-                    musicbrainz_artistid: row.get(17)?,
-                    musicbrainz_albumartistid: row.get(18)?,
-                    musicbrainz_releasegroupid: row.get(19)?,
-                    musicbrainz_releasetrackid: row.get(20)?,
-                    artist_sort: row.get(21)?,
-                    album_artist_sort: row.get(22)?,
-                    original_date: row.get(23)?,
-                    label: row.get(24)?,
-                    sample_rate: row.get(25)?,
-                    channels: row.get(26)?,
-                    bits_per_sample: row.get(27)?,
-                    bitrate: row.get(28)?,
-                    replay_gain_track_gain: row.get(29)?,
-                    replay_gain_track_peak: row.get(30)?,
-                    replay_gain_album_gain: row.get(31)?,
-                    replay_gain_album_peak: row.get(32)?,
-                    added_at: row.get(33)?,
-                    last_modified: row.get(34)?,
-                })
-            })?
+            .query_map(params![escaped_query], song_from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
 
         Ok(songs)
@@ -652,34 +654,8 @@ impl Database {
         filter_tag: &str,
         filter_value: &str,
     ) -> Result<Vec<String>> {
-        // Map tag names to column names
-        let tag_col = match tag.to_lowercase().as_str() {
-            "artist" => "artist",
-            "album" => "album",
-            "albumartist" => "album_artist",
-            "genre" => "genre",
-            "date" => "date",
-            "title" => "title",
-            "composer" => "composer",
-            "performer" => "performer",
-            _ => return Err(RmpdError::Database(format!("unsupported tag: {tag}"))),
-        };
-
-        let filter_col = match filter_tag.to_lowercase().as_str() {
-            "artist" => "artist",
-            "album" => "album",
-            "albumartist" => "album_artist",
-            "genre" => "genre",
-            "date" => "date",
-            "title" => "title",
-            "composer" => "composer",
-            "performer" => "performer",
-            _ => {
-                return Err(RmpdError::Database(format!(
-                    "unsupported filter tag: {filter_tag}"
-                )))
-            }
-        };
+        let tag_col = tag_to_column(tag)?;
+        let filter_col = tag_to_column(filter_tag)?;
 
         let query = format!(
             "SELECT DISTINCT {tag_col} FROM songs WHERE {filter_col} = ? AND {tag_col} IS NOT NULL ORDER BY {tag_col} COLLATE NOCASE"
@@ -695,81 +671,20 @@ impl Database {
     }
 
     pub fn find_songs(&self, tag: &str, value: &str) -> Result<Vec<Song>> {
-        let query = match tag.to_lowercase().as_str() {
-            "artist" => "SELECT id, path, mtime, duration,
-                    title, artist, album, album_artist, track, disc, date, genre, composer, performer, comment,
-                    musicbrainz_trackid, musicbrainz_albumid, musicbrainz_artistid, musicbrainz_albumartistid,
-                    musicbrainz_releasegroupid, musicbrainz_releasetrackid,
-                    artist_sort, album_artist_sort, original_date, label,
-                    sample_rate, channels, bits_per_sample, bitrate,
-                    replay_gain_track_gain, replay_gain_track_peak,
-                    replay_gain_album_gain, replay_gain_album_peak,
-                    added_at, last_modified
-             FROM songs WHERE artist = ?1 ORDER BY album, track",
-            "album" => "SELECT id, path, mtime, duration,
-                    title, artist, album, album_artist, track, disc, date, genre, composer, performer, comment,
-                    musicbrainz_trackid, musicbrainz_albumid, musicbrainz_artistid, musicbrainz_albumartistid,
-                    musicbrainz_releasegroupid, musicbrainz_releasetrackid,
-                    artist_sort, album_artist_sort, original_date, label,
-                    sample_rate, channels, bits_per_sample, bitrate,
-                    replay_gain_track_gain, replay_gain_track_peak,
-                    replay_gain_album_gain, replay_gain_album_peak,
-                    added_at, last_modified
-             FROM songs WHERE album = ?1 ORDER BY track",
-            "genre" => "SELECT id, path, mtime, duration,
-                    title, artist, album, album_artist, track, disc, date, genre, composer, performer, comment,
-                    musicbrainz_trackid, musicbrainz_albumid, musicbrainz_artistid, musicbrainz_albumartistid,
-                    musicbrainz_releasegroupid, musicbrainz_releasetrackid,
-                    artist_sort, album_artist_sort, original_date, label,
-                    sample_rate, channels, bits_per_sample, bitrate,
-                    replay_gain_track_gain, replay_gain_track_peak,
-                    replay_gain_album_gain, replay_gain_album_peak,
-                    added_at, last_modified
-             FROM songs WHERE genre = ?1 ORDER BY artist, album, track",
+        let (column, order) = match tag.to_lowercase().as_str() {
+            "artist" => ("artist", "album, track"),
+            "album" => ("album", "track"),
+            "genre" => ("genre", "artist, album, track"),
             _ => return Err(RmpdError::Library(format!("Unsupported tag: {tag}"))),
         };
 
-        let mut stmt = self.conn.prepare(query)?;
+        let sql = format!(
+            "SELECT {SONG_COLUMNS} FROM songs WHERE {column} = ?1 ORDER BY {order}"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
 
         let songs = stmt
-            .query_map(params![value], |row| {
-                Ok(Song {
-                    id: row.get::<_, i64>(0)? as u64,
-                    path: row.get::<_, String>(1)?.into(),
-                    duration: row.get::<_, Option<f64>>(3)?.map(Duration::from_secs_f64),
-                    title: row.get(4)?,
-                    artist: row.get(5)?,
-                    album: row.get(6)?,
-                    album_artist: row.get(7)?,
-                    track: row.get(8)?,
-                    disc: row.get(9)?,
-                    date: row.get(10)?,
-                    genre: row.get(11)?,
-                    composer: row.get(12)?,
-                    performer: row.get(13)?,
-                    comment: row.get(14)?,
-                    musicbrainz_trackid: row.get(15)?,
-                    musicbrainz_albumid: row.get(16)?,
-                    musicbrainz_artistid: row.get(17)?,
-                    musicbrainz_albumartistid: row.get(18)?,
-                    musicbrainz_releasegroupid: row.get(19)?,
-                    musicbrainz_releasetrackid: row.get(20)?,
-                    artist_sort: row.get(21)?,
-                    album_artist_sort: row.get(22)?,
-                    original_date: row.get(23)?,
-                    label: row.get(24)?,
-                    sample_rate: row.get(25)?,
-                    channels: row.get(26)?,
-                    bits_per_sample: row.get(27)?,
-                    bitrate: row.get(28)?,
-                    replay_gain_track_gain: row.get(29)?,
-                    replay_gain_track_peak: row.get(30)?,
-                    replay_gain_album_gain: row.get(31)?,
-                    replay_gain_album_peak: row.get(32)?,
-                    added_at: row.get(33)?,
-                    last_modified: row.get(34)?,
-                })
-            })?
+            .query_map(params![value], song_from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
 
         Ok(songs)
@@ -780,25 +695,15 @@ impl Database {
         &self,
         filter_expr: &rmpd_core::filter::FilterExpression,
     ) -> Result<Vec<Song>> {
-        let (where_clause, params) = filter_expr.to_sql();
+        let (where_clause, filter_params) = filter_expr.to_sql();
 
-        let query = format!(
-            "SELECT id, path, mtime, duration,
-                    title, artist, album, album_artist, track, disc, date, genre, composer, performer, comment,
-                    musicbrainz_trackid, musicbrainz_albumid, musicbrainz_artistid, musicbrainz_albumartistid,
-                    musicbrainz_releasegroupid, musicbrainz_releasetrackid,
-                    artist_sort, album_artist_sort, original_date, label,
-                    sample_rate, channels, bits_per_sample, bitrate,
-                    replay_gain_track_gain, replay_gain_track_peak,
-                    replay_gain_album_gain, replay_gain_album_peak,
-                    added_at, last_modified
-             FROM songs WHERE {where_clause} ORDER BY album, track"
+        let sql = format!(
+            "SELECT {SONG_COLUMNS} FROM songs WHERE {where_clause} ORDER BY album, track"
         );
 
-        let mut stmt = self.conn.prepare(&query)?;
+        let mut stmt = self.conn.prepare(&sql)?;
 
-        // Convert Vec<String> to params that rusqlite can use
-        let params_refs: Vec<&dyn rusqlite::ToSql> = params
+        let params_refs: Vec<&dyn rusqlite::ToSql> = filter_params
             .iter()
             .map(|s| {
                 let r: &dyn rusqlite::ToSql = s;
@@ -807,103 +712,18 @@ impl Database {
             .collect();
 
         let songs = stmt
-            .query_map(params_refs.as_slice(), |row| {
-                Ok(Song {
-                    id: row.get::<_, i64>(0)? as u64,
-                    path: row.get::<_, String>(1)?.into(),
-                    duration: row.get::<_, Option<f64>>(3)?.map(Duration::from_secs_f64),
-                    title: row.get(4)?,
-                    artist: row.get(5)?,
-                    album: row.get(6)?,
-                    album_artist: row.get(7)?,
-                    track: row.get(8)?,
-                    disc: row.get(9)?,
-                    date: row.get(10)?,
-                    genre: row.get(11)?,
-                    composer: row.get(12)?,
-                    performer: row.get(13)?,
-                    comment: row.get(14)?,
-                    musicbrainz_trackid: row.get(15)?,
-                    musicbrainz_albumid: row.get(16)?,
-                    musicbrainz_artistid: row.get(17)?,
-                    musicbrainz_albumartistid: row.get(18)?,
-                    musicbrainz_releasegroupid: row.get(19)?,
-                    musicbrainz_releasetrackid: row.get(20)?,
-                    artist_sort: row.get(21)?,
-                    album_artist_sort: row.get(22)?,
-                    original_date: row.get(23)?,
-                    label: row.get(24)?,
-                    sample_rate: row.get(25)?,
-                    channels: row.get(26)?,
-                    bits_per_sample: row.get(27)?,
-                    bitrate: row.get(28)?,
-                    replay_gain_track_gain: row.get(29)?,
-                    replay_gain_track_peak: row.get(30)?,
-                    replay_gain_album_gain: row.get(31)?,
-                    replay_gain_album_peak: row.get(32)?,
-                    added_at: row.get(33)?,
-                    last_modified: row.get(34)?,
-                })
-            })?
+            .query_map(params_refs.as_slice(), song_from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
 
         Ok(songs)
     }
 
     pub fn list_all_songs(&self) -> Result<Vec<Song>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, path, mtime, duration,
-                    title, artist, album, album_artist, track, disc, date, genre, composer, performer, comment,
-                    musicbrainz_trackid, musicbrainz_albumid, musicbrainz_artistid, musicbrainz_albumartistid,
-                    musicbrainz_releasegroupid, musicbrainz_releasetrackid,
-                    artist_sort, album_artist_sort, original_date, label,
-                    sample_rate, channels, bits_per_sample, bitrate,
-                    replay_gain_track_gain, replay_gain_track_peak,
-                    replay_gain_album_gain, replay_gain_album_peak,
-                    added_at, last_modified
-             FROM songs
-             ORDER BY path"
-        )?;
+        let sql = format!("SELECT {SONG_COLUMNS} FROM songs ORDER BY path");
+        let mut stmt = self.conn.prepare(&sql)?;
 
         let songs = stmt
-            .query_map([], |row| {
-                Ok(Song {
-                    id: row.get::<_, i64>(0)? as u64,
-                    path: row.get::<_, String>(1)?.into(),
-                    duration: row.get::<_, Option<f64>>(3)?.map(Duration::from_secs_f64),
-                    title: row.get(4)?,
-                    artist: row.get(5)?,
-                    album: row.get(6)?,
-                    album_artist: row.get(7)?,
-                    track: row.get(8)?,
-                    disc: row.get(9)?,
-                    date: row.get(10)?,
-                    genre: row.get(11)?,
-                    composer: row.get(12)?,
-                    performer: row.get(13)?,
-                    comment: row.get(14)?,
-                    musicbrainz_trackid: row.get(15)?,
-                    musicbrainz_albumid: row.get(16)?,
-                    musicbrainz_artistid: row.get(17)?,
-                    musicbrainz_albumartistid: row.get(18)?,
-                    musicbrainz_releasegroupid: row.get(19)?,
-                    musicbrainz_releasetrackid: row.get(20)?,
-                    artist_sort: row.get(21)?,
-                    album_artist_sort: row.get(22)?,
-                    original_date: row.get(23)?,
-                    label: row.get(24)?,
-                    sample_rate: row.get(25)?,
-                    channels: row.get(26)?,
-                    bits_per_sample: row.get(27)?,
-                    bitrate: row.get(28)?,
-                    replay_gain_track_gain: row.get(29)?,
-                    replay_gain_track_peak: row.get(30)?,
-                    replay_gain_album_gain: row.get(31)?,
-                    replay_gain_album_peak: row.get(32)?,
-                    added_at: row.get(33)?,
-                    last_modified: row.get(34)?,
-                })
-            })?
+            .query_map([], song_from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
 
         Ok(songs)
@@ -1012,6 +832,7 @@ impl Database {
         }
 
         // Get songs in this directory
+        // Note: this query omits `mtime` so uses a different column layout
         let mut songs = Vec::new();
         {
             let query = "SELECT id, path, duration,
@@ -1027,44 +848,8 @@ impl Database {
 
             let mut stmt = self.conn.prepare(query)?;
 
-            let song_rows = stmt.query_map(params![dir_id.unwrap_or(0)], |row| {
-                Ok(Song {
-                    id: row.get::<_, i64>(0)? as u64,
-                    path: Utf8PathBuf::from(row.get::<_, String>(1)?),
-                    duration: row.get::<_, Option<f64>>(2)?.map(Duration::from_secs_f64),
-                    title: row.get(3).ok(),
-                    artist: row.get(4).ok(),
-                    album: row.get(5).ok(),
-                    album_artist: row.get(6).ok(),
-                    track: row.get(7).ok(),
-                    disc: row.get(8).ok(),
-                    date: row.get(9).ok(),
-                    genre: row.get(10).ok(),
-                    composer: row.get(11).ok(),
-                    performer: row.get(12).ok(),
-                    comment: row.get(13).ok(),
-                    musicbrainz_trackid: row.get(14).ok(),
-                    musicbrainz_albumid: row.get(15).ok(),
-                    musicbrainz_artistid: row.get(16).ok(),
-                    musicbrainz_albumartistid: row.get(17).ok(),
-                    musicbrainz_releasegroupid: row.get(18).ok(),
-                    musicbrainz_releasetrackid: row.get(19).ok(),
-                    artist_sort: row.get(20).ok(),
-                    album_artist_sort: row.get(21).ok(),
-                    original_date: row.get(22).ok(),
-                    label: row.get(23).ok(),
-                    sample_rate: row.get(24).ok(),
-                    channels: row.get(25).ok(),
-                    bits_per_sample: row.get(26).ok(),
-                    bitrate: row.get(27).ok(),
-                    replay_gain_track_gain: row.get(28).ok(),
-                    replay_gain_track_peak: row.get(29).ok(),
-                    replay_gain_album_gain: row.get(30).ok(),
-                    replay_gain_album_peak: row.get(31).ok(),
-                    added_at: row.get(32)?,
-                    last_modified: row.get(33)?,
-                })
-            })?;
+            let song_rows =
+                stmt.query_map(params![dir_id.unwrap_or(0)], song_from_row_optional)?;
 
             for row in song_rows {
                 songs.push(row?);
@@ -1091,49 +876,9 @@ impl Database {
 
         let search_path = if path.is_empty() { "%" } else { path };
 
-        let song_rows = stmt.query_map(params![search_path], |row| {
-            Ok(Song {
-                id: row.get::<_, i64>(0)? as u64,
-                path: Utf8PathBuf::from(row.get::<_, String>(1)?),
-                duration: row.get::<_, Option<f64>>(2)?.map(Duration::from_secs_f64),
-                title: row.get(3).ok(),
-                artist: row.get(4).ok(),
-                album: row.get(5).ok(),
-                album_artist: row.get(6).ok(),
-                track: row.get(7).ok(),
-                disc: row.get(8).ok(),
-                date: row.get(9).ok(),
-                genre: row.get(10).ok(),
-                composer: row.get(11).ok(),
-                performer: row.get(12).ok(),
-                comment: row.get(13).ok(),
-                musicbrainz_trackid: row.get(14).ok(),
-                musicbrainz_albumid: row.get(15).ok(),
-                musicbrainz_artistid: row.get(16).ok(),
-                musicbrainz_albumartistid: row.get(17).ok(),
-                musicbrainz_releasegroupid: row.get(18).ok(),
-                musicbrainz_releasetrackid: row.get(19).ok(),
-                artist_sort: row.get(20).ok(),
-                album_artist_sort: row.get(21).ok(),
-                original_date: row.get(22).ok(),
-                label: row.get(23).ok(),
-                sample_rate: row.get(24).ok(),
-                channels: row.get(25).ok(),
-                bits_per_sample: row.get(26).ok(),
-                bitrate: row.get(27).ok(),
-                replay_gain_track_gain: row.get(28).ok(),
-                replay_gain_track_peak: row.get(29).ok(),
-                replay_gain_album_gain: row.get(30).ok(),
-                replay_gain_album_peak: row.get(31).ok(),
-                added_at: row.get(32)?,
-                last_modified: row.get(33)?,
-            })
-        })?;
-
-        let mut songs = Vec::new();
-        for row in song_rows {
-            songs.push(row?);
-        }
+        let songs = stmt
+            .query_map(params![search_path], song_from_row_optional)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
 
         Ok(songs)
     }
@@ -1171,18 +916,9 @@ impl Database {
 
     /// Load playlist and return songs
     pub fn load_playlist(&self, name: &str) -> Result<Vec<Song>> {
-        let playlist_id: i64 = self
-            .conn
-            .query_row(
-                "SELECT id FROM playlists WHERE name = ?1",
-                params![name],
-                |row| row.get(0),
-            )
-            .optional()?
-            .ok_or_else(|| RmpdError::Library(format!("Playlist not found: {name}")))?;
+        let playlist_id = get_playlist_id(&self.conn, name)?;
 
-        let mut stmt = self.conn.prepare(
-            "SELECT s.id, s.path, s.duration,
+        let sql = "SELECT s.id, s.path, s.duration,
                     s.title, s.artist, s.album, s.album_artist, s.track, s.disc, s.date, s.genre,
                     s.composer, s.performer, s.comment,
                     s.musicbrainz_trackid, s.musicbrainz_albumid, s.musicbrainz_artistid, s.musicbrainz_albumartistid,
@@ -1195,52 +931,12 @@ impl Database {
              FROM playlist_items pi
              JOIN songs s ON pi.song_id = s.id
              WHERE pi.playlist_id = ?1
-             ORDER BY pi.position"
-        )?;
+             ORDER BY pi.position";
+        let mut stmt = self.conn.prepare(sql)?;
 
-        let song_rows = stmt.query_map(params![playlist_id], |row| {
-            Ok(Song {
-                id: row.get::<_, i64>(0)? as u64,
-                path: Utf8PathBuf::from(row.get::<_, String>(1)?),
-                duration: row.get::<_, Option<f64>>(2)?.map(Duration::from_secs_f64),
-                title: row.get(3).ok(),
-                artist: row.get(4).ok(),
-                album: row.get(5).ok(),
-                album_artist: row.get(6).ok(),
-                track: row.get(7).ok(),
-                disc: row.get(8).ok(),
-                date: row.get(9).ok(),
-                genre: row.get(10).ok(),
-                composer: row.get(11).ok(),
-                performer: row.get(12).ok(),
-                comment: row.get(13).ok(),
-                musicbrainz_trackid: row.get(14).ok(),
-                musicbrainz_albumid: row.get(15).ok(),
-                musicbrainz_artistid: row.get(16).ok(),
-                musicbrainz_albumartistid: row.get(17).ok(),
-                musicbrainz_releasegroupid: row.get(18).ok(),
-                musicbrainz_releasetrackid: row.get(19).ok(),
-                artist_sort: row.get(20).ok(),
-                album_artist_sort: row.get(21).ok(),
-                original_date: row.get(22).ok(),
-                label: row.get(23).ok(),
-                sample_rate: row.get(24).ok(),
-                channels: row.get(25).ok(),
-                bits_per_sample: row.get(26).ok(),
-                bitrate: row.get(27).ok(),
-                replay_gain_track_gain: row.get(28).ok(),
-                replay_gain_track_peak: row.get(29).ok(),
-                replay_gain_album_gain: row.get(30).ok(),
-                replay_gain_album_peak: row.get(31).ok(),
-                added_at: row.get(32)?,
-                last_modified: row.get(33)?,
-            })
-        })?;
-
-        let mut songs = Vec::new();
-        for row in song_rows {
-            songs.push(row?);
-        }
+        let songs = stmt
+            .query_map(params![playlist_id], song_from_row_optional)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
 
         Ok(songs)
     }
@@ -1305,16 +1001,7 @@ impl Database {
 
     /// Add a song to a playlist
     pub fn playlist_add(&self, name: &str, uri: &str) -> Result<()> {
-        // Get playlist ID
-        let playlist_id: i64 = self
-            .conn
-            .query_row(
-                "SELECT id FROM playlists WHERE name = ?1",
-                params![name],
-                |row| row.get(0),
-            )
-            .optional()?
-            .ok_or_else(|| RmpdError::Library(format!("Playlist not found: {name}")))?;
+        let playlist_id = get_playlist_id(&self.conn, name)?;
 
         // Get song by URI
         let song = self
@@ -1345,15 +1032,7 @@ impl Database {
 
     /// Clear all songs from a playlist
     pub fn playlist_clear(&self, name: &str) -> Result<()> {
-        let playlist_id: i64 = self
-            .conn
-            .query_row(
-                "SELECT id FROM playlists WHERE name = ?1",
-                params![name],
-                |row| row.get(0),
-            )
-            .optional()?
-            .ok_or_else(|| RmpdError::Library(format!("Playlist not found: {name}")))?;
+        let playlist_id = get_playlist_id(&self.conn, name)?;
 
         self.conn.execute(
             "DELETE FROM playlist_items WHERE playlist_id = ?1",
@@ -1371,15 +1050,7 @@ impl Database {
 
     /// Delete a song from a playlist by position
     pub fn playlist_delete_pos(&self, name: &str, position: u32) -> Result<()> {
-        let playlist_id: i64 = self
-            .conn
-            .query_row(
-                "SELECT id FROM playlists WHERE name = ?1",
-                params![name],
-                |row| row.get(0),
-            )
-            .optional()?
-            .ok_or_else(|| RmpdError::Library(format!("Playlist not found: {name}")))?;
+        let playlist_id = get_playlist_id(&self.conn, name)?;
 
         let affected = self.conn.execute(
             "DELETE FROM playlist_items WHERE playlist_id = ?1 AND position = ?2",
@@ -1410,15 +1081,7 @@ impl Database {
 
     /// Move a song within a playlist
     pub fn playlist_move(&self, name: &str, from: u32, to: u32) -> Result<()> {
-        let playlist_id: i64 = self
-            .conn
-            .query_row(
-                "SELECT id FROM playlists WHERE name = ?1",
-                params![name],
-                |row| row.get(0),
-            )
-            .optional()?
-            .ok_or_else(|| RmpdError::Library(format!("Playlist not found: {name}")))?;
+        let playlist_id = get_playlist_id(&self.conn, name)?;
 
         if from == to {
             return Ok(());

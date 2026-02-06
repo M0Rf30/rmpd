@@ -12,6 +12,7 @@
 //!
 //! Note: Command handlers still need updating to use partition context
 
+use super::utils::ACK_ERROR_SYSTEM;
 use super::{AppState, ResponseBuilder};
 use crate::connection::ConnectionState;
 use tracing::{debug, info};
@@ -33,7 +34,7 @@ pub async fn handle_partition_command(
     let manager = match &state.partition_manager {
         Some(m) => m,
         None => {
-            return ResponseBuilder::error(50, 0, "partition", "Partition support not initialized");
+            return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "partition", "Partition support not initialized");
         }
     };
 
@@ -43,7 +44,7 @@ pub async fn handle_partition_command(
         conn_state.current_partition = name.to_string();
         ResponseBuilder::new().ok()
     } else {
-        ResponseBuilder::error(50, 0, "partition", "No such partition")
+        ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "partition", "No such partition")
     }
 }
 
@@ -91,12 +92,12 @@ pub async fn handle_listpartitions_command(state: &AppState) -> String {
 pub async fn handle_newpartition_command(state: &AppState, name: &str) -> String {
     // Validate partition name
     if name.is_empty() {
-        return ResponseBuilder::error(50, 0, "newpartition", "Invalid partition name");
+        return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "newpartition", "Invalid partition name");
     }
 
     // Check for invalid characters
     if name.contains('/') || name.contains('\\') || name.contains('\0') {
-        return ResponseBuilder::error(50, 0, "newpartition", "Invalid partition name");
+        return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "newpartition", "Invalid partition name");
     }
 
     let manager = match &state.partition_manager {
@@ -118,7 +119,7 @@ pub async fn handle_newpartition_command(state: &AppState, name: &str) -> String
         }
         Err(e) => {
             debug!("Failed to create partition '{}': {}", name, e);
-            ResponseBuilder::error(50, 0, "newpartition", &e)
+            ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "newpartition", &e)
         }
     }
 }
@@ -152,7 +153,7 @@ pub async fn handle_delpartition_command(state: &AppState, name: &str) -> String
         }
         Err(e) => {
             debug!("Failed to delete partition '{}': {}", name, e);
-            ResponseBuilder::error(50, 0, "delpartition", &e)
+            ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "delpartition", &e)
         }
     }
 }
@@ -191,7 +192,7 @@ pub async fn handle_moveoutput_command(
     let (output_id, current_partition) = match output {
         Some(o) => (o.id, o.partition.clone()),
         None => {
-            return ResponseBuilder::error(50, 0, "moveoutput", "No such output");
+            return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "moveoutput", "No such output");
         }
     };
 
@@ -237,19 +238,20 @@ pub async fn handle_moveoutput_command(
     match move_result {
         Ok(_) => {
             // Update OutputInfo to reflect new partition ownership
-            drop(outputs); // Release read lock
-            let mut outputs_mut = state.outputs.write().await;
-            if let Some(output) = outputs_mut.iter_mut().find(|o| o.id == output_id) {
-                output.partition = Some(to.clone());
+            drop(outputs); // Release read lock before acquiring write lock
+            {
+                let mut outputs_mut = state.outputs.write().await;
+                if let Some(output) = outputs_mut.iter_mut().find(|o| o.id == output_id) {
+                    output.partition = Some(to.clone());
+                }
             }
-            drop(outputs_mut);
 
             info!("Moved output '{}' to partition '{}'", output_name, to);
             ResponseBuilder::new().ok()
         }
         Err(e) => {
             debug!("Failed to move output '{}': {}", output_name, e);
-            ResponseBuilder::error(50, 0, "moveoutput", &format!("Output move failed: {}", e))
+            ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "moveoutput", &format!("Output move failed: {}", e))
         }
     }
 }

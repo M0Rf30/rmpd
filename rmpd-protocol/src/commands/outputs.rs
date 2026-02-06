@@ -3,6 +3,8 @@
 use crate::response::ResponseBuilder;
 use crate::state::AppState;
 
+use super::utils::ACK_ERROR_SYSTEM;
+
 pub async fn handle_outputs_command(state: &AppState) -> String {
     let outputs = state.outputs.read().await;
     let mut resp = ResponseBuilder::new();
@@ -34,7 +36,7 @@ pub async fn handle_enableoutput_command(state: &AppState, id: u32) -> String {
             .emit(rmpd_core::event::Event::OutputsChanged);
         ResponseBuilder::new().ok()
     } else {
-        ResponseBuilder::error(50, 0, "enableoutput", "No such output")
+        ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "enableoutput", "No such output")
     }
 }
 
@@ -48,7 +50,7 @@ pub async fn handle_disableoutput_command(state: &AppState, id: u32) -> String {
             .emit(rmpd_core::event::Event::OutputsChanged);
         ResponseBuilder::new().ok()
     } else {
-        ResponseBuilder::error(50, 0, "disableoutput", "No such output")
+        ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "disableoutput", "No such output")
     }
 }
 
@@ -62,7 +64,7 @@ pub async fn handle_toggleoutput_command(state: &AppState, id: u32) -> String {
             .emit(rmpd_core::event::Event::OutputsChanged);
         ResponseBuilder::new().ok()
     } else {
-        ResponseBuilder::error(50, 0, "toggleoutput", "No such output")
+        ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "toggleoutput", "No such output")
     }
 }
 
@@ -79,6 +81,6 @@ pub async fn handle_outputset_command(
         // when we have configurable output properties
         ResponseBuilder::new().ok()
     } else {
-        ResponseBuilder::error(50, 0, "outputset", "No such output")
+        ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "outputset", "No such output")
     }
 }

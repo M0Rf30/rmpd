@@ -42,15 +42,9 @@ impl QueuePlaybackManager {
 
                         // Sync status.state with atomic_state to ensure consistency
                         // Read atomic_state WHILE holding the lock to avoid races
-                        use rmpd_core::state::PlayerState;
-                        let atomic_state_val =
-                            state.atomic_state.load(std::sync::atomic::Ordering::SeqCst);
-                        let atomic_player_state = match atomic_state_val {
-                            0 => PlayerState::Stop,
-                            1 => PlayerState::Play,
-                            2 => PlayerState::Pause,
-                            _ => PlayerState::Stop,
-                        };
+                        let atomic_player_state = rmpd_core::state::PlayerState::from_atomic(
+                            state.atomic_state.load(std::sync::atomic::Ordering::Acquire),
+                        );
 
                         let state_changed = status.state != atomic_player_state;
                         if state_changed {

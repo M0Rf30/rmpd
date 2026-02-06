@@ -5,23 +5,7 @@ use tracing::{debug, error, info};
 use crate::response::ResponseBuilder;
 use crate::state::AppState;
 
-/// Resolve relative path to absolute path using music_directory
-/// If path is already absolute, return as-is
-fn resolve_path(rel_path: &str, music_dir: Option<&str>) -> String {
-    // If path is already absolute, return as-is
-    if rel_path.starts_with('/') {
-        return rel_path.to_string();
-    }
-
-    // Otherwise, prepend music_directory
-    if let Some(music_dir) = music_dir {
-        let music_dir = music_dir.trim_end_matches('/');
-        format!("{music_dir}/{rel_path}")
-    } else {
-        // Fallback: return as-is if no music_dir
-        rel_path.to_string()
-    }
-}
+use super::utils::{prepare_song_for_playback, ACK_ERROR_SYSTEM};
 
 pub async fn handle_play_command(state: &AppState, position: Option<u32>) -> String {
     let queue = state.queue.read().await;
@@ -32,7 +16,7 @@ pub async fn handle_play_command(state: &AppState, position: Option<u32>) -> Str
         if let Some(item) = queue.get(pos) {
             (item.song.clone(), Some((pos, item.id)))
         } else {
-            return ResponseBuilder::error(50, 0, "play", "No such song");
+            return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "play", "No such song");
         }
     } else {
         // Resume or play first song
@@ -45,18 +29,14 @@ pub async fn handle_play_command(state: &AppState, position: Option<u32>) -> Str
             // Play first song
             (item.song.clone(), Some((0, item.id)))
         } else {
-            return ResponseBuilder::error(50, 0, "play", "No songs in queue");
+            return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "play", "No songs in queue");
         }
     };
 
     drop(queue);
 
-    // Resolve relative path to absolute for playback
-    let mut playback_song = song.clone();
-    let absolute_path = resolve_path(song.path.as_str(), state.music_dir.as_deref());
-    playback_song.path = absolute_path.into();
+    let playback_song = prepare_song_for_playback(&song, state.music_dir.as_deref());
 
-    // Start playback with resolved path
     match state.engine.write().await.play(playback_song).await {
         Ok(_) => {
             // Update status immediately (event will also update but that's idempotent)
@@ -106,7 +86,7 @@ pub async fn handle_play_command(state: &AppState, position: Option<u32>) -> Str
 
             ResponseBuilder::new().ok()
         }
-        Err(e) => ResponseBuilder::error(50, 0, "play", &format!("Playback error: {e}")),
+        Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "play", &format!("Playback error: {e}")),
     }
 }
 
@@ -114,13 +94,9 @@ pub async fn handle_pause_command(state: &AppState, pause_state: Option<bool>) -
     info!("Pause command received: pause_state={:?}", pause_state);
 
     // Get current state lock-free using atomic (no engine lock needed!)
-    let current_state_u8 = state.atomic_state.load(std::sync::atomic::Ordering::SeqCst);
-    let current_state = match current_state_u8 {
-        0 => rmpd_core::state::PlayerState::Stop,
-        1 => rmpd_core::state::PlayerState::Play,
-        2 => rmpd_core::state::PlayerState::Pause,
-        _ => rmpd_core::state::PlayerState::Stop,
-    };
+    let current_state = rmpd_core::state::PlayerState::from_atomic(
+        state.atomic_state.load(std::sync::atomic::Ordering::Acquire),
+    );
 
     info!("Current state (atomic, no locks): {:?}", current_state);
 
@@ -148,13 +124,9 @@ pub async fn handle_pause_command(state: &AppState, pause_state: Option<bool>) -
         Ok(_) => {
             info!("Engine pause completed, updating status...");
             // Read the actual state from atomic (engine might not have changed it)
-            let actual_state_u8 = state.atomic_state.load(std::sync::atomic::Ordering::SeqCst);
-            let actual_state = match actual_state_u8 {
-                0 => rmpd_core::state::PlayerState::Stop,
-                1 => rmpd_core::state::PlayerState::Play,
-                2 => rmpd_core::state::PlayerState::Pause,
-                _ => rmpd_core::state::PlayerState::Stop,
-            };
+            let actual_state = rmpd_core::state::PlayerState::from_atomic(
+                state.atomic_state.load(std::sync::atomic::Ordering::Acquire),
+            );
 
             // Update status to match actual atomic state
             let mut status = state.status.write().await;
@@ -175,7 +147,7 @@ pub async fn handle_pause_command(state: &AppState, pause_state: Option<bool>) -
         }
         Err(e) => {
             error!("Pause failed: {}", e);
-            ResponseBuilder::error(50, 0, "pause", &format!("Pause error: {e}"))
+            ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "pause", &format!("Pause error: {e}"))
         }
     }
 }
@@ -202,7 +174,7 @@ pub async fn handle_stop_command(state: &AppState) -> String {
 
             ResponseBuilder::new().ok()
         }
-        Err(e) => ResponseBuilder::error(50, 0, "stop", &format!("Stop error: {e}")),
+        Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "stop", &format!("Stop error: {e}")),
     }
 }
 
@@ -222,10 +194,7 @@ pub async fn handle_next_command(state: &AppState) -> String {
         drop(queue);
         drop(status);
 
-        // Resolve relative path to absolute for playback
-        let mut playback_song = song.clone();
-        let absolute_path = resolve_path(song.path.as_str(), state.music_dir.as_deref());
-        playback_song.path = absolute_path.into();
+        let playback_song = prepare_song_for_playback(&song, state.music_dir.as_deref());
 
         match state.engine.write().await.play(playback_song).await {
             Ok(_) => {
@@ -248,10 +217,10 @@ pub async fn handle_next_command(state: &AppState) -> String {
 
                 ResponseBuilder::new().ok()
             }
-            Err(e) => ResponseBuilder::error(50, 0, "next", &format!("Playback error: {e}")),
+            Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "next", &format!("Playback error: {e}")),
         }
     } else {
-        ResponseBuilder::error(50, 0, "next", "No next song")
+        ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "next", "No next song")
     }
 }
 
@@ -263,7 +232,7 @@ pub async fn handle_previous_command(state: &AppState) -> String {
         if current.position > 0 {
             current.position - 1
         } else {
-            return ResponseBuilder::error(50, 0, "previous", "Already at first song");
+            return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "previous", "Already at first song");
         }
     } else {
         0
@@ -275,10 +244,7 @@ pub async fn handle_previous_command(state: &AppState) -> String {
         drop(queue);
         drop(status);
 
-        // Resolve relative path to absolute for playback
-        let mut playback_song = song.clone();
-        let absolute_path = resolve_path(song.path.as_str(), state.music_dir.as_deref());
-        playback_song.path = absolute_path.into();
+        let playback_song = prepare_song_for_playback(&song, state.music_dir.as_deref());
 
         match state.engine.write().await.play(playback_song).await {
             Ok(_) => {
@@ -301,10 +267,10 @@ pub async fn handle_previous_command(state: &AppState) -> String {
 
                 ResponseBuilder::new().ok()
             }
-            Err(e) => ResponseBuilder::error(50, 0, "previous", &format!("Playback error: {e}")),
+            Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "previous", &format!("Playback error: {e}")),
         }
     } else {
-        ResponseBuilder::error(50, 0, "previous", "No previous song")
+        ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "previous", "No previous song")
     }
 }
 
@@ -326,13 +292,13 @@ pub async fn handle_seek_command(state: &AppState, position: u32, time: f64) -> 
                         Some(std::time::Duration::from_secs_f64(time));
                     ResponseBuilder::new().ok()
                 }
-                Err(e) => ResponseBuilder::error(50, 0, "seek", &format!("Seek failed: {e}")),
+                Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "seek", &format!("Seek failed: {e}")),
             }
         } else {
-            ResponseBuilder::error(50, 0, "seek", "Can only seek in current song")
+            ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "seek", "Can only seek in current song")
         }
     } else {
-        ResponseBuilder::error(50, 0, "seek", "Not playing")
+        ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "seek", "Not playing")
     }
 }
 
@@ -351,13 +317,13 @@ pub async fn handle_seekid_command(state: &AppState, id: u32, time: f64) -> Stri
                         Some(std::time::Duration::from_secs_f64(time));
                     ResponseBuilder::new().ok()
                 }
-                Err(e) => ResponseBuilder::error(50, 0, "seekid", &format!("Seek failed: {e}")),
+                Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "seekid", &format!("Seek failed: {e}")),
             }
         } else {
-            ResponseBuilder::error(50, 0, "seekid", "Can only seek in current song")
+            ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "seekid", "Can only seek in current song")
         }
     } else {
-        ResponseBuilder::error(50, 0, "seekid", "Not playing")
+        ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "seekid", "Not playing")
     }
 }
 
@@ -388,9 +354,9 @@ pub async fn handle_seekcur_command(state: &AppState, time: f64, relative: bool)
                     Some(std::time::Duration::from_secs_f64(seek_position));
                 ResponseBuilder::new().ok()
             }
-            Err(e) => ResponseBuilder::error(50, 0, "seekcur", &format!("Seek failed: {e}")),
+            Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "seekcur", &format!("Seek failed: {e}")),
         }
     } else {
-        ResponseBuilder::error(50, 0, "seekcur", "Not playing")
+        ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "seekcur", "Not playing")
     }
 }

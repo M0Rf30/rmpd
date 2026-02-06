@@ -19,17 +19,31 @@ use symphonia::core::codecs::{BitOrder, ChannelDataLayout};
 const DOP_MARKER_1: u8 = 0x05;
 const DOP_MARKER_2: u8 = 0xFA;
 
-/// Reverse the bits in a byte
-/// Used when source DSD is LSB-first but DAC expects MSB-first in DoP
+/// Lookup table for bit reversal (LSB-first to MSB-first).
+/// Generated at compile time. Each index maps to its bit-reversed value.
+const BIT_REVERSE_TABLE: [u8; 256] = {
+    let mut table = [0u8; 256];
+    let mut i = 0u16;
+    while i < 256 {
+        let mut result = 0u8;
+        let mut b = i as u8;
+        let mut bit = 0;
+        while bit < 8 {
+            result = (result << 1) | (b & 1);
+            b >>= 1;
+            bit += 1;
+        }
+        table[i as usize] = result;
+        i += 1;
+    }
+    table
+};
+
+/// Reverse the bits in a byte using lookup table.
+/// Used when source DSD is LSB-first but DAC expects MSB-first in DoP.
 #[inline]
 fn reverse_bits(byte: u8) -> u8 {
-    let mut result = 0u8;
-    let mut b = byte;
-    for _ in 0..8 {
-        result = (result << 1) | (b & 1);
-        b >>= 1;
-    }
-    result
+    BIT_REVERSE_TABLE[byte as usize]
 }
 
 /// DoP encoder that converts DSD data to DoP-encoded PCM

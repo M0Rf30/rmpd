@@ -5,7 +5,9 @@ use lofty::probe::Probe;
 use rmpd_core::error::{Result, RmpdError};
 use rmpd_core::song::Song;
 use std::fs;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime};
+
+use crate::database::system_time_to_unix_secs;
 
 /// Represents extracted artwork from an audio file
 #[derive(Debug, Clone)]
@@ -24,15 +26,9 @@ impl MetadataExtractor {
         let metadata = fs::metadata(path.as_str())
             .map_err(|e| RmpdError::Library(format!("Failed to read file metadata: {e}")))?;
 
-        let mtime = metadata
-            .modified()
-            .unwrap_or(SystemTime::UNIX_EPOCH)
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_else(|_| {
-                tracing::warn!("System time before UNIX_EPOCH, using 0");
-                Duration::ZERO
-            })
-            .as_secs() as i64;
+        let mtime = system_time_to_unix_secs(
+            metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH),
+        );
 
         // Parse audio file with lofty (now supports DSF/DFF with ID3v2 tags)
         let tagged_file = Probe::open(path.as_str())

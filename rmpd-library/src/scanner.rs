@@ -5,7 +5,7 @@ use std::fs;
 use std::path::Path;
 use tracing::{debug, info, warn};
 
-use crate::database::Database;
+use crate::database::{system_time_to_unix_secs, Database};
 use crate::metadata::MetadataExtractor;
 
 #[derive(Debug)]
@@ -147,15 +147,11 @@ impl Scanner {
                     }
                 };
 
-                let mtime = metadata
-                    .modified()
-                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_else(|_| {
-                        tracing::warn!("System time before UNIX_EPOCH, using 0");
-                        std::time::Duration::ZERO
-                    })
-                    .as_secs() as i64;
+                let mtime = system_time_to_unix_secs(
+                    metadata
+                        .modified()
+                        .unwrap_or(std::time::SystemTime::UNIX_EPOCH),
+                );
 
                 // Skip if file hasn't been modified
                 let is_update = if let Some(ref existing_song) = existing {

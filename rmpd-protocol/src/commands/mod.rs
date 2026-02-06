@@ -16,6 +16,7 @@ pub mod queue;
 pub mod reflection;
 pub mod stickers;
 pub mod storage;
+pub mod utils;
 
 // Re-export commonly used types
 pub use crate::response::{Response, ResponseBuilder, Stats};
