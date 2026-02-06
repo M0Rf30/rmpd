@@ -302,6 +302,11 @@ impl SymphoniaDecoder {
             let spec = *decoded.spec();
             let duration = decoded.frames() as u64;
 
+            // Skip empty packets (can happen with metadata or padding)
+            if duration == 0 {
+                continue;
+            }
+
             // Update channels if not yet known
             if self.channels.is_none() {
                 self.channels = Some(spec.channels.count() as u8);

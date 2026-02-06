@@ -2,19 +2,21 @@
 //!
 //! These tests verify mount/unmount/listmounts commands.
 //!
-//! **IMPORTANT**: Run these tests with the environment variable set to disable actual mounting:
-//! ```bash
-//! RMPD_DISABLE_ACTUAL_MOUNT=1 cargo test --test storage_commands
-//! ```
-//!
-//! This prevents the tests from attempting to perform actual filesystem mounting
-//! which requires root privileges.
+//! **IMPORTANT**: These tests disable actual mounting automatically to avoid
+//! requiring root privileges. They test the mount tracking/registry functionality.
 
 use rmpd_protocol::commands::storage;
 use rmpd_protocol::AppState;
 
+/// Setup test environment to disable actual mounting
+#[allow(clippy::disallowed_methods)]
+fn setup_test_env() {
+    std::env::set_var("RMPD_DISABLE_ACTUAL_MOUNT", "1");
+}
+
 #[tokio::test]
 async fn test_mount_command() {
+    setup_test_env();
     let state = AppState::with_paths("/tmp/test_db".to_string(), "/tmp/test_music".to_string());
 
     let response =
@@ -32,6 +34,7 @@ async fn test_mount_command() {
 
 #[tokio::test]
 async fn test_mount_duplicate() {
+    setup_test_env();
     let state = AppState::with_paths("/tmp/test_db".to_string(), "/tmp/test_music".to_string());
 
     // First mount should succeed
@@ -65,6 +68,7 @@ async fn test_mount_path_validation() {
 
 #[tokio::test]
 async fn test_unmount_command() {
+    setup_test_env();
     let state = AppState::with_paths("/tmp/test_db".to_string(), "/tmp/test_music".to_string());
 
     // Mount first
@@ -91,6 +95,7 @@ async fn test_unmount_nonexistent() {
 
 #[tokio::test]
 async fn test_listmounts_command() {
+    setup_test_env();
     let state = AppState::with_paths("/tmp/test_db".to_string(), "/tmp/test_music".to_string());
 
     // Empty list initially
@@ -112,6 +117,7 @@ async fn test_listmounts_command() {
 
 #[tokio::test]
 async fn test_protocol_extraction() {
+    setup_test_env();
     let state = AppState::with_paths("/tmp/test_db".to_string(), "/tmp/test_music".to_string());
 
     storage::handle_mount_command(&state, "r1", "nfs://server/path").await;

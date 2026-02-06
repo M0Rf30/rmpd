@@ -52,7 +52,7 @@ pub async fn handle_partition_command(
 /// Returns a list of all partition names.
 ///
 /// Response format:
-/// ```
+/// ```text
 /// partition: default
 /// partition: bedroom
 /// partition: kitchen
