@@ -29,3 +29,4 @@ mdns-sd.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
+tokio = { workspace = true }

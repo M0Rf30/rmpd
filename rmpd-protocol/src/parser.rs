@@ -1111,8 +1111,9 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
             let name = parse_quoted_or_unquoted.parse_next(input)?;
             let _ = space0.parse_next(input)?;
 
-            // Try to parse optional range (START:END)
-            let range = opt(parse_range).parse_next(input)?;
+            // Try to parse optional range (START:END) — must contain colon
+            // to distinguish from the optional position argument that follows.
+            let range = opt(parse_colon_range).parse_next(input)?;
             let _ = space0.parse_next(input)?;
 
             // Try to parse optional position
@@ -1480,11 +1481,27 @@ fn parse_u8(input: &mut &str) -> PResult<u8> {
 }
 
 fn parse_range(input: &mut &str) -> PResult<(u32, u32)> {
-    // Parse range syntax (e.g., "5:10")
+    // Parse MPD range syntax:
+    //   "START:END"  — range [START, END)
+    //   "START:"     — open-ended range [START, ...)
+    //   "NUM"        — single position (equivalent to NUM:NUM+1)
+    let start = parse_u32.parse_next(input)?;
+    if input.starts_with(':') {
+        let _ = winnow::token::one_of(':').parse_next(input)?;
+        let end = opt(parse_u32).parse_next(input)?;
+        Ok((start, end.unwrap_or(u32::MAX)))
+    } else {
+        Ok((start, start + 1))
+    }
+}
+
+/// Parse a range that requires a colon (for commands where a bare number
+/// is ambiguous with a following positional argument, e.g. `load`).
+fn parse_colon_range(input: &mut &str) -> PResult<(u32, u32)> {
     let start = parse_u32.parse_next(input)?;
     let _ = winnow::token::one_of(':').parse_next(input)?;
-    let end = parse_u32.parse_next(input)?;
-    Ok((start, end))
+    let end = opt(parse_u32).parse_next(input)?;
+    Ok((start, end.unwrap_or(u32::MAX)))
 }
 
 fn parse_delete_target(input: &mut &str) -> PResult<DeleteTarget> {

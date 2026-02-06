@@ -45,10 +45,17 @@ impl MpdServer {
         }
     }
 
-    pub async fn run(mut self) -> Result<()> {
+    pub async fn run(self) -> Result<()> {
         let listener = TcpListener::bind(&self.bind_address).await?;
         info!("MPD server listening on {}", self.bind_address);
+        self.run_with_listener(listener).await
+    }
 
+    /// Run the server accept loop using a pre-bound listener.
+    ///
+    /// This is useful for tests that need to bind to port 0 and discover the
+    /// actual port before handing the listener to the server.
+    pub async fn run_with_listener(mut self, listener: TcpListener) -> Result<()> {
         // Start queue playback manager
         let mut playback_manager = QueuePlaybackManager::new(self.state.clone());
         playback_manager.start();
@@ -169,6 +176,10 @@ async fn handle_client(mut stream: TcpStream, state: AppState) -> Result<()> {
                 // Accumulate commands in batch
                 batch_commands.push(trimmed.to_string());
                 continue; // Don't send response yet
+            }
+            Ok(Command::Close) => {
+                // Close: terminate the connection immediately (per MPD spec)
+                break;
             }
             Ok(cmd) => handle_command(cmd, &state, &mut conn_state).await,
             Err(e) => Response::Text(ResponseBuilder::error(ACK_ERROR_UNKNOWN, 0, trimmed, &e)),
@@ -364,8 +375,9 @@ async fn handle_command(
     let response_str = match cmd {
         Command::Ping => ResponseBuilder::new().ok(),
         Command::Close => {
-            // Connection will be closed by the handler
-            ResponseBuilder::new().ok()
+            // Close is handled in the accept loop; this branch is unreachable
+            // but kept so the match is exhaustive.
+            unreachable!("Close is handled before dispatch")
         }
         Command::Commands => reflection::handle_commands_command().await,
         Command::NotCommands => reflection::handle_notcommands_command().await,
