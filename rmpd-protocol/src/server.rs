@@ -164,7 +164,7 @@ async fn handle_client(mut stream: TcpStream, state: AppState) -> Result<()> {
             Ok(Command::Idle { subsystems }) if !batch_mode => {
                 Response::Text(handle_idle(&mut reader, &mut event_rx, subsystems).await)
             }
-            Ok(cmd) if batch_mode => {
+            Ok(_cmd) if batch_mode => {
                 // Accumulate commands in batch
                 batch_commands.push(trimmed.to_string());
                 continue; // Don't send response yet
