@@ -44,7 +44,7 @@ impl FilesystemWatcher {
 
     /// Start watching the music directory
     pub async fn start(&mut self) -> Result<()> {
-        info!("Starting filesystem watcher for {:?}", self.music_dir);
+        info!("starting filesystem watcher for {:?}", self.music_dir);
 
         let (tx, mut rx) = mpsc::channel(EVENT_CHANNEL_SIZE);
         let db = Arc::clone(&self.db);
@@ -59,7 +59,7 @@ impl FilesystemWatcher {
                 let tx = tx.clone();
                 tokio::spawn(async move {
                     if let Err(e) = tx.send(result).await {
-                        error!("Failed to send watch event: {}", e);
+                        error!("failed to send watch event: {}", e);
                     }
                 });
             },
@@ -86,27 +86,26 @@ impl FilesystemWatcher {
                             if let Err(e) =
                                 handle_fs_event(&event, &music_dir, &db, &event_bus).await
                             {
-                                error!("Failed to handle filesystem event: {}", e);
+                                error!("failed to handle filesystem event: {}", e);
                             }
                         }
                     }
                     Err(errors) => {
                         for error in errors {
-                            error!("Filesystem watch error: {}", error);
+                            error!("filesystem watch error: {}", error);
                         }
                     }
                 }
             }
         });
 
-        info!("Filesystem watcher started successfully");
         Ok(())
     }
 
     /// Stop watching (graceful shutdown)
     pub fn stop(&mut self) {
         if self.debouncer.is_some() {
-            info!("Stopping filesystem watcher");
+            info!("stopping filesystem watcher");
             self.debouncer = None;
             self.event_bus.emit(RmpdEvent::FilesystemWatchStopped);
         }
@@ -155,14 +154,14 @@ async fn handle_fs_event(
                 let relative_path = match path.strip_prefix(music_dir) {
                     Ok(p) => p,
                     Err(_) => {
-                        debug!("Path outside music directory: {:?}", path);
+                        debug!("path outside music directory: {:?}", path);
                         continue;
                     }
                 };
 
                 let path_str = relative_path.to_string_lossy().to_string();
 
-                debug!("File created/modified: {}", path_str);
+                debug!("file created/modified: {}", path_str);
 
                 // Extract metadata
                 let path_buf = camino::Utf8PathBuf::from(path.to_string_lossy().to_string());
@@ -172,10 +171,7 @@ async fn handle_fs_event(
                         let db_guard = match db.lock() {
                             Ok(guard) => guard,
                             Err(poisoned) => {
-                                tracing::error!(
-                                    "Database mutex poisoned, recovering: {}",
-                                    poisoned
-                                );
+                                tracing::warn!("database mutex poisoned, recovering: {}", poisoned);
                                 poisoned.into_inner()
                             }
                         };
@@ -190,15 +186,15 @@ async fn handle_fs_event(
 
                         // Emit appropriate event
                         if exists {
-                            debug!("Song updated: {}", path_str);
+                            debug!("song updated: {}", path_str);
                             event_bus.emit(RmpdEvent::SongUpdated(song));
                         } else {
-                            debug!("Song added: {}", path_str);
+                            debug!("song added: {}", path_str);
                             event_bus.emit(RmpdEvent::SongAdded(song));
                         }
                     }
                     Err(e) => {
-                        warn!("Failed to extract metadata from {}: {}", path_str, e);
+                        warn!("failed to extract metadata from {}: {}", path_str, e);
                     }
                 }
             }
@@ -216,13 +212,13 @@ async fn handle_fs_event(
 
                 let path_str = relative_path.to_string_lossy().to_string();
 
-                debug!("File removed: {}", path_str);
+                debug!("file removed: {}", path_str);
 
                 // Remove from database
                 let db_guard = match db.lock() {
                     Ok(guard) => guard,
                     Err(poisoned) => {
-                        tracing::error!("Database mutex poisoned, recovering: {}", poisoned);
+                        tracing::warn!("database mutex poisoned, recovering: {}", poisoned);
                         poisoned.into_inner()
                     }
                 };

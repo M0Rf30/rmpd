@@ -15,7 +15,10 @@ async fn sticker_set_and_get() {
         .command("sticker get song \"music/song1.flac\" rating")
         .await;
     assert_ok(&resp);
-    assert!(resp.contains("rating=5"), "should return sticker value: {resp}");
+    assert!(
+        resp.contains("rating=5"),
+        "should return sticker value: {resp}"
+    );
 }
 
 #[tokio::test]
@@ -35,7 +38,10 @@ async fn sticker_delete() {
     let resp = client
         .command("sticker get song \"music/song1.flac\" rating")
         .await;
-    assert!(resp.starts_with("ACK "), "deleted sticker should not exist: {resp}");
+    assert!(
+        resp.starts_with("ACK "),
+        "deleted sticker should not exist: {resp}"
+    );
 }
 
 #[tokio::test]
@@ -65,9 +71,7 @@ async fn sticker_find() {
         .command("sticker set song \"music/song1.flac\" rating 5")
         .await;
 
-    let resp = client
-        .command("sticker find song \"\" rating")
-        .await;
+    let resp = client.command("sticker find song \"\" rating").await;
     assert_ok(&resp);
 }
 
@@ -77,7 +81,10 @@ async fn sticker_get_nonexistent() {
     let resp = client
         .command("sticker get song \"music/song1.flac\" nonexistent")
         .await;
-    assert!(resp.starts_with("ACK "), "nonexistent sticker should error: {resp}");
+    assert!(
+        resp.starts_with("ACK "),
+        "nonexistent sticker should error: {resp}"
+    );
 }
 
 #[tokio::test]

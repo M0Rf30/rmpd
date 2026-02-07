@@ -14,12 +14,17 @@ pub fn open_db(
     state: &crate::state::AppState,
     command: &str,
 ) -> Result<rmpd_library::Database, String> {
-    let db_path = state
-        .db_path
-        .as_ref()
-        .ok_or_else(|| ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, command, "database not configured"))?;
-    rmpd_library::Database::open(db_path)
-        .map_err(|e| ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, command, &format!("database error: {e}")))
+    let db_path = state.db_path.as_ref().ok_or_else(|| {
+        ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, command, "database not configured")
+    })?;
+    rmpd_library::Database::open(db_path).map_err(|e| {
+        ResponseBuilder::error(
+            ACK_ERROR_SYSTEM,
+            0,
+            command,
+            &format!("database error: {e}"),
+        )
+    })
 }
 
 /// Convert Unix timestamp to ISO 8601 format (RFC 3339)
@@ -139,7 +144,10 @@ pub fn apply_range<T>(items: &[T], range: Option<(u32, u32)>) -> &[T] {
 }
 
 /// Append queue item metadata (priority, range) to the response.
-pub fn add_queue_item_metadata(resp: &mut crate::response::ResponseBuilder, item: &rmpd_core::queue::QueueItem) {
+pub fn add_queue_item_metadata(
+    resp: &mut crate::response::ResponseBuilder,
+    item: &rmpd_core::queue::QueueItem,
+) {
     if item.priority > 0 {
         resp.field("Prio", item.priority);
     }
@@ -154,16 +162,20 @@ pub fn update_next_song(
     queue: &rmpd_core::queue::Queue,
     current_pos: u32,
 ) {
-    status.next_song = queue.get(current_pos + 1).map(|next_item| {
-        rmpd_core::state::QueuePosition {
-            position: current_pos + 1,
-            id: next_item.id,
-        }
-    });
+    status.next_song =
+        queue
+            .get(current_pos + 1)
+            .map(|next_item| rmpd_core::state::QueuePosition {
+                position: current_pos + 1,
+                id: next_item.id,
+            });
 }
 
 /// Clone a song and resolve its path to an absolute path for playback.
-pub fn prepare_song_for_playback(song: &rmpd_core::song::Song, music_dir: Option<&str>) -> rmpd_core::song::Song {
+pub fn prepare_song_for_playback(
+    song: &rmpd_core::song::Song,
+    music_dir: Option<&str>,
+) -> rmpd_core::song::Song {
     let mut playback_song = song.clone();
     playback_song.path = resolve_path(song.path.as_str(), music_dir).into();
     playback_song

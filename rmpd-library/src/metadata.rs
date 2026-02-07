@@ -26,9 +26,7 @@ impl MetadataExtractor {
         let metadata = fs::metadata(path.as_str())
             .map_err(|e| RmpdError::Library(format!("Failed to read file metadata: {e}")))?;
 
-        let mtime = system_time_to_unix_secs(
-            metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH),
-        );
+        let mtime = system_time_to_unix_secs(metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH));
 
         // Parse audio file with lofty (now supports DSF/DFF with ID3v2 tags)
         let tagged_file = Probe::open(path.as_str())
@@ -48,8 +46,7 @@ impl MetadataExtractor {
             .primary_tag()
             .or_else(|| tagged_file.first_tag());
 
-        tracing::debug!("Extracting metadata from: {}", path);
-        tracing::debug!("Tag present: {}", tag.is_some());
+        tracing::debug!("extracting metadata from: {}", path);
 
         let (
             title,
@@ -114,10 +111,6 @@ impl MetadataExtractor {
                 None, None, None, None, None, None, None,
             )
         };
-
-        tracing::debug!("Extracted MB TrackID: {:?}", musicbrainz_trackid);
-        tracing::debug!("Extracted MB AlbumID: {:?}", musicbrainz_albumid);
-        tracing::debug!("Extracted Label: {:?}", label);
 
         // ReplayGain (not all formats support this)
         let (

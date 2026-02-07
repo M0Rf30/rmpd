@@ -1,6 +1,6 @@
 //! Database and library browsing command handlers
 
-use tracing::{debug, error, info};
+use tracing::{error, info};
 
 use crate::response::{Response, ResponseBuilder};
 use crate::state::AppState;
@@ -26,7 +26,10 @@ fn strip_music_dir_prefix<'a>(path: &'a str, music_dir: Option<&str>) -> &'a str
     path
 }
 
-use super::utils::{apply_range, build_and_filter, format_iso8601_timestamp, open_db, ACK_ERROR_ARG, ACK_ERROR_SYSTEM};
+use super::utils::{
+    apply_range, build_and_filter, format_iso8601_timestamp, open_db, ACK_ERROR_ARG,
+    ACK_ERROR_SYSTEM,
+};
 
 /// Helper function to get tag value for sorting (avoids allocation for most tags)
 fn get_tag_value<'a>(song: &'a rmpd_core::song::Song, tag: &str) -> std::borrow::Cow<'a, str> {
@@ -36,7 +39,9 @@ fn get_tag_value<'a>(song: &'a rmpd_core::song::Song, tag: &str) -> std::borrow:
         "album" => Cow::Borrowed(song.album.as_deref().unwrap_or_default()),
         "albumartist" => Cow::Borrowed(song.album_artist.as_deref().unwrap_or_default()),
         "title" => Cow::Borrowed(song.title.as_deref().unwrap_or_default()),
-        "track" => song.track.map_or(Cow::Borrowed(""), |t| Cow::Owned(t.to_string())),
+        "track" => song
+            .track
+            .map_or(Cow::Borrowed(""), |t| Cow::Owned(t.to_string())),
         "date" => Cow::Borrowed(song.date.as_deref().unwrap_or_default()),
         "genre" => Cow::Borrowed(song.genre.as_deref().unwrap_or_default()),
         "composer" => Cow::Borrowed(song.composer.as_deref().unwrap_or_default()),
@@ -67,24 +72,48 @@ pub async fn handle_find_command(
             Ok(filter) => match db.find_songs_filter(&filter) {
                 Ok(s) => s,
                 Err(e) => {
-                    return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "find", &format!("query error: {e}"))
+                    return ResponseBuilder::error(
+                        ACK_ERROR_SYSTEM,
+                        0,
+                        "find",
+                        &format!("query error: {e}"),
+                    )
                 }
             },
             Err(e) => {
-                return ResponseBuilder::error(ACK_ERROR_ARG, 0, "find", &format!("filter parse error: {e}"))
+                return ResponseBuilder::error(
+                    ACK_ERROR_ARG,
+                    0,
+                    "find",
+                    &format!("filter parse error: {e}"),
+                )
             }
         }
     } else if filters.len() == 1 {
         // Simple single tag/value search
         match db.find_songs(&filters[0].0, &filters[0].1) {
             Ok(s) => s,
-            Err(e) => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "find", &format!("query error: {e}")),
+            Err(e) => {
+                return ResponseBuilder::error(
+                    ACK_ERROR_SYSTEM,
+                    0,
+                    "find",
+                    &format!("query error: {e}"),
+                )
+            }
         }
     } else {
         let expr = build_and_filter(filters);
         match db.find_songs_filter(&expr) {
             Ok(s) => s,
-            Err(e) => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "find", &format!("query error: {e}")),
+            Err(e) => {
+                return ResponseBuilder::error(
+                    ACK_ERROR_SYSTEM,
+                    0,
+                    "find",
+                    &format!("query error: {e}"),
+                )
+            }
         }
     };
 
@@ -128,11 +157,21 @@ pub async fn handle_search_command(
             Ok(filter) => match db.find_songs_filter(&filter) {
                 Ok(s) => s,
                 Err(e) => {
-                    return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "search", &format!("query error: {e}"))
+                    return ResponseBuilder::error(
+                        ACK_ERROR_SYSTEM,
+                        0,
+                        "search",
+                        &format!("query error: {e}"),
+                    )
                 }
             },
             Err(e) => {
-                return ResponseBuilder::error(ACK_ERROR_ARG, 0, "search", &format!("filter parse error: {e}"))
+                return ResponseBuilder::error(
+                    ACK_ERROR_ARG,
+                    0,
+                    "search",
+                    &format!("filter parse error: {e}"),
+                )
             }
         }
     } else if filters.len() == 1 {
@@ -144,7 +183,12 @@ pub async fn handle_search_command(
             match db.search_songs(value) {
                 Ok(s) => s,
                 Err(e) => {
-                    return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "search", &format!("search error: {e}"))
+                    return ResponseBuilder::error(
+                        ACK_ERROR_SYSTEM,
+                        0,
+                        "search",
+                        &format!("search error: {e}"),
+                    )
                 }
             }
         } else {
@@ -152,7 +196,12 @@ pub async fn handle_search_command(
             match db.find_songs(tag, value) {
                 Ok(s) => s,
                 Err(e) => {
-                    return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "search", &format!("query error: {e}"))
+                    return ResponseBuilder::error(
+                        ACK_ERROR_SYSTEM,
+                        0,
+                        "search",
+                        &format!("query error: {e}"),
+                    )
                 }
             }
         }
@@ -160,7 +209,14 @@ pub async fn handle_search_command(
         let expr = build_and_filter(filters);
         match db.find_songs_filter(&expr) {
             Ok(s) => s,
-            Err(e) => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "search", &format!("query error: {e}")),
+            Err(e) => {
+                return ResponseBuilder::error(
+                    ACK_ERROR_SYSTEM,
+                    0,
+                    "search",
+                    &format!("query error: {e}"),
+                )
+            }
         }
     };
 
@@ -197,7 +253,14 @@ pub async fn handle_list_command(
     let values = if let (Some(ft), Some(fv)) = (filter_tag, filter_value) {
         match db.list_filtered(tag, ft, fv) {
             Ok(v) => v,
-            Err(e) => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "list", &format!("query error: {e}")),
+            Err(e) => {
+                return ResponseBuilder::error(
+                    ACK_ERROR_SYSTEM,
+                    0,
+                    "list",
+                    &format!("query error: {e}"),
+                )
+            }
         }
     } else {
         // No filter, list all values
@@ -206,12 +269,26 @@ pub async fn handle_list_command(
             "album" => db.list_albums(),
             "albumartist" => db.list_album_artists(),
             "genre" => db.list_genres(),
-            _ => return ResponseBuilder::error(ACK_ERROR_ARG, 0, "list", &format!("unsupported tag: {tag}")),
+            _ => {
+                return ResponseBuilder::error(
+                    ACK_ERROR_ARG,
+                    0,
+                    "list",
+                    &format!("unsupported tag: {tag}"),
+                )
+            }
         };
 
         match result {
             Ok(v) => v,
-            Err(e) => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "list", &format!("query error: {e}")),
+            Err(e) => {
+                return ResponseBuilder::error(
+                    ACK_ERROR_SYSTEM,
+                    0,
+                    "list",
+                    &format!("query error: {e}"),
+                )
+            }
         }
     };
 
@@ -248,13 +325,27 @@ pub async fn handle_count_command(
     let songs = if filters.len() == 1 {
         match db.find_songs(&filters[0].0, &filters[0].1) {
             Ok(s) => s,
-            Err(e) => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "count", &format!("query error: {e}")),
+            Err(e) => {
+                return ResponseBuilder::error(
+                    ACK_ERROR_SYSTEM,
+                    0,
+                    "count",
+                    &format!("query error: {e}"),
+                )
+            }
         }
     } else {
         let expr = build_and_filter(filters);
         match db.find_songs_filter(&expr) {
             Ok(s) => s,
-            Err(e) => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "count", &format!("query error: {e}")),
+            Err(e) => {
+                return ResponseBuilder::error(
+                    ACK_ERROR_SYSTEM,
+                    0,
+                    "count",
+                    &format!("query error: {e}"),
+                )
+            }
         }
     };
 
@@ -297,19 +388,28 @@ pub async fn handle_count_command(
 pub async fn handle_update_command(state: &AppState, _path: Option<&str>) -> String {
     let db_path = match &state.db_path {
         Some(p) => p.clone(),
-        None => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "update", "database not configured"),
+        None => {
+            return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "update", "database not configured")
+        }
     };
 
     let music_dir = match &state.music_dir {
         Some(p) => p.clone(),
-        None => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "update", "music directory not configured"),
+        None => {
+            return ResponseBuilder::error(
+                ACK_ERROR_SYSTEM,
+                0,
+                "update",
+                "music directory not configured",
+            )
+        }
     };
 
     let event_bus = state.event_bus.clone();
 
     // Spawn background scanning task (blocking task since scan is synchronous)
     tokio::task::spawn_blocking(move || {
-        info!("Starting library update");
+        info!("starting library update");
 
         match rmpd_library::Database::open(&db_path) {
             Ok(db) => {
@@ -317,17 +417,17 @@ pub async fn handle_update_command(state: &AppState, _path: Option<&str>) -> Str
                 match scanner.scan_directory(&db, std::path::Path::new(&music_dir)) {
                     Ok(stats) => {
                         info!(
-                            "Library scan complete: {} scanned, {} added, {} updated, {} errors",
+                            "library scan complete: {} scanned, {} added, {} updated, {} errors",
                             stats.scanned, stats.added, stats.updated, stats.errors
                         );
                     }
                     Err(e) => {
-                        error!("Library scan error: {}", e);
+                        error!("library scan error: {}", e);
                     }
                 }
             }
             Err(e) => {
-                error!("Failed to open database: {}", e);
+                error!("failed to open database: {}", e);
             }
         }
     });
@@ -339,7 +439,7 @@ pub async fn handle_update_command(state: &AppState, _path: Option<&str>) -> Str
 }
 
 pub async fn handle_albumart_command(state: &AppState, uri: &str, offset: usize) -> Response {
-    info!("AlbumArt command: uri=[{}], offset={}", uri, offset);
+    info!("albumart command: uri=[{}], offset={}", uri, offset);
 
     let db = match open_db(state, "albumart") {
         Ok(d) => d,
@@ -349,14 +449,12 @@ pub async fn handle_albumart_command(state: &AppState, uri: &str, offset: usize)
     // Resolve relative path to absolute path
     let absolute_path = if uri.starts_with('/') {
         // Already absolute
-        debug!("Using absolute path: {}", uri);
         uri.to_string()
     } else {
         // Relative to music directory
         match &state.music_dir {
             Some(music_dir) => {
                 let path = format!("{music_dir}/{uri}");
-                debug!("Resolved relative path: {} -> {}", uri, path);
                 path
             }
             None => {
@@ -502,7 +600,9 @@ pub async fn handle_listallinfo_command(state: &AppState, path: Option<&str>) ->
             }
             resp.ok()
         }
-        Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "listallinfo", &format!("Error: {e}")),
+        Err(e) => {
+            ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "listallinfo", &format!("Error: {e}"))
+        }
     }
 }
 
@@ -517,14 +617,24 @@ pub async fn handle_searchadd_command(state: &AppState, tag: &str, value: &str) 
         match db.search_songs(value) {
             Ok(s) => s,
             Err(e) => {
-                return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "searchadd", &format!("search error: {e}"))
+                return ResponseBuilder::error(
+                    ACK_ERROR_SYSTEM,
+                    0,
+                    "searchadd",
+                    &format!("search error: {e}"),
+                )
             }
         }
     } else {
         match db.find_songs(tag, value) {
             Ok(s) => s,
             Err(e) => {
-                return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "searchadd", &format!("query error: {e}"))
+                return ResponseBuilder::error(
+                    ACK_ERROR_SYSTEM,
+                    0,
+                    "searchadd",
+                    &format!("query error: {e}"),
+                )
             }
         }
     };
@@ -612,7 +722,12 @@ pub async fn handle_getfingerprint_command(state: &AppState, uri: &str) -> Strin
     }
 
     // Chromaprint library not yet integrated
-    ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "getfingerprint", "chromaprint not available")
+    ResponseBuilder::error(
+        ACK_ERROR_SYSTEM,
+        0,
+        "getfingerprint",
+        "chromaprint not available",
+    )
 }
 
 /// Read file metadata comments

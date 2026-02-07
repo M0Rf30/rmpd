@@ -18,8 +18,7 @@ const SONG_COLUMNS_ALIASED: &str =
      s.added_at, s.last_modified";
 
 /// Common SELECT columns for song queries (without table alias).
-const SONG_COLUMNS: &str =
-    "id, path, mtime, duration,
+const SONG_COLUMNS: &str = "id, path, mtime, duration,
      title, artist, album, album_artist, track, disc, date, genre, composer, performer, comment,
      musicbrainz_trackid, musicbrainz_albumid, musicbrainz_artistid, musicbrainz_albumartistid,
      musicbrainz_releasegroupid, musicbrainz_releasetrackid,
@@ -116,7 +115,7 @@ fn song_from_row_optional(row: &Row<'_>) -> rusqlite::Result<Song> {
 pub(crate) fn system_time_to_unix_secs(time: SystemTime) -> i64 {
     time.duration_since(UNIX_EPOCH)
         .unwrap_or_else(|_| {
-            tracing::warn!("System time before UNIX_EPOCH, using 0");
+            tracing::warn!("system time before UNIX_EPOCH, using 0");
             Duration::ZERO
         })
         .as_secs() as i64
@@ -524,7 +523,13 @@ impl Database {
             [],
             |row| {
                 let duration: f64 = row.get(3)?;
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?, duration as u64, row.get(4)?))
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    duration as u64,
+                    row.get(4)?,
+                ))
             },
         )?)
     }
@@ -678,9 +683,7 @@ impl Database {
             _ => return Err(RmpdError::Library(format!("Unsupported tag: {tag}"))),
         };
 
-        let sql = format!(
-            "SELECT {SONG_COLUMNS} FROM songs WHERE {column} = ?1 ORDER BY {order}"
-        );
+        let sql = format!("SELECT {SONG_COLUMNS} FROM songs WHERE {column} = ?1 ORDER BY {order}");
         let mut stmt = self.conn.prepare(&sql)?;
 
         let songs = stmt
@@ -697,9 +700,8 @@ impl Database {
     ) -> Result<Vec<Song>> {
         let (where_clause, filter_params) = filter_expr.to_sql();
 
-        let sql = format!(
-            "SELECT {SONG_COLUMNS} FROM songs WHERE {where_clause} ORDER BY album, track"
-        );
+        let sql =
+            format!("SELECT {SONG_COLUMNS} FROM songs WHERE {where_clause} ORDER BY album, track");
 
         let mut stmt = self.conn.prepare(&sql)?;
 
@@ -848,8 +850,7 @@ impl Database {
 
             let mut stmt = self.conn.prepare(query)?;
 
-            let song_rows =
-                stmt.query_map(params![dir_id.unwrap_or(0)], song_from_row_optional)?;
+            let song_rows = stmt.query_map(params![dir_id.unwrap_or(0)], song_from_row_optional)?;
 
             for row in song_rows {
                 songs.push(row?);

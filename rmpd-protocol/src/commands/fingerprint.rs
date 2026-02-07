@@ -28,10 +28,15 @@ pub async fn handle_getfingerprint_command(state: &AppState, uri: &str) -> Strin
 
     // Check if file exists
     if !path.exists() {
-        return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "getfingerprint", &format!("File not found: {uri}"));
+        return ResponseBuilder::error(
+            ACK_ERROR_SYSTEM,
+            0,
+            "getfingerprint",
+            &format!("File not found: {uri}"),
+        );
     }
 
-    debug!("Generating fingerprint for: {}", path.display());
+    debug!("generating fingerprint for: {}", path.display());
 
     // Generate fingerprint in blocking task (CPU-intensive)
     match tokio::task::spawn_blocking(move || {
@@ -41,13 +46,12 @@ pub async fn handle_getfingerprint_command(state: &AppState, uri: &str) -> Strin
     .await
     {
         Ok(Ok(fingerprint)) => {
-            debug!("Fingerprint generated successfully");
             let mut resp = ResponseBuilder::new();
             resp.field("chromaprint", &fingerprint);
             resp.ok()
         }
         Ok(Err(e)) => {
-            error!("Fingerprinting failed: {}", e);
+            error!("fingerprinting failed: {}", e);
             ResponseBuilder::error(
                 50,
                 0,
@@ -56,8 +60,13 @@ pub async fn handle_getfingerprint_command(state: &AppState, uri: &str) -> Strin
             )
         }
         Err(_) => {
-            error!("Fingerprinting task panicked");
-            ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "getfingerprint", "Fingerprinting task panicked")
+            error!("fingerprinting task panicked");
+            ResponseBuilder::error(
+                ACK_ERROR_SYSTEM,
+                0,
+                "getfingerprint",
+                "Fingerprinting task panicked",
+            )
         }
     }
 }

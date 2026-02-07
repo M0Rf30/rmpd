@@ -55,7 +55,7 @@ impl CpalDeviceConfig {
 
         let mut found_format = None;
         tracing::info!(
-            "Searching for suitable {} format at {:?} Hz",
+            "searching for suitable {} format at {:?} Hz",
             format_type,
             self.config.sample_rate
         );
@@ -66,13 +66,6 @@ impl CpalDeviceConfig {
             let min_rate = config.min_sample_rate();
             let max_rate = config.max_sample_rate();
 
-            tracing::debug!(
-                "  Checking format: {:?}, rates: {:?}-{:?} Hz",
-                sample_format,
-                min_rate,
-                max_rate
-            );
-
             // Check if our sample rate is supported
             if self.config.sample_rate >= min_rate && self.config.sample_rate <= max_rate {
                 // Check each preference in order
@@ -82,7 +75,7 @@ impl CpalDeviceConfig {
                         if i == 0 {
                             found_format = Some(sample_format);
                             tracing::info!(
-                                "Found preferred format: {:?} at {:?}-{:?} Hz",
+                                "found preferred format: {:?} at {:?}-{:?} Hz",
                                 sample_format,
                                 min_rate,
                                 max_rate
@@ -93,7 +86,7 @@ impl CpalDeviceConfig {
                         else if found_format.is_none() {
                             found_format = Some(sample_format);
                             tracing::info!(
-                                "Found fallback format: {:?} at {:?}-{:?} Hz",
+                                "found fallback format: {:?} at {:?}-{:?} Hz",
                                 sample_format,
                                 min_rate,
                                 max_rate
@@ -110,7 +103,7 @@ impl CpalDeviceConfig {
         }
 
         let format = found_format.unwrap_or(preferences[0]);
-        tracing::info!("Using sample format: {:?}", format);
+        tracing::info!("using sample format: {:?}", format);
 
         self.sample_format = format;
         Ok(format)

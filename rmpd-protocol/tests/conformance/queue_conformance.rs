@@ -25,14 +25,20 @@ async fn add_requires_db() {
     // Without a database configured, add should fail
     let (_server, mut client) = setup().await;
     let resp = client.command("add \"test.flac\"").await;
-    assert!(resp.starts_with("ACK "), "add without db should fail: {resp}");
+    assert!(
+        resp.starts_with("ACK "),
+        "add without db should fail: {resp}"
+    );
 }
 
 #[tokio::test]
 async fn addid_requires_db() {
     let (_server, mut client) = setup().await;
     let resp = client.command("addid \"test.flac\"").await;
-    assert!(resp.starts_with("ACK "), "addid without db should fail: {resp}");
+    assert!(
+        resp.starts_with("ACK "),
+        "addid without db should fail: {resp}"
+    );
 }
 
 // ── Queue operations with database ──────────────────────────────────
@@ -45,7 +51,10 @@ async fn add_and_playlistinfo() {
 
     let resp = client.command("playlistinfo").await;
     assert_ok(&resp);
-    assert!(get_field(&resp, "file").is_some(), "queue should have a song");
+    assert!(
+        get_field(&resp, "file").is_some(),
+        "queue should have a song"
+    );
 }
 
 #[tokio::test]
@@ -53,7 +62,10 @@ async fn addid_returns_id() {
     let (_server, mut client, _tmp) = setup_with_db(3).await;
     let resp = client.command("addid \"music/song1.flac\"").await;
     assert_ok(&resp);
-    assert!(get_field(&resp, "Id").is_some(), "addid must return Id field");
+    assert!(
+        get_field(&resp, "Id").is_some(),
+        "addid must return Id field"
+    );
 }
 
 #[tokio::test]
@@ -169,7 +181,11 @@ async fn plchangesposid_returns_positions() {
 
     let resp = client.command("plchangesposid 0").await;
     assert_ok(&resp);
-    assert!(get_field(&resp, "cpos").is_some() || get_field(&resp, "Pos").is_some() || resp.contains("Id:"));
+    assert!(
+        get_field(&resp, "cpos").is_some()
+            || get_field(&resp, "Pos").is_some()
+            || resp.contains("Id:")
+    );
 }
 
 #[tokio::test]
@@ -210,7 +226,9 @@ async fn addtagid_and_cleartagid() {
     let r = client.command("addid \"music/song1.flac\"").await;
     let id = get_field(&r, "Id").unwrap();
 
-    let resp = client.command(&format!("addtagid {id} Artist \"New Artist\"")).await;
+    let resp = client
+        .command(&format!("addtagid {id} Artist \"New Artist\""))
+        .await;
     assert_ok(&resp);
 
     let resp = client.command(&format!("cleartagid {id} Artist")).await;

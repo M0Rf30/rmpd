@@ -17,7 +17,10 @@ async fn newpartition_and_delete() {
     assert_ok(&resp);
 
     let resp = client.command("listpartitions").await;
-    assert!(resp.contains("testpart"), "new partition should appear: {resp}");
+    assert!(
+        resp.contains("testpart"),
+        "new partition should appear: {resp}"
+    );
 
     let resp = client.command("delpartition \"testpart\"").await;
     assert_ok(&resp);
@@ -38,7 +41,10 @@ async fn partition_switch() {
 async fn delete_nonexistent_partition() {
     let (_server, mut client) = setup().await;
     let resp = client.command("delpartition \"nonexistent\"").await;
-    assert!(resp.starts_with("ACK "), "should error on nonexistent: {resp}");
+    assert!(
+        resp.starts_with("ACK "),
+        "should error on nonexistent: {resp}"
+    );
 }
 
 #[tokio::test]
@@ -53,5 +59,8 @@ async fn duplicate_newpartition() {
     let (_server, mut client) = setup().await;
     client.command("newpartition \"duppart\"").await;
     let resp = client.command("newpartition \"duppart\"").await;
-    assert!(resp.starts_with("ACK "), "duplicate partition should error: {resp}");
+    assert!(
+        resp.starts_with("ACK "),
+        "duplicate partition should error: {resp}"
+    );
 }

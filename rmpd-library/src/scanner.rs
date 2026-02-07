@@ -23,7 +23,7 @@ impl Scanner {
     }
 
     pub fn scan_directory(&self, db: &Database, root_path: &Path) -> Result<ScanStats> {
-        info!("Starting music library scan: {}", root_path.display());
+        info!("starting music library scan: {}", root_path.display());
         self.event_bus.emit(Event::DatabaseUpdateStarted);
 
         let mut stats = ScanStats::default();
@@ -41,7 +41,7 @@ impl Scanner {
         scanner_with_dir.scan_recursive(db, root_path, &mut stats)?;
 
         info!(
-            "Scan complete: {} files scanned, {} added, {} updated, {} errors",
+            "scan complete: {} files scanned, {} added, {} updated, {} errors",
             stats.scanned, stats.added, stats.updated, stats.errors
         );
 
@@ -71,7 +71,7 @@ impl Scanner {
             let entry = match entry {
                 Ok(e) => e,
                 Err(e) => {
-                    warn!("Failed to read directory entry: {}", e);
+                    warn!("failed to read directory entry: {}", e);
                     stats.errors += 1;
                     continue;
                 }
@@ -89,7 +89,7 @@ impl Scanner {
             let metadata = match entry.metadata() {
                 Ok(m) => m,
                 Err(e) => {
-                    warn!("Failed to read metadata for {:?}: {}", entry_path, e);
+                    warn!("failed to read metadata for {:?}: {}", entry_path, e);
                     stats.errors += 1;
                     continue;
                 }
@@ -98,7 +98,7 @@ impl Scanner {
             if metadata.is_dir() {
                 // Recurse into subdirectory
                 if let Err(e) = self.scan_recursive(db, &entry_path, stats) {
-                    warn!("Failed to scan directory {:?}: {}", entry_path, e);
+                    warn!("failed to scan directory {:?}: {}", entry_path, e);
                     stats.errors += 1;
                 }
             } else if metadata.is_file() {
@@ -106,7 +106,7 @@ impl Scanner {
                 let utf8_path = match Utf8PathBuf::try_from(entry_path.clone()) {
                     Ok(p) => p,
                     Err(_) => {
-                        warn!("Skipping non-UTF8 path: {:?}", entry_path);
+                        warn!("skipping non-UTF8 path: {:?}", entry_path);
                         stats.errors += 1;
                         continue;
                     }
@@ -131,7 +131,7 @@ impl Scanner {
                 let relative_path = match self.make_relative_path(&utf8_path) {
                     Ok(p) => p,
                     Err(e) => {
-                        warn!("Failed to convert path to relative: {}", e);
+                        warn!("failed to convert path to relative: {}", e);
                         stats.errors += 1;
                         continue;
                     }
@@ -141,7 +141,7 @@ impl Scanner {
                 let existing = match db.get_song_by_path(relative_path.as_str()) {
                     Ok(s) => s,
                     Err(e) => {
-                        warn!("Database error checking {}: {}", relative_path, e);
+                        warn!("database error checking {}: {}", relative_path, e);
                         stats.errors += 1;
                         continue;
                     }
@@ -156,7 +156,6 @@ impl Scanner {
                 // Skip if file hasn't been modified
                 let is_update = if let Some(ref existing_song) = existing {
                     if existing_song.last_modified >= mtime {
-                        debug!("Skipping unchanged file: {}", relative_path);
                         continue;
                     }
                     true
@@ -173,21 +172,21 @@ impl Scanner {
                         match db.add_song(&song) {
                             Ok(_) => {
                                 if is_update {
-                                    debug!("Updated: {}", relative_path);
+                                    debug!("updated: {}", relative_path);
                                     stats.updated += 1;
                                 } else {
-                                    debug!("Added: {}", relative_path);
+                                    debug!("added: {}", relative_path);
                                     stats.added += 1;
                                 }
                             }
                             Err(e) => {
-                                warn!("Failed to add {} to database: {}", relative_path, e);
+                                warn!("failed to add {} to database: {}", relative_path, e);
                                 stats.errors += 1;
                             }
                         }
                     }
                     Err(e) => {
-                        warn!("Failed to extract metadata from {}: {}", relative_path, e);
+                        warn!("failed to extract metadata from {}: {}", relative_path, e);
                         stats.errors += 1;
                     }
                 }

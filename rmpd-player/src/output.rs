@@ -80,7 +80,7 @@ impl CpalOutput {
                             }
                         },
                         |err| {
-                            tracing::error!("PCM output error: {}", err);
+                            tracing::error!("pcm output error: {}", err);
                         },
                         None,
                     )
@@ -115,7 +115,7 @@ impl CpalOutput {
                             }
                         },
                         |err| {
-                            tracing::error!("PCM output error: {}", err);
+                            tracing::error!("pcm output error: {}", err);
                         },
                         None,
                     )
@@ -150,7 +150,7 @@ impl CpalOutput {
                             }
                         },
                         |err| {
-                            tracing::error!("PCM output error: {}", err);
+                            tracing::error!("pcm output error: {}", err);
                         },
                         None,
                     )
@@ -172,7 +172,7 @@ impl CpalOutput {
         self.is_paused = false;
 
         tracing::info!(
-            "PCM output started: {:?} format, {} Hz, {} channels",
+            "pcm output started: {:?} format, {} Hz, {} channels",
             sample_format,
             self.config.sample_rate,
             self.config.channels

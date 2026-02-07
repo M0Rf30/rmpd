@@ -35,23 +35,23 @@ impl DiscoveryService {
         {
             let cache = self.cache.read().await;
             if cache.is_valid() {
-                debug!("Returning cached discovery results");
+                debug!("returning cached discovery results");
                 return Ok(cache.get().to_vec());
             }
         }
 
-        info!("Scanning for network services");
+        info!("scanning for network services");
         let mut neighbors = Vec::new();
 
         // Browse each service type
         for service_type in SERVICE_TYPES {
             match self.browse_service(service_type).await {
                 Ok(mut discovered) => {
-                    debug!("Found {} {} services", discovered.len(), service_type);
+                    debug!("found {} {} services", discovered.len(), service_type);
                     neighbors.append(&mut discovered);
                 }
                 Err(e) => {
-                    warn!("Failed to browse {}: {}", service_type, e);
+                    warn!("failed to browse {}: {}", service_type, e);
                 }
             }
         }
@@ -63,7 +63,7 @@ impl DiscoveryService {
         }
 
         info!(
-            "Discovery scan complete, found {} neighbors",
+            "discovery scan complete, found {} neighbors",
             neighbors.len()
         );
         Ok(neighbors)
@@ -102,16 +102,14 @@ impl DiscoveryService {
                             });
 
                             debug!(
-                                "Resolved {} service: {} at {}",
+                                "resolved {} service: {} at {}",
                                 protocol,
                                 info.get_fullname(),
                                 address
                             );
                         }
                     }
-                    ServiceEvent::SearchStarted(_) => {
-                        debug!("Search started for {}", service_type);
-                    }
+                    ServiceEvent::SearchStarted(_) => {}
                     ServiceEvent::ServiceFound(_, _) => {
                         // Service found but not yet resolved, wait for ServiceResolved
                     }
@@ -121,7 +119,7 @@ impl DiscoveryService {
                     _ => {}
                 },
                 Ok(Err(e)) => {
-                    error!("Error receiving mDNS event: {}", e);
+                    error!("error receiving mDNS event: {}", e);
                     break;
                 }
                 Err(_) => {

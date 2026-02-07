@@ -36,7 +36,10 @@ async fn listplaylists_after_save() {
 
     let resp = client.command("listplaylists").await;
     assert_ok(&resp);
-    assert!(resp.contains("mylist"), "should list saved playlist: {resp}");
+    assert!(
+        resp.contains("mylist"),
+        "should list saved playlist: {resp}"
+    );
 }
 
 #[tokio::test]

@@ -1566,16 +1566,11 @@ fn parse_string(input: &mut &str) -> PResult<String> {
 }
 
 fn parse_quoted_or_unquoted(input: &mut &str) -> PResult<String> {
-    tracing::debug!("parse_quoted_or_unquoted input: {:?}", input);
-    let result = if input.starts_with('"') {
-        tracing::debug!("Using quoted string parser");
+    if input.starts_with('"') {
         parse_quoted_string.parse_next(input)
     } else {
-        tracing::debug!("Using unquoted string parser");
         parse_string.parse_next(input)
-    };
-    tracing::debug!("parse_quoted_or_unquoted result: {:?}", result);
-    result
+    }
 }
 
 fn parse_quoted_string(input: &mut &str) -> PResult<String> {

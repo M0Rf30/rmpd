@@ -15,7 +15,7 @@
 use super::utils::ACK_ERROR_SYSTEM;
 use super::{AppState, ResponseBuilder};
 use crate::connection::ConnectionState;
-use tracing::{debug, info};
+use tracing::info;
 
 /// Switch to a specific partition
 ///
@@ -34,13 +34,18 @@ pub async fn handle_partition_command(
     let manager = match &state.partition_manager {
         Some(m) => m,
         None => {
-            return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "partition", "Partition support not initialized");
+            return ResponseBuilder::error(
+                ACK_ERROR_SYSTEM,
+                0,
+                "partition",
+                "Partition support not initialized",
+            );
         }
     };
 
     // Check if partition exists
     if manager.get_partition(name).await.is_some() {
-        info!("Client switching to partition: {}", name);
+        info!("client switching to partition: {}", name);
         conn_state.current_partition = name.to_string();
         ResponseBuilder::new().ok()
     } else {
@@ -92,12 +97,22 @@ pub async fn handle_listpartitions_command(state: &AppState) -> String {
 pub async fn handle_newpartition_command(state: &AppState, name: &str) -> String {
     // Validate partition name
     if name.is_empty() {
-        return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "newpartition", "Invalid partition name");
+        return ResponseBuilder::error(
+            ACK_ERROR_SYSTEM,
+            0,
+            "newpartition",
+            "Invalid partition name",
+        );
     }
 
     // Check for invalid characters
     if name.contains('/') || name.contains('\\') || name.contains('\0') {
-        return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "newpartition", "Invalid partition name");
+        return ResponseBuilder::error(
+            ACK_ERROR_SYSTEM,
+            0,
+            "newpartition",
+            "Invalid partition name",
+        );
     }
 
     let manager = match &state.partition_manager {
@@ -114,13 +129,10 @@ pub async fn handle_newpartition_command(state: &AppState, name: &str) -> String
 
     match manager.create_partition(name.to_string()).await {
         Ok(_) => {
-            info!("Created new partition: {}", name);
+            info!("created new partition: {}", name);
             ResponseBuilder::new().ok()
         }
-        Err(e) => {
-            debug!("Failed to create partition '{}': {}", name, e);
-            ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "newpartition", &e)
-        }
+        Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "newpartition", &e),
     }
 }
 
@@ -148,13 +160,10 @@ pub async fn handle_delpartition_command(state: &AppState, name: &str) -> String
 
     match manager.delete_partition(name).await {
         Ok(_) => {
-            info!("Deleted partition: {}", name);
+            info!("deleted partition: {}", name);
             ResponseBuilder::new().ok()
         }
-        Err(e) => {
-            debug!("Failed to delete partition '{}': {}", name, e);
-            ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "delpartition", &e)
-        }
+        Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "delpartition", &e),
     }
 }
 
@@ -222,11 +231,11 @@ pub async fn handle_moveoutput_command(
     let move_result = if let Some(found_partition) = source_partition {
         // Output is assigned to a known partition, do full move
         let from = found_partition;
-        info!("Moving output from '{}' to '{}'", from, to);
+        info!("moving output from '{}' to '{}'", from, to);
         manager.move_output(output_id, &from, to).await
     } else {
         // Output is not assigned to any partition yet, just assign to target
-        info!("Assigning unassigned output to '{}'", to);
+        info!("assigning unassigned output to '{}'", to);
         if let Some(target_partition) = manager.get_partition(to).await {
             target_partition.assign_output(output_id).await;
             Ok(())
@@ -246,12 +255,14 @@ pub async fn handle_moveoutput_command(
                 }
             }
 
-            info!("Moved output '{}' to partition '{}'", output_name, to);
+            info!("moved output '{}' to partition '{}'", output_name, to);
             ResponseBuilder::new().ok()
         }
-        Err(e) => {
-            debug!("Failed to move output '{}': {}", output_name, e);
-            ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "moveoutput", &format!("Output move failed: {}", e))
-        }
+        Err(e) => ResponseBuilder::error(
+            ACK_ERROR_SYSTEM,
+            0,
+            "moveoutput",
+            &format!("Output move failed: {}", e),
+        ),
     }
 }

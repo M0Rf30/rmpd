@@ -6,10 +6,13 @@ use crate::commands::playback;
 use crate::response::ResponseBuilder;
 use crate::state::AppState;
 
-use super::utils::{add_queue_item_metadata, apply_range, open_db, prepare_song_for_playback, song_tag_contains, song_tag_eq, update_next_song, ACK_ERROR_SYSTEM};
+use super::utils::{
+    add_queue_item_metadata, apply_range, open_db, prepare_song_for_playback, song_tag_contains,
+    song_tag_eq, update_next_song, ACK_ERROR_SYSTEM,
+};
 
 pub async fn handle_add_command(state: &AppState, uri: &str, position: Option<u32>) -> String {
-    debug!("Add command received with URI: [{}]", uri);
+    debug!("add command received with URI: [{}]", uri);
     // Get song from database
     let db = match open_db(state, "add") {
         Ok(d) => d,
@@ -18,8 +21,12 @@ pub async fn handle_add_command(state: &AppState, uri: &str, position: Option<u3
 
     let song = match db.get_song_by_path(uri) {
         Ok(Some(s)) => s,
-        Ok(None) => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "add", "song not found in database"),
-        Err(e) => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "add", &format!("query error: {e}")),
+        Ok(None) => {
+            return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "add", "song not found in database")
+        }
+        Err(e) => {
+            return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "add", &format!("query error: {e}"))
+        }
     };
 
     // Add to queue at specified position or at end
@@ -93,7 +100,7 @@ pub async fn handle_delete_command(
 
 pub async fn handle_addid_command(state: &AppState, uri: &str, position: Option<u32>) -> String {
     debug!(
-        "AddId command received with URI: [{}], position: {:?}",
+        "addid command received with URI: [{}], position: {:?}",
         uri, position
     );
 
@@ -104,8 +111,22 @@ pub async fn handle_addid_command(state: &AppState, uri: &str, position: Option<
 
     let song = match db.get_song_by_path(uri) {
         Ok(Some(s)) => s,
-        Ok(None) => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "addid", "song not found in database"),
-        Err(e) => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "addid", &format!("query error: {e}")),
+        Ok(None) => {
+            return ResponseBuilder::error(
+                ACK_ERROR_SYSTEM,
+                0,
+                "addid",
+                "song not found in database",
+            )
+        }
+        Err(e) => {
+            return ResponseBuilder::error(
+                ACK_ERROR_SYSTEM,
+                0,
+                "addid",
+                &format!("query error: {e}"),
+            )
+        }
     };
 
     // Add to queue at specific position
@@ -172,7 +193,12 @@ pub async fn handle_move_command(
                 // Moving up in the queue
                 for i in 0..range_size.min(queue.len() as u32 - start) {
                     if !queue.move_item(start, to + i) {
-                        return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "move", "Invalid position");
+                        return ResponseBuilder::error(
+                            ACK_ERROR_SYSTEM,
+                            0,
+                            "move",
+                            "Invalid position",
+                        );
                     }
                 }
             } else {
@@ -180,7 +206,12 @@ pub async fn handle_move_command(
                 let actual_end = end.min(queue.len() as u32);
                 for _ in 0..(actual_end - start) {
                     if !queue.move_item(start, to.saturating_sub(1)) {
-                        return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "move", "Invalid position");
+                        return ResponseBuilder::error(
+                            ACK_ERROR_SYSTEM,
+                            0,
+                            "move",
+                            "Invalid position",
+                        );
                     }
                 }
             }
@@ -286,7 +317,12 @@ pub async fn handle_playid_command(state: &AppState, id: Option<u32>) -> String 
 
                     ResponseBuilder::new().ok()
                 }
-                Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "playid", &format!("Playback error: {e}")),
+                Err(e) => ResponseBuilder::error(
+                    ACK_ERROR_SYSTEM,
+                    0,
+                    "playid",
+                    &format!("Playback error: {e}"),
+                ),
             }
         } else {
             ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "playid", "No such song")

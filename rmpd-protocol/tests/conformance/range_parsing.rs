@@ -14,7 +14,10 @@ async fn playlistinfo_single_position() {
     let resp = client.command("playlistinfo 1").await;
     assert_ok(&resp);
     let file_count = resp.matches("file:").count();
-    assert_eq!(file_count, 1, "single position should return 1 song: {resp}");
+    assert_eq!(
+        file_count, 1,
+        "single position should return 1 song: {resp}"
+    );
 }
 
 #[tokio::test]

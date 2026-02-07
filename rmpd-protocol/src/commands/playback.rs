@@ -1,6 +1,6 @@
 //! Playback control command handlers
 
-use tracing::{debug, error, info};
+use tracing::{debug, error};
 
 use crate::response::ResponseBuilder;
 use crate::state::AppState;
@@ -66,7 +66,7 @@ pub async fn handle_play_command(state: &AppState, position: Option<u32>) -> Str
             drop(status);
 
             // Emit events to notify idle clients
-            debug!("Emitting PlayerStateChanged(Play) and SongChanged events");
+            debug!("emitting PlayerStateChanged(Play) and SongChanged events");
             state
                 .event_bus
                 .emit(rmpd_core::event::Event::PlayerStateChanged(
@@ -78,19 +78,19 @@ pub async fn handle_play_command(state: &AppState, position: Option<u32>) -> Str
 
             ResponseBuilder::new().ok()
         }
-        Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "play", &format!("Playback error: {e}")),
+        Err(e) => {
+            ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "play", &format!("Playback error: {e}"))
+        }
     }
 }
 
 pub async fn handle_pause_command(state: &AppState, pause_state: Option<bool>) -> String {
-    info!("Pause command received: pause_state={:?}", pause_state);
-
     // Get current state lock-free using atomic (no engine lock needed!)
     let current_state = rmpd_core::state::PlayerState::from_atomic(
-        state.atomic_state.load(std::sync::atomic::Ordering::Acquire),
+        state
+            .atomic_state
+            .load(std::sync::atomic::Ordering::Acquire),
     );
-
-    info!("Current state (atomic, no locks): {:?}", current_state);
 
     let should_pause =
         pause_state.unwrap_or_else(|| current_state == rmpd_core::state::PlayerState::Play);
@@ -98,11 +98,9 @@ pub async fn handle_pause_command(state: &AppState, pause_state: Option<bool>) -
 
     // If already in desired state, do nothing
     if should_pause == is_currently_paused {
-        info!("Already in desired state, returning OK");
         return ResponseBuilder::new().ok();
     }
 
-    info!("Acquiring engine write lock...");
     // Set pause state
     let result = if pause_state.is_some() {
         // Explicit pause state given - use set_pause
@@ -114,10 +112,11 @@ pub async fn handle_pause_command(state: &AppState, pause_state: Option<bool>) -
 
     match result {
         Ok(_) => {
-            info!("Engine pause completed, updating status...");
             // Read the actual state from atomic (engine might not have changed it)
             let actual_state = rmpd_core::state::PlayerState::from_atomic(
-                state.atomic_state.load(std::sync::atomic::Ordering::Acquire),
+                state
+                    .atomic_state
+                    .load(std::sync::atomic::Ordering::Acquire),
             );
 
             // Update status to match actual atomic state
@@ -126,27 +125,21 @@ pub async fn handle_pause_command(state: &AppState, pause_state: Option<bool>) -
             drop(status);
 
             // Emit event to notify idle clients
-            debug!("Emitting PlayerStateChanged({:?}) event", actual_state);
+            debug!("emitting PlayerStateChanged({:?}) event", actual_state);
             state
                 .event_bus
                 .emit(rmpd_core::event::Event::PlayerStateChanged(actual_state));
 
-            info!(
-                "Pause completed successfully, state is now: {:?}",
-                actual_state
-            );
             ResponseBuilder::new().ok()
         }
         Err(e) => {
-            error!("Pause failed: {}", e);
+            error!("pause failed: {}", e);
             ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "pause", &format!("Pause error: {e}"))
         }
     }
 }
 
 pub async fn handle_stop_command(state: &AppState) -> String {
-    info!("Stop command received");
-    info!("Acquiring engine write lock for stop...");
     match state.engine.write().await.stop().await {
         Ok(_) => {
             // Update status after engine stops
@@ -157,7 +150,7 @@ pub async fn handle_stop_command(state: &AppState) -> String {
             drop(status);
 
             // Emit event to notify idle clients
-            debug!("Emitting PlayerStateChanged(Stop) event");
+            debug!("emitting PlayerStateChanged(Stop) event");
             state
                 .event_bus
                 .emit(rmpd_core::event::Event::PlayerStateChanged(
@@ -201,7 +194,9 @@ pub async fn handle_next_command(state: &AppState) -> String {
 
                 ResponseBuilder::new().ok()
             }
-            Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "next", &format!("Playback error: {e}")),
+            Err(e) => {
+                ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "next", &format!("Playback error: {e}"))
+            }
         }
     } else {
         ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "next", "No next song")
@@ -216,7 +211,12 @@ pub async fn handle_previous_command(state: &AppState) -> String {
         if current.position > 0 {
             current.position - 1
         } else {
-            return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "previous", "Already at first song");
+            return ResponseBuilder::error(
+                ACK_ERROR_SYSTEM,
+                0,
+                "previous",
+                "Already at first song",
+            );
         }
     } else {
         0
@@ -243,7 +243,12 @@ pub async fn handle_previous_command(state: &AppState) -> String {
 
                 ResponseBuilder::new().ok()
             }
-            Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "previous", &format!("Playback error: {e}")),
+            Err(e) => ResponseBuilder::error(
+                ACK_ERROR_SYSTEM,
+                0,
+                "previous",
+                &format!("Playback error: {e}"),
+            ),
         }
     } else {
         ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "previous", "No previous song")
@@ -268,7 +273,12 @@ pub async fn handle_seek_command(state: &AppState, position: u32, time: f64) -> 
                         Some(std::time::Duration::from_secs_f64(time));
                     ResponseBuilder::new().ok()
                 }
-                Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "seek", &format!("Seek failed: {e}")),
+                Err(e) => ResponseBuilder::error(
+                    ACK_ERROR_SYSTEM,
+                    0,
+                    "seek",
+                    &format!("Seek failed: {e}"),
+                ),
             }
         } else {
             ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "seek", "Can only seek in current song")
@@ -293,10 +303,20 @@ pub async fn handle_seekid_command(state: &AppState, id: u32, time: f64) -> Stri
                         Some(std::time::Duration::from_secs_f64(time));
                     ResponseBuilder::new().ok()
                 }
-                Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "seekid", &format!("Seek failed: {e}")),
+                Err(e) => ResponseBuilder::error(
+                    ACK_ERROR_SYSTEM,
+                    0,
+                    "seekid",
+                    &format!("Seek failed: {e}"),
+                ),
             }
         } else {
-            ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "seekid", "Can only seek in current song")
+            ResponseBuilder::error(
+                ACK_ERROR_SYSTEM,
+                0,
+                "seekid",
+                "Can only seek in current song",
+            )
         }
     } else {
         ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "seekid", "Not playing")
@@ -330,7 +350,9 @@ pub async fn handle_seekcur_command(state: &AppState, time: f64, relative: bool)
                     Some(std::time::Duration::from_secs_f64(seek_position));
                 ResponseBuilder::new().ok()
             }
-            Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "seekcur", &format!("Seek failed: {e}")),
+            Err(e) => {
+                ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "seekcur", &format!("Seek failed: {e}"))
+            }
         }
     } else {
         ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "seekcur", "Not playing")

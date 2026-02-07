@@ -30,7 +30,9 @@ pub async fn handle_sticker_get_command(state: &AppState, uri: &str, name: &str)
             resp.ok()
         }
         Ok(None) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "sticker get", "no such sticker"),
-        Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "sticker get", &format!("Error: {e}")),
+        Err(e) => {
+            ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "sticker get", &format!("Error: {e}"))
+        }
     }
 }
 
@@ -47,7 +49,9 @@ pub async fn handle_sticker_set_command(
 
     match db.set_sticker(uri, name, value) {
         Ok(_) => ResponseBuilder::new().ok(),
-        Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "sticker set", &format!("Error: {e}")),
+        Err(e) => {
+            ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "sticker set", &format!("Error: {e}"))
+        }
     }
 }
 
@@ -63,7 +67,12 @@ pub async fn handle_sticker_delete_command(
 
     match db.delete_sticker(uri, name) {
         Ok(_) => ResponseBuilder::new().ok(),
-        Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "sticker delete", &format!("Error: {e}")),
+        Err(e) => ResponseBuilder::error(
+            ACK_ERROR_SYSTEM,
+            0,
+            "sticker delete",
+            &format!("Error: {e}"),
+        ),
     }
 }
 
@@ -81,7 +90,9 @@ pub async fn handle_sticker_list_command(state: &AppState, uri: &str) -> String 
             }
             resp.ok()
         }
-        Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "sticker list", &format!("Error: {e}")),
+        Err(e) => {
+            ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "sticker list", &format!("Error: {e}"))
+        }
     }
 }
 
@@ -105,7 +116,9 @@ pub async fn handle_sticker_find_command(
             }
             resp.ok()
         }
-        Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "sticker find", &format!("Error: {e}")),
+        Err(e) => {
+            ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "sticker find", &format!("Error: {e}"))
+        }
     }
 }
 
@@ -131,7 +144,9 @@ pub async fn handle_sticker_inc_command(
             resp.field("sticker", format!("{name}={new_value}"));
             resp.ok()
         }
-        Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "sticker inc", &format!("Error: {e}")),
+        Err(e) => {
+            ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "sticker inc", &format!("Error: {e}"))
+        }
     }
 }
 
@@ -157,7 +172,9 @@ pub async fn handle_sticker_dec_command(
             resp.field("sticker", format!("{name}={new_value}"));
             resp.ok()
         }
-        Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "sticker dec", &format!("Error: {e}")),
+        Err(e) => {
+            ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "sticker dec", &format!("Error: {e}"))
+        }
     }
 }
 

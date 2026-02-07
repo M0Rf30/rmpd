@@ -37,7 +37,7 @@ async fn main() -> Result<()> {
         )
         .init();
 
-    info!("Starting rmpd v{}", env!("CARGO_PKG_VERSION"));
+    info!("starting rmpd v{}", env!("CARGO_PKG_VERSION"));
 
     // Load configuration
     let config = if let Some(config_path) = args.config {
@@ -54,9 +54,9 @@ async fn main() -> Result<()> {
 
     let full_address = format!("{bind_address}:{port}");
 
-    info!("Configuration loaded");
-    info!("Music directory: {}", config.general.music_directory);
-    info!("Database: {}", config.general.db_file);
+    info!("configuration loaded");
+    info!("music directory: {}", config.general.music_directory);
+    info!("database: {}", config.general.db_file);
 
     // Start the server
     app::run(full_address, config).await?;

@@ -7,7 +7,10 @@ async fn outputs_lists_default() {
     let (_server, mut client) = setup().await;
     let resp = client.command("outputs").await;
     assert_ok(&resp);
-    assert!(get_field(&resp, "outputid").is_some(), "should have an output");
+    assert!(
+        get_field(&resp, "outputid").is_some(),
+        "should have an output"
+    );
     assert!(get_field(&resp, "outputname").is_some());
     assert!(get_field(&resp, "outputenabled").is_some());
 }
@@ -53,7 +56,9 @@ async fn toggleoutput() {
 #[tokio::test]
 async fn outputset_attribute() {
     let (_server, mut client) = setup().await;
-    let resp = client.command("outputset 0 allowed_formats \"44100:16:2\"").await;
+    let resp = client
+        .command("outputset 0 allowed_formats \"44100:16:2\"")
+        .await;
     assert_ok(&resp);
 }
 

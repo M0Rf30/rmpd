@@ -18,21 +18,13 @@ pub struct DopOutput {
 
 impl DopOutput {
     pub fn new(sample_rate: u32, channels: u8) -> Result<Self> {
-        tracing::info!("Using default ALSA device (should be configured as hw: device)");
-
         let device_config = CpalDeviceConfig::new(sample_rate, channels as u16)?;
-
-        tracing::info!(
-            "DoP output config: {}Hz, {} channels",
-            sample_rate,
-            channels
-        );
 
         // NOTE: For DoP to work properly, the device must run at the exact sample rate.
         // If PipeWire/PulseAudio is running, it may resample the audio which destroys DoP markers.
         // To fix: either configure PipeWire to pass through the sample rate,
         // or temporarily stop PipeWire: systemctl --user stop pipewire pipewire-pulse
-        tracing::warn!("DoP requires direct hardware access at {} Hz - ensure PipeWire/PulseAudio isn't resampling", sample_rate);
+        tracing::warn!("DoP requires direct hardware access at {} Hz, ensure PipeWire/PulseAudio isn't resampling", sample_rate);
 
         Ok(Self {
             device: device_config.device,
@@ -55,8 +47,8 @@ impl DopOutput {
             sample_format: SampleFormat::I32,
         };
         let sample_format = device_config.find_dop_format()?;
-        tracing::info!("Requested sample rate: {:?} Hz", self.config.sample_rate);
-        tracing::info!("Requested channels: {}", self.config.channels);
+        tracing::info!("requested sample rate: {:?} Hz", self.config.sample_rate);
+        tracing::info!("requested channels: {}", self.config.channels);
 
         // Create channel for sample data
         // Increased buffer depth to handle high sample rates (DSD128/256)
@@ -107,7 +99,7 @@ impl DopOutput {
             _ => {
                 // Fallback: convert I32 to the native format
                 // This is less ideal but ensures compatibility
-                tracing::warn!("No I32 format available, using fallback conversion");
+                tracing::warn!("no I32 format available, using fallback conversion");
                 self.device
                     .build_output_stream(
                         &self.config,
@@ -150,7 +142,7 @@ impl DopOutput {
         self.sample_sender = Some(tx.clone());
         self.is_paused = false;
 
-        tracing::info!("DoP output started successfully");
+        tracing::info!("DoP output started");
 
         // Give the stream a moment to fully initialize before sending primer
         std::thread::sleep(std::time::Duration::from_millis(50));
@@ -158,7 +150,7 @@ impl DopOutput {
         // CRITICAL FIX: Prime the DAC with DoP-marked silence
         // This ensures the DAC detects DoP format immediately (blue LED)
         // Without this, first playback sounds like PCM (yellow LED)
-        tracing::info!("Priming DAC with DoP-marked silence for format detection...");
+        tracing::info!("priming DAC with DoP-marked silence for format detection");
 
         // Scale primer duration based on sample rate to avoid blocking
         // DSD64 (176.4kHz): 200ms, DSD128 (352.8kHz): 100ms, DSD256+: 50ms
@@ -192,7 +184,7 @@ impl DopOutput {
         }
 
         tracing::info!(
-            "DoP primer sent ({} frames = {}ms), DAC should detect DSD format now",
+            "DoP primer sent ({} frames = {}ms)",
             primer_frames,
             (primer_frames * 1000) / self.config.sample_rate as usize
         );
@@ -239,7 +231,7 @@ impl DopOutput {
     pub fn stop(&mut self) -> Result<()> {
         // CRITICAL: Send PCM reset sequence to switch DAC back to PCM mode
         // This allows non-DSD tracks to play correctly after DSD playback
-        tracing::info!("Sending PCM reset sequence to switch DAC back to PCM mode...");
+        tracing::info!("sending PCM reset sequence to switch DAC back to PCM mode");
 
         if let Some(ref sender) = self.sample_sender {
             let reset_frames = self.config.sample_rate as usize / 10; // 100ms
@@ -258,7 +250,7 @@ impl DopOutput {
             // Give DAC time to process reset sequence
             std::thread::sleep(std::time::Duration::from_millis(150));
 
-            tracing::info!("PCM reset sequence sent, DAC should switch back to PCM mode");
+            tracing::info!("PCM reset sequence sent");
         }
 
         if let Some(stream) = self.stream.take() {

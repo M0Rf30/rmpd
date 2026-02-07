@@ -22,7 +22,16 @@ async fn status_has_required_fields() {
     assert_ok(&resp);
 
     // Per MPD spec, these fields must always be present
-    for field in &["volume", "repeat", "random", "single", "consume", "playlist", "playlistlength", "state"] {
+    for field in &[
+        "volume",
+        "repeat",
+        "random",
+        "single",
+        "consume",
+        "playlist",
+        "playlistlength",
+        "state",
+    ] {
         assert!(
             get_field(&resp, field).is_some(),
             "missing required field: {field}"
@@ -36,7 +45,15 @@ async fn stats_response_format() {
     let resp = client.command("stats").await;
     assert_ok(&resp);
 
-    for field in &["artists", "albums", "songs", "uptime", "db_playtime", "db_update", "playtime"] {
+    for field in &[
+        "artists",
+        "albums",
+        "songs",
+        "uptime",
+        "db_playtime",
+        "db_update",
+        "playtime",
+    ] {
         assert!(
             get_field(&resp, field).is_some(),
             "missing required field: {field}"

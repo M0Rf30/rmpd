@@ -16,7 +16,7 @@ pub async fn run(bind_address: String, config: Config) -> Result<()> {
     // Load state from file if it exists
     let state_file = StateFile::new(state_file_path.clone());
     if let Ok(Some(saved_state)) = state_file.load() {
-        info!("Restoring state from file");
+        info!("restoring state from file");
         restore_state(
             &state,
             saved_state,
@@ -41,13 +41,13 @@ pub async fn run(bind_address: String, config: Config) -> Result<()> {
     tokio::spawn(async move {
         match signal::ctrl_c().await {
             Ok(()) => {
-                info!("Received SIGINT, saving state...");
+                info!("received SIGINT, saving state");
                 save_state_on_shutdown(&shutdown_state, &shutdown_state_file_path).await;
                 // Send shutdown signal
                 let _ = shutdown_tx.send(());
             }
             Err(err) => {
-                error!("Unable to listen for shutdown signal: {}", err);
+                error!("unable to listen for shutdown signal: {}", err);
             }
         }
     });
@@ -59,7 +59,7 @@ pub async fn run(bind_address: String, config: Config) -> Result<()> {
     let server_result = server.run().await;
 
     // Save state on clean shutdown
-    info!("Server stopped, saving state...");
+    info!("server stopped, saving state");
     save_state_on_shutdown(&state, &state_file_path).await;
 
     server_result?;
@@ -89,7 +89,7 @@ async fn restore_state(
     // Restore playlist
     if !saved_state.playlist_paths.is_empty() {
         info!(
-            "Restoring playlist with {} songs",
+            "restoring playlist with {} songs",
             saved_state.playlist_paths.len()
         );
 
@@ -101,7 +101,7 @@ async fn restore_state(
                 if let Ok(Some(song)) = db.get_song_by_path(path) {
                     queue.add(song);
                 } else {
-                    warn!("Song not found in database: {}", path);
+                    warn!("song not found in database: {}", path);
                 }
             }
 
@@ -127,14 +127,15 @@ async fn restore_state(
                 if let Some(play_state) = saved_state.state {
                     if play_state == PlayerState::Play || play_state == PlayerState::Pause {
                         info!(
-                            "Auto-resuming playback at position {} (state: {:?})",
+                            "auto-resuming playback at position {} (state: {:?})",
                             position, play_state
                         );
 
-                        let playback_song = rmpd_protocol::commands::utils::prepare_song_for_playback(
-                            &song,
-                            Some(music_dir),
-                        );
+                        let playback_song =
+                            rmpd_protocol::commands::utils::prepare_song_for_playback(
+                                &song,
+                                Some(music_dir),
+                            );
 
                         // Set current song immediately
                         let mut status = state.status.write().await;
@@ -186,7 +187,6 @@ async fn restore_state(
                                 // Seek to saved position if available
                                 if let Some(elapsed_time) = elapsed {
                                     if elapsed_time > 0.0 {
-                                        info!("Seeking to {:.2}s", elapsed_time);
                                         if let Err(e) = state_clone
                                             .engine
                                             .write()
@@ -194,16 +194,15 @@ async fn restore_state(
                                             .seek(elapsed_time)
                                             .await
                                         {
-                                            error!("Failed to seek: {}", e);
+                                            error!("failed to seek: {}", e);
                                         }
                                     }
                                 }
 
                                 // If was paused, pause the engine
                                 if play_state == PlayerState::Pause {
-                                    info!("Pausing playback");
                                     if let Err(e) = state_clone.engine.write().await.pause().await {
-                                        error!("Failed to pause: {}", e);
+                                        error!("failed to pause: {}", e);
                                     }
                                 }
                             }
@@ -212,10 +211,6 @@ async fn restore_state(
                 }
             } else {
                 // Don't auto-resume, just set current position
-                info!(
-                    "Setting current position to {} (restore_paused={})",
-                    position, restore_paused
-                );
                 let mut status = state.status.write().await;
                 status.current_song = Some(rmpd_core::state::QueuePosition {
                     position,
@@ -225,7 +220,7 @@ async fn restore_state(
         }
     }
 
-    info!("State restoration complete");
+    info!("state restoration complete");
 }
 
 async fn save_state_on_shutdown(state: &AppState, state_file_path: &str) {
@@ -234,6 +229,6 @@ async fn save_state_on_shutdown(state: &AppState, state_file_path: &str) {
 
     let state_file = StateFile::new(state_file_path.to_string());
     if let Err(e) = state_file.save(&status, &queue).await {
-        error!("Failed to save state: {}", e);
+        error!("failed to save state: {}", e);
     }
 }

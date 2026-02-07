@@ -66,7 +66,7 @@ impl PlaybackEngine {
     }
 
     pub async fn play(&mut self, song: Song) -> Result<()> {
-        info!("Starting playback: {}", song.path);
+        info!("starting playback: {}", song.path);
 
         // Stop current playback if any (internal stop, no events - caller will emit)
         self.stop_internal().await?;
@@ -99,7 +99,7 @@ impl PlaybackEngine {
                 volume,
                 command_rx,
             ) {
-                error!("Playback error: {}", e);
+                error!("playback error: {}", e);
             }
         });
 
@@ -141,7 +141,7 @@ impl PlaybackEngine {
     }
 
     pub async fn stop(&mut self) -> Result<()> {
-        debug!("Stopping playback");
+        debug!("stopping playback");
         self.stop_internal().await?;
         // Emit event to notify clients (external stop)
         self.event_bus.emit(Event::SongChanged(None));
@@ -150,7 +150,7 @@ impl PlaybackEngine {
 
     /// Internal stop - doesn't emit events (used when stopping before playing next song)
     async fn stop_internal(&mut self) -> Result<()> {
-        debug!("Internal stop (no events)");
+        debug!("internal stop (no events)");
 
         // Set stop flag
         self.stop_flag.store(true, Ordering::Release);
@@ -209,7 +209,7 @@ impl PlaybackEngine {
 
         // Check if this is a DSD file - try DoP first, then fall back to PCM conversion
         if decoder.is_dsd() {
-            info!("DSD file detected, attempting DoP output...");
+            info!("DSD file detected, attempting DoP output");
 
             // Try to create DoP output and play
             match Self::try_dop_playback(&decoder) {
@@ -226,7 +226,7 @@ impl PlaybackEngine {
                 }
                 Err(e) => {
                     warn!("DoP playback not available: {}", e);
-                    info!("Falling back to DSD-to-PCM conversion");
+                    info!("falling back to DSD-to-PCM conversion");
 
                     // Try PCM conversion rates in order of preference (highest to lowest)
                     // Test both decoder conversion AND output creation at each rate
@@ -242,7 +242,7 @@ impl PlaybackEngine {
                     for &rate in &preferred_rates {
                         // Try to enable PCM conversion at this rate
                         if let Err(e) = decoder.enable_pcm_conversion(rate) {
-                            debug!("Failed to enable PCM conversion at {} Hz: {}", rate, e);
+                            debug!("failed to enable PCM conversion at {} Hz: {}", rate, e);
                             continue;
                         }
 
@@ -252,7 +252,7 @@ impl PlaybackEngine {
                         let mut test_output = match CpalOutput::new(format) {
                             Ok(output) => output,
                             Err(e) => {
-                                debug!("Failed to create output at {} Hz: {}", rate, e);
+                                debug!("failed to create output at {} Hz: {}", rate, e);
                                 continue;
                             }
                         };
@@ -260,7 +260,7 @@ impl PlaybackEngine {
                         match test_output.start() {
                             Ok(()) => {
                                 info!(
-                                    "Successfully configured DSD-to-PCM conversion at {} Hz",
+                                    "successfully configured DSD-to-PCM conversion at {} Hz",
                                     rate
                                 );
                                 // Stop test output - we'll create a new one later
@@ -269,7 +269,7 @@ impl PlaybackEngine {
                                 break;
                             }
                             Err(e) => {
-                                debug!("Hardware doesn't support {} Hz: {}", rate, e);
+                                debug!("hardware doesn't support {} Hz: {}", rate, e);
                                 let _ = test_output.stop();
                                 continue;
                             }
@@ -289,15 +289,13 @@ impl PlaybackEngine {
         let format = decoder.format();
 
         debug!(
-            "Decoder opened: {}Hz, {} channels",
+            "decoder opened: {}Hz, {} channels",
             format.sample_rate, format.channels
         );
 
         // Create output
         let mut output = CpalOutput::new(format)?;
         output.start()?;
-
-        debug!("Output started");
 
         // Playback loop
         let mut buffer = vec![0.0f32; BUFFER_SIZE];
@@ -309,9 +307,9 @@ impl PlaybackEngine {
             if let Ok(cmd) = command_rx.try_recv() {
                 match cmd {
                     PlaybackCommand::Seek(position) => {
-                        debug!("Seeking to position: {:.2}s", position);
+                        debug!("seeking to position: {:.2}s", position);
                         if let Err(e) = decoder.seek(position) {
-                            error!("Seek failed: {}", e);
+                            error!("seek failed: {}", e);
                         } else {
                             // Reset sample counter after seek
                             total_samples_played = (position * samples_per_second as f64) as u64;
@@ -350,7 +348,7 @@ impl PlaybackEngine {
 
             if samples_read < buffer.len() {
                 debug!(
-                    "Partial read: {} samples (buffer size: {})",
+                    "partial read: {} samples (buffer size: {})",
                     samples_read,
                     buffer.len()
                 );
@@ -384,7 +382,6 @@ impl PlaybackEngine {
         // Stop output
         output.stop()?;
 
-        debug!("Playback thread finished");
         Ok(())
     }
 
@@ -433,11 +430,11 @@ impl PlaybackEngine {
             .unwrap_or(symphonia::core::codecs::BitOrder::LsbFirst);
 
         info!(
-            "DSD playback: {} Hz, {} channels",
+            "dsd playback: {} Hz, {} channels",
             dsd_sample_rate, channels
         );
         info!(
-            "DSD format: channel_layout={:?}, bit_order={:?}",
+            "dsd format: channel_layout={:?}, bit_order={:?}",
             channel_layout, bit_order
         );
 
@@ -459,8 +456,6 @@ impl PlaybackEngine {
         let mut output = DopOutput::new(pcm_sample_rate, channels)?;
         output.start()?;
 
-        info!("DoP output started");
-
         // Playback loop
         let mut dsd_buffer = Vec::new();
         let mut dop_i32_buffer = Vec::new();
@@ -472,9 +467,9 @@ impl PlaybackEngine {
             if let Ok(cmd) = command_rx.try_recv() {
                 match cmd {
                     PlaybackCommand::Seek(position) => {
-                        debug!("Seeking to position: {:.2}s", position);
+                        debug!("seeking to position: {:.2}s", position);
                         if let Err(e) = decoder.seek(position) {
-                            error!("Seek failed: {}", e);
+                            error!("seek failed: {}", e);
                         } else {
                             total_dsd_bytes = (position * dsd_bytes_per_second as f64) as u64;
                             event_bus.emit(Event::PositionChanged(
@@ -500,7 +495,7 @@ impl PlaybackEngine {
             let bytes_read = decoder.read_dsd_raw(&mut dsd_buffer)?;
 
             if bytes_read == 0 {
-                debug!("End of DSD stream reached");
+                debug!("end of DSD stream reached");
                 event_bus.emit(Event::SongFinished);
                 break;
             }
@@ -529,7 +524,6 @@ impl PlaybackEngine {
         // Stop output
         output.stop()?;
 
-        debug!("DoP playback thread finished");
         Ok(())
     }
 }

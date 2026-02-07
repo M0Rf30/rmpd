@@ -4,13 +4,13 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::broadcast;
 use tracing::{debug, error, info};
 
+use crate::commands::utils::ACK_ERROR_UNKNOWN;
 use crate::commands::{
     connection, database, fingerprint, messaging, options, outputs, partition, playback, playlists,
     queue, reflection, stickers, storage,
 };
 use crate::parser::{parse_command, Command};
 use crate::queue_playback::QueuePlaybackManager;
-use crate::commands::utils::ACK_ERROR_UNKNOWN;
 use crate::response::{Response, ResponseBuilder, Stats};
 use crate::state::AppState;
 
@@ -47,7 +47,7 @@ impl MpdServer {
 
     pub async fn run(self) -> Result<()> {
         let listener = TcpListener::bind(&self.bind_address).await?;
-        info!("MPD server listening on {}", self.bind_address);
+        info!("mpd server listening on {}", self.bind_address);
         self.run_with_listener(listener).await
     }
 
@@ -59,7 +59,7 @@ impl MpdServer {
         // Start queue playback manager
         let mut playback_manager = QueuePlaybackManager::new(self.state.clone());
         playback_manager.start();
-        info!("Queue playback manager started");
+        info!("queue playback manager started");
 
         loop {
             tokio::select! {
@@ -67,28 +67,28 @@ impl MpdServer {
                 result = listener.accept() => {
                     match result {
                         Ok((stream, addr)) => {
-                            debug!("New connection from {}", addr);
+                            debug!("new connection from {}", addr);
                             let state = self.state.clone();
                             tokio::spawn(async move {
                                 if let Err(e) = handle_client(stream, state).await {
-                                    error!("Client error: {}", e);
+                                    error!("client error: {}", e);
                                 }
                             });
                         }
                         Err(e) => {
-                            error!("Failed to accept connection: {}", e);
+                            error!("failed to accept connection: {}", e);
                         }
                     }
                 }
                 // Handle shutdown signal
                 _ = self.shutdown_rx.recv() => {
-                    info!("Shutdown signal received, stopping server...");
+                    info!("shutdown signal received, stopping server");
                     break;
                 }
             }
         }
 
-        info!("Server shutdown complete");
+        info!("server shutdown complete");
         Ok(())
     }
 }
@@ -131,7 +131,7 @@ async fn handle_client(mut stream: TcpStream, state: AppState) -> Result<()> {
             continue;
         }
 
-        debug!("Received command: {}", trimmed);
+        debug!("received command: {}", trimmed);
 
         // Handle command batching
         let response = match parse_command(trimmed) {
@@ -233,7 +233,12 @@ async fn execute_command_list(
             }
             Err(e) => {
                 // Parse error - return ACK with index
-                return Response::Text(ResponseBuilder::error(ACK_ERROR_UNKNOWN, index as i32, cmd_str, &e));
+                return Response::Text(ResponseBuilder::error(
+                    ACK_ERROR_UNKNOWN,
+                    index as i32,
+                    cmd_str,
+                    &e,
+                ));
             }
         }
     }
@@ -286,7 +291,7 @@ async fn handle_idle(
             event_result = event_rx.recv() => {
                 match event_result {
                     Ok(event) => {
-                        debug!("Idle received event: {:?}", event);
+                        debug!("idle received event: {:?}", event);
                         let event_subsystems = event.subsystems();
 
                         // Check if event matches any subscribed subsystem
@@ -298,24 +303,24 @@ async fn handle_idle(
                             event_subsystems.iter().any(|s| filter_subsystems.contains(s))
                         };
 
-                        debug!("Event matches filter: {}, subsystems: {:?}", matches, event_subsystems);
+                        debug!("event matches filter: {}, subsystems: {:?}", matches, event_subsystems);
 
                         if matches {
                             // Return changed subsystem
                             let subsystem_name = subsystem_to_string(event_subsystems[0]);
-                            debug!("Idle returning: changed: {}", subsystem_name);
+                            debug!("idle returning: changed: {}", subsystem_name);
                             return format!("changed: {subsystem_name}\nOK\n");
                         }
                     }
                     Err(RecvError::Lagged(skipped)) => {
                         // Channel lagged - messages were dropped
                         // Return immediately to notify client of changes
-                        debug!("Idle: channel lagged, skipped {} messages", skipped);
+                        debug!("idle: channel lagged, skipped {} messages", skipped);
                         return "changed: player\nOK\n".to_owned();
                     }
                     Err(RecvError::Closed) => {
                         // Channel closed - should not happen, but handle gracefully
-                        debug!("Idle: event channel closed");
+                        debug!("idle: event channel closed");
                         return "OK\n".to_owned();
                     }
                 }
@@ -392,7 +397,9 @@ async fn handle_command(
                 // Sync status.state with atomic_state WHILE holding the lock
                 // This prevents race conditions between reading atomic_state and writing to status
                 guard.state = rmpd_core::state::PlayerState::from_atomic(
-                    state.atomic_state.load(std::sync::atomic::Ordering::Acquire),
+                    state
+                        .atomic_state
+                        .load(std::sync::atomic::Ordering::Acquire),
                 );
                 guard.clone()
             };
@@ -527,7 +534,9 @@ async fn handle_command(
             // Already handled at the beginning of the function
             unreachable!()
         }
-        Command::Unknown(cmd) => ResponseBuilder::error(ACK_ERROR_UNKNOWN, 0, &cmd, "unknown command"),
+        Command::Unknown(cmd) => {
+            ResponseBuilder::error(ACK_ERROR_UNKNOWN, 0, &cmd, "unknown command")
+        }
         Command::Repeat { enabled } => options::handle_repeat_command(state, enabled).await,
         Command::Random { enabled } => options::handle_random_command(state, enabled).await,
         Command::Single { mode } => options::handle_single_command(state, &mode).await,

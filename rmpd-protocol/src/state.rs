@@ -72,7 +72,7 @@ impl AppState {
         // Initialize discovery service (may fail if mDNS not available)
         let discovery = DiscoveryService::new().ok();
         if discovery.is_none() {
-            tracing::warn!("Failed to initialize network discovery service");
+            tracing::warn!("failed to initialize network discovery service");
         }
 
         // Initialize mount registry

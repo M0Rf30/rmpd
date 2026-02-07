@@ -84,7 +84,7 @@ impl MountBackend for LinuxMountBackend {
         match protocol.as_str() {
             "nfs" => {
                 // NFS mount: mount -t nfs server:/path /mountpoint
-                tracing::info!("Mounting NFS: {} -> {}", address, mountpoint.display());
+                tracing::info!("mounting NFS: {} -> {}", address, mountpoint.display());
                 self.execute_mount_command("nfs", &address, path_to_str(mountpoint)?, options)
             }
             "smb" | "cifs" => {
@@ -95,7 +95,7 @@ impl MountBackend for LinuxMountBackend {
                     format!("//{}", address)
                 };
 
-                tracing::info!("Mounting CIFS: {} -> {}", cifs_path, mountpoint.display());
+                tracing::info!("mounting CIFS: {} -> {}", cifs_path, mountpoint.display());
 
                 // Add guest option if no credentials provided
                 let mut mount_options = options.to_vec();
@@ -113,7 +113,7 @@ impl MountBackend for LinuxMountBackend {
             "webdav" | "http" | "https" => {
                 // WebDAV would require davfs2 to be installed
                 // mount -t davfs http://server/path /mountpoint
-                tracing::warn!("WebDAV mounting requires davfs2 to be installed and configured");
+                tracing::warn!("webDAV mounting requires davfs2 to be installed and configured");
 
                 // Try with davfs
                 self.execute_mount_command("davfs", uri, path_to_str(mountpoint)?, options)
@@ -125,7 +125,7 @@ impl MountBackend for LinuxMountBackend {
     }
 
     fn unmount(&self, mountpoint: &Path) -> Result<()> {
-        tracing::info!("Unmounting: {}", mountpoint.display());
+        tracing::info!("unmounting: {}", mountpoint.display());
 
         let output = Command::new("umount")
             .arg(path_to_str(mountpoint)?)
@@ -171,7 +171,6 @@ impl MacOSMountBackend {
     pub fn new() -> Self {
         Self
     }
-
 }
 
 #[cfg(target_os = "macos")]

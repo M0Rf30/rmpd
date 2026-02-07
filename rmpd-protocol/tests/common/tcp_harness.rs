@@ -35,11 +35,7 @@ impl MpdTestServer {
         let (shutdown_tx, shutdown_rx) = broadcast::channel::<()>(1);
         state.set_shutdown_sender(shutdown_tx.clone());
 
-        let server = MpdServer::with_state(
-            format!("127.0.0.1:{port}"),
-            state,
-            shutdown_rx,
-        );
+        let server = MpdServer::with_state(format!("127.0.0.1:{port}"), state, shutdown_rx);
 
         tokio::spawn(async move {
             let _ = server.run_with_listener(listener).await;

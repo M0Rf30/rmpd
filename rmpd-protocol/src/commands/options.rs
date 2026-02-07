@@ -12,7 +12,9 @@ pub async fn handle_setvol_command(state: &AppState, volume: u8) -> String {
             status.volume = volume;
             ResponseBuilder::new().ok()
         }
-        Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "setvol", &format!("Volume error: {e}")),
+        Err(e) => {
+            ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "setvol", &format!("Volume error: {e}"))
+        }
     }
 }
 
@@ -25,7 +27,9 @@ pub async fn handle_volume_command(state: &AppState, change: i8) -> String {
             state.status.write().await.volume = new_vol;
             ResponseBuilder::new().ok()
         }
-        Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "volume", &format!("Volume error: {e}")),
+        Err(e) => {
+            ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "volume", &format!("Volume error: {e}"))
+        }
     }
 }
 

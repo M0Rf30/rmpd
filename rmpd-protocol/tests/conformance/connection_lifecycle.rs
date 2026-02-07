@@ -26,7 +26,10 @@ async fn greeting_format() {
     let parts: Vec<&str> = version.split('.').collect();
     assert_eq!(parts.len(), 3, "version must be major.minor.patch");
     for part in &parts {
-        assert!(part.parse::<u32>().is_ok(), "version part not numeric: {part}");
+        assert!(
+            part.parse::<u32>().is_ok(),
+            "version part not numeric: {part}"
+        );
     }
 }
 

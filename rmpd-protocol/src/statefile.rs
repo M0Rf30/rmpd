@@ -76,7 +76,7 @@ impl StateFile {
         fs::write(&temp_path, content)?;
         fs::rename(&temp_path, &self.path)?;
 
-        info!("State saved to {}", self.path);
+        info!("state saved to {}", self.path);
         Ok(())
     }
 
@@ -84,7 +84,7 @@ impl StateFile {
     pub fn load(&self) -> Result<Option<SavedState>> {
         let path = Path::new(&self.path);
         if !path.exists() {
-            debug!("State file not found: {}", self.path);
+            debug!("state file not found: {}", self.path);
             return Ok(None);
         }
 
@@ -173,7 +173,7 @@ impl StateFile {
         }
 
         state.playlist_paths = playlist_items;
-        info!("State loaded from {}", self.path);
+        info!("state loaded from {}", self.path);
         Ok(Some(state))
     }
 }

@@ -151,7 +151,7 @@ impl SymphoniaDecoder {
         params_with_pcm.extra_data = Some(output_rate.to_le_bytes().to_vec().into_boxed_slice());
 
         tracing::info!(
-            "Enabling DSD-to-PCM conversion: {} Hz DSD -> {} Hz PCM",
+            "enabling DSD-to-PCM conversion: {} Hz DSD -> {} Hz PCM",
             input_rate,
             output_rate
         );
@@ -228,7 +228,7 @@ impl SymphoniaDecoder {
                     continue;
                 }
                 Err(e) => {
-                    tracing::error!("Failed to read packet: {}", e);
+                    tracing::error!("failed to read packet: {}", e);
                     return Err(RmpdError::Player(format!("Failed to read packet: {e}")));
                 }
             };
@@ -276,7 +276,7 @@ impl SymphoniaDecoder {
 
                 if !is_f32 {
                     tracing::error!(
-                        "DSD-to-PCM decoder returned wrong format! Expected F32, got U8={}",
+                        "DSD-to-PCM decoder returned wrong format, expected F32, got U8={}",
                         is_u8
                     );
                     return Err(RmpdError::Player(
@@ -290,7 +290,7 @@ impl SymphoniaDecoder {
             static LOGGED: AtomicBool = AtomicBool::new(false);
             if !LOGGED.swap(true, AtomicOrdering::Relaxed) {
                 tracing::info!(
-                    "First packet: format=F32, frames={}, spec={:?}",
+                    "first packet: format=F32, frames={}, spec={:?}",
                     decoded.frames(),
                     decoded.spec()
                 );

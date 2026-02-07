@@ -46,7 +46,9 @@ async fn list_artists() {
 #[tokio::test]
 async fn count_songs() {
     let (_server, mut client, _tmp) = setup_with_db(3).await;
-    let resp = client.command("count \"(artist == \\\"Test Artist\\\")\"").await;
+    let resp = client
+        .command("count \"(artist == \\\"Test Artist\\\")\"")
+        .await;
     assert!(resp.ends_with("OK\n") || resp.starts_with("ACK "));
 }
 

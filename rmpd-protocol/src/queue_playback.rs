@@ -30,9 +30,9 @@ impl QueuePlaybackManager {
             loop {
                 match event_rx.recv().await {
                     Ok(Event::SongFinished) => {
-                        info!("Song finished, advancing to next");
+                        info!("song finished, advancing to next");
                         if let Err(e) = Self::handle_song_finished(&state).await {
-                            error!("Error advancing to next song: {}", e);
+                            error!("error advancing to next song: {}", e);
                         }
                     }
                     Ok(Event::PositionChanged(elapsed)) => {
@@ -43,13 +43,15 @@ impl QueuePlaybackManager {
                         // Sync status.state with atomic_state to ensure consistency
                         // Read atomic_state WHILE holding the lock to avoid races
                         let atomic_player_state = rmpd_core::state::PlayerState::from_atomic(
-                            state.atomic_state.load(std::sync::atomic::Ordering::Acquire),
+                            state
+                                .atomic_state
+                                .load(std::sync::atomic::Ordering::Acquire),
                         );
 
                         let state_changed = status.state != atomic_player_state;
                         if state_changed {
                             debug!(
-                                "Syncing status.state {:?} -> {:?}",
+                                "syncing status.state {:?} -> {:?}",
                                 status.state, atomic_player_state
                             );
                             status.state = atomic_player_state;
@@ -67,13 +69,13 @@ impl QueuePlaybackManager {
                     }
                     Ok(Event::BitrateChanged(bitrate)) => {
                         // Update status with current instantaneous bitrate (VBR support)
-                        debug!("Bitrate changed to: {:?} kbps", bitrate);
+                        debug!("bitrate changed to: {:?} kbps", bitrate);
                         let mut status = state.status.write().await;
                         status.bitrate = bitrate;
                     }
                     Ok(_) => {} // Ignore other events
                     Err(e) => {
-                        error!("Event receive error: {}", e);
+                        error!("event receive error: {}", e);
                         break;
                     }
                 }
@@ -131,7 +133,7 @@ impl QueuePlaybackManager {
                     0
                 } else {
                     // No repeat: stop playback
-                    debug!("End of queue reached, stopping playback");
+                    debug!("end of queue reached, stopping playback");
                     drop(queue);
                     state.engine.write().await.stop().await?;
                     // Update status immediately (event will also update but that's idempotent)
@@ -229,11 +231,11 @@ impl QueuePlaybackManager {
                     }
                 }
                 Err(e) => {
-                    error!("Failed to play next song: {}", e);
+                    error!("failed to play next song: {}", e);
                 }
             }
         } else {
-            debug!("No next song found");
+            debug!("no next song found");
         }
 
         Ok(())

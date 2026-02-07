@@ -3,7 +3,9 @@
 use crate::response::ResponseBuilder;
 use crate::state::AppState;
 
-use super::utils::{apply_range, format_iso8601_timestamp, open_db, song_tag_contains, ACK_ERROR_SYSTEM};
+use super::utils::{
+    apply_range, format_iso8601_timestamp, open_db, song_tag_contains, ACK_ERROR_SYSTEM,
+};
 
 pub async fn handle_listplaylists_command(state: &AppState) -> String {
     let db = match open_db(state, "listplaylists") {
@@ -21,7 +23,9 @@ pub async fn handle_listplaylists_command(state: &AppState) -> String {
             }
             resp.ok()
         }
-        Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "listplaylists", &format!("Error: {e}")),
+        Err(e) => {
+            ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "listplaylists", &format!("Error: {e}"))
+        }
     }
 }
 
@@ -59,7 +63,12 @@ pub async fn handle_save_command(
                     // Playlist doesn't exist, create it
                     match db.save_playlist(name, &songs) {
                         Ok(_) => ResponseBuilder::new().ok(),
-                        Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "save", &format!("Error: {e}")),
+                        Err(e) => ResponseBuilder::error(
+                            ACK_ERROR_SYSTEM,
+                            0,
+                            "save",
+                            &format!("Error: {e}"),
+                        ),
                     }
                 }
             }
@@ -72,7 +81,9 @@ pub async fn handle_save_command(
             // Save new playlist
             match db.save_playlist(name, &songs) {
                 Ok(_) => ResponseBuilder::new().ok(),
-                Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "save", &format!("Error: {e}")),
+                Err(e) => {
+                    ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "save", &format!("Error: {e}"))
+                }
             }
         }
         SaveMode::Append => {
@@ -85,14 +96,24 @@ pub async fn handle_save_command(
                     // Save updated playlist
                     match db.save_playlist(name, &existing_songs) {
                         Ok(_) => ResponseBuilder::new().ok(),
-                        Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "save", &format!("Error: {e}")),
+                        Err(e) => ResponseBuilder::error(
+                            ACK_ERROR_SYSTEM,
+                            0,
+                            "save",
+                            &format!("Error: {e}"),
+                        ),
                     }
                 }
                 Err(_) => {
                     // Playlist doesn't exist, create it
                     match db.save_playlist(name, &songs) {
                         Ok(_) => ResponseBuilder::new().ok(),
-                        Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "save", &format!("Error: {e}")),
+                        Err(e) => ResponseBuilder::error(
+                            ACK_ERROR_SYSTEM,
+                            0,
+                            "save",
+                            &format!("Error: {e}"),
+                        ),
                     }
                 }
             }
@@ -167,21 +188,36 @@ pub async fn handle_searchaddpl_command(
         match db.search_songs(value) {
             Ok(s) => s,
             Err(e) => {
-                return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "searchaddpl", &format!("search error: {e}"))
+                return ResponseBuilder::error(
+                    ACK_ERROR_SYSTEM,
+                    0,
+                    "searchaddpl",
+                    &format!("search error: {e}"),
+                )
             }
         }
     } else {
         match db.find_songs(tag, value) {
             Ok(s) => s,
             Err(e) => {
-                return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "searchaddpl", &format!("query error: {e}"))
+                return ResponseBuilder::error(
+                    ACK_ERROR_SYSTEM,
+                    0,
+                    "searchaddpl",
+                    &format!("query error: {e}"),
+                )
             }
         }
     };
 
     for song in songs {
         if let Err(e) = db.playlist_add(name, song.path.as_str()) {
-            return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "searchaddpl", &format!("Error: {e}"));
+            return ResponseBuilder::error(
+                ACK_ERROR_SYSTEM,
+                0,
+                "searchaddpl",
+                &format!("Error: {e}"),
+            );
         }
     }
 
@@ -208,7 +244,9 @@ pub async fn handle_listplaylist_command(
             }
             resp.ok()
         }
-        Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "listplaylist", &format!("Error: {e}")),
+        Err(e) => {
+            ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "listplaylist", &format!("Error: {e}"))
+        }
     }
 }
 
@@ -232,7 +270,12 @@ pub async fn handle_listplaylistinfo_command(
             }
             resp.ok()
         }
-        Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "listplaylistinfo", &format!("Error: {e}")),
+        Err(e) => ResponseBuilder::error(
+            ACK_ERROR_SYSTEM,
+            0,
+            "listplaylistinfo",
+            &format!("Error: {e}"),
+        ),
     }
 }
 
@@ -253,7 +296,9 @@ pub async fn handle_playlistadd_command(
 
     match db.playlist_add(name, uri) {
         Ok(_) => ResponseBuilder::new().ok(),
-        Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "playlistadd", &format!("Error: {e}")),
+        Err(e) => {
+            ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "playlistadd", &format!("Error: {e}"))
+        }
     }
 }
 
@@ -265,7 +310,9 @@ pub async fn handle_playlistclear_command(state: &AppState, name: &str) -> Strin
 
     match db.playlist_clear(name) {
         Ok(_) => ResponseBuilder::new().ok(),
-        Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "playlistclear", &format!("Error: {e}")),
+        Err(e) => {
+            ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "playlistclear", &format!("Error: {e}"))
+        }
     }
 }
 
@@ -277,7 +324,12 @@ pub async fn handle_playlistdelete_command(state: &AppState, name: &str, positio
 
     match db.playlist_delete_pos(name, position) {
         Ok(_) => ResponseBuilder::new().ok(),
-        Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "playlistdelete", &format!("Error: {e}")),
+        Err(e) => ResponseBuilder::error(
+            ACK_ERROR_SYSTEM,
+            0,
+            "playlistdelete",
+            &format!("Error: {e}"),
+        ),
     }
 }
 
@@ -294,7 +346,9 @@ pub async fn handle_playlistmove_command(
 
     match db.playlist_move(name, from, to) {
         Ok(_) => ResponseBuilder::new().ok(),
-        Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "playlistmove", &format!("Error: {e}")),
+        Err(e) => {
+            ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "playlistmove", &format!("Error: {e}"))
+        }
     }
 }
 
@@ -336,7 +390,14 @@ pub async fn handle_searchplaylist_command(
 
     let songs = match db.load_playlist(name) {
         Ok(s) => s,
-        Err(_) => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "searchplaylist", "Playlist not found"),
+        Err(_) => {
+            return ResponseBuilder::error(
+                ACK_ERROR_SYSTEM,
+                0,
+                "searchplaylist",
+                "Playlist not found",
+            )
+        }
     };
 
     let mut resp = ResponseBuilder::new();
@@ -359,7 +420,14 @@ pub async fn handle_playlistlength_command(state: &AppState, name: &str) -> Stri
 
     let songs = match db.load_playlist(name) {
         Ok(s) => s,
-        Err(_) => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "playlistlength", "Playlist not found"),
+        Err(_) => {
+            return ResponseBuilder::error(
+                ACK_ERROR_SYSTEM,
+                0,
+                "playlistlength",
+                "Playlist not found",
+            )
+        }
     };
 
     let total_duration: f64 = songs

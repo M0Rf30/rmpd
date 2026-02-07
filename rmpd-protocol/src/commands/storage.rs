@@ -44,7 +44,12 @@ pub async fn handle_mount_command(state: &AppState, path: &str, uri: &str) -> St
     let music_dir = match &state.music_dir {
         Some(dir) => dir,
         None => {
-            return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "mount", "Music directory not configured");
+            return ResponseBuilder::error(
+                ACK_ERROR_SYSTEM,
+                0,
+                "mount",
+                "Music directory not configured",
+            );
         }
     };
 
@@ -53,7 +58,7 @@ pub async fn handle_mount_command(state: &AppState, path: &str, uri: &str) -> St
 
     if !is_actual_mount_disabled() {
         // Tier 2: Perform actual mounting
-        tracing::info!("Mounting {} to {}", uri, mountpoint.display());
+        tracing::info!("mounting {} to {}", uri, mountpoint.display());
 
         // Create mountpoint directory if it doesn't exist
         if let Err(e) = tokio::fs::create_dir_all(&mountpoint).await {
@@ -76,7 +81,7 @@ pub async fn handle_mount_command(state: &AppState, path: &str, uri: &str) -> St
         .await
         {
             Ok(Ok(_)) => {
-                tracing::info!("Successfully mounted {} to {}", uri, mountpoint.display());
+                tracing::info!("successfully mounted {} to {}", uri, mountpoint.display());
 
                 // Register as mounted in registry
                 if let Err(e) = state
@@ -84,7 +89,7 @@ pub async fn handle_mount_command(state: &AppState, path: &str, uri: &str) -> St
                     .register_mounted(path.to_string(), uri.to_string())
                     .await
                 {
-                    tracing::error!("Failed to register mount: {}", e);
+                    tracing::error!("failed to register mount: {}", e);
                     return ResponseBuilder::error(
                         50,
                         0,
@@ -96,31 +101,28 @@ pub async fn handle_mount_command(state: &AppState, path: &str, uri: &str) -> St
                 ResponseBuilder::new().ok()
             }
             Ok(Err(e)) => {
-                tracing::error!("Mount failed: {}", e);
+                tracing::error!("mount failed: {}", e);
                 ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "mount", &format!("Mount failed: {e}"))
             }
             Err(_) => {
-                tracing::error!("Mount task panicked");
+                tracing::error!("mount task panicked");
                 ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "mount", "Mount task panicked")
             }
         }
     } else {
         // Tier 1: Only register mount without actual mounting
-        tracing::info!(
-            "Registering mount (actual mounting disabled): {} -> {}",
-            path,
-            uri
-        );
-
         match state
             .mount_registry
             .register(path.to_string(), uri.to_string())
             .await
         {
             Ok(_) => ResponseBuilder::new().ok(),
-            Err(e) => {
-                ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "mount", &format!("Mount registration failed: {e}"))
-            }
+            Err(e) => ResponseBuilder::error(
+                ACK_ERROR_SYSTEM,
+                0,
+                "mount",
+                &format!("Mount registration failed: {e}"),
+            ),
         }
     }
 }
@@ -136,7 +138,12 @@ pub async fn handle_unmount_command(state: &AppState, path: &str) -> String {
     let music_dir = match &state.music_dir {
         Some(dir) => dir,
         None => {
-            return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "unmount", "Music directory not configured");
+            return ResponseBuilder::error(
+                ACK_ERROR_SYSTEM,
+                0,
+                "unmount",
+                "Music directory not configured",
+            );
         }
     };
 
@@ -145,7 +152,7 @@ pub async fn handle_unmount_command(state: &AppState, path: &str) -> String {
 
     if !is_actual_mount_disabled() {
         // Tier 2: Perform actual unmounting
-        tracing::info!("Unmounting {}", mountpoint.display());
+        tracing::info!("unmounting {}", mountpoint.display());
 
         // Perform unmount in blocking task (system calls)
         let mountpoint_clone = mountpoint.clone();
@@ -157,33 +164,41 @@ pub async fn handle_unmount_command(state: &AppState, path: &str) -> String {
         .await
         {
             Ok(Ok(_)) => {
-                tracing::info!("Successfully unmounted {}", mountpoint.display());
+                tracing::info!("successfully unmounted {}", mountpoint.display());
 
                 // Remove from registry
                 if let Err(e) = state.mount_registry.unmount(path).await {
-                    tracing::error!("Failed to unregister mount: {}", e);
+                    tracing::error!("failed to unregister mount: {}", e);
                 }
 
                 ResponseBuilder::new().ok()
             }
             Ok(Err(e)) => {
-                tracing::error!("Unmount failed: {}", e);
+                tracing::error!("unmount failed: {}", e);
                 // Still try to remove from registry
                 let _ = state.mount_registry.unmount(path).await;
-                ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "unmount", &format!("Unmount failed: {e}"))
+                ResponseBuilder::error(
+                    ACK_ERROR_SYSTEM,
+                    0,
+                    "unmount",
+                    &format!("Unmount failed: {e}"),
+                )
             }
             Err(_) => {
-                tracing::error!("Unmount task panicked");
+                tracing::error!("unmount task panicked");
                 ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "unmount", "Unmount task panicked")
             }
         }
     } else {
         // Tier 1: Only remove from registry
-        tracing::info!("Unregistering mount (actual unmounting disabled): {}", path);
-
         match state.mount_registry.unmount(path).await {
             Ok(_) => ResponseBuilder::new().ok(),
-            Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "unmount", &format!("Unmount failed: {e}")),
+            Err(e) => ResponseBuilder::error(
+                ACK_ERROR_SYSTEM,
+                0,
+                "unmount",
+                &format!("Unmount failed: {e}"),
+            ),
         }
     }
 }
@@ -243,7 +258,7 @@ pub async fn handle_listneighbors_command(state: &AppState) -> String {
         }
         Err(e) => {
             // Log error but return empty list (graceful degradation)
-            tracing::error!("Network discovery failed: {}", e);
+            tracing::error!("network discovery failed: {}", e);
             ResponseBuilder::new().ok()
         }
     }
