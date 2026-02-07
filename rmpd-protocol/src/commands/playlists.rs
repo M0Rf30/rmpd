@@ -47,8 +47,8 @@ pub async fn handle_save_command(
         queue.items().iter().map(|item| item.song.clone()).collect()
     };
 
-    // Handle different save modes
-    let mode = mode.unwrap_or(SaveMode::Create);
+    // MPD default: replace existing playlist (or create if new)
+    let mode = mode.unwrap_or(SaveMode::Replace);
 
     match mode {
         SaveMode::Create => {
@@ -147,14 +147,13 @@ pub async fn handle_load_command(
 
             {
                 let mut queue = state.queue.write().await;
-                // If position is specified, add at that position
-                // Otherwise, clear queue and add all songs
                 if let Some(pos) = position {
+                    // Insert at specified position
                     for (i, song) in songs.into_iter().enumerate() {
                         queue.add_at(song, Some(pos + i as u32));
                     }
                 } else {
-                    queue.clear();
+                    // MPD spec: load appends to queue
                     for song in songs {
                         queue.add(song);
                     }

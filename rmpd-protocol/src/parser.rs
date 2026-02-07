@@ -1059,7 +1059,9 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
             let _ = space0.parse_next(input)?;
             let value = parse_quoted_or_unquoted.parse_next(input)?;
             let _ = space0.parse_next(input)?;
-            let group = opt(parse_string).parse_next(input)?;
+            let group = opt(parse_string)
+                .parse_next(input)?
+                .filter(|s| !s.is_empty());
             Ok(Command::SearchCount { tag, value, group })
         }
         "getfingerprint" => {

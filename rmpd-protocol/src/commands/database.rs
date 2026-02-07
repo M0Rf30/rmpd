@@ -653,8 +653,49 @@ pub async fn handle_searchadd_command(state: &AppState, tag: &str, value: &str) 
 }
 
 pub async fn handle_findadd_command(state: &AppState, tag: &str, value: &str) -> String {
-    // findadd is exact match version of searchadd
-    handle_searchadd_command(state, tag, value).await
+    let db = match open_db(state, "findadd") {
+        Ok(d) => d,
+        Err(e) => return e,
+    };
+
+    // findadd uses exact match (unlike searchadd which uses partial/FTS for "any")
+    let songs = if tag.eq_ignore_ascii_case("any") {
+        match db.find_songs_any(value) {
+            Ok(s) => s,
+            Err(e) => {
+                return ResponseBuilder::error(
+                    ACK_ERROR_SYSTEM,
+                    0,
+                    "findadd",
+                    &format!("search error: {e}"),
+                )
+            }
+        }
+    } else {
+        match db.find_songs(tag, value) {
+            Ok(s) => s,
+            Err(e) => {
+                return ResponseBuilder::error(
+                    ACK_ERROR_SYSTEM,
+                    0,
+                    "findadd",
+                    &format!("query error: {e}"),
+                )
+            }
+        }
+    };
+
+    // Add all found songs to queue
+    for song in songs {
+        state.queue.write().await.add(song);
+    }
+
+    // Update status
+    let mut status = state.status.write().await;
+    status.playlist_version += 1;
+    status.playlist_length = state.queue.read().await.len() as u32;
+
+    ResponseBuilder::new().ok()
 }
 
 pub async fn handle_listfiles_command(state: &AppState, uri: Option<&str>) -> String {

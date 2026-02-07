@@ -137,6 +137,7 @@ impl ResponseBuilder {
         self.field("playlist", status.playlist_version);
         self.field("playlistlength", status.playlist_length);
         self.field("mixrampdb", status.mixramp_db);
+        self.field("mixrampdelay", status.mixramp_delay);
 
         let state_str = match status.state {
             rmpd_core::state::PlayerState::Stop => "stop",

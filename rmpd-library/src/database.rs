@@ -693,6 +693,24 @@ impl Database {
         Ok(songs)
     }
 
+    /// Find songs by exact match across all text columns (for `any` tag).
+    pub fn find_songs_any(&self, value: &str) -> Result<Vec<Song>> {
+        let sql = format!(
+            "SELECT {SONG_COLUMNS} FROM songs WHERE \
+             title = ?1 OR artist = ?1 OR album = ?1 OR album_artist = ?1 OR \
+             genre = ?1 OR composer = ?1 OR performer = ?1 OR comment = ?1 OR \
+             path = ?1 \
+             ORDER BY artist, album, track"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+
+        let songs = stmt
+            .query_map(params![value], song_from_row)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        Ok(songs)
+    }
+
     /// Find songs using filter expression
     pub fn find_songs_filter(
         &self,
