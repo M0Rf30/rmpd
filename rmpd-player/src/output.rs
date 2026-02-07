@@ -3,7 +3,7 @@ use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{Device, SampleFormat, Stream, StreamConfig};
 use rmpd_core::error::{Result, RmpdError};
 use rmpd_core::song::AudioFormat;
-use std::sync::mpsc::{sync_channel, SyncSender};
+use std::sync::mpsc::{SyncSender, sync_channel};
 use std::sync::{Arc, Mutex};
 
 /// cpal-based audio output
@@ -60,13 +60,12 @@ impl CpalOutput {
                             // Fill output buffer
                             for sample in data.iter_mut() {
                                 // Refill internal buffer if needed
-                                if buffer_pos >= sample_buffer.len() {
-                                    if let Ok(rx) = rx_clone.lock() {
-                                        if let Ok(new_samples) = rx.try_recv() {
-                                            sample_buffer = new_samples;
-                                            buffer_pos = 0;
-                                        }
-                                    }
+                                if buffer_pos >= sample_buffer.len()
+                                    && let Ok(rx) = rx_clone.lock()
+                                    && let Ok(new_samples) = rx.try_recv()
+                                {
+                                    sample_buffer = new_samples;
+                                    buffer_pos = 0;
                                 }
 
                                 // Output sample or silence
@@ -94,13 +93,12 @@ impl CpalOutput {
                             // Fill output buffer with converted samples
                             for sample in data.iter_mut() {
                                 // Refill internal buffer if needed
-                                if buffer_pos >= sample_buffer.len() {
-                                    if let Ok(rx) = rx_clone.lock() {
-                                        if let Ok(new_samples) = rx.try_recv() {
-                                            sample_buffer = new_samples;
-                                            buffer_pos = 0;
-                                        }
-                                    }
+                                if buffer_pos >= sample_buffer.len()
+                                    && let Ok(rx) = rx_clone.lock()
+                                    && let Ok(new_samples) = rx.try_recv()
+                                {
+                                    sample_buffer = new_samples;
+                                    buffer_pos = 0;
                                 }
 
                                 // Output sample or silence (convert f32 to i16)
@@ -129,13 +127,12 @@ impl CpalOutput {
                             // Fill output buffer with converted samples
                             for sample in data.iter_mut() {
                                 // Refill internal buffer if needed
-                                if buffer_pos >= sample_buffer.len() {
-                                    if let Ok(rx) = rx_clone.lock() {
-                                        if let Ok(new_samples) = rx.try_recv() {
-                                            sample_buffer = new_samples;
-                                            buffer_pos = 0;
-                                        }
-                                    }
+                                if buffer_pos >= sample_buffer.len()
+                                    && let Ok(rx) = rx_clone.lock()
+                                    && let Ok(new_samples) = rx.try_recv()
+                                {
+                                    sample_buffer = new_samples;
+                                    buffer_pos = 0;
                                 }
 
                                 // Output sample or silence (convert f32 to i32)

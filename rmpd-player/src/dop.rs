@@ -69,12 +69,12 @@ impl DopEncoder {
             11289600 => {
                 return Err(RmpdError::Player(
                     "DSD256 not supported via DoP (would require 705.6kHz PCM)".to_owned(),
-                ))
+                ));
             }
             _ => {
                 return Err(RmpdError::Player(format!(
                     "Unsupported DSD sample rate: {dsd_sample_rate}"
-                )))
+                )));
             }
         }
 

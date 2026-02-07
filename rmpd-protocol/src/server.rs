@@ -9,7 +9,7 @@ use crate::commands::{
     connection, database, fingerprint, messaging, options, outputs, partition, playback, playlists,
     queue, reflection, stickers, storage,
 };
-use crate::parser::{parse_command, Command};
+use crate::parser::{Command, parse_command};
 use crate::queue_playback::QueuePlaybackManager;
 use crate::response::{Response, ResponseBuilder, Stats};
 use crate::state::AppState;
@@ -327,12 +327,11 @@ async fn handle_idle(
             }
             // Wait for noidle command
             line_result = reader.read_line(&mut line) => {
-                if let Ok(bytes) = line_result {
-                    if bytes > 0 && line.trim() == "noidle" {
+                if let Ok(bytes) = line_result
+                    && bytes > 0 && line.trim() == "noidle" {
                         // Cancel idle
                         return "OK\n".to_owned();
                     }
-                }
                 // Connection closed or error
                 return "OK\n".to_owned();
             }
@@ -412,7 +411,8 @@ async fn handle_command(
             // Get stats from database if available
             let (songs, artists, albums, db_playtime, db_update) =
                 if let Some(ref db_path) = state.db_path {
-                    if let Ok(db) = rmpd_library::Database::open(db_path) {
+                    let result = rmpd_library::Database::open(db_path);
+                    if let Ok(db) = result {
                         db.get_stats().unwrap_or((0, 0, 0, 0, 0))
                     } else {
                         (0, 0, 0, 0, 0)

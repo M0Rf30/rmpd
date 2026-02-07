@@ -27,8 +27,8 @@ fn strip_music_dir_prefix<'a>(path: &'a str, music_dir: Option<&str>) -> &'a str
 }
 
 use super::utils::{
-    apply_range, build_and_filter, format_iso8601_timestamp, open_db, ACK_ERROR_ARG,
-    ACK_ERROR_SYSTEM,
+    ACK_ERROR_ARG, ACK_ERROR_SYSTEM, apply_range, build_and_filter, format_iso8601_timestamp,
+    open_db,
 };
 
 /// Helper function to get tag value for sorting (avoids allocation for most tags)
@@ -77,7 +77,7 @@ pub async fn handle_find_command(
                         0,
                         "find",
                         &format!("query error: {e}"),
-                    )
+                    );
                 }
             },
             Err(e) => {
@@ -86,7 +86,7 @@ pub async fn handle_find_command(
                     0,
                     "find",
                     &format!("filter parse error: {e}"),
-                )
+                );
             }
         }
     } else if filters.len() == 1 {
@@ -99,7 +99,7 @@ pub async fn handle_find_command(
                     0,
                     "find",
                     &format!("query error: {e}"),
-                )
+                );
             }
         }
     } else {
@@ -112,7 +112,7 @@ pub async fn handle_find_command(
                     0,
                     "find",
                     &format!("query error: {e}"),
-                )
+                );
             }
         }
     };
@@ -162,7 +162,7 @@ pub async fn handle_search_command(
                         0,
                         "search",
                         &format!("query error: {e}"),
-                    )
+                    );
                 }
             },
             Err(e) => {
@@ -171,7 +171,7 @@ pub async fn handle_search_command(
                     0,
                     "search",
                     &format!("filter parse error: {e}"),
-                )
+                );
             }
         }
     } else if filters.len() == 1 {
@@ -188,7 +188,7 @@ pub async fn handle_search_command(
                         0,
                         "search",
                         &format!("search error: {e}"),
-                    )
+                    );
                 }
             }
         } else {
@@ -201,7 +201,7 @@ pub async fn handle_search_command(
                         0,
                         "search",
                         &format!("query error: {e}"),
-                    )
+                    );
                 }
             }
         }
@@ -215,7 +215,7 @@ pub async fn handle_search_command(
                     0,
                     "search",
                     &format!("query error: {e}"),
-                )
+                );
             }
         }
     };
@@ -259,7 +259,7 @@ pub async fn handle_list_command(
                     0,
                     "list",
                     &format!("query error: {e}"),
-                )
+                );
             }
         }
     } else {
@@ -275,7 +275,7 @@ pub async fn handle_list_command(
                     0,
                     "list",
                     &format!("unsupported tag: {tag}"),
-                )
+                );
             }
         };
 
@@ -287,7 +287,7 @@ pub async fn handle_list_command(
                     0,
                     "list",
                     &format!("query error: {e}"),
-                )
+                );
             }
         }
     };
@@ -331,7 +331,7 @@ pub async fn handle_count_command(
                     0,
                     "count",
                     &format!("query error: {e}"),
-                )
+                );
             }
         }
     } else {
@@ -344,7 +344,7 @@ pub async fn handle_count_command(
                     0,
                     "count",
                     &format!("query error: {e}"),
-                )
+                );
             }
         }
     };
@@ -389,7 +389,12 @@ pub async fn handle_update_command(state: &AppState, _path: Option<&str>) -> Str
     let db_path = match &state.db_path {
         Some(p) => p.clone(),
         None => {
-            return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "update", "database not configured")
+            return ResponseBuilder::error(
+                ACK_ERROR_SYSTEM,
+                0,
+                "update",
+                "database not configured",
+            );
         }
     };
 
@@ -401,7 +406,7 @@ pub async fn handle_update_command(state: &AppState, _path: Option<&str>) -> Str
                 0,
                 "update",
                 "music directory not configured",
-            )
+            );
         }
     };
 
@@ -463,7 +468,7 @@ pub async fn handle_albumart_command(state: &AppState, uri: &str, offset: usize)
                     0,
                     "albumart",
                     "music directory not configured",
-                ))
+                ));
             }
         }
     };
@@ -505,12 +510,12 @@ pub async fn handle_currentsong_command(state: &AppState) -> String {
     let status = state.status.read().await;
     let queue = state.queue.read().await;
 
-    if let Some(current) = status.current_song {
-        if let Some(item) = queue.get(current.position) {
-            let mut resp = ResponseBuilder::new();
-            resp.song(&item.song, Some(current.position), Some(current.id));
-            return resp.ok();
-        }
+    if let Some(current) = status.current_song
+        && let Some(item) = queue.get(current.position)
+    {
+        let mut resp = ResponseBuilder::new();
+        resp.song(&item.song, Some(current.position), Some(current.id));
+        return resp.ok();
     }
 
     // No current song
@@ -548,13 +553,13 @@ pub async fn handle_lsinfo_command(state: &AppState, path: Option<&str>) -> Stri
             }
 
             // For root directory, also list playlists
-            if path_str.is_empty() || path_str == "/" {
-                if let Ok(playlists) = db.list_playlists() {
-                    for playlist in &playlists {
-                        resp.field("playlist", &playlist.name);
-                        let timestamp_str = format_iso8601_timestamp(playlist.last_modified);
-                        resp.field("Last-Modified", &timestamp_str);
-                    }
+            if (path_str.is_empty() || path_str == "/")
+                && let Ok(playlists) = db.list_playlists()
+            {
+                for playlist in &playlists {
+                    resp.field("playlist", &playlist.name);
+                    let timestamp_str = format_iso8601_timestamp(playlist.last_modified);
+                    resp.field("Last-Modified", &timestamp_str);
                 }
             }
 
@@ -622,7 +627,7 @@ pub async fn handle_searchadd_command(state: &AppState, tag: &str, value: &str) 
                     0,
                     "searchadd",
                     &format!("search error: {e}"),
-                )
+                );
             }
         }
     } else {
@@ -634,7 +639,7 @@ pub async fn handle_searchadd_command(state: &AppState, tag: &str, value: &str) 
                     0,
                     "searchadd",
                     &format!("query error: {e}"),
-                )
+                );
             }
         }
     };
@@ -668,7 +673,7 @@ pub async fn handle_findadd_command(state: &AppState, tag: &str, value: &str) ->
                     0,
                     "findadd",
                     &format!("search error: {e}"),
-                )
+                );
             }
         }
     } else {
@@ -680,7 +685,7 @@ pub async fn handle_findadd_command(state: &AppState, tag: &str, value: &str) ->
                     0,
                     "findadd",
                     &format!("query error: {e}"),
-                )
+                );
             }
         }
     };

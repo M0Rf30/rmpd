@@ -1,7 +1,7 @@
 //! Tests for MPD connection lifecycle: greeting, ping, close, empty lines,
 //! unknown commands, concurrent clients, abrupt disconnect.
 
-use crate::common::tcp_harness::*;
+use crate::tcp_harness::*;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::time::Duration;

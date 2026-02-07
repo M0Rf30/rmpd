@@ -3,9 +3,6 @@
 //! These utilities provide helpers for testing MPD protocol response formats.
 //! Currently focused on response parsing validation rather than live server tests.
 
-pub mod state_helpers;
-pub mod tcp_harness;
-
 /// Test helper for MPD protocol response validation
 pub struct TestClient;
 

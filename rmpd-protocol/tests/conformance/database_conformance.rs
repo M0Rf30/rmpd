@@ -1,6 +1,6 @@
 //! Tests for MPD database commands over TCP.
 
-use crate::common::tcp_harness::*;
+use crate::tcp_harness::*;
 
 #[tokio::test]
 async fn lsinfo_root_without_db() {

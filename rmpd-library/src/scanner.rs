@@ -5,7 +5,7 @@ use std::fs;
 use std::path::Path;
 use tracing::{debug, info, warn};
 
-use crate::database::{system_time_to_unix_secs, Database};
+use crate::database::{Database, system_time_to_unix_secs};
 use crate::metadata::MetadataExtractor;
 
 #[derive(Debug)]
@@ -80,10 +80,10 @@ impl Scanner {
             let entry_path = entry.path();
 
             // Skip hidden files and directories
-            if let Some(file_name) = entry_path.file_name().and_then(|n| n.to_str()) {
-                if file_name.starts_with('.') {
-                    continue;
-                }
+            if let Some(file_name) = entry_path.file_name().and_then(|n| n.to_str())
+                && file_name.starts_with('.')
+            {
+                continue;
             }
 
             let metadata = match entry.metadata() {

@@ -7,7 +7,7 @@
 use crate::response::ResponseBuilder;
 use crate::state::AppState;
 
-use super::utils::{open_db, ACK_ERROR_SYSTEM};
+use super::utils::{ACK_ERROR_SYSTEM, open_db};
 
 fn get_sticker_i32(db: &rmpd_library::Database, uri: &str, name: &str) -> i32 {
     db.get_sticker(uri, name)

@@ -1,7 +1,7 @@
 //! Extended playback command conformance tests.
 //! Tests pause toggle modes and seekcur relative seeking.
 
-use crate::common::tcp_harness::*;
+use crate::tcp_harness::*;
 
 #[tokio::test]
 async fn pause_toggle_returns_ok() {

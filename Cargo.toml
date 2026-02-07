@@ -12,7 +12,7 @@ members = [
 
 [workspace.package]
 version = "0.1.1"
-edition = "2021"
+edition = "2024"
 authors = ["rmpd contributors"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/M0Rf30/rmpd"

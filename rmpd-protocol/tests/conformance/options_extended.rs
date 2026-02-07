@@ -1,7 +1,7 @@
 //! Extended options conformance tests.
 //! Tests mixrampdb and mixrampdelay set and status reflection.
 
-use crate::common::tcp_harness::*;
+use crate::tcp_harness::*;
 
 #[tokio::test]
 async fn mixrampdb_set() {

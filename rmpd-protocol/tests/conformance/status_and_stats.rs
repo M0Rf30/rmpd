@@ -1,6 +1,6 @@
 //! Tests for MPD status and stats commands over TCP.
 
-use crate::common::tcp_harness::*;
+use crate::tcp_harness::*;
 
 #[tokio::test]
 async fn status_initial_state() {

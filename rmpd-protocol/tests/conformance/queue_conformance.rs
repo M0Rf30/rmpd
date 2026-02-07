@@ -1,6 +1,6 @@
 //! Tests for MPD queue commands over TCP.
 
-use crate::common::tcp_harness::*;
+use crate::tcp_harness::*;
 
 // ── Basic queue operations ───────────────────────────────────────────
 

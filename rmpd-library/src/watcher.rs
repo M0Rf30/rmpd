@@ -1,5 +1,5 @@
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode};
-use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, RecommendedCache};
+use notify_debouncer_full::{DebounceEventResult, Debouncer, RecommendedCache, new_debouncer};
 use rmpd_core::error::{Result, RmpdError};
 use rmpd_core::event::{Event as RmpdEvent, EventBus};
 use std::fmt;
@@ -126,10 +126,10 @@ async fn handle_fs_event(
 ) -> Result<()> {
     // Filter out non-audio files and hidden files
     let is_audio_file = |path: &Path| -> bool {
-        if let Some(name) = path.file_name() {
-            if name.to_string_lossy().starts_with('.') {
-                return false; // Skip hidden files
-            }
+        if let Some(name) = path.file_name()
+            && name.to_string_lossy().starts_with('.')
+        {
+            return false; // Skip hidden files
         }
 
         path.extension()

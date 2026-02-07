@@ -7,8 +7,8 @@ use crate::response::ResponseBuilder;
 use crate::state::AppState;
 
 use super::utils::{
-    add_queue_item_metadata, apply_range, open_db, prepare_song_for_playback, song_tag_contains,
-    song_tag_eq, update_next_song, ACK_ERROR_SYSTEM,
+    ACK_ERROR_SYSTEM, add_queue_item_metadata, apply_range, open_db, prepare_song_for_playback,
+    song_tag_contains, song_tag_eq, update_next_song,
 };
 
 pub async fn handle_add_command(state: &AppState, uri: &str, position: Option<u32>) -> String {
@@ -22,10 +22,20 @@ pub async fn handle_add_command(state: &AppState, uri: &str, position: Option<u3
     let song = match db.get_song_by_path(uri) {
         Ok(Some(s)) => s,
         Ok(None) => {
-            return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "add", "song not found in database")
+            return ResponseBuilder::error(
+                ACK_ERROR_SYSTEM,
+                0,
+                "add",
+                "song not found in database",
+            );
         }
         Err(e) => {
-            return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "add", &format!("query error: {e}"))
+            return ResponseBuilder::error(
+                ACK_ERROR_SYSTEM,
+                0,
+                "add",
+                &format!("query error: {e}"),
+            );
         }
     };
 
@@ -117,7 +127,7 @@ pub async fn handle_addid_command(state: &AppState, uri: &str, position: Option<
                 0,
                 "addid",
                 "song not found in database",
-            )
+            );
         }
         Err(e) => {
             return ResponseBuilder::error(
@@ -125,7 +135,7 @@ pub async fn handle_addid_command(state: &AppState, uri: &str, position: Option<
                 0,
                 "addid",
                 &format!("query error: {e}"),
-            )
+            );
         }
     };
 

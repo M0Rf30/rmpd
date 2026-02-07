@@ -1,5 +1,5 @@
-use rmpd_protocol::commands::fingerprint;
 use rmpd_protocol::AppState;
+use rmpd_protocol::commands::fingerprint;
 
 #[tokio::test]
 async fn test_getfingerprint_no_music_dir() {

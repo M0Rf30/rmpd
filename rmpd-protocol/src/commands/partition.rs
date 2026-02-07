@@ -236,7 +236,8 @@ pub async fn handle_moveoutput_command(
     } else {
         // Output is not assigned to any partition yet, just assign to target
         info!("assigning unassigned output to '{}'", to);
-        if let Some(target_partition) = manager.get_partition(to).await {
+        let target = manager.get_partition(to).await;
+        if let Some(target_partition) = target {
             target_partition.assign_output(output_id).await;
             Ok(())
         } else {

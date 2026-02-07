@@ -217,10 +217,10 @@ fn default_enabled_decoders() -> Vec<String> {
 
 fn default_plugin_dirs() -> Vec<Utf8PathBuf> {
     let mut dirs = Vec::new();
-    if let Some(config_dir) = dirs::config_dir() {
-        if let Ok(path) = Utf8PathBuf::try_from(config_dir.join("rmpd/plugins")) {
-            dirs.push(path);
-        }
+    if let Some(config_dir) = dirs::config_dir()
+        && let Ok(path) = Utf8PathBuf::try_from(config_dir.join("rmpd/plugins"))
+    {
+        dirs.push(path);
     }
     dirs.push(Utf8PathBuf::from("/usr/lib/rmpd/plugins"));
     dirs
@@ -272,12 +272,11 @@ impl Config {
         // Helper function to expand tilde
         fn expand_tilde(path: &Utf8PathBuf) -> Utf8PathBuf {
             let path_str = path.as_str();
-            if path_str.starts_with("~/") {
-                if let Some(home) = dirs::home_dir() {
-                    if let Some(home_str) = home.to_str() {
-                        return Utf8PathBuf::from(path_str.replacen('~', home_str, 1));
-                    }
-                }
+            if path_str.starts_with("~/")
+                && let Some(home) = dirs::home_dir()
+                && let Some(home_str) = home.to_str()
+            {
+                return Utf8PathBuf::from(path_str.replacen('~', home_str, 1));
             }
             path.clone()
         }

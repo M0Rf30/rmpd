@@ -9,7 +9,7 @@ use rmpd_player::PlaybackEngine;
 use std::fmt;
 use std::sync::Arc;
 use std::time::Instant;
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{RwLock, broadcast};
 
 /// Output device information
 #[derive(Clone, Debug)]
@@ -38,6 +38,7 @@ pub struct AppState {
     pub mount_registry: Arc<MountRegistry>,
     pub partition_manager: Option<Arc<PartitionManager>>,
     pub shutdown_tx: Option<broadcast::Sender<()>>,
+    pub disable_actual_mount: bool,
 }
 
 impl fmt::Debug for AppState {
@@ -98,6 +99,9 @@ impl AppState {
             mount_registry,
             partition_manager: Some(partition_manager),
             shutdown_tx: None,
+            disable_actual_mount: std::env::var("RMPD_DISABLE_ACTUAL_MOUNT")
+                .map(|v| v == "1" || v.to_lowercase() == "true")
+                .unwrap_or(false),
         }
     }
 

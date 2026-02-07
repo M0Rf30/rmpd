@@ -1,7 +1,7 @@
 //! Extended stored playlist conformance tests.
 //! Tests save modes, load with range/position, searchplaylist, playlistlength.
 
-use crate::common::tcp_harness::*;
+use crate::tcp_harness::*;
 
 #[tokio::test]
 async fn save_default_replaces_existing() {

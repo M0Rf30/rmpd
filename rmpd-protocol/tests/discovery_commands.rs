@@ -1,5 +1,5 @@
-use rmpd_protocol::commands::storage;
 use rmpd_protocol::AppState;
+use rmpd_protocol::commands::storage;
 
 #[tokio::test]
 async fn test_listneighbors_with_no_discovery() {

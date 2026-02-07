@@ -1,7 +1,7 @@
 //! Tests for MPD range parsing in commands that accept ranges.
 //! Inspired by MPD's test_protocol.cxx range parsing tests.
 
-use crate::common::tcp_harness::*;
+use crate::tcp_harness::*;
 
 #[tokio::test]
 async fn playlistinfo_single_position() {

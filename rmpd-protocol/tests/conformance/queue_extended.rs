@@ -1,7 +1,7 @@
 //! Extended queue command conformance tests.
 //! Tests add/addid with position parameters.
 
-use crate::common::tcp_harness::*;
+use crate::tcp_harness::*;
 
 #[tokio::test]
 async fn add_with_position() {

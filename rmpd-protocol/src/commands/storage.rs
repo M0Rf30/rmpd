@@ -7,17 +7,11 @@
 //! - listneighbors: ✅ Fully implemented with mDNS discovery
 //! - mount/unmount/listmounts: ✅ Tier 1 (tracking) + Tier 2 (actual mounting) implemented
 
-use super::utils::ACK_ERROR_SYSTEM;
 use super::ResponseBuilder;
+use super::utils::ACK_ERROR_SYSTEM;
 use crate::state::AppState;
 use rmpd_core::storage::platform::get_default_backend;
 use std::path::PathBuf;
-
-fn is_actual_mount_disabled() -> bool {
-    std::env::var("RMPD_DISABLE_ACTUAL_MOUNT")
-        .map(|v| v == "1" || v.to_lowercase() == "true")
-        .unwrap_or(false)
-}
 
 /// Mount a storage location
 ///
@@ -27,7 +21,7 @@ fn is_actual_mount_disabled() -> bool {
 /// Supports NFS, SMB/CIFS, and WebDAV (with davfs2) on Linux.
 /// Requires appropriate permissions (may need sudo/polkit configuration).
 ///
-/// Set RMPD_DISABLE_ACTUAL_MOUNT=1 environment variable to disable actual mounting
+/// Set `disable_actual_mount` on AppState to disable actual mounting
 /// and only track mounts in registry (Tier 1 mode).
 pub async fn handle_mount_command(state: &AppState, path: &str, uri: &str) -> String {
     // Validate path (no ../, no absolute paths)
@@ -56,7 +50,7 @@ pub async fn handle_mount_command(state: &AppState, path: &str, uri: &str) -> St
     // Create full mountpoint path
     let mountpoint = PathBuf::from(music_dir).join(path);
 
-    if !is_actual_mount_disabled() {
+    if !state.disable_actual_mount {
         // Tier 2: Perform actual mounting
         tracing::info!("mounting {} to {}", uri, mountpoint.display());
 
@@ -131,7 +125,7 @@ pub async fn handle_mount_command(state: &AppState, path: &str, uri: &str) -> St
 ///
 /// Tier 2 Implementation: Performs actual filesystem unmounting using platform backends.
 ///
-/// Set RMPD_DISABLE_ACTUAL_MOUNT=1 environment variable to disable actual unmounting
+/// Set `disable_actual_mount` on AppState to disable actual unmounting
 /// and only remove from registry (Tier 1 mode).
 pub async fn handle_unmount_command(state: &AppState, path: &str) -> String {
     // Check if music directory is configured
@@ -150,7 +144,7 @@ pub async fn handle_unmount_command(state: &AppState, path: &str) -> String {
     // Create full mountpoint path
     let mountpoint = PathBuf::from(music_dir).join(path);
 
-    if !is_actual_mount_disabled() {
+    if !state.disable_actual_mount {
         // Tier 2: Perform actual unmounting
         tracing::info!("unmounting {}", mountpoint.display());
 

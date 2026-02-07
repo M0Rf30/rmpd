@@ -19,7 +19,7 @@ macro_rules! require_ffmpeg {
 fn test_embedded_artwork_extraction() {
     require_ffmpeg!();
 
-    let gen = FixtureGenerator::new().unwrap();
+    let generator = FixtureGenerator::new().unwrap();
     let harness = RmpdTestHarness::new().unwrap();
 
     let metadata = TestMetadata {
@@ -30,7 +30,7 @@ fn test_embedded_artwork_extraction() {
     };
 
     // Generate audio file with embedded artwork
-    let path = gen
+    let path = generator
         .generate_with_artwork(AudioFormat::Flac, &metadata)
         .unwrap();
 
@@ -54,7 +54,7 @@ fn test_embedded_artwork_extraction() {
 fn test_no_artwork_in_file() {
     require_ffmpeg!();
 
-    let gen = FixtureGenerator::new().unwrap();
+    let generator = FixtureGenerator::new().unwrap();
     let harness = RmpdTestHarness::new().unwrap();
 
     let metadata = TestMetadata {
@@ -65,7 +65,7 @@ fn test_no_artwork_in_file() {
     };
 
     // Generate audio file without artwork (standard generation)
-    let path = gen.generate(AudioFormat::Flac, &metadata).unwrap();
+    let path = generator.generate(AudioFormat::Flac, &metadata).unwrap();
 
     // Extract artwork
     let artworks = harness.extract_artwork(path.to_str().unwrap()).unwrap();
@@ -82,7 +82,7 @@ fn test_no_artwork_in_file() {
 fn test_artwork_mime_types() {
     require_ffmpeg!();
 
-    let gen = FixtureGenerator::new().unwrap();
+    let generator = FixtureGenerator::new().unwrap();
     let harness = RmpdTestHarness::new().unwrap();
 
     let metadata = TestMetadata {
@@ -92,7 +92,7 @@ fn test_artwork_mime_types() {
         ..Default::default()
     };
 
-    let path = gen
+    let path = generator
         .generate_with_artwork(AudioFormat::Flac, &metadata)
         .unwrap();
     let artworks = harness.extract_artwork(path.to_str().unwrap()).unwrap();
@@ -112,7 +112,7 @@ fn test_artwork_mime_types() {
 fn test_artwork_database_storage() {
     require_ffmpeg!();
 
-    let gen = FixtureGenerator::new().unwrap();
+    let generator = FixtureGenerator::new().unwrap();
     let harness = RmpdTestHarness::new().unwrap();
 
     let metadata = TestMetadata {
@@ -122,7 +122,7 @@ fn test_artwork_database_storage() {
         ..Default::default()
     };
 
-    let path = gen
+    let path = generator
         .generate_with_artwork(AudioFormat::Flac, &metadata)
         .unwrap();
     let song = harness.extract_metadata(path.to_str().unwrap()).unwrap();
@@ -160,7 +160,7 @@ fn test_artwork_database_storage() {
 fn test_artwork_cache_hit() {
     require_ffmpeg!();
 
-    let gen = FixtureGenerator::new().unwrap();
+    let generator = FixtureGenerator::new().unwrap();
     let harness = RmpdTestHarness::new().unwrap();
 
     let metadata = TestMetadata {
@@ -170,7 +170,7 @@ fn test_artwork_cache_hit() {
         ..Default::default()
     };
 
-    let path = gen
+    let path = generator
         .generate_with_artwork(AudioFormat::Flac, &metadata)
         .unwrap();
     let song = harness.extract_metadata(path.to_str().unwrap()).unwrap();
@@ -198,7 +198,7 @@ fn test_artwork_cache_hit() {
 fn test_multiple_picture_types() {
     require_ffmpeg!();
 
-    let gen = FixtureGenerator::new().unwrap();
+    let generator = FixtureGenerator::new().unwrap();
     let harness = RmpdTestHarness::new().unwrap();
 
     let metadata = TestMetadata {
@@ -210,7 +210,7 @@ fn test_multiple_picture_types() {
 
     // Note: Most audio files will only have one picture type (front cover)
     // This test validates we can handle files with multiple pictures
-    let path = gen
+    let path = generator
         .generate_with_artwork(AudioFormat::Flac, &metadata)
         .unwrap();
     let artworks = harness.extract_artwork(path.to_str().unwrap()).unwrap();
@@ -228,7 +228,7 @@ fn test_multiple_picture_types() {
 fn test_artwork_size_validation() {
     require_ffmpeg!();
 
-    let gen = FixtureGenerator::new().unwrap();
+    let generator = FixtureGenerator::new().unwrap();
     let harness = RmpdTestHarness::new().unwrap();
 
     let metadata = TestMetadata {
@@ -238,7 +238,7 @@ fn test_artwork_size_validation() {
         ..Default::default()
     };
 
-    let path = gen
+    let path = generator
         .generate_with_artwork(AudioFormat::Flac, &metadata)
         .unwrap();
     let artworks = harness.extract_artwork(path.to_str().unwrap()).unwrap();
@@ -262,7 +262,7 @@ fn test_artwork_size_validation() {
 fn test_artwork_across_formats() {
     require_ffmpeg!();
 
-    let gen = FixtureGenerator::new().unwrap();
+    let generator = FixtureGenerator::new().unwrap();
     let harness = RmpdTestHarness::new().unwrap();
 
     // Test artwork extraction across different audio formats
@@ -276,7 +276,7 @@ fn test_artwork_across_formats() {
             ..Default::default()
         };
 
-        let path = gen.generate_with_artwork(format, &metadata).unwrap();
+        let path = generator.generate_with_artwork(format, &metadata).unwrap();
         let artworks = harness.extract_artwork(path.to_str().unwrap()).unwrap();
 
         // Note: Artwork embedding with FFmpeg is complex and format-specific

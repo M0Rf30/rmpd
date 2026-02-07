@@ -1,6 +1,6 @@
 //! Tests for MPD client-to-client messaging commands over TCP.
 
-use crate::common::tcp_harness::*;
+use crate::tcp_harness::*;
 
 #[tokio::test]
 async fn subscribe_and_unsubscribe() {

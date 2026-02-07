@@ -1,6 +1,6 @@
 //! Tests for MPD output control commands over TCP.
 
-use crate::common::tcp_harness::*;
+use crate::tcp_harness::*;
 
 #[tokio::test]
 async fn outputs_lists_default() {

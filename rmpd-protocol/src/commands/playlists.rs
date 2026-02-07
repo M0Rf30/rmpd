@@ -4,7 +4,7 @@ use crate::response::ResponseBuilder;
 use crate::state::AppState;
 
 use super::utils::{
-    apply_range, format_iso8601_timestamp, open_db, song_tag_contains, ACK_ERROR_SYSTEM,
+    ACK_ERROR_SYSTEM, apply_range, format_iso8601_timestamp, open_db, song_tag_contains,
 };
 
 pub async fn handle_listplaylists_command(state: &AppState) -> String {
@@ -192,7 +192,7 @@ pub async fn handle_searchaddpl_command(
                     0,
                     "searchaddpl",
                     &format!("search error: {e}"),
-                )
+                );
             }
         }
     } else {
@@ -204,7 +204,7 @@ pub async fn handle_searchaddpl_command(
                     0,
                     "searchaddpl",
                     &format!("query error: {e}"),
-                )
+                );
             }
         }
     };
@@ -395,7 +395,7 @@ pub async fn handle_searchplaylist_command(
                 0,
                 "searchplaylist",
                 "Playlist not found",
-            )
+            );
         }
     };
 
@@ -425,7 +425,7 @@ pub async fn handle_playlistlength_command(state: &AppState, name: &str) -> Stri
                 0,
                 "playlistlength",
                 "Playlist not found",
-            )
+            );
         }
     };
 

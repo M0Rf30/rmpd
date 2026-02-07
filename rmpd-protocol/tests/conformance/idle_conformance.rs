@@ -1,6 +1,6 @@
 //! Tests for MPD idle/noidle commands over TCP.
 
-use crate::common::tcp_harness::*;
+use crate::tcp_harness::*;
 use tokio::time::Duration;
 
 #[tokio::test]

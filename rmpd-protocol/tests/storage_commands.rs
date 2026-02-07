@@ -5,19 +5,18 @@
 //! **IMPORTANT**: These tests disable actual mounting automatically to avoid
 //! requiring root privileges. They test the mount tracking/registry functionality.
 
-use rmpd_protocol::commands::storage;
 use rmpd_protocol::AppState;
+use rmpd_protocol::commands::storage;
 
-/// Setup test environment to disable actual mounting
-#[allow(clippy::disallowed_methods)]
-fn setup_test_env() {
-    std::env::set_var("RMPD_DISABLE_ACTUAL_MOUNT", "1");
+fn test_state() -> AppState {
+    let mut state = AppState::with_paths("/tmp/test_db".to_string(), "/tmp/test_music".to_string());
+    state.disable_actual_mount = true;
+    state
 }
 
 #[tokio::test]
 async fn test_mount_command() {
-    setup_test_env();
-    let state = AppState::with_paths("/tmp/test_db".to_string(), "/tmp/test_music".to_string());
+    let state = test_state();
 
     let response =
         storage::handle_mount_command(&state, "remote/nas", "nfs://192.168.1.100/music").await;
@@ -34,8 +33,7 @@ async fn test_mount_command() {
 
 #[tokio::test]
 async fn test_mount_duplicate() {
-    setup_test_env();
-    let state = AppState::with_paths("/tmp/test_db".to_string(), "/tmp/test_music".to_string());
+    let state = test_state();
 
     // First mount should succeed
     let response1 =
@@ -51,7 +49,7 @@ async fn test_mount_duplicate() {
 
 #[tokio::test]
 async fn test_mount_path_validation() {
-    let state = AppState::with_paths("/tmp/test_db".to_string(), "/tmp/test_music".to_string());
+    let state = test_state();
 
     // Absolute path should be rejected
     let response1 =
@@ -68,8 +66,7 @@ async fn test_mount_path_validation() {
 
 #[tokio::test]
 async fn test_unmount_command() {
-    setup_test_env();
-    let state = AppState::with_paths("/tmp/test_db".to_string(), "/tmp/test_music".to_string());
+    let state = test_state();
 
     // Mount first
     storage::handle_mount_command(&state, "remote/nas", "nfs://192.168.1.100/music").await;
@@ -85,7 +82,7 @@ async fn test_unmount_command() {
 
 #[tokio::test]
 async fn test_unmount_nonexistent() {
-    let state = AppState::with_paths("/tmp/test_db".to_string(), "/tmp/test_music".to_string());
+    let state = test_state();
 
     let response = storage::handle_unmount_command(&state, "nonexistent").await;
     assert!(response.contains("ACK"));
@@ -95,8 +92,7 @@ async fn test_unmount_nonexistent() {
 
 #[tokio::test]
 async fn test_listmounts_command() {
-    setup_test_env();
-    let state = AppState::with_paths("/tmp/test_db".to_string(), "/tmp/test_music".to_string());
+    let state = test_state();
 
     // Empty list initially
     let response1 = storage::handle_listmounts_command(&state).await;
@@ -117,8 +113,7 @@ async fn test_listmounts_command() {
 
 #[tokio::test]
 async fn test_protocol_extraction() {
-    setup_test_env();
-    let state = AppState::with_paths("/tmp/test_db".to_string(), "/tmp/test_music".to_string());
+    let state = test_state();
 
     storage::handle_mount_command(&state, "r1", "nfs://server/path").await;
     storage::handle_mount_command(&state, "r2", "smb://server/share").await;

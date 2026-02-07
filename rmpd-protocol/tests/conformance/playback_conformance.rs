@@ -2,7 +2,7 @@
 //! Note: actual audio playback is not expected in test environments.
 //! These tests verify protocol-level responses (OK/ACK as appropriate).
 
-use crate::common::tcp_harness::*;
+use crate::tcp_harness::*;
 
 #[tokio::test]
 async fn play_empty_queue_errors() {

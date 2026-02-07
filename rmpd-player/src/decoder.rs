@@ -1,7 +1,7 @@
 use rmpd_core::error::{Result, RmpdError};
 use rmpd_core::song::AudioFormat;
 use std::path::Path;
-use symphonia::core::codecs::{BitOrder, ChannelDataLayout, DecoderOptions, CODEC_TYPE_NULL};
+use symphonia::core::codecs::{BitOrder, CODEC_TYPE_NULL, ChannelDataLayout, DecoderOptions};
 use symphonia::core::errors::Error as SymphoniaError;
 use symphonia::core::formats::{FormatOptions, FormatReader};
 use symphonia::core::io::MediaSourceStream;

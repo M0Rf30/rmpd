@@ -5,7 +5,7 @@ use tracing::{debug, error};
 use crate::response::ResponseBuilder;
 use crate::state::AppState;
 
-use super::utils::{prepare_song_for_playback, update_next_song, ACK_ERROR_SYSTEM};
+use super::utils::{ACK_ERROR_SYSTEM, prepare_song_for_playback, update_next_song};
 
 pub async fn handle_play_command(state: &AppState, position: Option<u32>) -> String {
     let queue = state.queue.read().await;

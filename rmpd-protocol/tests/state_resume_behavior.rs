@@ -6,8 +6,9 @@ use rmpd_core::queue::Queue;
 use rmpd_core::state::{ConsumeMode, PlayerState, SingleMode};
 use rmpd_protocol::statefile::{SavedState, StateFile};
 
-mod common;
-use common::state_helpers::{create_test_queue, create_test_song, StatusBuilder, TempStateFile};
+#[path = "common/state_helpers.rs"]
+mod state_helpers;
+use state_helpers::{StatusBuilder, TempStateFile, create_test_queue, create_test_song};
 
 /// Simulates a full restart cycle: save state, "restart", restore state
 async fn simulate_restart(

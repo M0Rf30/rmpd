@@ -7,3 +7,5 @@
 
 mod common;
 mod conformance;
+#[path = "common/tcp_harness.rs"]
+mod tcp_harness;

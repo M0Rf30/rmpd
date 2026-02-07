@@ -402,10 +402,10 @@ mod tests {
     #[test]
     #[ignore] // Requires FFmpeg
     fn test_generate_flac() {
-        let gen = FixtureGenerator::new().unwrap();
+        let generator = FixtureGenerator::new().unwrap();
         let metadata = TestMetadata::default();
 
-        let path = gen.generate(AudioFormat::Flac, &metadata).unwrap();
+        let path = generator.generate(AudioFormat::Flac, &metadata).unwrap();
         assert!(path.exists());
         assert_eq!(path.extension().unwrap(), "flac");
     }
@@ -413,28 +413,30 @@ mod tests {
     #[test]
     #[ignore] // Requires FFmpeg
     fn test_generate_temp() {
-        let gen = FixtureGenerator::new().unwrap();
+        let generator = FixtureGenerator::new().unwrap();
         let metadata = TestMetadata::default();
 
-        let (_temp_dir, path) = gen.generate_temp(AudioFormat::Mp3, &metadata).unwrap();
+        let (_temp_dir, path) = generator
+            .generate_temp(AudioFormat::Mp3, &metadata)
+            .unwrap();
         assert!(path.exists());
     }
 
     #[test]
     #[ignore] // Requires FFmpeg
     fn test_cache_reuse() {
-        let gen = FixtureGenerator::new().unwrap();
+        let generator = FixtureGenerator::new().unwrap();
         let metadata = TestMetadata::default();
 
         // Generate once
-        let path1 = gen.generate(AudioFormat::Wav, &metadata).unwrap();
+        let path1 = generator.generate(AudioFormat::Wav, &metadata).unwrap();
         let mtime1 = std::fs::metadata(&path1).unwrap().modified().unwrap();
 
         // Wait a bit
         std::thread::sleep(std::time::Duration::from_millis(100));
 
         // Generate again - should return cached
-        let path2 = gen.generate(AudioFormat::Wav, &metadata).unwrap();
+        let path2 = generator.generate(AudioFormat::Wav, &metadata).unwrap();
         let mtime2 = std::fs::metadata(&path2).unwrap().modified().unwrap();
 
         assert_eq!(path1, path2);
@@ -444,8 +446,8 @@ mod tests {
     #[test]
     #[ignore] // Requires FFmpeg
     fn test_unicode_metadata() {
-        let gen = FixtureGenerator::new().unwrap();
-        let path = gen.generate_unicode(AudioFormat::Flac).unwrap();
+        let generator = FixtureGenerator::new().unwrap();
+        let path = generator.generate_unicode(AudioFormat::Flac).unwrap();
         assert!(path.exists());
     }
 }

@@ -1,6 +1,6 @@
 //! Tests for MPD partition commands over TCP.
 
-use crate::common::tcp_harness::*;
+use crate::tcp_harness::*;
 
 #[tokio::test]
 async fn listpartitions_returns_ok() {

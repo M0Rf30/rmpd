@@ -19,7 +19,7 @@ macro_rules! require_ffmpeg {
 fn test_full_text_search_basic() {
     require_ffmpeg!();
 
-    let gen = FixtureGenerator::new().unwrap();
+    let generator = FixtureGenerator::new().unwrap();
     let harness = RmpdTestHarness::new().unwrap();
 
     // Add songs with searchable content
@@ -37,7 +37,7 @@ fn test_full_text_search_basic() {
             ..Default::default()
         };
 
-        let path = gen.generate(AudioFormat::Flac, &metadata).unwrap();
+        let path = generator.generate(AudioFormat::Flac, &metadata).unwrap();
         let song = harness.extract_metadata(path.to_str().unwrap()).unwrap();
         harness.add_song(&song).unwrap();
     }
@@ -62,7 +62,7 @@ fn test_full_text_search_basic() {
 fn test_case_insensitive_search() {
     require_ffmpeg!();
 
-    let gen = FixtureGenerator::new().unwrap();
+    let generator = FixtureGenerator::new().unwrap();
     let harness = RmpdTestHarness::new().unwrap();
 
     let metadata = TestMetadata {
@@ -72,7 +72,7 @@ fn test_case_insensitive_search() {
         ..Default::default()
     };
 
-    let path = gen.generate(AudioFormat::Flac, &metadata).unwrap();
+    let path = generator.generate(AudioFormat::Flac, &metadata).unwrap();
     let song = harness.extract_metadata(path.to_str().unwrap()).unwrap();
     harness.add_song(&song).unwrap();
 
@@ -90,7 +90,7 @@ fn test_case_insensitive_search() {
 fn test_partial_word_search() {
     require_ffmpeg!();
 
-    let gen = FixtureGenerator::new().unwrap();
+    let generator = FixtureGenerator::new().unwrap();
     let harness = RmpdTestHarness::new().unwrap();
 
     let metadata = TestMetadata {
@@ -100,7 +100,7 @@ fn test_partial_word_search() {
         ..Default::default()
     };
 
-    let path = gen.generate(AudioFormat::Flac, &metadata).unwrap();
+    let path = generator.generate(AudioFormat::Flac, &metadata).unwrap();
     let song = harness.extract_metadata(path.to_str().unwrap()).unwrap();
     harness.add_song(&song).unwrap();
 
@@ -122,7 +122,7 @@ fn test_partial_word_search() {
 fn test_multi_field_search() {
     require_ffmpeg!();
 
-    let gen = FixtureGenerator::new().unwrap();
+    let generator = FixtureGenerator::new().unwrap();
     let harness = RmpdTestHarness::new().unwrap();
 
     // Add multiple songs
@@ -140,7 +140,7 @@ fn test_multi_field_search() {
             ..Default::default()
         };
 
-        let path = gen.generate(AudioFormat::Flac, &metadata).unwrap();
+        let path = generator.generate(AudioFormat::Flac, &metadata).unwrap();
         let song = harness.extract_metadata(path.to_str().unwrap()).unwrap();
         harness.add_song(&song).unwrap();
     }
@@ -161,7 +161,7 @@ fn test_multi_field_search() {
 fn test_unicode_search() {
     require_ffmpeg!();
 
-    let gen = FixtureGenerator::new().unwrap();
+    let generator = FixtureGenerator::new().unwrap();
     let harness = RmpdTestHarness::new().unwrap();
 
     // Add song with unicode metadata
@@ -172,7 +172,7 @@ fn test_unicode_search() {
         ..Default::default()
     };
 
-    let path = gen.generate(AudioFormat::Flac, &metadata).unwrap();
+    let path = generator.generate(AudioFormat::Flac, &metadata).unwrap();
     let song = harness.extract_metadata(path.to_str().unwrap()).unwrap();
     harness.add_song(&song).unwrap();
 
@@ -191,7 +191,7 @@ fn test_unicode_search() {
 fn test_search_by_genre() {
     require_ffmpeg!();
 
-    let gen = FixtureGenerator::new().unwrap();
+    let generator = FixtureGenerator::new().unwrap();
     let harness = RmpdTestHarness::new().unwrap();
 
     // Add songs with different genres
@@ -210,7 +210,7 @@ fn test_search_by_genre() {
             ..Default::default()
         };
 
-        let path = gen.generate(AudioFormat::Flac, &metadata).unwrap();
+        let path = generator.generate(AudioFormat::Flac, &metadata).unwrap();
         let song = harness.extract_metadata(path.to_str().unwrap()).unwrap();
         harness.add_song(&song).unwrap();
     }
@@ -232,7 +232,7 @@ fn test_search_by_genre() {
 fn test_search_by_composer() {
     require_ffmpeg!();
 
-    let gen = FixtureGenerator::new().unwrap();
+    let generator = FixtureGenerator::new().unwrap();
     let harness = RmpdTestHarness::new().unwrap();
 
     let metadata = TestMetadata {
@@ -243,7 +243,7 @@ fn test_search_by_composer() {
         ..Default::default()
     };
 
-    let path = gen.generate(AudioFormat::Flac, &metadata).unwrap();
+    let path = generator.generate(AudioFormat::Flac, &metadata).unwrap();
     let song = harness.extract_metadata(path.to_str().unwrap()).unwrap();
     harness.add_song(&song).unwrap();
 
@@ -260,7 +260,7 @@ fn test_search_by_composer() {
 fn test_empty_search_results() {
     require_ffmpeg!();
 
-    let gen = FixtureGenerator::new().unwrap();
+    let generator = FixtureGenerator::new().unwrap();
     let harness = RmpdTestHarness::new().unwrap();
 
     let metadata = TestMetadata {
@@ -270,7 +270,7 @@ fn test_empty_search_results() {
         ..Default::default()
     };
 
-    let path = gen.generate(AudioFormat::Flac, &metadata).unwrap();
+    let path = generator.generate(AudioFormat::Flac, &metadata).unwrap();
     let song = harness.extract_metadata(path.to_str().unwrap()).unwrap();
     harness.add_song(&song).unwrap();
 
@@ -283,7 +283,7 @@ fn test_empty_search_results() {
 fn test_search_with_special_characters() {
     require_ffmpeg!();
 
-    let gen = FixtureGenerator::new().unwrap();
+    let generator = FixtureGenerator::new().unwrap();
     let harness = RmpdTestHarness::new().unwrap();
 
     let metadata = TestMetadata {
@@ -293,7 +293,7 @@ fn test_search_with_special_characters() {
         ..Default::default()
     };
 
-    let path = gen.generate(AudioFormat::Flac, &metadata).unwrap();
+    let path = generator.generate(AudioFormat::Flac, &metadata).unwrap();
     let song = harness.extract_metadata(path.to_str().unwrap()).unwrap();
     harness.add_song(&song).unwrap();
 
@@ -309,7 +309,7 @@ fn test_search_with_special_characters() {
 fn test_search_performance() {
     require_ffmpeg!();
 
-    let gen = FixtureGenerator::new().unwrap();
+    let generator = FixtureGenerator::new().unwrap();
     let harness = RmpdTestHarness::new().unwrap();
 
     // Add many songs
@@ -326,7 +326,7 @@ fn test_search_performance() {
             ..Default::default()
         };
 
-        let path = gen.generate(AudioFormat::Flac, &metadata).unwrap();
+        let path = generator.generate(AudioFormat::Flac, &metadata).unwrap();
         let song = harness.extract_metadata(path.to_str().unwrap()).unwrap();
         harness.add_song(&song).unwrap();
     }

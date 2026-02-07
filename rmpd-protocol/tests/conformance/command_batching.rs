@@ -1,6 +1,6 @@
 //! Tests for MPD command batching (command_list_begin / command_list_ok_begin).
 
-use crate::common::tcp_harness::*;
+use crate::tcp_harness::*;
 
 #[tokio::test]
 async fn command_list_basic() {

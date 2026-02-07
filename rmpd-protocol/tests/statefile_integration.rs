@@ -1,8 +1,22 @@
 use rmpd_core::state::{ConsumeMode, PlayerState, SingleMode};
 use rmpd_protocol::statefile::StateFile;
 
-mod common;
-use common::state_helpers::{create_test_queue, save_and_load, StatusBuilder, TempStateFile};
+#[path = "common/state_helpers.rs"]
+mod state_helpers;
+use state_helpers::{StatusBuilder, TempStateFile, create_test_queue};
+
+async fn save_and_load(
+    status: &rmpd_core::state::PlayerStatus,
+    queue: &rmpd_core::queue::Queue,
+) -> Result<rmpd_protocol::statefile::SavedState, rmpd_core::error::RmpdError> {
+    let temp = TempStateFile::new_empty();
+    let statefile = StateFile::new(temp.path_str());
+
+    statefile.save(status, queue).await?;
+    statefile
+        .load()?
+        .ok_or_else(|| rmpd_core::error::RmpdError::Library("No state loaded".to_string()))
+}
 
 #[tokio::test]
 async fn test_save_and_load_with_queue() {

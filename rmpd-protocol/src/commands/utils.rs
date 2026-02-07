@@ -3,7 +3,7 @@
 use crate::response::ResponseBuilder;
 
 /// MPD protocol error codes (ACK error types)
-/// Reference: https://mpd.readthedocs.io/en/latest/protocol.html#ack-errors
+/// Reference: <https://mpd.readthedocs.io/en/latest/protocol.html#ack-errors>
 pub const ACK_ERROR_ARG: i32 = 2;
 pub const ACK_ERROR_UNKNOWN: i32 = 5;
 pub const ACK_ERROR_SYSTEM: i32 = 50;

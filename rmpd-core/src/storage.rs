@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::SystemTime;
 use tokio::sync::RwLock;
 
-pub use platform::{get_default_backend, MountBackend};
+pub use platform::{MountBackend, get_default_backend};
 
 /// Represents a mounted storage location
 #[derive(Clone, Debug, Serialize, Deserialize)]

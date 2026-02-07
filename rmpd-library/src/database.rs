@@ -1,7 +1,7 @@
 use camino::Utf8PathBuf;
 use rmpd_core::error::{Result, RmpdError};
 use rmpd_core::song::Song;
-use rusqlite::{params, Connection, OptionalExtension, Row};
+use rusqlite::{Connection, OptionalExtension, Row, params};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Common SELECT columns for all song queries (with `s.` table alias prefix).

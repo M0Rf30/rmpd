@@ -1,6 +1,6 @@
 //! Tests for MPD error handling: ACK format, malformed args, missing args.
 
-use crate::common::tcp_harness::*;
+use crate::tcp_harness::*;
 
 #[tokio::test]
 async fn ack_format_has_code_and_command() {

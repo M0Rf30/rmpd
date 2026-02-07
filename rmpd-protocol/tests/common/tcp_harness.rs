@@ -4,14 +4,14 @@
 //! `MpdTestClient` (connects via TCP, sends commands, validates responses).
 
 use rmpd_core::song::Song;
-use rmpd_protocol::state::AppState;
 use rmpd_protocol::MpdServer;
+use rmpd_protocol::state::AppState;
 use std::time::Duration as StdDuration;
 use tempfile::TempDir;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::broadcast;
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 const READ_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -153,7 +153,6 @@ impl MpdTestClient {
 // ── Static assertion helpers ─────────────────────────────────────────
 
 /// Assert the response ends with `OK\n`.
-#[allow(dead_code)]
 pub fn assert_ok(response: &str) {
     assert!(
         response.ends_with("OK\n"),
@@ -161,27 +160,7 @@ pub fn assert_ok(response: &str) {
     );
 }
 
-/// Assert the response starts with `ACK` and contains the expected error code and command name.
-#[allow(dead_code)]
-pub fn assert_error(response: &str, code: u8, cmd: &str) {
-    assert!(
-        response.starts_with("ACK "),
-        "expected ACK response, got: {response}"
-    );
-    let expected_prefix = format!("ACK [{code}@");
-    assert!(
-        response.contains(&expected_prefix),
-        "expected error code {code} in: {response}"
-    );
-    let expected_cmd = format!("{{{cmd}}}");
-    assert!(
-        response.contains(&expected_cmd),
-        "expected command {cmd} in: {response}"
-    );
-}
-
 /// Extract the value of a `key: value` field from a response.
-#[allow(dead_code)]
 pub fn get_field<'a>(response: &'a str, field: &str) -> Option<&'a str> {
     let prefix = format!("{field}: ");
     response
@@ -193,7 +172,6 @@ pub fn get_field<'a>(response: &'a str, field: &str) -> Option<&'a str> {
 // ── Convenience setup functions ──────────────────────────────────────
 
 /// Create a server and a single connected client.
-#[allow(dead_code)]
 pub async fn setup() -> (MpdTestServer, MpdTestClient) {
     let server = MpdTestServer::start().await;
     let client = MpdTestClient::connect(server.port()).await;
@@ -201,7 +179,6 @@ pub async fn setup() -> (MpdTestServer, MpdTestClient) {
 }
 
 /// Create a server with custom state and a single connected client.
-#[allow(dead_code)]
 pub async fn setup_with_state(state: AppState) -> (MpdTestServer, MpdTestClient) {
     let server = MpdTestServer::start_with_state(state).await;
     let client = MpdTestClient::connect(server.port()).await;
@@ -209,7 +186,6 @@ pub async fn setup_with_state(state: AppState) -> (MpdTestServer, MpdTestClient)
 }
 
 /// Create a test song with the given path and track number.
-#[allow(dead_code)]
 pub fn make_test_song(path: &str, track: u32) -> Song {
     Song {
         id: track as u64,
@@ -251,7 +227,6 @@ pub fn make_test_song(path: &str, track: u32) -> Song {
 
 /// Create a server backed by a temporary SQLite database pre-populated with
 /// test songs, plus a connected client. Returns the TempDir so it stays alive.
-#[allow(dead_code)]
 pub async fn setup_with_db(num_songs: u32) -> (MpdTestServer, MpdTestClient, TempDir) {
     let tmp = TempDir::new().unwrap();
     let db_path = tmp.path().join("test.db");
@@ -268,7 +243,8 @@ pub async fn setup_with_db(num_songs: u32) -> (MpdTestServer, MpdTestClient, Tem
         }
     }
 
-    let state = AppState::with_paths(db_path_str, music_dir.to_str().unwrap().to_string());
+    let mut state = AppState::with_paths(db_path_str, music_dir.to_str().unwrap().to_string());
+    state.disable_actual_mount = true;
     let server = MpdTestServer::start_with_state(state).await;
     let client = MpdTestClient::connect(server.port()).await;
     (server, client, tmp)

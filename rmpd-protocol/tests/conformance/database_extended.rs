@@ -1,7 +1,7 @@
 //! Extended database command conformance tests.
 //! Tests findadd, searchadd, searchcount, and rescan.
 
-use crate::common::tcp_harness::*;
+use crate::tcp_harness::*;
 
 #[tokio::test]
 async fn findadd_adds_to_queue() {
@@ -72,9 +72,7 @@ async fn searchadd_no_match() {
 #[tokio::test]
 async fn searchcount_returns_counts() {
     let (_server, mut client, _tmp) = setup_with_db(3).await;
-    let resp = client
-        .command("searchcount Artist \"Test Artist\"")
-        .await;
+    let resp = client.command("searchcount Artist \"Test Artist\"").await;
     assert_ok(&resp);
     assert!(
         get_field(&resp, "songs").is_some(),

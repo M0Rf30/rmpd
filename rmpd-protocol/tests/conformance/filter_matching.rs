@@ -1,7 +1,7 @@
 //! Tests for MPD filter matching in find/search commands.
 //! Inspired by MPD's TestTagSongFilter tests.
 
-use crate::common::tcp_harness::*;
+use crate::tcp_harness::*;
 
 #[tokio::test]
 async fn playlistfind_exact_match() {

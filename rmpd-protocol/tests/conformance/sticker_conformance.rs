@@ -1,6 +1,6 @@
 //! Tests for MPD sticker commands over TCP.
 
-use crate::common::tcp_harness::*;
+use crate::tcp_harness::*;
 
 #[tokio::test]
 async fn sticker_set_and_get() {

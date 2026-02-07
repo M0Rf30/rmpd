@@ -124,90 +124,83 @@ async fn restore_state(
 
             // Check if we should auto-resume playback
             if !restore_paused {
-                if let Some(play_state) = saved_state.state {
-                    if play_state == PlayerState::Play || play_state == PlayerState::Pause {
-                        info!(
-                            "auto-resuming playback at position {} (state: {:?})",
-                            position, play_state
-                        );
+                if let Some(play_state) = saved_state.state
+                    && (play_state == PlayerState::Play || play_state == PlayerState::Pause)
+                {
+                    info!(
+                        "auto-resuming playback at position {} (state: {:?})",
+                        position, play_state
+                    );
 
-                        let playback_song =
-                            rmpd_protocol::commands::utils::prepare_song_for_playback(
-                                &song,
-                                Some(music_dir),
-                            );
+                    let playback_song = rmpd_protocol::commands::utils::prepare_song_for_playback(
+                        &song,
+                        Some(music_dir),
+                    );
 
-                        // Set current song immediately
-                        let mut status = state.status.write().await;
-                        status.current_song = Some(rmpd_core::state::QueuePosition {
-                            position,
-                            id: song_id,
-                        });
-                        status.duration = song.duration;
-                        status.bitrate = song.bitrate;
+                    // Set current song immediately
+                    let mut status = state.status.write().await;
+                    status.current_song = Some(rmpd_core::state::QueuePosition {
+                        position,
+                        id: song_id,
+                    });
+                    status.duration = song.duration;
+                    status.bitrate = song.bitrate;
 
-                        // Set audio format if available
-                        if let (Some(sr), Some(ch), Some(bps)) =
-                            (song.sample_rate, song.channels, song.bits_per_sample)
-                        {
-                            status.audio_format = Some(rmpd_core::song::AudioFormat {
-                                sample_rate: sr,
-                                channels: ch,
-                                bits_per_sample: bps,
-                            });
-                        }
-                        drop(status);
-
-                        // Spawn background task to start playback (don't block server startup)
-                        let state_clone = state.clone();
-                        let elapsed = saved_state.elapsed_seconds;
-                        tokio::spawn(async move {
-                            // Small delay to ensure server is listening
-                            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-
-                            // Start playback
-                            if state_clone
-                                .engine
-                                .write()
-                                .await
-                                .play(playback_song)
-                                .await
-                                .is_ok()
-                            {
-                                // Update state immediately
-                                {
-                                    let mut status = state_clone.status.write().await;
-                                    status.state = if play_state == PlayerState::Pause {
-                                        PlayerState::Pause
-                                    } else {
-                                        PlayerState::Play
-                                    };
-                                }
-
-                                // Seek to saved position if available
-                                if let Some(elapsed_time) = elapsed {
-                                    if elapsed_time > 0.0 {
-                                        if let Err(e) = state_clone
-                                            .engine
-                                            .write()
-                                            .await
-                                            .seek(elapsed_time)
-                                            .await
-                                        {
-                                            error!("failed to seek: {}", e);
-                                        }
-                                    }
-                                }
-
-                                // If was paused, pause the engine
-                                if play_state == PlayerState::Pause {
-                                    if let Err(e) = state_clone.engine.write().await.pause().await {
-                                        error!("failed to pause: {}", e);
-                                    }
-                                }
-                            }
+                    // Set audio format if available
+                    if let (Some(sr), Some(ch), Some(bps)) =
+                        (song.sample_rate, song.channels, song.bits_per_sample)
+                    {
+                        status.audio_format = Some(rmpd_core::song::AudioFormat {
+                            sample_rate: sr,
+                            channels: ch,
+                            bits_per_sample: bps,
                         });
                     }
+                    drop(status);
+
+                    // Spawn background task to start playback (don't block server startup)
+                    let state_clone = state.clone();
+                    let elapsed = saved_state.elapsed_seconds;
+                    tokio::spawn(async move {
+                        // Small delay to ensure server is listening
+                        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+                        // Start playback
+                        if state_clone
+                            .engine
+                            .write()
+                            .await
+                            .play(playback_song)
+                            .await
+                            .is_ok()
+                        {
+                            // Update state immediately
+                            {
+                                let mut status = state_clone.status.write().await;
+                                status.state = if play_state == PlayerState::Pause {
+                                    PlayerState::Pause
+                                } else {
+                                    PlayerState::Play
+                                };
+                            }
+
+                            // Seek to saved position if available
+                            if let Some(elapsed_time) = elapsed
+                                && elapsed_time > 0.0
+                                && let Err(e) =
+                                    state_clone.engine.write().await.seek(elapsed_time).await
+                            {
+                                error!("failed to seek: {}", e);
+                            }
+
+                            // If was paused, pause the engine
+                            if play_state == PlayerState::Pause
+                                && let Err(e) = state_clone.engine.write().await.pause().await
+                            {
+                                error!("failed to pause: {}", e);
+                            }
+                        }
+                    });
                 }
             } else {
                 // Don't auto-resume, just set current position

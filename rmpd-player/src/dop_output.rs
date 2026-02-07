@@ -4,7 +4,7 @@ use crate::cpal_utils::CpalDeviceConfig;
 use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{Device, SampleFormat, Stream, StreamConfig};
 use rmpd_core::error::{Result, RmpdError};
-use std::sync::mpsc::{sync_channel, SyncSender};
+use std::sync::mpsc::{SyncSender, sync_channel};
 use std::sync::{Arc, Mutex};
 
 /// DoP audio output using 32-bit integer samples
@@ -24,7 +24,10 @@ impl DopOutput {
         // If PipeWire/PulseAudio is running, it may resample the audio which destroys DoP markers.
         // To fix: either configure PipeWire to pass through the sample rate,
         // or temporarily stop PipeWire: systemctl --user stop pipewire pipewire-pulse
-        tracing::warn!("DoP requires direct hardware access at {} Hz, ensure PipeWire/PulseAudio isn't resampling", sample_rate);
+        tracing::warn!(
+            "DoP requires direct hardware access at {} Hz, ensure PipeWire/PulseAudio isn't resampling",
+            sample_rate
+        );
 
         Ok(Self {
             device: device_config.device,
@@ -70,13 +73,12 @@ impl DopOutput {
                             // Fill output buffer with DoP samples
                             for sample in data.iter_mut() {
                                 // Refill internal buffer if needed
-                                if buffer_pos >= sample_buffer.len() {
-                                    if let Ok(rx) = rx_clone.lock() {
-                                        if let Ok(new_samples) = rx.try_recv() {
-                                            sample_buffer = new_samples;
-                                            buffer_pos = 0;
-                                        }
-                                    }
+                                if buffer_pos >= sample_buffer.len()
+                                    && let Ok(rx) = rx_clone.lock()
+                                    && let Ok(new_samples) = rx.try_recv()
+                                {
+                                    sample_buffer = new_samples;
+                                    buffer_pos = 0;
                                 }
 
                                 // Output DoP sample or silence
@@ -105,13 +107,12 @@ impl DopOutput {
                         &self.config,
                         move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
                             for sample in data.iter_mut() {
-                                if buffer_pos >= sample_buffer.len() {
-                                    if let Ok(rx) = rx_clone.lock() {
-                                        if let Ok(new_samples) = rx.try_recv() {
-                                            sample_buffer = new_samples;
-                                            buffer_pos = 0;
-                                        }
-                                    }
+                                if buffer_pos >= sample_buffer.len()
+                                    && let Ok(rx) = rx_clone.lock()
+                                    && let Ok(new_samples) = rx.try_recv()
+                                {
+                                    sample_buffer = new_samples;
+                                    buffer_pos = 0;
                                 }
 
                                 *sample = if buffer_pos < sample_buffer.len() {
