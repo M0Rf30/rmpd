@@ -32,7 +32,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Audio stack
 # Use remote Symphonia fork with DSD support
 symphonia = { git = "https://github.com/M0Rf30/Symphonia", branch = "dsd-support", features = ["all", "dsd"] }
-lofty = { git = "https://github.com/M0Rf30/lofty-rs", branch = "custom" }
+lofty = { git = "https://github.com/M0Rf30/lofty-rs", branch = "feat/dsd-support" }
 # Use remote CPAL fork with PipeWire and DSD support
 cpal = { git = "https://github.com/M0Rf30/cpal", branch = "pipewire", features = ["pipewire"] }
 rubato = "1.0"
