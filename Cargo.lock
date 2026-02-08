@@ -1658,8 +1658,8 @@ dependencies = [
 
 [[package]]
 name = "lofty"
-version = "0.22.4"
-source = "git+https://github.com/M0Rf30/lofty-rs?branch=custom#5b888dfa40d24a4ec7985b438d22722cfb9b4858"
+version = "0.23.1"
+source = "git+https://github.com/M0Rf30/lofty-rs?branch=feat%2Fdsd-support#c36472bd9f33fe84b16aea4d6418354460dcc3e0"
 dependencies = [
  "byteorder",
  "data-encoding",
@@ -1672,8 +1672,8 @@ dependencies = [
 
 [[package]]
 name = "lofty_attr"
-version = "0.11.1"
-source = "git+https://github.com/M0Rf30/lofty-rs?branch=custom#5b888dfa40d24a4ec7985b438d22722cfb9b4858"
+version = "0.12.0"
+source = "git+https://github.com/M0Rf30/lofty-rs?branch=feat%2Fdsd-support#c36472bd9f33fe84b16aea4d6418354460dcc3e0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2070,9 +2070,8 @@ dependencies = [
 
 [[package]]
 name = "ogg_pager"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e034c10fb5c1c012c1b327b85df89fb0ef98ae66ec28af30f0d1eed804a40c19"
+version = "0.7.1"
+source = "git+https://github.com/M0Rf30/lofty-rs?branch=feat%2Fdsd-support#c36472bd9f33fe84b16aea4d6418354460dcc3e0"
 dependencies = [
  "byteorder",
 ]
