@@ -11,6 +11,10 @@ repository.workspace = true
 # thiserror used for error handling macros
 ignored = ["rubato", "thiserror"]
 
+[features]
+# Enable PipeWire audio backend. Requires bindgen at build time (slow).
+pipewire = ["cpal/pipewire"]
+
 [dependencies]
 rmpd-core = { workspace = true, features = ["player-errors"] }
 symphonia.workspace = true

@@ -18,6 +18,10 @@ ignored = ["rmpd-player"]
 name = "rmpd"
 path = "src/main.rs"
 
+[features]
+# Enable PipeWire audio backend. Requires bindgen at build time (slow).
+pipewire = ["rmpd-player/pipewire"]
+
 [dependencies]
 rmpd-core.workspace = true
 rmpd-protocol.workspace = true
