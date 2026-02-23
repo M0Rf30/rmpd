@@ -1,7 +1,7 @@
 use camino::Utf8PathBuf;
 use rmpd_core::error::{Result, RmpdError};
 use rmpd_core::song::Song;
-use rusqlite::{Connection, OptionalExtension, Row, params};
+use rusqlite::{params, Connection, OptionalExtension, Row};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Common SELECT columns for all song queries (with `s.` table alias prefix).
@@ -893,10 +893,8 @@ impl Database {
 
         let mut stmt = self.conn.prepare(query)?;
 
-        let search_path = if path.is_empty() { "%" } else { path };
-
         let songs = stmt
-            .query_map(params![search_path], song_from_row_optional)?
+            .query_map(params![path], song_from_row_optional)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
 
         Ok(songs)
