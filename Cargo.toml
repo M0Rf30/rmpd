@@ -34,7 +34,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 symphonia = { git = "https://github.com/M0Rf30/Symphonia", branch = "dsd-support", features = ["all", "dsd"] }
 lofty = { git = "https://github.com/M0Rf30/lofty-rs", branch = "feat/dsd-support" }
 # Use remote CPAL fork with PipeWire and DSD support
-cpal = { git = "https://github.com/M0Rf30/cpal", branch = "pipewire", features = ["pipewire"] }
+# PipeWire support is optional (disabled by default) to speed up builds
+cpal = { git = "https://github.com/M0Rf30/cpal", branch = "pipewire", default-features = false }
 rubato = "1.0"
 
 # Networking & Protocol
