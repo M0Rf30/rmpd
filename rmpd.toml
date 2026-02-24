@@ -1,7 +1,7 @@
 # rmpd configuration file
 
 [general]
-music_directory = "/home/gianluca/Music"
+music_directory = "/home/gianluca/Musica"
 playlist_directory = "/home/gianluca/.config/rmpd/playlists"
 db_file = "/home/gianluca/.config/rmpd/database.db"
 state_file = "/home/gianluca/.config/rmpd/state"
