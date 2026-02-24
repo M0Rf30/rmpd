@@ -675,17 +675,28 @@ impl Database {
     }
 
     /// List unique values for any tag supported by tag_to_column.
+    /// Sorted with ICU root-locale collation to match MPD's IcuCollate().
     pub fn list_tag_values(&self, tag: &str) -> Result<Vec<String>> {
         let col = tag_to_column(tag)?;
         // Include empty strings (MPD emits them first), exclude only NULL.
-        // Sort empties first, then case-insensitive.
         let query = format!(
-            "SELECT DISTINCT COALESCE({col}, '') FROM songs ORDER BY CASE WHEN COALESCE({col}, '') = '' THEN 0 ELSE 1 END, {col} COLLATE NOCASE"
+            "SELECT DISTINCT COALESCE({col}, '') FROM songs"
         );
         let mut stmt = self.conn.prepare(&query)?;
-        let values = stmt
+        let mut values: Vec<String> = stmt
             .query_map([], |row| row.get(0))?
             .collect::<std::result::Result<Vec<_>, _>>()?;
+        // Sort with ICU collation to match MPD: empties first, then ICU root-locale order.
+        let collator = CollatorBorrowed::try_new(CollatorPreferences::default(), Default::default())
+            .unwrap_or_else(|_| panic!("ICU collator unavailable"));
+        values.sort_by(|a, b| {
+            match (a.is_empty(), b.is_empty()) {
+                (true, true) => Ordering::Equal,
+                (true, false) => Ordering::Less,
+                (false, true) => Ordering::Greater,
+                (false, false) => collator.compare(a, b),
+            }
+        });
         Ok(values)
     }
 
@@ -697,17 +708,19 @@ impl Database {
     ) -> Result<Vec<String>> {
         let tag_col = tag_to_column(tag)?;
         let filter_col = tag_to_column(filter_tag)?;
-
         let query = format!(
-            "SELECT DISTINCT {tag_col} FROM songs WHERE {filter_col} = ? AND {tag_col} IS NOT NULL ORDER BY {tag_col} COLLATE NOCASE"
+            "SELECT DISTINCT {tag_col} FROM songs WHERE {filter_col} = ? AND {tag_col} IS NOT NULL"
         );
 
         let mut stmt = self.conn.prepare(&query)?;
 
-        let values = stmt
+        let mut values: Vec<String> = stmt
             .query_map([filter_value], |row| row.get(0))?
             .collect::<std::result::Result<Vec<_>, _>>()?;
-
+        // Sort with ICU collation to match MPD's IcuCollate().
+        let collator = CollatorBorrowed::try_new(CollatorPreferences::default(), Default::default())
+            .unwrap_or_else(|_| panic!("ICU collator unavailable"));
+        values.sort_by(|a, b| collator.compare(a, b));
         Ok(values)
     }
 
