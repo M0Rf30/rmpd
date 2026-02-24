@@ -1061,7 +1061,7 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
                 Ok(Command::Count { filters, group })
             } else {
                 // Traditional syntax: TAG VALUE [TAG VALUE ...] [group GROUPTAG]
-            let mut filters = Vec::new();
+                let mut filters = Vec::new();
                 // Check for "group" keyword on the first token
                 if first == "group" {
                     let _ = space0.parse_next(input)?;
@@ -1077,12 +1077,12 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
                     if input.is_empty() {
                         break;
                     }
-                let saved_input = *input;
+                    let saved_input = *input;
                     let tag = match opt(parse_quoted_or_unquoted).parse_next(input)? {
                         Some(t) if !t.is_empty() => t,
                         _ => break,
                     };
-                if tag == "group" {
+                    if tag == "group" {
                         *input = saved_input;
                         break;
                     }

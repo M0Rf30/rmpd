@@ -2659,7 +2659,6 @@ dependencies = [
  "camino",
  "chromaprint-sys-next",
  "icu_collator",
- "icu_locale_core",
  "lofty",
  "notify",
  "notify-debouncer-full",

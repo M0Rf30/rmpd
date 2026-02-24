@@ -109,14 +109,13 @@ impl ResponseBuilder {
         self
     }
 
-
     /// Add an optional string field, skipping None and empty strings.
     /// MPD omits tags entirely when their value is empty.
     pub fn optional_str_field(&mut self, key: &str, value: Option<&String>) -> &mut Self {
-        if let Some(val) = value {
-            if !val.is_empty() {
-                self.field(key, val);
-            }
+        if let Some(val) = value
+            && !val.is_empty()
+        {
+            self.field(key, val);
         }
         self
     }
@@ -226,7 +225,7 @@ impl ResponseBuilder {
         // Format: samplerate:bits:channels (e.g. "44100:16:2", "44100:f:2")
         if let Some(sr) = song.sample_rate {
             let bits = match song.bits_per_sample {
-                Some(0) | None => "f".to_string(),  // float
+                Some(0) | None => "f".to_string(), // float
                 Some(b) => b.to_string(),
             };
             let ch = song.channels.unwrap_or(2);

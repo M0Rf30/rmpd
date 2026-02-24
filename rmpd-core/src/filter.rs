@@ -394,8 +394,7 @@ mod tests {
     #[test]
     fn test_double_quoted_with_escape() {
         // Backslash-escaped characters inside double quotes
-        let expr =
-            FilterExpression::parse(r#"(Artist == "Guns \"N\" Roses")"#).unwrap();
+        let expr = FilterExpression::parse(r#"(Artist == "Guns \"N\" Roses")"#).unwrap();
         let (sql, params) = expr.to_sql();
         assert_eq!(sql, "artist = ?");
         assert_eq!(params, vec![r#"Guns "N" Roses"#]);
