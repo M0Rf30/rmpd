@@ -15,8 +15,8 @@ pub async fn handle_config_command(state: &AppState) -> String {
         resp.field("music_directory", music_dir);
     }
 
-    if let Some(db_path) = &state.db_path {
-        resp.field("db_file", db_path);
+    if let Some(playlist_dir) = &state.playlist_dir {
+        resp.field("playlist_directory", playlist_dir);
     }
 
     resp.ok()
