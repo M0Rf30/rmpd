@@ -255,7 +255,7 @@ impl ResponseBuilder {
         self.optional_field("MUSICBRAINZ_TRACKID", song.musicbrainz_trackid.as_ref());
         // Duration
         if let Some(duration) = song.duration {
-            self.field("Time", duration.as_secs());
+            self.field("Time", duration.as_millis().saturating_add(500) / 1000);
             self.field("duration", format!("{:.3}", duration.as_secs_f64()));
         }
 
