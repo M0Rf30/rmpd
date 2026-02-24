@@ -677,8 +677,10 @@ impl Database {
     /// List unique values for any tag supported by tag_to_column.
     pub fn list_tag_values(&self, tag: &str) -> Result<Vec<String>> {
         let col = tag_to_column(tag)?;
+        // Include empty strings (MPD emits them first), exclude only NULL.
+        // Sort empties first, then case-insensitive.
         let query = format!(
-            "SELECT DISTINCT {col} FROM songs WHERE {col} IS NOT NULL AND {col} != '' ORDER BY {col} COLLATE NOCASE"
+            "SELECT DISTINCT COALESCE({col}, '') FROM songs ORDER BY CASE WHEN COALESCE({col}, '') = '' THEN 0 ELSE 1 END, {col} COLLATE NOCASE"
         );
         let mut stmt = self.conn.prepare(&query)?;
         let values = stmt
