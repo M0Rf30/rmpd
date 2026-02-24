@@ -31,15 +31,33 @@ use super::utils::{
     open_db,
 };
 
-/// Helper function to get tag value for sorting (avoids allocation for most tags)
+/// Helper function to get tag value with MPD-style fallback.
+/// When albumartist is missing, falls back to artist; artistsort falls back to artist; etc.
 fn get_tag_value<'a>(song: &'a rmpd_core::song::Song, tag: &str) -> std::borrow::Cow<'a, str> {
     use std::borrow::Cow;
     match tag.to_lowercase().as_str() {
         "artist" => Cow::Borrowed(song.artist.as_deref().unwrap_or_default()),
-        "artistsort" => Cow::Borrowed(song.artist_sort.as_deref().unwrap_or_default()),
+        "artistsort" => Cow::Borrowed(
+            song.artist_sort
+                .as_deref()
+                .or(song.artist.as_deref())
+                .unwrap_or_default(),
+        ),
         "album" => Cow::Borrowed(song.album.as_deref().unwrap_or_default()),
-        "albumartist" => Cow::Borrowed(song.album_artist.as_deref().unwrap_or_default()),
-        "albumartistsort" => Cow::Borrowed(song.album_artist_sort.as_deref().unwrap_or_default()),
+        "albumartist" => Cow::Borrowed(
+            song.album_artist
+                .as_deref()
+                .or(song.artist.as_deref())
+                .unwrap_or_default(),
+        ),
+        "albumartistsort" => Cow::Borrowed(
+            song.album_artist_sort
+                .as_deref()
+                .or(song.album_artist.as_deref())
+                .or(song.artist_sort.as_deref())
+                .or(song.artist.as_deref())
+                .unwrap_or_default(),
+        ),
         "title" => Cow::Borrowed(song.title.as_deref().unwrap_or_default()),
         "track" => song
             .track
@@ -412,7 +430,9 @@ pub async fn handle_count_command(
         Err(e) => return e,
     };
 
-    if filters.is_empty() {
+    // Bare "count" with no args or bare tag without value (e.g. "count Genre") should error.
+    // But "count group <tag>" (empty filters with group) is valid: count all songs grouped by tag.
+    if filters.is_empty() && group.is_none() {
         return ResponseBuilder::error(
             ACK_ERROR_ARG,
             0,
@@ -420,9 +440,12 @@ pub async fn handle_count_command(
             "too few arguments for \"count\"",
         );
     }
-
     // Bare tag without value (e.g. "count Genre") should error like MPD
-    if !filters[0].0.starts_with('(') && filters.len() == 1 && filters[0].1.is_empty() {
+    if !filters.is_empty()
+        && !filters[0].0.starts_with('(')
+        && filters.len() == 1
+        && filters[0].1.is_empty()
+    {
         return ResponseBuilder::error(
             ACK_ERROR_ARG,
             0,
@@ -431,8 +454,21 @@ pub async fn handle_count_command(
         );
     }
 
-    // Get songs based on filters
-    let songs = if filters[0].0.starts_with('(') {
+    // Get songs based on filters (empty filters = all songs)
+    let songs = if filters.is_empty() {
+        // No filter - count all songs (used with "count group <tag>")
+        match db.get_all_songs() {
+            Ok(s) => s,
+            Err(e) => {
+                return ResponseBuilder::error(
+                    ACK_ERROR_SYSTEM,
+                    0,
+                    "count",
+                    &format!("query error: {e}"),
+                );
+            }
+        }
+    } else if filters[0].0.starts_with('(') {
         // Parse as filter expression
         match rmpd_core::filter::FilterExpression::parse(&filters[0].0) {
             Ok(filter) => match db.find_songs_filter(&filter) {
@@ -485,10 +521,9 @@ pub async fn handle_count_command(
     let mut resp = ResponseBuilder::new();
 
     if let Some(group_tag) = group {
-        // Group by specified tag
+        // Group by specified tag — sorted output to match MPD
         use std::collections::HashMap;
         let mut groups: HashMap<String, (usize, u64)> = HashMap::new();
-
         for song in &songs {
             let group_value = get_tag_value(song, group_tag).into_owned();
             let entry = groups.entry(group_value).or_insert((0, 0));
@@ -498,8 +533,12 @@ pub async fn handle_count_command(
             }
         }
 
-        for (value, (count, playtime)) in groups {
-            resp.field(group_tag, &value);
+        // Sort by tag value (MPD uses std::map which sorts lexicographically)
+        let mut sorted: Vec<_> = groups.into_iter().collect();
+        sorted.sort_by(|a, b| a.0.cmp(&b.0));
+        let tag_key = canonical_tag_name(group_tag);
+        for (value, (count, playtime)) in &sorted {
+            resp.field(tag_key, value);
             resp.field("songs", count);
             resp.field("playtime", playtime);
         }

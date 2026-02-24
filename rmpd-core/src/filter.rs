@@ -318,13 +318,14 @@ impl<'a> Parser<'a> {
     }
 }
 
-/// Convert MPD tag name to database column name
+/// Convert MPD tag name to database column expression.
+/// Uses COALESCE for tags with MPD-style fallbacks (e.g. albumartist falls back to artist).
 fn tag_to_column(tag: &str) -> &str {
     match tag.to_lowercase().as_str() {
         "artist" => "artist",
-        "artistsort" => "artist_sort",
-        "albumartist" => "album_artist",
-        "albumartistsort" => "album_artist_sort",
+        "artistsort" => "COALESCE(artist_sort, artist)",
+        "albumartist" => "COALESCE(album_artist, artist)",
+        "albumartistsort" => "COALESCE(album_artist_sort, album_artist, artist_sort, artist)",
         "album" => "album",
         "title" => "title",
         "track" => "track",

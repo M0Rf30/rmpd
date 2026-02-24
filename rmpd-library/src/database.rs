@@ -146,12 +146,13 @@ pub(crate) fn system_time_to_unix_secs(time: SystemTime) -> i64 {
         .as_secs() as i64
 }
 
-/// Map a tag name to its database column name.
+/// Map a tag name to its database column expression.
+/// Uses COALESCE for tags with MPD-style fallbacks (e.g. albumartist falls back to artist).
 fn tag_to_column(tag: &str) -> std::result::Result<&'static str, RmpdError> {
     match tag.to_lowercase().as_str() {
         "artist" => Ok("artist"),
         "album" => Ok("album"),
-        "albumartist" => Ok("album_artist"),
+        "albumartist" => Ok("COALESCE(album_artist, artist)"),
         "genre" => Ok("genre"),
         "date" => Ok("date"),
         "title" => Ok("title"),
@@ -163,8 +164,8 @@ fn tag_to_column(tag: &str) -> std::result::Result<&'static str, RmpdError> {
         "track" => Ok("CAST(track AS TEXT)"),
         "label" => Ok("label"),
         "originaldate" => Ok("original_date"),
-        "artistsort" => Ok("artist_sort"),
-        "albumartistsort" => Ok("album_artist_sort"),
+        "artistsort" => Ok("COALESCE(artist_sort, artist)"),
+        "albumartistsort" => Ok("COALESCE(album_artist_sort, album_artist, artist_sort, artist)"),
         "musicbrainz_artistid" => Ok("musicbrainz_artistid"),
         "musicbrainz_albumid" => Ok("musicbrainz_albumid"),
         "musicbrainz_albumartistid" => Ok("musicbrainz_albumartistid"),
@@ -769,6 +770,16 @@ impl Database {
                 .unwrap_or_else(|_| panic!("ICU collator unavailable"));
         values.sort_by(|a, b| collator.compare(a, b));
         Ok(values)
+    }
+
+    /// Get all songs from the database.
+    pub fn get_all_songs(&self) -> Result<Vec<Song>> {
+        let sql = format!("SELECT {SONG_COLUMNS} FROM songs ORDER BY artist, album, track");
+        let mut stmt = self.conn.prepare(&sql)?;
+        let songs = stmt
+            .query_map([], song_from_row)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(songs)
     }
 
     pub fn find_songs(&self, tag: &str, value: &str) -> Result<Vec<Song>> {
