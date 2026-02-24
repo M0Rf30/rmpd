@@ -211,7 +211,7 @@ impl ResponseBuilder {
 
     pub fn song(&mut self, song: &Song, position: Option<u32>, id: Option<u32>) -> &mut Self {
         self.field("file", &song.path);
-        // MPD order: Last-Modified, Added, tags in Names.cxx order, Format, Time/duration, Pos/Id
+        // MPD order: Last-Modified, Added, Format, tags in file insertion order, Time/duration, Pos/Id
         if song.last_modified > 0 {
             let ts = crate::commands::utils::format_iso8601_timestamp(song.last_modified);
             self.field("Last-Modified", &ts);
@@ -219,6 +219,15 @@ impl ResponseBuilder {
         if song.added_at > 0 {
             let ts = crate::commands::utils::format_iso8601_timestamp(song.added_at);
             self.field("Added", &ts);
+        }
+        // Format: samplerate:bits:channels — before tags (matching MPD's SongPrint.cxx order)
+        if let Some(sr) = song.sample_rate {
+            let bits = match song.bits_per_sample {
+                Some(0) | None => "f".to_string(),
+                Some(b) => b.to_string(),
+            };
+            let ch = song.channels.unwrap_or(2);
+            self.field("Format", format!("{}:{}:{}", sr, bits, ch));
         }
         // Tags in file insertion order (matching MPD which outputs tags as stored in the file).
         // Comment is excluded from default tag mask (MPD's Settings.cxx: All & ~TAG_COMMENT)
@@ -228,15 +237,6 @@ impl ResponseBuilder {
             }
             let canonical = rmpd_core::song::canonical_tag_name(tag);
             self.field(canonical, value);
-        }
-        // Format: samplerate:bits:channels — AFTER tags, before Time/duration
-        if let Some(sr) = song.sample_rate {
-            let bits = match song.bits_per_sample {
-                Some(0) | None => "f".to_string(),
-                Some(b) => b.to_string(),
-            };
-            let ch = song.channels.unwrap_or(2);
-            self.field("Format", format!("{}:{}:{}", sr, bits, ch));
         }
         // Duration
         if let Some(duration) = song.duration {

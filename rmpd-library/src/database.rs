@@ -286,7 +286,7 @@ impl Database {
     fn load_tags_for_song(&self, song_id: u64) -> Result<Vec<(String, String)>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT tag, value FROM song_tags WHERE song_id = ?1")?;
+            .prepare("SELECT tag, value FROM song_tags WHERE song_id = ?1 ORDER BY rowid")?;
         let tags = stmt
             .query_map(params![song_id as i64], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
@@ -310,7 +310,7 @@ impl Database {
             let ids: Vec<String> = songs.iter().map(|s| s.id.to_string()).collect();
             let id_list = ids.join(",");
             let sql = format!(
-                "SELECT song_id, tag, value FROM song_tags WHERE song_id IN ({id_list}) ORDER BY song_id"
+                "SELECT song_id, tag, value FROM song_tags WHERE song_id IN ({id_list}) ORDER BY song_id, rowid"
             );
             let mut stmt = self.conn.prepare(&sql)?;
             let rows: Vec<(i64, String, String)> = stmt
@@ -412,14 +412,29 @@ impl Database {
         let dir_path = song.path.parent().unwrap_or(root_path.as_path());
         let dir_id = self.get_or_create_directory(dir_path)?;
 
-        // Insert or replace the song row (audio properties only)
+        // Insert or update the song row (audio properties only).
+        // On conflict (same path): update audio props and last_modified, but preserve added_at.
         self.conn.execute(
-            "INSERT OR REPLACE INTO songs (
+            "INSERT INTO songs (
                 path, directory_id, mtime, duration,
                 sample_rate, channels, bits_per_sample, bitrate,
                 replay_gain_track_gain, replay_gain_track_peak,
-                replay_gain_album_gain, replay_gain_album_peak
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                replay_gain_album_gain, replay_gain_album_peak,
+                last_modified
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?3)
+            ON CONFLICT(path) DO UPDATE SET
+                directory_id = excluded.directory_id,
+                mtime = excluded.mtime,
+                duration = excluded.duration,
+                sample_rate = excluded.sample_rate,
+                channels = excluded.channels,
+                bits_per_sample = excluded.bits_per_sample,
+                bitrate = excluded.bitrate,
+                replay_gain_track_gain = excluded.replay_gain_track_gain,
+                replay_gain_track_peak = excluded.replay_gain_track_peak,
+                replay_gain_album_gain = excluded.replay_gain_album_gain,
+                replay_gain_album_peak = excluded.replay_gain_album_peak,
+                last_modified = excluded.mtime",
             params![
                 song.path.as_str(),
                 dir_id,
