@@ -1312,7 +1312,7 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
             Ok(Command::FindAdd { tag, value })
         }
         "listfiles" => {
-            let uri = opt(parse_string).parse_next(input)?;
+            let uri = opt(parse_quoted_or_unquoted).parse_next(input)?;
             Ok(Command::ListFiles { uri })
         }
         // Stickers

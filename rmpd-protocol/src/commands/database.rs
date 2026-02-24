@@ -806,37 +806,36 @@ pub async fn handle_listfiles_command(state: &AppState, uri: Option<&str>) -> St
 
         match std::fs::read_dir(&full_path) {
             Ok(entries) => {
-                let mut dirs: Vec<(String, std::fs::Metadata)> = Vec::new();
-                let mut files: Vec<(String, std::fs::Metadata)> = Vec::new();
-
+                let mut resp = ResponseBuilder::new();
+                // MPD streams entries in readdir order with dirs and files
+                // interleaved — no sorting, no separation.
                 for entry in entries.flatten() {
                     let name = match entry.file_name().into_string() {
                         Ok(n) => n,
                         Err(_) => continue, // skip non-UTF8 names
                     };
-                    // Skip hidden files (MPD skips . and ..)
+                    // Skip hidden files and special entries (MPD skips . and ..)
                     if name.starts_with('.') {
                         continue;
                     }
-                    if let Ok(meta) = entry.metadata() {
-                        if meta.is_dir() {
-                            dirs.push((name, meta));
-                        } else if meta.is_file() {
-                            files.push((name, meta));
-                        }
+                    // Skip names containing newlines (MPD does this)
+                    if name.contains('\n') {
+                        continue;
                     }
-                }
+                    let meta = match entry.metadata() {
+                        Ok(m) => m,
+                        Err(_) => continue,
+                    };
 
-                // Sort alphabetically (MPD sorts via directory reader order, but
-                // we sort for consistency)
-                dirs.sort_by(|a, b| a.0.cmp(&b.0));
-                files.sort_by(|a, b| a.0.cmp(&b.0));
+                    if meta.is_file() {
+                        resp.field("file", &name);
+                        resp.field("size", meta.len());
+                    } else if meta.is_dir() {
+                        resp.field("directory", &name);
+                    } else {
+                        continue;
+                    }
 
-                let mut resp = ResponseBuilder::new();
-
-                // Directories first
-                for (name, meta) in &dirs {
-                    resp.field("directory", name);
                     if let Ok(mtime) = meta.modified() {
                         let ts = format_iso8601_timestamp(
                             mtime.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() as i64,
@@ -844,19 +843,6 @@ pub async fn handle_listfiles_command(state: &AppState, uri: Option<&str>) -> St
                         resp.field("Last-Modified", &ts);
                     }
                 }
-
-                // Then all files (audio and non-audio) with size
-                for (name, meta) in &files {
-                    resp.field("file", name);
-                    resp.field("size", meta.len());
-                    if let Ok(mtime) = meta.modified() {
-                        let ts = format_iso8601_timestamp(
-                            mtime.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() as i64,
-                        );
-                        resp.field("Last-Modified", &ts);
-                    }
-                }
-
                 return resp.ok();
             }
             Err(_) => {
