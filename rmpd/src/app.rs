@@ -10,8 +10,9 @@ pub async fn run(bind_address: String, config: Config) -> Result<()> {
     let db_path = config.general.db_file.to_string();
     let music_dir = config.general.music_directory.to_string();
     let state_file_path = config.general.state_file.to_string();
+    let playlist_dir = config.general.playlist_directory.to_string();
 
-    let mut state = AppState::with_paths(db_path.clone(), music_dir.clone());
+    let mut state = AppState::with_all_paths(db_path.clone(), music_dir.clone(), playlist_dir);
 
     // Load state from file if it exists
     let state_file = StateFile::new(state_file_path.clone());

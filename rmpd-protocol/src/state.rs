@@ -31,6 +31,7 @@ pub struct AppState {
     pub event_bus: EventBus,
     pub db_path: Option<String>,
     pub music_dir: Option<String>,
+    pub playlist_dir: Option<String>,
     pub outputs: Arc<RwLock<Vec<OutputInfo>>>,
     pub start_time: Instant,
     pub message_broker: MessageBroker,
@@ -53,7 +54,7 @@ impl fmt::Debug for AppState {
 }
 
 impl AppState {
-    fn build(db_path: Option<String>, music_dir: Option<String>) -> Self {
+    fn build(db_path: Option<String>, music_dir: Option<String>, playlist_dir: Option<String>) -> Self {
         let event_bus = EventBus::new();
         let status = Arc::new(RwLock::new(PlayerStatus::default()));
         let atomic_state = Arc::new(std::sync::atomic::AtomicU8::new(
@@ -92,6 +93,7 @@ impl AppState {
             event_bus,
             db_path,
             music_dir,
+            playlist_dir,
             outputs: Arc::new(RwLock::new(vec![default_output])),
             start_time: Instant::now(),
             message_broker: MessageBroker::new(),
@@ -106,11 +108,15 @@ impl AppState {
     }
 
     pub fn new() -> Self {
-        Self::build(None, None)
+        Self::build(None, None, None)
     }
 
     pub fn with_paths(db_path: String, music_dir: String) -> Self {
-        Self::build(Some(db_path), Some(music_dir))
+        Self::build(Some(db_path), Some(music_dir), None)
+    }
+
+    pub fn with_all_paths(db_path: String, music_dir: String, playlist_dir: String) -> Self {
+        Self::build(Some(db_path), Some(music_dir), Some(playlist_dir))
     }
 
     /// Set the shutdown sender for graceful shutdown support
