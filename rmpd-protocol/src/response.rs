@@ -109,6 +109,18 @@ impl ResponseBuilder {
         self
     }
 
+
+    /// Add an optional string field, skipping None and empty strings.
+    /// MPD omits tags entirely when their value is empty.
+    pub fn optional_str_field(&mut self, key: &str, value: Option<&String>) -> &mut Self {
+        if let Some(val) = value {
+            if !val.is_empty() {
+                self.field(key, val);
+            }
+        }
+        self
+    }
+
     /// Add a blank line to separate entities in the response
     pub fn blank_line(&mut self) -> &mut Self {
         self.buffer.push('\n');
@@ -221,38 +233,38 @@ impl ResponseBuilder {
             self.field("Format", format!("{}:{}:{}", sr, bits, ch));
         }
 
-        // Tags in MPD canonical order
-        self.optional_field("Artist", song.artist.as_ref());
-        self.optional_field("AlbumArtist", song.album_artist.as_ref());
-        self.optional_field("ArtistSort", song.artist_sort.as_ref());
-        self.optional_field("AlbumArtistSort", song.album_artist_sort.as_ref());
-        self.optional_field("Title", song.title.as_ref());
-        self.optional_field("Album", song.album.as_ref());
+        // Tags in MPD canonical order (matching TagType enum order in Names.cxx)
+        self.optional_str_field("Artist", song.artist.as_ref());
+        self.optional_str_field("ArtistSort", song.artist_sort.as_ref());
+        self.optional_str_field("Album", song.album.as_ref());
+        self.optional_str_field("AlbumArtist", song.album_artist.as_ref());
+        self.optional_str_field("AlbumArtistSort", song.album_artist_sort.as_ref());
+        self.optional_str_field("Title", song.title.as_ref());
         self.optional_field("Track", song.track);
-        self.optional_field("Date", song.date.as_ref());
-        self.optional_field("OriginalDate", song.original_date.as_ref());
-        self.optional_field("Genre", song.genre.as_ref());
+        self.optional_str_field("Genre", song.genre.as_ref());
+        self.optional_str_field("Date", song.date.as_ref());
+        self.optional_str_field("OriginalDate", song.original_date.as_ref());
+        self.optional_str_field("Composer", song.composer.as_ref());
+        self.optional_str_field("Performer", song.performer.as_ref());
+        self.optional_str_field("Comment", song.comment.as_ref());
         self.optional_field("Disc", song.disc);
-        self.optional_field("Label", song.label.as_ref());
-        self.optional_field("Composer", song.composer.as_ref());
-        self.optional_field("Performer", song.performer.as_ref());
-        self.optional_field("Comment", song.comment.as_ref());
+        self.optional_str_field("Label", song.label.as_ref());
         // MusicBrainz IDs
-        self.optional_field("MUSICBRAINZ_ALBUMID", song.musicbrainz_albumid.as_ref());
-        self.optional_field("MUSICBRAINZ_ARTISTID", song.musicbrainz_artistid.as_ref());
-        self.optional_field(
+        self.optional_str_field("MUSICBRAINZ_ARTISTID", song.musicbrainz_artistid.as_ref());
+        self.optional_str_field("MUSICBRAINZ_ALBUMID", song.musicbrainz_albumid.as_ref());
+        self.optional_str_field(
             "MUSICBRAINZ_ALBUMARTISTID",
             song.musicbrainz_albumartistid.as_ref(),
         );
-        self.optional_field(
-            "MUSICBRAINZ_RELEASEGROUPID",
-            song.musicbrainz_releasegroupid.as_ref(),
-        );
-        self.optional_field(
+        self.optional_str_field("MUSICBRAINZ_TRACKID", song.musicbrainz_trackid.as_ref());
+        self.optional_str_field(
             "MUSICBRAINZ_RELEASETRACKID",
             song.musicbrainz_releasetrackid.as_ref(),
         );
-        self.optional_field("MUSICBRAINZ_TRACKID", song.musicbrainz_trackid.as_ref());
+        self.optional_str_field(
+            "MUSICBRAINZ_RELEASEGROUPID",
+            song.musicbrainz_releasegroupid.as_ref(),
+        );
         // Duration
         if let Some(duration) = song.duration {
             self.field("Time", duration.as_millis().saturating_add(500) / 1000);
