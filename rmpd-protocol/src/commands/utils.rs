@@ -106,6 +106,30 @@ pub fn build_and_filter(filters: &[(String, String)]) -> rmpd_core::filter::Filt
     expr
 }
 
+/// Build a FilterExpression from multiple tag/value pairs joined with AND,
+/// using Contains (LIKE) for case-insensitive substring matching (for `search`).
+/// Panics if `filters` is empty.
+pub fn build_search_filter(filters: &[(String, String)]) -> rmpd_core::filter::FilterExpression {
+    use rmpd_core::filter::{CompareOp, FilterExpression};
+
+    let mut expr = FilterExpression::Compare {
+        tag: filters[0].0.clone(),
+        op: CompareOp::Contains,
+        value: filters[0].1.clone(),
+    };
+
+    for filter in &filters[1..] {
+        let next_expr = FilterExpression::Compare {
+            tag: filter.0.clone(),
+            op: CompareOp::Contains,
+            value: filter.1.clone(),
+        };
+        expr = FilterExpression::And(Box::new(expr), Box::new(next_expr));
+    }
+
+    expr
+}
+
 /// Apply a range/window filter to a slice, returning the filtered sub-slice.
 pub fn apply_range<T>(items: &[T], range: Option<(u32, u32)>) -> &[T] {
     if let Some((start, end)) = range {

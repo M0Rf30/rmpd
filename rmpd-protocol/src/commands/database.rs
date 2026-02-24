@@ -27,7 +27,7 @@ fn strip_music_dir_prefix<'a>(path: &'a str, music_dir: Option<&str>) -> &'a str
 }
 
 use super::utils::{
-    ACK_ERROR_ARG, ACK_ERROR_SYSTEM, apply_range, build_and_filter, format_iso8601_timestamp,
+    ACK_ERROR_ARG, ACK_ERROR_SYSTEM, apply_range, build_and_filter, build_search_filter, format_iso8601_timestamp,
     open_db,
 };
 
@@ -180,8 +180,8 @@ pub async fn handle_search_command(
                 }
             }
         } else {
-            // Partial match using LIKE
-            match db.find_songs(tag, value) {
+            // Partial/case-insensitive match using LIKE (search semantics)
+            match db.search_songs_by_tag(tag, value) {
                 Ok(s) => s,
                 Err(e) => {
                     return ResponseBuilder::error(
@@ -194,7 +194,7 @@ pub async fn handle_search_command(
             }
         }
     } else {
-        let expr = build_and_filter(filters);
+        let expr = build_search_filter(filters);
         match db.find_songs_filter(&expr) {
             Ok(s) => s,
             Err(e) => {
@@ -790,7 +790,7 @@ pub async fn handle_searchadd_command(state: &AppState, tag: &str, value: &str) 
             }
         }
     } else {
-        match db.find_songs(tag, value) {
+        match db.search_songs_by_tag(tag, value) {
             Ok(s) => s,
             Err(e) => {
                 return ResponseBuilder::error(
