@@ -211,7 +211,7 @@ impl ResponseBuilder {
 
     pub fn song(&mut self, song: &Song, position: Option<u32>, id: Option<u32>) -> &mut Self {
         self.field("file", &song.path);
-        // MPD order: Last-Modified, Added, Format, then tags, then Time/duration, then Pos/Id
+        // MPD order: Last-Modified, Added, Format, then tags in Names.cxx order, then Time/duration, then Pos/Id
         // Last-Modified and Added timestamps
         if song.last_modified > 0 {
             let ts = crate::commands::utils::format_iso8601_timestamp(song.last_modified);
@@ -221,7 +221,6 @@ impl ResponseBuilder {
             let ts = crate::commands::utils::format_iso8601_timestamp(song.added_at);
             self.field("Added", &ts);
         }
-
         // Format: samplerate:bits:channels (e.g. "44100:16:2", "44100:f:2")
         if let Some(sr) = song.sample_rate {
             let bits = match song.bits_per_sample {
@@ -231,7 +230,6 @@ impl ResponseBuilder {
             let ch = song.channels.unwrap_or(2);
             self.field("Format", format!("{}:{}:{}", sr, bits, ch));
         }
-
         // Tags in MPD canonical order (matching TagType enum order in Names.cxx)
         self.optional_str_field("Artist", song.artist.as_ref());
         self.optional_str_field("ArtistSort", song.artist_sort.as_ref());
@@ -245,10 +243,11 @@ impl ResponseBuilder {
         self.optional_str_field("OriginalDate", song.original_date.as_ref());
         self.optional_str_field("Composer", song.composer.as_ref());
         self.optional_str_field("Performer", song.performer.as_ref());
-        self.optional_str_field("Comment", song.comment.as_ref());
+        self.optional_str_field("Grouping", song.grouping.as_ref());
+        // Comment is excluded from default tag mask (MPD's Settings.cxx: All & ~TAG_COMMENT)
         self.optional_field("Disc", song.disc);
         self.optional_str_field("Label", song.label.as_ref());
-        // MusicBrainz IDs
+        // MusicBrainz IDs (in Names.cxx order)
         self.optional_str_field("MUSICBRAINZ_ARTISTID", song.musicbrainz_artistid.as_ref());
         self.optional_str_field("MUSICBRAINZ_ALBUMID", song.musicbrainz_albumid.as_ref());
         self.optional_str_field(
@@ -264,6 +263,7 @@ impl ResponseBuilder {
             "MUSICBRAINZ_RELEASEGROUPID",
             song.musicbrainz_releasegroupid.as_ref(),
         );
+        self.optional_str_field("MUSICBRAINZ_WORKID", song.musicbrainz_workid.as_ref());
         // Duration
         if let Some(duration) = song.duration {
             self.field("Time", duration.as_millis().saturating_add(500) / 1000);
