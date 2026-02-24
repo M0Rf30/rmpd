@@ -1074,23 +1074,45 @@ pub async fn handle_getfingerprint_command(state: &AppState, uri: &str) -> Strin
 
 /// Read file metadata comments
 ///
-/// Returns comment field from the song metadata
+/// Reads raw key-value pairs directly from the audio file (not from the DB).
+/// This matches MPD behavior which reads raw vorbis comments / ID3 frames / MP4 atoms.
 pub async fn handle_readcomments_command(state: &AppState, uri: &str) -> String {
-    let db = match open_db(state, "readcomments") {
-        Ok(d) => d,
-        Err(e) => return e,
+    use camino::Utf8PathBuf;
+    use rmpd_library::MetadataExtractor;
+
+    // Resolve absolute path from music_dir + relative URI
+    let abs_path = if let Some(music_dir) = &state.music_dir {
+        let base = music_dir.trim_end_matches('/');
+        format!("{base}/{uri}")
+    } else {
+        // Try as-is (absolute path)
+        uri.to_string()
     };
 
-    if let Ok(Some(song)) = db.get_song_by_path(uri) {
-        let mut resp = ResponseBuilder::new();
-        // readcomments emits all raw metadata fields, uppercase, in file order.
-        for (tag, value) in &song.tags {
-            if !value.is_empty() {
-                let key = tag.to_uppercase();
-                resp.field(&key, value);
-            }
-        }
-        return resp.ok();
+    let path = Utf8PathBuf::from(&abs_path);
+    if !path.exists() {
+        return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "readcomments", "No such file");
     }
-    ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "readcomments", "No such file")
+
+    match MetadataExtractor::read_raw_comments(&path) {
+        Ok(pairs) => {
+            let mut resp = ResponseBuilder::new();
+            for (key, value) in pairs {
+                // MPD's IsValidName: must start with alpha, all chars [A-Za-z_-]
+                // MPD's IsValidValue: no control chars (< 0x20)
+                let valid_name = !key.is_empty()
+                    && key.chars().next().map_or(false, |c| c.is_ascii_alphabetic())
+                    && key.chars().all(|c| c.is_ascii_alphabetic() || c == '_' || c == '-');
+                let valid_value = value.bytes().all(|b| b >= 0x20);
+                if valid_name && valid_value {
+                    resp.field(&key, &value);
+                }
+            }
+            resp.ok()
+        }
+        Err(e) => {
+            error!("readcomments error for {uri}: {e}");
+            ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "readcomments", "No such file")
+        }
+    }
 }
