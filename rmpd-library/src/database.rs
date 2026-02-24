@@ -815,42 +815,7 @@ impl Database {
 
     /// List directory contents (songs + subdirectories)
     pub fn list_directory(&self, path: &str) -> Result<DirectoryListing> {
-        // First, find the directory
-        let dir_id = if path.is_empty() || path == "/" {
-            // Root directory - need to find the music directory root
-            // Look for a directory that starts with / and has subdirectories
-            // This is a heuristic to find the music directory
-            let id: Option<i64> = self.conn.query_row(
-                "SELECT id FROM directories WHERE path LIKE '%/Musica' OR path LIKE '%/Music' ORDER BY LENGTH(path) DESC LIMIT 1",
-                [],
-                |row| row.get(0),
-            ).optional()
-            ?;
-
-            // If we can't find Music/Musica directory, try to find any directory with songs
-            if id.is_none() {
-                self.conn
-                    .query_row(
-                        "SELECT DISTINCT directory_id FROM songs ORDER BY directory_id LIMIT 1",
-                        [],
-                        |row| row.get(0),
-                    )
-                    .optional()?
-            } else {
-                id
-            }
-        } else {
-            // Find directory by path
-            let id: Option<i64> = self
-                .conn
-                .query_row(
-                    "SELECT id FROM directories WHERE path = ?1 OR path LIKE '%/' || ?1",
-                    params![path],
-                    |row| row.get(0),
-                )
-                .optional()?;
-            id
-        };
+        let dir_id = self.resolve_dir_id(path)?;
 
         // Get subdirectories
         let mut directories = Vec::new();
