@@ -948,10 +948,12 @@ pub async fn handle_readcomments_command(state: &AppState, uri: &str) -> String 
 
     if let Ok(Some(song)) = db.get_song_by_path(uri) {
         let mut resp = ResponseBuilder::new();
-        if let Some(comment) = song.tag("comment")
-            && !comment.is_empty()
-        {
-            resp.field("comment", comment);
+        // readcomments emits all raw metadata fields, uppercase, in file order.
+        for (tag, value) in &song.tags {
+            if !value.is_empty() {
+                let key = tag.to_uppercase();
+                resp.field(&key, value);
+            }
         }
         return resp.ok();
     }
