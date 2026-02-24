@@ -1,8 +1,29 @@
 use camino::Utf8PathBuf;
+use icu_collator::{CollatorBorrowed, CollatorPreferences};
 use rmpd_core::error::{Result, RmpdError};
 use rmpd_core::song::Song;
 use rusqlite::{params, Connection, OptionalExtension, Row};
+use std::cmp::Ordering;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+/// Compare two optional strings using ICU root-locale collation: None sorts before Some.
+/// Matches MPD's compare_utf8_string() + IcuCollate() behaviour.
+fn icu_cmp_opt(col: &CollatorBorrowed<'_>, a: Option<&str>, b: Option<&str>) -> Ordering {
+    match (a, b) {
+        (None, None) => Ordering::Equal,
+        (None, Some(_)) => Ordering::Less,
+        (Some(_), None) => Ordering::Greater,
+        (Some(a), Some(b)) => col.compare(a, b),
+    }
+}
+
+/// An entry yielded during a recursive directory walk.
+pub enum WalkEntry<'a> {
+    /// A song file.
+    Song(&'a Song),
+    /// A directory (emitted before its contents are visited).
+    Directory(&'a str),
+}
 
 /// Common SELECT columns for all song queries (with `s.` table alias prefix).
 /// Used with `song_from_row` to construct Song structs from query results.
@@ -898,6 +919,118 @@ impl Database {
             .collect::<std::result::Result<Vec<_>, _>>()?;
 
         Ok(songs)
+    }
+
+    /// Resolve a path to a directory id, or None if not found.
+    /// Empty string resolves to the root directory.
+    fn resolve_dir_id(&self, path: &str) -> Result<Option<i64>> {
+        if path.is_empty() || path == "/" {
+            Ok(self
+                .conn
+                .query_row(
+                    "SELECT id FROM directories WHERE parent_id IS NULL LIMIT 1",
+                    [],
+                    |row| row.get(0),
+                )
+                .optional()?)
+        } else {
+            Ok(self
+                .conn
+                .query_row(
+                    "SELECT id FROM directories WHERE path = ?1",
+                    params![path],
+                    |row| row.get(0),
+                )
+                .optional()?)
+        }
+    }
+
+    /// Walk a directory tree recursively in DFS order, matching MPD's traversal:
+    /// for each directory, emit its songs first, then for each child directory
+    /// emit a `WalkEntry::Directory` entry and recurse into it.
+    ///
+    /// The visitor is called with a `WalkEntry` for each song and directory encountered.
+    pub fn walk_recursive(
+        &self,
+        path: &str,
+        visitor: &mut impl FnMut(WalkEntry<'_>) -> Result<()>,
+    ) -> Result<()> {
+        let dir_id = self.resolve_dir_id(path)?;
+        self.walk_dir(dir_id, visitor)
+    }
+
+    fn walk_dir(
+        &self,
+        dir_id: Option<i64>,
+        visitor: &mut impl FnMut(WalkEntry<'_>) -> Result<()>,
+    ) -> Result<()> {
+        let id = match dir_id {
+            Some(id) => id,
+            None => return Ok(()),
+        };
+
+        // Emit songs in this directory first, sorted to match MPD's song_cmp:
+        // album (NULL first, then case-insensitive), disc, track, filename (case-insensitive).
+        let song_query = "SELECT id, path, duration,
+                title, artist, album, album_artist, track, disc, date, genre, composer, performer, comment,
+                musicbrainz_trackid, musicbrainz_albumid, musicbrainz_artistid, musicbrainz_albumartistid,
+                musicbrainz_releasegroupid, musicbrainz_releasetrackid,
+                artist_sort, album_artist_sort, original_date, label,
+                sample_rate, channels, bits_per_sample, bitrate,
+                replay_gain_track_gain, replay_gain_track_peak,
+                replay_gain_album_gain, replay_gain_album_peak,
+                added_at, last_modified
+            FROM songs WHERE directory_id = ?1";
+        let mut stmt = self.conn.prepare(song_query)?;
+        let mut songs: Vec<Song> = stmt
+            .query_map(params![id], song_from_row_optional)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        // Sort in Rust to match MPD's song_cmp: (album NULL-first, disc, track, filename)
+        // Uses ICU root-locale collation to match MPD's IcuCollate() behaviour.
+        let col = CollatorBorrowed::try_new(CollatorPreferences::default(), Default::default())
+            .unwrap_or_else(|_| panic!("ICU collator unavailable"));
+        songs.sort_by(|a, b| {
+            // NULL album sorts before any non-NULL album (matches MPD compare_utf8_string)
+            let album_ord = icu_cmp_opt(&col, a.album.as_deref(), b.album.as_deref());
+            if album_ord != Ordering::Equal {
+                return album_ord;
+            }
+            // Then by disc number
+            let disc_ord = a.disc.unwrap_or(0).cmp(&b.disc.unwrap_or(0));
+            if disc_ord != Ordering::Equal {
+                return disc_ord;
+            }
+            // Then by track number
+            let track_ord = a.track.unwrap_or(0).cmp(&b.track.unwrap_or(0));
+            if track_ord != Ordering::Equal {
+                return track_ord;
+            }
+            // Finally by filename via ICU collation
+            let a_name = a.path.file_name().unwrap_or(a.path.as_str());
+            let b_name = b.path.file_name().unwrap_or(b.path.as_str());
+            col.compare(a_name, b_name)
+        });
+
+        for song in &songs {
+            visitor(WalkEntry::Song(song))?;
+        }
+
+        // Collect immediate subdirectories, sorted by path
+        let mut dir_stmt = self
+            .conn
+            .prepare("SELECT id, path FROM directories WHERE parent_id = ?1 ORDER BY path")?;
+        let subdirs: Vec<(i64, String)> = dir_stmt
+            .query_map(params![id], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        // For each child: emit directory entry, then recurse (DFS)
+        for (child_id, child_path) in &subdirs {
+            visitor(WalkEntry::Directory(child_path.as_str()))?;
+            self.walk_dir(Some(*child_id), visitor)?;
+        }
+
+        Ok(())
     }
 
     /// Save current queue as a playlist

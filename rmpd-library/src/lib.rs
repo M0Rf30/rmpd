@@ -9,7 +9,7 @@ pub mod scanner;
 pub mod watcher;
 
 pub use artwork::{AlbumArtExtractor, ArtworkData};
-pub use database::{Database, DirectoryListing, PlaylistInfo};
+pub use database::{Database, DirectoryListing, PlaylistInfo, WalkEntry};
 pub use fingerprint::Fingerprinter;
 pub use metadata::{Artwork, MetadataExtractor};
 pub use scanner::{ScanStats, Scanner};
