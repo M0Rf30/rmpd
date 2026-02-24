@@ -790,13 +790,86 @@ pub async fn handle_findadd_command(state: &AppState, tag: &str, value: &str) ->
 }
 
 pub async fn handle_listfiles_command(state: &AppState, uri: Option<&str>) -> String {
+    let path = uri.unwrap_or("");
+    // Prefer filesystem listing (like MPD) to show all files with size.
+    if let Some(music_dir) = state.music_dir.as_deref() {
+        let full_path = if path.is_empty() {
+            std::path::PathBuf::from(music_dir)
+        } else {
+            std::path::PathBuf::from(music_dir).join(path)
+        };
+
+        // Safety: reject path traversal
+        if path.contains("..") {
+            return ResponseBuilder::error(ACK_ERROR_ARG, 0, "listfiles", "bad path");
+        }
+
+        match std::fs::read_dir(&full_path) {
+            Ok(entries) => {
+                let mut dirs: Vec<(String, std::fs::Metadata)> = Vec::new();
+                let mut files: Vec<(String, std::fs::Metadata)> = Vec::new();
+
+                for entry in entries.flatten() {
+                    let name = match entry.file_name().into_string() {
+                        Ok(n) => n,
+                        Err(_) => continue, // skip non-UTF8 names
+                    };
+                    // Skip hidden files (MPD skips . and ..)
+                    if name.starts_with('.') {
+                        continue;
+                    }
+                    if let Ok(meta) = entry.metadata() {
+                        if meta.is_dir() {
+                            dirs.push((name, meta));
+                        } else if meta.is_file() {
+                            files.push((name, meta));
+                        }
+                    }
+                }
+
+                // Sort alphabetically (MPD sorts via directory reader order, but
+                // we sort for consistency)
+                dirs.sort_by(|a, b| a.0.cmp(&b.0));
+                files.sort_by(|a, b| a.0.cmp(&b.0));
+
+                let mut resp = ResponseBuilder::new();
+
+                // Directories first
+                for (name, meta) in &dirs {
+                    resp.field("directory", name);
+                    if let Ok(mtime) = meta.modified() {
+                        let ts = format_iso8601_timestamp(
+                            mtime.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() as i64,
+                        );
+                        resp.field("Last-Modified", &ts);
+                    }
+                }
+
+                // Then all files (audio and non-audio) with size
+                for (name, meta) in &files {
+                    resp.field("file", name);
+                    resp.field("size", meta.len());
+                    if let Ok(mtime) = meta.modified() {
+                        let ts = format_iso8601_timestamp(
+                            mtime.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() as i64,
+                        );
+                        resp.field("Last-Modified", &ts);
+                    }
+                }
+
+                return resp.ok();
+            }
+            Err(_) => {
+                // Fall through to DB-based listing
+            }
+        }
+    }
+
+    // Fallback: use database listing when music_dir is not available
     let db = match open_db(state, "listfiles") {
         Ok(d) => d,
         Err(e) => return e,
     };
-
-    let path = uri.unwrap_or("");
-
     match db.list_directory(path) {
         Ok(listing) => {
             let mut resp = ResponseBuilder::new();
@@ -804,7 +877,6 @@ pub async fn handle_listfiles_command(state: &AppState, uri: Option<&str>) -> St
             // MPD emits directories before files in listfiles
             for (dir, mtime) in &listing.directories {
                 let display_dir = strip_music_dir_prefix(dir, music_dir);
-                // listfiles shows just the basename for subdirectories
                 let basename = display_dir.rsplit('/').next().unwrap_or(&display_dir);
                 resp.field("directory", basename);
                 if *mtime > 0 {
@@ -814,7 +886,6 @@ pub async fn handle_listfiles_command(state: &AppState, uri: Option<&str>) -> St
             }
             for song in &listing.songs {
                 let display_path = strip_music_dir_prefix(song.path.as_str(), music_dir);
-                // listfiles shows just the filename
                 let filename = display_path.rsplit('/').next().unwrap_or(&display_path);
                 resp.field("file", filename);
                 if song.last_modified > 0 {
