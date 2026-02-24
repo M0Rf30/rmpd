@@ -421,19 +421,7 @@ pub async fn handle_count_command(
             "too few arguments for \"count\"",
         );
     }
-    // Bare tag without value (e.g. "count Genre") should error like MPD
-    if !filters.is_empty()
-        && !filters[0].0.starts_with('(')
-        && filters.len() == 1
-        && filters[0].1.is_empty()
-    {
-        return ResponseBuilder::error(
-            ACK_ERROR_ARG,
-            0,
-            "count",
-            "too few arguments for \"count\"",
-        );
-    }
+    // Note: empty string value is valid in MPD (e.g. "count title \"\"" finds songs with blank title).
 
     // Get songs based on filters (empty filters = all songs)
     let songs = if filters.is_empty() {
