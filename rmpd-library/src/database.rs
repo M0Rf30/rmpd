@@ -774,19 +774,29 @@ impl Database {
 
     pub fn find_songs(&self, tag: &str, value: &str) -> Result<Vec<Song>> {
         let tag_lower = tag.to_lowercase();
+        // `file` is a pseudo-tag matching the path column, not song_tags
+        if tag_lower == "file" {
+            let sql = format!("SELECT {SONG_COLUMNS} FROM songs WHERE path = ?1 ORDER BY path");
+            let mut stmt = self.conn.prepare(&sql)?;
+            let mut songs: Vec<Song> = stmt
+                .query_map(params![value], song_from_row)?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            self.load_tags_for_songs(&mut songs)?;
+            return Ok(songs);
+        }
         let sql = if value.is_empty() {
             // MPD semantics: empty value matches songs with no value for this tag
             // (i.e. no song_tags row with this tag, or explicit empty-value row)
             format!(
                 "SELECT {SONG_COLUMNS} FROM songs
-                 WHERE id NOT IN (SELECT song_id FROM song_tags WHERE tag = ?1 AND value != '')
-                 ORDER BY path"
+ WHERE id NOT IN (SELECT song_id FROM song_tags WHERE tag = ?1 AND value != '')
+ ORDER BY path"
             )
         } else {
             format!(
                 "SELECT {SONG_COLUMNS} FROM songs
-                 WHERE id IN (SELECT song_id FROM song_tags WHERE tag = ?1 AND value = ?2)
-                 ORDER BY path"
+ WHERE id IN (SELECT song_id FROM song_tags WHERE tag = ?1 AND value = ?2)
+ ORDER BY path"
             )
         };
         let mut stmt = self.conn.prepare(&sql)?;
@@ -804,6 +814,17 @@ impl Database {
     /// Search songs by tag with case-insensitive substring match (for `search`/`searchcount`).
     pub fn search_songs_by_tag(&self, tag: &str, value: &str) -> Result<Vec<Song>> {
         let tag_lower = tag.to_lowercase();
+        // `file` is a pseudo-tag matching the path column, not song_tags
+        if tag_lower == "file" {
+            let pattern = format!("%{}%", value.replace('%', "\\%").replace('_', "\\_"));
+            let sql = format!("SELECT {SONG_COLUMNS} FROM songs WHERE path LIKE ?1 ESCAPE '\\' ORDER BY path");
+            let mut stmt = self.conn.prepare(&sql)?;
+            let mut songs: Vec<Song> = stmt
+                .query_map(params![pattern], song_from_row)?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            self.load_tags_for_songs(&mut songs)?;
+            return Ok(songs);
+        }
         // Use SQLite LIKE which is case-insensitive for ASCII by default.
         // Wrap value in % for substring matching.
         let pattern = format!("%{}%", value.replace('%', "\\%").replace('_', "\\_"));
