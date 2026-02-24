@@ -5,7 +5,7 @@ use lofty::probe::Probe;
 use rmpd_core::error::{Result, RmpdError};
 use rmpd_core::song::Song;
 use std::fs;
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 
 use crate::database::system_time_to_unix_secs;
 
@@ -36,7 +36,7 @@ impl MetadataExtractor {
 
         // Extract audio properties
         let properties = tagged_file.properties();
-        let duration = Some(Duration::from_secs(properties.duration().as_secs()));
+        let duration = Some(properties.duration());
         let sample_rate = properties.sample_rate();
         let channels = properties.channels();
         let bitrate = properties.audio_bitrate();
