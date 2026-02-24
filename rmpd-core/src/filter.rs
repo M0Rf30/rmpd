@@ -247,20 +247,28 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_quoted_value(&mut self) -> Result<String> {
-        // Expect single-quoted string
-        self.consume_str("'")?;
-        let start = self.pos;
+        // Accept both single and double quotes (matching MPD's ExpectQuoted)
+        let quote_char = self.peek_char()?;
+        if quote_char != '\'' && quote_char != '"' {
+            return Err(RmpdError::ParseError("Quoted string expected".to_owned()));
+        }
+        self.pos += 1; // consume opening quote
+
+        let mut result = String::new();
         while self.pos < self.input.len() {
             let ch = self.peek_char()?;
-            if ch == '\'' {
-                let value = self.input[start..self.pos].to_string();
+            if ch == quote_char {
                 self.pos += 1; // consume closing quote
-                return Ok(value);
+                return Ok(result);
             } else if ch == '\\' && self.pos + 1 < self.input.len() {
-                // Skip escaped character
-                self.pos += 2;
-            } else {
+                // Backslash escapes the following character
                 self.pos += 1;
+                let escaped = self.peek_char()?;
+                result.push(escaped);
+                self.pos += 1;
+            } else {
+                result.push(ch);
+                self.pos += ch.len_utf8();
             }
         }
         Err(RmpdError::ParseError("Unterminated string".to_owned()))
@@ -372,5 +380,24 @@ mod tests {
         let (sql, params) = expr.to_sql();
         assert!(sql.contains("LIKE"));
         assert_eq!(params, vec!["Radio%"]);
+    }
+
+    #[test]
+    fn test_double_quoted_values() {
+        // MPD clients send double-quoted values after protocol unquoting
+        let expr = FilterExpression::parse("(Artist == \"Amon Tobin\")").unwrap();
+        let (sql, params) = expr.to_sql();
+        assert_eq!(sql, "artist = ?");
+        assert_eq!(params, vec!["Amon Tobin"]);
+    }
+
+    #[test]
+    fn test_double_quoted_with_escape() {
+        // Backslash-escaped characters inside double quotes
+        let expr =
+            FilterExpression::parse(r#"(Artist == "Guns \"N\" Roses")"#).unwrap();
+        let (sql, params) = expr.to_sql();
+        assert_eq!(sql, "artist = ?");
+        assert_eq!(params, vec![r#"Guns "N" Roses"#]);
     }
 }

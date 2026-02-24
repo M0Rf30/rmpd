@@ -250,17 +250,60 @@ pub async fn handle_list_command(
     };
 
     // If filter is provided, get filtered results
-    let values = if let (Some(ft), Some(fv)) = (filter_tag, filter_value) {
-        match db.list_filtered(tag, ft, fv) {
-            Ok(v) => v,
-            Err(e) => {
-                return ResponseBuilder::error(
-                    ACK_ERROR_SYSTEM,
-                    0,
-                    "list",
-                    &format!("query error: {e}"),
-                );
+    let values = if let Some(ft) = filter_tag {
+        if ft.starts_with('(') {
+            // Filter expression
+            match rmpd_core::filter::FilterExpression::parse(ft) {
+                Ok(filter) => match db.find_songs_filter(&filter) {
+                    Ok(songs) => {
+                        // Extract unique values of the requested tag
+                        let mut seen = std::collections::BTreeSet::new();
+                        for song in &songs {
+                            let val = get_tag_value(song, tag);
+                            if !val.is_empty() {
+                                seen.insert(val.into_owned());
+                            }
+                        }
+                        seen.into_iter().collect()
+                    }
+                    Err(e) => {
+                        return ResponseBuilder::error(
+                            ACK_ERROR_SYSTEM,
+                            0,
+                            "list",
+                            &format!("query error: {e}"),
+                        );
+                    }
+                },
+                Err(e) => {
+                    return ResponseBuilder::error(
+                        ACK_ERROR_ARG,
+                        0,
+                        "list",
+                        &format!("filter parse error: {e}"),
+                    );
+                }
             }
+        } else if let Some(fv) = filter_value {
+            // Traditional tag/value filter
+            match db.list_filtered(tag, ft, fv) {
+                Ok(v) => v,
+                Err(e) => {
+                    return ResponseBuilder::error(
+                        ACK_ERROR_SYSTEM,
+                        0,
+                        "list",
+                        &format!("query error: {e}"),
+                    );
+                }
+            }
+        } else {
+            return ResponseBuilder::error(
+                ACK_ERROR_ARG,
+                0,
+                "list",
+                "missing filter value",
+            );
         }
     } else {
         // No filter, list all values
@@ -278,7 +321,6 @@ pub async fn handle_list_command(
                 );
             }
         };
-
         match result {
             Ok(v) => v,
             Err(e) => {
@@ -322,7 +364,30 @@ pub async fn handle_count_command(
     }
 
     // Get songs based on filters
-    let songs = if filters.len() == 1 {
+    let songs = if filters[0].0.starts_with('(') {
+        // Parse as filter expression
+        match rmpd_core::filter::FilterExpression::parse(&filters[0].0) {
+            Ok(filter) => match db.find_songs_filter(&filter) {
+                Ok(s) => s,
+                Err(e) => {
+                    return ResponseBuilder::error(
+                        ACK_ERROR_SYSTEM,
+                        0,
+                        "count",
+                        &format!("query error: {e}"),
+                    );
+                }
+            },
+            Err(e) => {
+                return ResponseBuilder::error(
+                    ACK_ERROR_ARG,
+                    0,
+                    "count",
+                    &format!("filter parse error: {e}"),
+                );
+            }
+        }
+    } else if filters.len() == 1 {
         match db.find_songs(&filters[0].0, &filters[0].1) {
             Ok(s) => s,
             Err(e) => {

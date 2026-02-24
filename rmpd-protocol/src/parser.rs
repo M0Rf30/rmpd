@@ -963,29 +963,52 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
                     .parse_next(input)?
                     .filter(|s| !s.is_empty());
                 (None, None, group_type)
-            } else if let Some(ft) = next_token {
-                // Format: list TAG FILTER_TAG FILTER_VALUE [group GROUPTYPE]
-                let _ = space0.parse_next(input)?;
-                let fv = parse_quoted_or_unquoted.parse_next(input)?;
-                let _ = space0.parse_next(input)?;
-
-                // Check for optional "group" keyword
-                let saved_input2 = *input;
-                let group_keyword = opt(parse_quoted_or_unquoted)
-                    .parse_next(input)?
-                    .filter(|s| !s.is_empty());
-
-                let group_type = if group_keyword.as_deref() == Some("group") {
+            } else if let Some(ref ft) = next_token {
+                if ft.starts_with('(') {
+                    // Filter expression: list TAG "(expr)" [group GROUPTYPE]
                     let _ = space0.parse_next(input)?;
-                    opt(parse_quoted_or_unquoted)
-                        .parse_next(input)?
-                        .filter(|s| !s.is_empty())
-                } else {
-                    *input = saved_input2;
-                    None
-                };
 
-                (Some(ft), Some(fv), group_type)
+                    // Check for optional "group" keyword
+                    let saved_input2 = *input;
+                    let group_keyword = opt(parse_quoted_or_unquoted)
+                        .parse_next(input)?
+                        .filter(|s| !s.is_empty());
+
+                    let group_type = if group_keyword.as_deref() == Some("group") {
+                        let _ = space0.parse_next(input)?;
+                        opt(parse_quoted_or_unquoted)
+                            .parse_next(input)?
+                            .filter(|s| !s.is_empty())
+                    } else {
+                        *input = saved_input2;
+                        None
+                    };
+
+                    (Some(next_token.unwrap()), None, group_type)
+                } else {
+                    // Traditional: list TAG FILTER_TAG FILTER_VALUE [group GROUPTYPE]
+                    let _ = space0.parse_next(input)?;
+                    let fv = parse_quoted_or_unquoted.parse_next(input)?;
+                    let _ = space0.parse_next(input)?;
+
+                    // Check for optional "group" keyword
+                    let saved_input2 = *input;
+                    let group_keyword = opt(parse_quoted_or_unquoted)
+                        .parse_next(input)?
+                        .filter(|s| !s.is_empty());
+
+                    let group_type = if group_keyword.as_deref() == Some("group") {
+                        let _ = space0.parse_next(input)?;
+                        opt(parse_quoted_or_unquoted)
+                            .parse_next(input)?
+                            .filter(|s| !s.is_empty())
+                    } else {
+                        *input = saved_input2;
+                        None
+                    };
+
+                    (Some(next_token.unwrap()), Some(fv), group_type)
+                }
             } else {
                 // Format: list TAG
                 *input = saved_input;
@@ -1012,47 +1035,79 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
             Ok(Command::LsInfo { path })
         }
         "count" => {
-            // Parse filter pairs: TAG VALUE [TAG VALUE ...] [group GROUPTAG]
-            let mut filters = Vec::new();
-
-            loop {
-                let _ = space0.parse_next(input)?;
-                if input.is_empty() {
-                    break;
-                }
-
-                let saved_input = *input;
-                let tag = match opt(parse_quoted_or_unquoted).parse_next(input)? {
-                    Some(t) if !t.is_empty() => t,
-                    _ => break,
-                };
-
-                // Check for "group" keyword
-                if tag == "group" {
-                    *input = saved_input;
-                    break;
-                }
-
-                let _ = space0.parse_next(input)?;
-                let value = parse_quoted_or_unquoted.parse_next(input)?;
-                filters.push((tag, value));
-            }
-
-            // Parse optional group
+            let first = parse_quoted_or_unquoted.parse_next(input)?;
             let _ = space0.parse_next(input)?;
-            let group = if !input.is_empty() {
-                let keyword = opt(parse_quoted_or_unquoted).parse_next(input)?;
-                if keyword.as_deref() == Some("group") {
-                    let _ = space0.parse_next(input)?;
-                    opt(parse_quoted_or_unquoted).parse_next(input)?
+
+            // Check if this is a filter expression (starts with '(')
+            if first.starts_with('(') {
+                // Filter expression - treat as single filter
+                let filters = vec![(first, String::new())];
+
+                // Parse optional group
+                let group = if !input.is_empty() {
+                    let saved = *input;
+                    let keyword = opt(parse_quoted_or_unquoted).parse_next(input)?;
+                    if keyword.as_deref() == Some("group") {
+                        let _ = space0.parse_next(input)?;
+                        opt(parse_quoted_or_unquoted).parse_next(input)?
+                    } else {
+                        *input = saved;
+                        None
+                    }
                 } else {
                     None
-                }
-            } else {
-                None
-            };
+                };
 
-            Ok(Command::Count { filters, group })
+                Ok(Command::Count { filters, group })
+            } else {
+                // Traditional syntax: TAG VALUE [TAG VALUE ...] [group GROUPTAG]
+            let mut filters = Vec::new();
+                // Check for "group" keyword on the first token
+                if first == "group" {
+                    let _ = space0.parse_next(input)?;
+                    let group = opt(parse_quoted_or_unquoted).parse_next(input)?;
+                    return Ok(Command::Count { filters, group });
+                }
+                let value = parse_quoted_or_unquoted.parse_next(input)?;
+                filters.push((first, value));
+
+                // Parse additional tag-value pairs
+                loop {
+                    let _ = space0.parse_next(input)?;
+                    if input.is_empty() {
+                        break;
+                    }
+                let saved_input = *input;
+                    let tag = match opt(parse_quoted_or_unquoted).parse_next(input)? {
+                        Some(t) if !t.is_empty() => t,
+                        _ => break,
+                    };
+                if tag == "group" {
+                        *input = saved_input;
+                        break;
+                    }
+
+                    let _ = space0.parse_next(input)?;
+                    let next_value = parse_quoted_or_unquoted.parse_next(input)?;
+                    filters.push((tag, next_value));
+                }
+
+                // Parse optional group
+                let _ = space0.parse_next(input)?;
+                let group = if !input.is_empty() {
+                    let keyword = opt(parse_quoted_or_unquoted).parse_next(input)?;
+                    if keyword.as_deref() == Some("group") {
+                        let _ = space0.parse_next(input)?;
+                        opt(parse_quoted_or_unquoted).parse_next(input)?
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                Ok(Command::Count { filters, group })
+            }
         }
         "searchcount" => {
             let tag = parse_string.parse_next(input)?;
@@ -1577,9 +1632,35 @@ fn parse_quoted_or_unquoted(input: &mut &str) -> PResult<String> {
 
 fn parse_quoted_string(input: &mut &str) -> PResult<String> {
     let _ = '"'.parse_next(input)?;
-    let content = take_till(0.., |c| c == '"').parse_next(input)?;
-    let _ = '"'.parse_next(input)?;
-    Ok(content.to_string())
+    let mut result = String::new();
+    let mut chars = input.chars();
+    let mut consumed = 0;
+    loop {
+        match chars.next() {
+            Some('"') => {
+                consumed += 1;
+                break;
+            }
+            Some('\\') => {
+                consumed += 1;
+                // Backslash escapes the following character
+                match chars.next() {
+                    Some(c) => {
+                        consumed += c.len_utf8();
+                        result.push(c);
+                    }
+                    None => return Err(ErrMode::Cut(ContextError::default())),
+                }
+            }
+            Some(c) => {
+                consumed += c.len_utf8();
+                result.push(c);
+            }
+            None => return Err(ErrMode::Cut(ContextError::default())),
+        }
+    }
+    *input = &input[consumed..];
+    Ok(result)
 }
 
 #[cfg(test)]
