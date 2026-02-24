@@ -16,6 +16,7 @@ ignored = ["bytes", "thiserror"]
 
 [dependencies]
 rmpd-core.workspace = true
+camino.workspace = true
 rmpd-library.workspace = true
 rmpd-player.workspace = true
 tokio.workspace = true

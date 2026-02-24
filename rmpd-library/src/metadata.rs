@@ -1,4 +1,9 @@
 use camino::Utf8PathBuf;
+use lofty::config::ParseOptions;
+use lofty::flac::FlacFile;
+use lofty::mp4::{AtomData, AtomIdent, Mp4File};
+use lofty::mpeg::MpegFile;
+use lofty::ogg::{OpusFile, VorbisFile};
 use lofty::picture::PictureType;
 use lofty::prelude::*;
 use lofty::probe::Probe;
@@ -6,6 +11,7 @@ use lofty::tag::ItemKey;
 use rmpd_core::error::{Result, RmpdError};
 use rmpd_core::song::Song;
 use std::fs;
+use std::io::BufReader;
 use std::time::SystemTime;
 
 use crate::database::system_time_to_unix_secs;
@@ -265,5 +271,169 @@ impl MetadataExtractor {
         } else {
             false
         }
+    }
+    /// Read raw key-value pairs directly from the audio file.
+    ///
+    /// Unlike `extract_from_file`, this returns the raw format-specific tag fields
+    /// as they appear in the file, not normalized to rmpd's internal tag names.
+    /// Used by the `readcomments` MPD command.
+    pub fn read_raw_comments(path: &Utf8PathBuf) -> Result<Vec<(String, String)>> {
+        let ext = path
+            .extension()
+            .map(|e| e.to_lowercase())
+            .unwrap_or_default();
+
+        match ext.as_str() {
+            "flac" => MetadataExtractor::read_vorbis_comments_from_flac(path),
+            "ogg" => MetadataExtractor::read_vorbis_comments_from_ogg(path),
+            "opus" => MetadataExtractor::read_vorbis_comments_from_opus(path),
+            "mp3" => MetadataExtractor::read_comments_from_id3v2(path),
+            "m4a" | "aac" => MetadataExtractor::read_comments_from_mp4(path),
+            _ => MetadataExtractor::read_comments_generic(path),
+        }
+    }
+
+    fn read_vorbis_comments_from_flac(path: &Utf8PathBuf) -> Result<Vec<(String, String)>> {
+        let file = std::fs::File::open(path.as_str())
+            .map_err(|e| RmpdError::Library(format!("Failed to open file: {e}")))?;
+        let mut reader = BufReader::new(file);
+        let flac = FlacFile::read_from(&mut reader, ParseOptions::default())
+            .map_err(|e| RmpdError::Library(format!("Failed to read FLAC: {e}")))?;
+        let mut pairs = Vec::new();
+        if let Some(vorbis) = flac.vorbis_comments() {
+            for (key, value) in vorbis.items() {
+                pairs.push((key.to_string(), value.to_string()));
+            }
+        }
+        Ok(pairs)
+    }
+
+    fn read_vorbis_comments_from_ogg(path: &Utf8PathBuf) -> Result<Vec<(String, String)>> {
+        let file = std::fs::File::open(path.as_str())
+            .map_err(|e| RmpdError::Library(format!("Failed to open file: {e}")))?;
+        let mut reader = BufReader::new(file);
+        let ogg = VorbisFile::read_from(&mut reader, ParseOptions::default())
+            .map_err(|e| RmpdError::Library(format!("Failed to read OGG: {e}")))?;
+        let mut pairs = Vec::new();
+        for (key, value) in ogg.vorbis_comments().items() {
+            pairs.push((key.to_string(), value.to_string()));
+        }
+        Ok(pairs)
+    }
+
+    fn read_vorbis_comments_from_opus(path: &Utf8PathBuf) -> Result<Vec<(String, String)>> {
+        let file = std::fs::File::open(path.as_str())
+            .map_err(|e| RmpdError::Library(format!("Failed to open file: {e}")))?;
+        let mut reader = BufReader::new(file);
+        let opus = OpusFile::read_from(&mut reader, ParseOptions::default())
+            .map_err(|e| RmpdError::Library(format!("Failed to read Opus: {e}")))?;
+        let mut pairs = Vec::new();
+        for (key, value) in opus.vorbis_comments().items() {
+            pairs.push((key.to_string(), value.to_string()));
+        }
+        Ok(pairs)
+    }
+
+    fn read_comments_from_id3v2(path: &Utf8PathBuf) -> Result<Vec<(String, String)>> {
+        use lofty::id3::v2::Frame;
+        let file = std::fs::File::open(path.as_str())
+            .map_err(|e| RmpdError::Library(format!("Failed to open file: {e}")))?;
+        let mut reader = BufReader::new(file);
+        let mpeg = MpegFile::read_from(&mut reader, ParseOptions::default())
+            .map_err(|e| RmpdError::Library(format!("Failed to read MP3: {e}")))?;
+        let mut pairs = Vec::new();
+        if let Some(id3v2) = mpeg.id3v2() {
+            // MPD only calls OnPair for TXXX (user-defined text) frames,
+            // NOT standard text frames (TIT2, TPE1, etc.). Match that behavior.
+            for frame in id3v2 {
+                if let Frame::UserText(f) = &frame {
+                    let key = f.description.as_ref().to_string();
+                    let value = f.content.as_ref().to_string();
+                    if !key.is_empty() {
+                        pairs.push((key, value));
+                    }
+                }
+            }
+        }
+        Ok(pairs)
+    }
+
+    /// Map a 4-byte MP4 fourcc atom identifier to a human-readable key name.
+    fn fourcc_to_key(fourcc: &[u8; 4]) -> Option<&'static str> {
+        match fourcc {
+            b"\xa9nam" => Some("title"),
+            b"\xa9ART" => Some("artist"),
+            b"\xa9alb" => Some("album"),
+            b"aART" => Some("album_artist"),
+            b"\xa9day" => Some("date"),
+            b"trkn" => Some("track"),
+            b"disk" => Some("disc"),
+            b"\xa9gen" => Some("genre"),
+            b"gnre" => Some("genre"),
+            b"\xa9wrt" => Some("composer"),
+            b"\xa9cmt" => Some("comment"),
+            b"cpil" => Some("compilation"),
+            b"\xa9grp" => Some("grouping"),
+            b"\xa9lyr" => Some("lyrics"),
+            b"\xa9too" => Some("encoder"),
+            b"soal" => Some("sort_album"),
+            b"soar" => Some("sort_artist"),
+            b"soaa" => Some("sort_album_artist"),
+            b"sonm" => Some("sort_title"),
+            b"soco" => Some("sort_composer"),
+            b"tmpo" => Some("bpm"),
+            b"rtng" => Some("rating"),
+            b"desc" => Some("description"),
+            _ => None,
+        }
+    }
+
+    fn read_comments_from_mp4(path: &Utf8PathBuf) -> Result<Vec<(String, String)>> {
+        let file = std::fs::File::open(path.as_str())
+            .map_err(|e| RmpdError::Library(format!("Failed to open file: {e}")))?;
+        let mut reader = BufReader::new(file);
+        let mp4 = Mp4File::read_from(&mut reader, ParseOptions::default())
+            .map_err(|e| RmpdError::Library(format!("Failed to read MP4: {e}")))?;
+        let mut pairs = Vec::new();
+        if let Some(ilst) = mp4.ilst() {
+            for atom in ilst {
+                let key = match atom.ident() {
+                    AtomIdent::Fourcc(fourcc) => {
+                        MetadataExtractor::fourcc_to_key(fourcc).map(|s| s.to_string())
+                    }
+                    AtomIdent::Freeform { name, .. } => Some(name.as_ref().to_string()),
+                };
+                if let Some(key) = key {
+                    for data in atom.data() {
+                        let value = match data {
+                            AtomData::UTF8(s) | AtomData::UTF16(s) => s.clone(),
+                            AtomData::Bool(b) => if *b { "1" } else { "0" }.to_string(),
+                            _ => continue,
+                        };
+                        pairs.push((key.clone(), value));
+                    }
+                }
+            }
+        }
+        Ok(pairs)
+    }
+
+    fn read_comments_generic(path: &Utf8PathBuf) -> Result<Vec<(String, String)>> {
+        let tagged_file = Probe::open(path.as_str())
+            .map_err(|e| RmpdError::Library(format!("Failed to open file: {e}")))?
+            .read()
+            .map_err(|e| RmpdError::Library(format!("Failed to read file: {e}")))?;
+        let mut pairs = Vec::new();
+        if let Some(tag) = tagged_file.primary_tag().or_else(|| tagged_file.first_tag()) {
+            let tag_type = tag.tag_type();
+            for item in tag.items() {
+                if let Some(key) = item.key().map_key(tag_type) {
+                    if let Some(value) = item.value().text() {
+                        pairs.push((key.to_string(), value.to_string()));
+                    }
+                }
+            }
+        }
+        Ok(pairs)
     }
 }
