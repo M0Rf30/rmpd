@@ -195,27 +195,44 @@ impl ResponseBuilder {
 
     pub fn song(&mut self, song: &Song, position: Option<u32>, id: Option<u32>) -> &mut Self {
         self.field("file", &song.path);
-
-        if let Some(pos) = position {
-            self.field("Pos", pos);
+        // MPD order: Last-Modified, Added, Format, then tags, then Time/duration, then Pos/Id
+        // Last-Modified and Added timestamps
+        if song.last_modified > 0 {
+            let ts = crate::commands::utils::format_iso8601_timestamp(song.last_modified);
+            self.field("Last-Modified", &ts);
         }
-        if let Some(song_id) = id {
-            self.field("Id", song_id);
+        if song.added_at > 0 {
+            let ts = crate::commands::utils::format_iso8601_timestamp(song.added_at);
+            self.field("Added", &ts);
         }
 
-        self.optional_field("Title", song.title.as_ref());
+        // Format: samplerate:bits:channels (e.g. "44100:16:2", "44100:f:2")
+        if let Some(sr) = song.sample_rate {
+            let bits = match song.bits_per_sample {
+                Some(0) | None => "f".to_string(),  // float
+                Some(b) => b.to_string(),
+            };
+            let ch = song.channels.unwrap_or(2);
+            self.field("Format", format!("{}:{}:{}", sr, bits, ch));
+        }
+
+        // Tags in MPD canonical order
         self.optional_field("Artist", song.artist.as_ref());
-        self.optional_field("Album", song.album.as_ref());
         self.optional_field("AlbumArtist", song.album_artist.as_ref());
+        self.optional_field("ArtistSort", song.artist_sort.as_ref());
+        self.optional_field("AlbumArtistSort", song.album_artist_sort.as_ref());
+        self.optional_field("Title", song.title.as_ref());
+        self.optional_field("Album", song.album.as_ref());
         self.optional_field("Track", song.track);
-        self.optional_field("Disc", song.disc);
         self.optional_field("Date", song.date.as_ref());
+        self.optional_field("OriginalDate", song.original_date.as_ref());
         self.optional_field("Genre", song.genre.as_ref());
+        self.optional_field("Disc", song.disc);
+        self.optional_field("Label", song.label.as_ref());
         self.optional_field("Composer", song.composer.as_ref());
         self.optional_field("Performer", song.performer.as_ref());
-
+        self.optional_field("Comment", song.comment.as_ref());
         // MusicBrainz IDs
-        self.optional_field("MUSICBRAINZ_TRACKID", song.musicbrainz_trackid.as_ref());
         self.optional_field("MUSICBRAINZ_ALBUMID", song.musicbrainz_albumid.as_ref());
         self.optional_field("MUSICBRAINZ_ARTISTID", song.musicbrainz_artistid.as_ref());
         self.optional_field(
@@ -230,16 +247,19 @@ impl ResponseBuilder {
             "MUSICBRAINZ_RELEASETRACKID",
             song.musicbrainz_releasetrackid.as_ref(),
         );
-
-        // Extended metadata
-        self.optional_field("ArtistSort", song.artist_sort.as_ref());
-        self.optional_field("AlbumArtistSort", song.album_artist_sort.as_ref());
-        self.optional_field("OriginalDate", song.original_date.as_ref());
-        self.optional_field("Label", song.label.as_ref());
-
+        self.optional_field("MUSICBRAINZ_TRACKID", song.musicbrainz_trackid.as_ref());
+        // Duration
         if let Some(duration) = song.duration {
             self.field("Time", duration.as_secs());
             self.field("duration", format!("{:.3}", duration.as_secs_f64()));
+        }
+
+        // Queue position/id (at the end, matching MPD)
+        if let Some(pos) = position {
+            self.field("Pos", pos);
+        }
+        if let Some(song_id) = id {
+            self.field("Id", song_id);
         }
 
         self
