@@ -322,17 +322,29 @@ impl<'a> Parser<'a> {
 fn tag_to_column(tag: &str) -> &str {
     match tag.to_lowercase().as_str() {
         "artist" => "artist",
+        "artistsort" => "artist_sort",
         "albumartist" => "album_artist",
+        "albumartistsort" => "album_artist_sort",
         "album" => "album",
         "title" => "title",
         "track" => "track",
         "date" => "date",
         "year" => "date", // year is stored in date column
+        "originaldate" => "original_date",
         "genre" => "genre",
         "composer" => "composer",
         "performer" => "performer",
         "disc" => "disc",
         "comment" => "comment",
+        "grouping" => "grouping",
+        "label" => "label",
+        "musicbrainz_artistid" => "musicbrainz_artistid",
+        "musicbrainz_albumid" => "musicbrainz_albumid",
+        "musicbrainz_albumartistid" => "musicbrainz_albumartistid",
+        "musicbrainz_trackid" => "musicbrainz_trackid",
+        "musicbrainz_releasetrackid" => "musicbrainz_releasetrackid",
+        "musicbrainz_releasegroupid" => "musicbrainz_releasegroupid",
+        "musicbrainz_workid" => "musicbrainz_workid",
         "file" => "path",
         _ => tag, // fallback to tag name
     }
