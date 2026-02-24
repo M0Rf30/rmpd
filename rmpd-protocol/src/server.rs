@@ -460,13 +460,14 @@ async fn handle_command(
             tag,
             filter_tag,
             filter_value,
-            group: _,
+            group,
         } => {
             database::handle_list_command(
                 state,
                 &tag,
                 filter_tag.as_deref(),
                 filter_value.as_deref(),
+                group.as_deref(),
             )
             .await
         }
@@ -536,6 +537,9 @@ async fn handle_command(
         }
         Command::Unknown(cmd) => {
             ResponseBuilder::error(ACK_ERROR_UNKNOWN, 0, &cmd, "unknown command")
+        }
+        Command::UnknownSubcmd(main_cmd, _sub) => {
+            ResponseBuilder::error(crate::commands::utils::ACK_ERROR_ARG, 0, &main_cmd, "Unknown sub command")
         }
         Command::Repeat { enabled } => options::handle_repeat_command(state, enabled).await,
         Command::Random { enabled } => options::handle_random_command(state, enabled).await,

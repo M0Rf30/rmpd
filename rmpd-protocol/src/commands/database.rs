@@ -231,13 +231,100 @@ pub async fn handle_list_command(
     tag: &str,
     filter_tag: Option<&str>,
     filter_value: Option<&str>,
+    group: Option<&str>,
 ) -> String {
     let db = match open_db(state, "list") {
         Ok(d) => d,
         Err(e) => return e,
     };
 
-    // If filter is provided, get filtered results
+    // For grouped queries we need the full song list to extract both the group tag
+    // and the requested tag. For non-grouped queries we can use the optimised path.
+    if let Some(group_tag) = group {
+        // Grouped: get all matching songs, then group by group_tag
+        let songs = if let Some(ft) = filter_tag {
+            if ft.starts_with('(') {
+                match rmpd_core::filter::FilterExpression::parse(ft) {
+                    Ok(filter) => match db.find_songs_filter(&filter) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            return ResponseBuilder::error(
+                                ACK_ERROR_SYSTEM, 0, "list",
+                                &format!("query error: {e}"),
+                            );
+                        }
+                    },
+                    Err(e) => {
+                        return ResponseBuilder::error(
+                            ACK_ERROR_ARG, 0, "list",
+                            &format!("filter parse error: {e}"),
+                        );
+                    }
+                }
+            } else if let Some(fv) = filter_value {
+                match db.find_songs(ft, fv) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        return ResponseBuilder::error(
+                            ACK_ERROR_SYSTEM, 0, "list",
+                            &format!("query error: {e}"),
+                        );
+                    }
+                }
+            } else {
+                return ResponseBuilder::error(ACK_ERROR_ARG, 0, "list", "missing filter value");
+            }
+        } else {
+            match db.get_all_songs() {
+                Ok(s) => s,
+                Err(e) => {
+                    return ResponseBuilder::error(
+                        ACK_ERROR_SYSTEM, 0, "list",
+                        &format!("query error: {e}"),
+                    );
+                }
+            }
+        };
+
+        // Build map: group_value -> BTreeSet<tag_value> (sorted set)
+        // Group values are sorted by MPD's std::map order (lexicographic)
+        let mut groups: std::collections::BTreeMap<String, std::collections::BTreeSet<String>> =
+            std::collections::BTreeMap::new();
+
+        let group_tag_lower = group_tag.to_lowercase();
+        let tag_lower = tag.to_lowercase();
+        for song in &songs {
+            let group_vals = song.tag_values_with_fallback(&group_tag_lower);
+            let tag_vals = song.tag_values_with_fallback(&tag_lower);
+
+            let group_vals: Vec<&str> = if group_vals.is_empty() { vec![""] } else { group_vals };
+
+            for gv in &group_vals {
+                let tag_set = groups.entry(gv.to_string()).or_default();
+                if tag_vals.is_empty() {
+                    tag_set.insert(String::new());
+                } else {
+                    for tv in &tag_vals {
+                        tag_set.insert(tv.to_string());
+                    }
+                }
+            }
+        }
+
+        let group_key = rmpd_core::song::canonical_tag_name(&group_tag_lower);
+        let tag_key = rmpd_core::song::canonical_tag_name(&tag_lower);
+
+        let mut resp = ResponseBuilder::new();
+        for (group_val, tag_vals) in &groups {
+            resp.field(group_key, group_val);
+            for tv in tag_vals {
+                resp.field(tag_key, tv);
+            }
+        }
+        return resp.ok();
+    }
+
+    // Non-grouped path (original logic)
     let values = if let Some(ft) = filter_tag {
         if ft.starts_with('(') {
             // Filter expression
@@ -308,7 +395,6 @@ pub async fn handle_list_command(
 
     let mut resp = ResponseBuilder::new();
     let tag_key = rmpd_core::song::canonical_tag_name(&tag.to_lowercase());
-
     for value in values {
         resp.field(tag_key, value);
     }
@@ -896,8 +982,57 @@ pub async fn handle_searchcount_command(
     value: &str,
     group: Option<&str>,
 ) -> String {
-    let filters = vec![(tag.to_string(), value.to_string())];
-    handle_count_command(state, &filters, group).await
+    let db = match open_db(state, "searchcount") {
+        Ok(d) => d,
+        Err(e) => return e,
+    };
+
+    // searchcount does case-insensitive substring matching (like `search`, not `count`)
+    let songs = match db.search_songs_by_tag(tag, value) {
+        Ok(s) => s,
+        Err(e) => {
+            return ResponseBuilder::error(
+                ACK_ERROR_SYSTEM, 0, "searchcount",
+                &format!("query error: {e}"),
+            );
+        }
+    };
+
+    let mut resp = ResponseBuilder::new();
+
+    if let Some(group_tag) = group {
+        use std::collections::HashMap;
+        let mut groups: HashMap<String, (usize, u64)> = HashMap::new();
+        for song in &songs {
+            let vals = song.tag_values_with_fallback(group_tag);
+            let vals: Vec<&str> = if vals.is_empty() { vec![""] } else { vals };
+            for group_value in vals {
+                let entry = groups.entry(group_value.to_string()).or_insert((0, 0));
+                entry.0 += 1;
+                if let Some(duration) = song.duration {
+                    entry.1 += duration.as_secs();
+                }
+            }
+        }
+        let mut sorted: Vec<_> = groups.into_iter().collect();
+        sorted.sort_by(|a, b| a.0.cmp(&b.0));
+        let tag_key = rmpd_core::song::canonical_tag_name(&group_tag.to_lowercase());
+        for (val, (count, playtime)) in &sorted {
+            resp.field(tag_key, val);
+            resp.field("songs", count);
+            resp.field("playtime", playtime);
+        }
+    } else {
+        let total_duration: u64 = songs
+            .iter()
+            .filter_map(|s| s.duration)
+            .map(|d| d.as_secs())
+            .sum();
+        resp.field("songs", songs.len());
+        resp.field("playtime", total_duration);
+    }
+
+    resp.ok()
 }
 
 /// Generate chromaprint fingerprint for audio file

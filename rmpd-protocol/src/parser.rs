@@ -425,6 +425,9 @@ pub enum Command {
 
     // Unknown/Invalid
     Unknown(String),
+    /// Unknown subcommand for a known command (e.g. `tagtypes list`, `protocol list`)
+    /// Fields: (main_command, unknown_subcommand)
+    UnknownSubcmd(String, String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -712,7 +715,7 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
                             subcommand: Some(ProtocolSubcommand::Disable { features }),
                         })
                     }
-                    _ => Ok(Command::Unknown(format!("protocol {subcommand_str}"))),
+                    _ => Ok(Command::UnknownSubcmd("protocol".to_string(), subcommand_str.to_string())),
                 }
             }
         }
@@ -770,7 +773,7 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
                             subcommand: Some(TagTypesSubcommand::Reset { tags }),
                         })
                     }
-                    _ => Ok(Command::Unknown(format!("tagtypes {subcommand_str}"))),
+                    _ => Ok(Command::UnknownSubcmd("tagtypes".to_string(), subcommand_str)),
                 }
             }
         }
@@ -1114,9 +1117,20 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
             let _ = space0.parse_next(input)?;
             let value = parse_quoted_or_unquoted.parse_next(input)?;
             let _ = space0.parse_next(input)?;
-            let group = opt(parse_string)
-                .parse_next(input)?
-                .filter(|s| !s.is_empty());
+            // Parse optional "group GROUPTAG" at end
+            let group = if !input.is_empty() {
+                let saved = *input;
+                let keyword = opt(parse_quoted_or_unquoted).parse_next(input)?;
+                if keyword.as_deref() == Some("group") {
+                    let _ = space0.parse_next(input)?;
+                    opt(parse_quoted_or_unquoted).parse_next(input)?
+                } else {
+                    *input = saved;
+                    None
+                }
+            } else {
+                None
+            };
             Ok(Command::SearchCount { tag, value, group })
         }
         "getfingerprint" => {

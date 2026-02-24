@@ -217,50 +217,70 @@ pub async fn handle_tagtypes_command(
     resp.ok()
 }
 
+/// Known protocol features in MPD 0.24.x.
+/// Only `hide_playlists_in_root` is a negotiable feature; everything else
+/// (binary, idle, ranges, tags) is a hardcoded capability, not a feature flag.
+const KNOWN_PROTOCOL_FEATURES: &[&str] = &["hide_playlists_in_root"];
 pub async fn handle_protocol_command(
     conn_state: &mut ConnectionState,
     subcommand: Option<crate::parser::ProtocolSubcommand>,
 ) -> String {
+    use crate::commands::utils::ACK_ERROR_ARG;
     use crate::parser::ProtocolSubcommand;
-
     let mut resp = ResponseBuilder::new();
-
     match subcommand {
-        None | Some(ProtocolSubcommand::Available) => {
-            // List all currently enabled protocol features for this connection
-            // Based on MPD 0.24.x protocol features
-            let all_features = vec![
-                "binary",          // Binary responses
-                "command_list_ok", // Command lists with OK markers
-                "idle",            // Idle notifications
-                "ranges",          // Range syntax (START:END)
-                "tags",            // Tag type negotiation
-            ];
-
-            for feature in all_features {
+        None => {
+            // Bare `protocol` — list enabled features for this connection.
+            // By default none are enabled, so this returns just OK.
+            for feature in KNOWN_PROTOCOL_FEATURES {
                 if conn_state.is_feature_enabled(feature) {
-                    resp.field("feature", feature);
+                    resp.field("feature", *feature);
                 }
             }
         }
+        Some(ProtocolSubcommand::Available) => {
+            // List all known protocol features (regardless of enabled state)
+            for feature in KNOWN_PROTOCOL_FEATURES {
+                resp.field("feature", *feature);
+            }
+        }
         Some(ProtocolSubcommand::All) => {
-            // Enable all protocol features for this client
-            conn_state.enable_all_features();
+            // Enable all known protocol features for this client
+            conn_state.set_features(KNOWN_PROTOCOL_FEATURES.iter().map(|s| s.to_string()).collect());
         }
         Some(ProtocolSubcommand::Clear) => {
             // Disable all protocol features for this client
-            conn_state.disable_all_features();
+            conn_state.clear_features();
         }
         Some(ProtocolSubcommand::Enable { features }) => {
-            // Enable specific protocol features for this client
+            // Validate each feature name before enabling
+            for feature in &features {
+                if !KNOWN_PROTOCOL_FEATURES.contains(&feature.as_str()) {
+                    return ResponseBuilder::error(
+                        ACK_ERROR_ARG,
+                        0,
+                        "protocol",
+                        "Unknown protocol feature",
+                    );
+                }
+            }
             conn_state.enable_features(features);
         }
         Some(ProtocolSubcommand::Disable { features }) => {
-            // Disable specific protocol features for this client
+            // Validate each feature name before disabling
+            for feature in &features {
+                if !KNOWN_PROTOCOL_FEATURES.contains(&feature.as_str()) {
+                    return ResponseBuilder::error(
+                        ACK_ERROR_ARG,
+                        0,
+                        "protocol",
+                        "Unknown protocol feature",
+                    );
+                }
+            }
             conn_state.disable_features(features);
         }
     }
-
     resp.ok()
 }
 

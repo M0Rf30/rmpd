@@ -197,9 +197,34 @@ pub async fn handle_sticker_names_command(state: &AppState, uri: Option<&str>) -
 }
 
 pub async fn handle_sticker_types_command() -> String {
-    // List available sticker types (song is the primary type)
+    // List available sticker types, matching MPD's handle_sticker_types output order.
+    // MPD outputs: filter, playlist, song, then sticker_allowed_tags intersected with tag_mask.
     let mut resp = ResponseBuilder::new();
-    resp.field("sticker", "song");
+    resp.field("stickertype", "filter");
+    resp.field("stickertype", "playlist");
+    resp.field("stickertype", "song");
+    // Sticker-allowed tags (from MPD's AllowedTags.cxx), in enum order:
+    for tag in &[
+        "Artist",
+        "Album",
+        "AlbumArtist",
+        "Title",
+        "Genre",
+        "Composer",
+        "Performer",
+        "Conductor",
+        "Work",
+        "Ensemble",
+        "Location",
+        "Label",
+        "MUSICBRAINZ_ARTISTID",
+        "MUSICBRAINZ_ALBUMID",
+        "MUSICBRAINZ_ALBUMARTISTID",
+        "MUSICBRAINZ_RELEASETRACKID",
+        "MUSICBRAINZ_WORKID",
+    ] {
+        resp.field("stickertype", *tag);
+    }
     resp.ok()
 }
 

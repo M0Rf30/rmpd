@@ -204,13 +204,17 @@ pub async fn handle_unmount_command(state: &AppState, path: &str) -> String {
 /// - storage: path
 pub async fn handle_listmounts_command(state: &AppState) -> String {
     let mounts = state.mount_registry.list().await;
-
     let mut resp = ResponseBuilder::new();
+
+    // Always emit root mount first (empty path = music_dir itself).
+    // MPD always outputs this entry even with no explicit mounts.
+    let music_dir = state.music_dir.as_deref().unwrap_or("");
+    resp.field("mount", "");
+    resp.field("storage", music_dir);
     for mount in mounts {
         resp.field("mount", &mount.uri);
         resp.field("storage", &mount.path);
     }
-
     resp.ok()
 }
 
