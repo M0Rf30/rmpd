@@ -8,25 +8,46 @@ use super::utils::{
 };
 
 pub async fn handle_listplaylists_command(state: &AppState) -> String {
-    let db = match open_db(state, "listplaylists") {
-        Ok(d) => d,
-        Err(e) => return e,
+    let playlist_dir = match &state.playlist_dir {
+        Some(d) => d.clone(),
+        None => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "listplaylists", "playlist directory not configured"),
     };
 
-    match db.list_playlists() {
-        Ok(playlists) => {
-            let mut resp = ResponseBuilder::new();
-            for playlist in &playlists {
-                resp.field("playlist", &playlist.name);
-                let timestamp_str = format_iso8601_timestamp(playlist.last_modified);
-                resp.field("Last-Modified", &timestamp_str);
-            }
-            resp.ok()
-        }
+    let mut resp = ResponseBuilder::new();
+
+    // Read .m3u files from playlist directory, matching MPD's filesystem-based approach
+    let dir = match std::fs::read_dir(&playlist_dir) {
+        Ok(d) => d,
         Err(e) => {
-            ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "listplaylists", &format!("Error: {e}"))
+            return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "listplaylists", &format!("Error reading playlist directory: {e}"));
+        }
+    };
+
+    let mut entries: Vec<(String, i64)> = Vec::new();
+    for entry in dir.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("m3u") {
+            if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                let mtime = entry.metadata()
+                    .ok()
+                    .and_then(|m| m.modified().ok())
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0);
+                entries.push((stem.to_string(), mtime));
+            }
         }
     }
+
+    // Sort alphabetically to match MPD ordering
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+
+    for (name, mtime) in &entries {
+        resp.field("playlist", name);
+        let timestamp_str = format_iso8601_timestamp(*mtime);
+        resp.field("Last-Modified", &timestamp_str);
+    }
+            resp.ok()
 }
 
 pub async fn handle_save_command(
