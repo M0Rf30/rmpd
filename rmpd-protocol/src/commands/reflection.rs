@@ -44,7 +44,7 @@ pub async fn handle_commands_command() -> String {
         "listallinfo",
         "listfiles",
         "listmounts",
-        "listneighbors",
+
         "listpartitions",
         "listplaylist",
         "listplaylistinfo",
@@ -60,8 +60,8 @@ pub async fn handle_commands_command() -> String {
         "newpartition",
         "next",
         "notcommands",
-        "outputset",
         "outputs",
+        "outputset",
         "partition",
         "password",
         "pause",
@@ -176,7 +176,7 @@ pub async fn handle_tagtypes_command(
                 "Ensemble",
                 "Location",
                 "Grouping",
-                "Comment",
+
                 "Disc",
                 "Label",
                 "MUSICBRAINZ_ARTISTID",
