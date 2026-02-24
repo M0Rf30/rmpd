@@ -21,6 +21,38 @@ fn is_bogus_dsf_comment(s: &str) -> bool {
     trimmed.len() >= 16 && trimmed.chars().all(|c| c.is_ascii_hexdigit() || c == ' ')
 }
 
+/// MPD-canonical VorbisComment key -> tag name mapping.
+/// Derived from MPD's tag/Names.cxx (tag_item_names) + lib/xiph/XiphTags.cxx.
+/// Only these exact key names (case-insensitive) are recognized for structured tags.
+const VORBIS_TAG_MAP: &[(&str, &str)] = &[
+    ("title", "title"),
+    ("artist", "artist"),
+    ("album", "album"),
+    ("albumartist", "albumartist"),
+    ("albumartistsort", "albumartistsort"),
+    ("artistsort", "artistsort"),
+    ("composer", "composer"),
+    ("performer", "performer"),
+    ("comment", "comment"),
+    ("description", "comment"),
+    ("genre", "genre"),
+    ("track", "track"),
+    ("tracknumber", "track"),
+    ("disc", "disc"),
+    ("discnumber", "disc"),
+    ("date", "date"),
+    ("label", "label"),
+    ("originaldate", "originaldate"),
+    ("originalyear", "originalyear"),
+    ("musicbrainz_trackid", "musicbrainz_trackid"),
+    ("musicbrainz_albumid", "musicbrainz_albumid"),
+    ("musicbrainz_artistid", "musicbrainz_artistid"),
+    ("musicbrainz_albumartistid", "musicbrainz_albumartistid"),
+    ("musicbrainz_releasegroupid", "musicbrainz_releasegroupid"),
+    ("musicbrainz_releasetrackid", "musicbrainz_releasetrackid"),
+    ("musicbrainz_workid", "musicbrainz_workid"),
+];
+
 const ITEM_KEY_TAG_MAP: &[(ItemKey, &str)] = &[
     (ItemKey::TrackTitle, "title"),
     (ItemKey::TrackArtist, "artist"),
@@ -87,12 +119,82 @@ impl MetadataExtractor {
             .or_else(|| tagged_file.first_tag());
 
         tracing::debug!("extracting metadata from: {}", path);
-
         let mut tags: Vec<(String, String)> = Vec::new();
 
-        if let Some(tag) = tag {
-            let mut seen_tags: Vec<(ItemKey, String)> = Vec::new();
+        // For VorbisComment-based formats (FLAC/OGG/Opus), use raw key extraction
+        // with MPD's canonical key mapping to avoid lofty mapping non-standard key
+        // variants (e.g., "ALBUM ARTIST" with space) to the same ItemKey.
+        let is_vorbis_format = matches!(
+            tagged_file.file_type(),
+            lofty::file::FileType::Flac
+                | lofty::file::FileType::Vorbis
+                | lofty::file::FileType::Opus
+        );
 
+        if is_vorbis_format {
+            // For VorbisComment-based formats, read raw (key, value) pairs directly
+            // using lofty's format-specific API. This preserves the original raw key
+            // names and avoids lofty normalizing e.g. "ALBUM ARTIST" (space variant)
+            // to the same ItemKey as the canonical "ALBUMARTIST".
+            let raw_vc_pairs: Vec<(String, String)> = match tagged_file.file_type() {
+                lofty::file::FileType::Flac => {
+                    let file = std::fs::File::open(path.as_str()).ok();
+                    let mut pairs = Vec::new();
+                    if let Some(f) = file {
+                        let mut reader = BufReader::new(f);
+                        if let Ok(flac) = FlacFile::read_from(&mut reader, ParseOptions::default()) {
+                            if let Some(vc) = flac.vorbis_comments() {
+                                for (k, v) in vc.items() {
+                                    pairs.push((k.to_string(), v.to_string()));
+                                }
+                            }
+                        }
+                    }
+                    pairs
+                }
+                lofty::file::FileType::Vorbis => {
+                    let file = std::fs::File::open(path.as_str()).ok();
+                    let mut pairs: Vec<(String, String)> = Vec::new();
+                    if let Some(f) = file {
+                        let mut reader = BufReader::new(f);
+                        if let Ok(ogg) = VorbisFile::read_from(&mut reader, ParseOptions::default()) {
+                            for (k, v) in ogg.vorbis_comments().items() {
+                                pairs.push((k.to_string(), v.to_string()));
+                            }
+                        }
+                    }
+                    pairs
+                }
+                lofty::file::FileType::Opus => {
+                    let file = std::fs::File::open(path.as_str()).ok();
+                    let mut pairs: Vec<(String, String)> = Vec::new();
+                    if let Some(f) = file {
+                        let mut reader = BufReader::new(f);
+                        if let Ok(opus) = OpusFile::read_from(&mut reader, ParseOptions::default()) {
+                            for (k, v) in opus.vorbis_comments().items() {
+                                pairs.push((k.to_string(), v.to_string()));
+                            }
+                        }
+                    }
+                    pairs
+                }
+                _ => Vec::new(),
+            };
+            // Apply MPD-canonical key mapping to raw VorbisComment pairs
+            for (raw_key, val) in raw_vc_pairs {
+                if val.is_empty() {
+                    continue;
+                }
+                let key_lower = raw_key.to_lowercase();
+                if let Some(&tag_name) = VORBIS_TAG_MAP.iter()
+                    .find(|(k, _)| *k == key_lower)
+                    .map(|(_, v)| v)
+                {
+                    tags.push((tag_name.to_string(), val));
+                }
+            }
+        } else if let Some(tag) = tag {
+            let mut seen_tags: Vec<(ItemKey, String)> = Vec::new();
             for item in tag.items() {
                 if let Some(val) = item.value().text() {
                     if val.is_empty() {
@@ -101,7 +203,6 @@ impl MetadataExtractor {
                     seen_tags.push((item.key(), val.to_string()));
                 }
             }
-
             for (item_key, tag_name) in ITEM_KEY_TAG_MAP {
                 for (key, val) in &seen_tags {
                     if key == item_key {
