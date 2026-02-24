@@ -492,19 +492,18 @@ pub async fn handle_count_command(
     if let Some(group_tag) = group {
         // Group by specified tag — sorted output to match MPD
         use std::collections::HashMap;
-        let mut groups: HashMap<String, (usize, u64)> = HashMap::new();
+        let mut groups: HashMap<String, (usize, f64)> = HashMap::new();
         for song in &songs {
             let vals = song.tag_values_with_fallback(group_tag);
             let vals: Vec<&str> = if vals.is_empty() { vec![""] } else { vals };
             for group_value in vals {
-                let entry = groups.entry(group_value.to_string()).or_insert((0, 0));
+                let entry = groups.entry(group_value.to_string()).or_insert((0, 0.0));
                 entry.0 += 1;
                 if let Some(duration) = song.duration {
-                    entry.1 += duration.as_secs();
+                    entry.1 += duration.as_secs_f64();
                 }
             }
         }
-
         // Sort by tag value (MPD uses std::map which sorts lexicographically)
         let mut sorted: Vec<_> = groups.into_iter().collect();
         sorted.sort_by(|a, b| a.0.cmp(&b.0));
@@ -512,16 +511,17 @@ pub async fn handle_count_command(
         for (value, (count, playtime)) in &sorted {
             resp.field(tag_key, value);
             resp.field("songs", count);
-            resp.field("playtime", playtime);
+            resp.field("playtime", playtime.round() as u64);
         }
     } else {
         // No grouping - return totals
+        // Sum fractional seconds, then round (matches MPD which rounds total playtime)
         let total_duration: u64 = songs
             .iter()
             .filter_map(|s| s.duration)
-            .map(|d| d.as_secs())
-            .sum();
-
+            .map(|d| d.as_secs_f64())
+            .sum::<f64>()
+            .round() as u64;
         resp.field("songs", songs.len());
         resp.field("playtime", total_duration);
     }
@@ -990,15 +990,15 @@ pub async fn handle_searchcount_command(
 
     if let Some(group_tag) = group {
         use std::collections::HashMap;
-        let mut groups: HashMap<String, (usize, u64)> = HashMap::new();
+        let mut groups: HashMap<String, (usize, f64)> = HashMap::new();
         for song in &songs {
             let vals = song.tag_values_with_fallback(group_tag);
             let vals: Vec<&str> = if vals.is_empty() { vec![""] } else { vals };
             for group_value in vals {
-                let entry = groups.entry(group_value.to_string()).or_insert((0, 0));
+                let entry = groups.entry(group_value.to_string()).or_insert((0, 0.0));
                 entry.0 += 1;
                 if let Some(duration) = song.duration {
-                    entry.1 += duration.as_secs();
+                    entry.1 += duration.as_secs_f64();
                 }
             }
         }
@@ -1008,14 +1008,16 @@ pub async fn handle_searchcount_command(
         for (val, (count, playtime)) in &sorted {
             resp.field(tag_key, val);
             resp.field("songs", count);
-            resp.field("playtime", playtime);
+            resp.field("playtime", playtime.round() as u64);
         }
     } else {
+        // Sum fractional seconds, then round (matches MPD which rounds total playtime)
         let total_duration: u64 = songs
             .iter()
             .filter_map(|s| s.duration)
-            .map(|d| d.as_secs())
-            .sum();
+            .map(|d| d.as_secs_f64())
+            .sum::<f64>()
+            .round() as u64;
         resp.field("songs", songs.len());
         resp.field("playtime", total_duration);
     }
