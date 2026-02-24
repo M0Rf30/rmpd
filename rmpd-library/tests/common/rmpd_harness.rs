@@ -143,29 +143,6 @@ mod tests {
             id: 0,
             path: "/music/test.mp3".into(),
             duration: Some(Duration::from_secs(180)),
-            title: Some("Test Song".to_string()),
-            artist: Some("Test Artist".to_string()),
-            album: Some("Test Album".to_string()),
-            album_artist: None,
-            track: Some(1),
-            disc: None,
-            date: Some("2024".to_string()),
-            genre: Some("Rock".to_string()),
-            composer: None,
-            performer: None,
-            comment: None,
-            grouping: None,
-            musicbrainz_trackid: None,
-            musicbrainz_albumid: None,
-            musicbrainz_artistid: None,
-            musicbrainz_albumartistid: None,
-            musicbrainz_releasegroupid: None,
-            musicbrainz_releasetrackid: None,
-            musicbrainz_workid: None,
-            artist_sort: None,
-            album_artist_sort: None,
-            original_date: None,
-            label: None,
             sample_rate: Some(44100),
             channels: Some(2),
             bits_per_sample: Some(16),
@@ -176,6 +153,14 @@ mod tests {
             replay_gain_album_peak: None,
             added_at: 0,
             last_modified: 0,
+            tags: vec![
+                ("title".to_string(), "Test Song".to_string()),
+                ("artist".to_string(), "Test Artist".to_string()),
+                ("album".to_string(), "Test Album".to_string()),
+                ("track".to_string(), "1".to_string()),
+                ("date".to_string(), "2024".to_string()),
+                ("genre".to_string(), "Rock".to_string()),
+            ],
         }
     }
 
@@ -194,8 +179,8 @@ mod tests {
         assert!(id > 0);
 
         let retrieved = harness.get_song(id).unwrap().unwrap();
-        assert_eq!(retrieved.title, song.title);
-        assert_eq!(retrieved.artist, song.artist);
+        assert_eq!(retrieved.tag("title"), song.tag("title"));
+        assert_eq!(retrieved.tag("artist"), song.tag("artist"));
     }
 
     #[test]
@@ -204,12 +189,18 @@ mod tests {
 
         let mut song1 = create_test_song();
         song1.path = "/music/song1.mp3".into();
-        song1.artist = Some("Artist A".to_string());
+        song1.tags.retain(|(k, _)| k != "artist");
+        song1
+            .tags
+            .push(("artist".to_string(), "Artist A".to_string()));
         harness.add_song(&song1).unwrap();
 
         let mut song2 = create_test_song();
         song2.path = "/music/song2.mp3".into();
-        song2.artist = Some("Artist B".to_string());
+        song2.tags.retain(|(k, _)| k != "artist");
+        song2
+            .tags
+            .push(("artist".to_string(), "Artist B".to_string()));
         harness.add_song(&song2).unwrap();
 
         let artists = harness.list_artists().unwrap();
@@ -223,12 +214,14 @@ mod tests {
         let harness = RmpdTestHarness::new().unwrap();
 
         let mut song = create_test_song();
-        song.artist = Some("Target Artist".to_string());
+        song.tags.retain(|(k, _)| k != "artist");
+        song.tags
+            .push(("artist".to_string(), "Target Artist".to_string()));
         harness.add_song(&song).unwrap();
 
         let found = harness.find_by_artist("Target Artist").unwrap();
         assert_eq!(found.len(), 1);
-        assert_eq!(found[0].artist, Some("Target Artist".to_string()));
+        assert_eq!(found[0].tag("artist"), Some("Target Artist"));
     }
 
     #[test]

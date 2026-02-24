@@ -15,36 +15,13 @@ use camino::Utf8PathBuf;
 /// # use rmpd_core::test_utils::create_test_song;
 /// let song = create_test_song(1, "test");
 /// assert_eq!(song.id, 1);
-/// assert_eq!(song.title, Some("Song test".to_string()));
+/// assert_eq!(song.tag("title"), Some("Song test"));
 /// ```
 pub fn create_test_song(id: u64, name: &str) -> Song {
     Song {
         id,
         path: Utf8PathBuf::from(format!("song{}.mp3", name)),
-        title: Some(format!("Song {}", name)),
         duration: None,
-        artist: None,
-        album: None,
-        album_artist: None,
-        track: None,
-        disc: None,
-        date: None,
-        genre: None,
-        composer: None,
-        performer: None,
-        comment: None,
-        grouping: None,
-        musicbrainz_trackid: None,
-        musicbrainz_albumid: None,
-        musicbrainz_artistid: None,
-        musicbrainz_albumartistid: None,
-        musicbrainz_releasegroupid: None,
-        musicbrainz_releasetrackid: None,
-        musicbrainz_workid: None,
-        artist_sort: None,
-        album_artist_sort: None,
-        original_date: None,
-        label: None,
         sample_rate: None,
         channels: None,
         bits_per_sample: None,
@@ -55,6 +32,7 @@ pub fn create_test_song(id: u64, name: &str) -> Song {
         replay_gain_album_peak: None,
         added_at: 0,
         last_modified: 0,
+        tags: vec![("title".to_string(), format!("Song {}", name))],
     }
 }
 
@@ -71,8 +49,8 @@ pub fn create_test_song(id: u64, name: &str) -> Song {
 ///     Some("Test Artist"),
 ///     Some("Test Album"),
 /// );
-/// assert_eq!(song.title, Some("Test Title".to_string()));
-/// assert_eq!(song.artist, Some("Test Artist".to_string()));
+/// assert_eq!(song.tag("title"), Some("Test Title"));
+/// assert_eq!(song.tag("artist"), Some("Test Artist"));
 /// ```
 pub fn create_test_song_with_metadata(
     id: u64,
@@ -81,33 +59,20 @@ pub fn create_test_song_with_metadata(
     artist: Option<&str>,
     album: Option<&str>,
 ) -> Song {
+    let mut tags = Vec::new();
+    if let Some(v) = title {
+        tags.push(("title".to_string(), v.to_string()));
+    }
+    if let Some(v) = artist {
+        tags.push(("artist".to_string(), v.to_string()));
+    }
+    if let Some(v) = album {
+        tags.push(("album".to_string(), v.to_string()));
+    }
     Song {
         id,
         path: Utf8PathBuf::from(path),
-        title: title.map(String::from),
-        artist: artist.map(String::from),
-        album: album.map(String::from),
         duration: None,
-        album_artist: None,
-        track: None,
-        disc: None,
-        date: None,
-        genre: None,
-        composer: None,
-        performer: None,
-        comment: None,
-        grouping: None,
-        musicbrainz_trackid: None,
-        musicbrainz_albumid: None,
-        musicbrainz_artistid: None,
-        musicbrainz_albumartistid: None,
-        musicbrainz_releasegroupid: None,
-        musicbrainz_releasetrackid: None,
-        musicbrainz_workid: None,
-        artist_sort: None,
-        album_artist_sort: None,
-        original_date: None,
-        label: None,
         sample_rate: None,
         channels: None,
         bits_per_sample: None,
@@ -118,6 +83,7 @@ pub fn create_test_song_with_metadata(
         replay_gain_album_peak: None,
         added_at: 0,
         last_modified: 0,
+        tags,
     }
 }
 
@@ -129,7 +95,7 @@ mod tests {
     fn test_create_test_song() {
         let song = create_test_song(42, "test");
         assert_eq!(song.id, 42);
-        assert_eq!(song.title, Some("Song test".to_string()));
+        assert_eq!(song.tag("title"), Some("Song test"));
         assert_eq!(song.path.as_str(), "songtest.mp3");
     }
 
@@ -143,8 +109,8 @@ mod tests {
             Some("My Album"),
         );
         assert_eq!(song.id, 1);
-        assert_eq!(song.title, Some("My Title".to_string()));
-        assert_eq!(song.artist, Some("My Artist".to_string()));
-        assert_eq!(song.album, Some("My Album".to_string()));
+        assert_eq!(song.tag("title"), Some("My Title"));
+        assert_eq!(song.tag("artist"), Some("My Artist"));
+        assert_eq!(song.tag("album"), Some("My Album"));
     }
 }

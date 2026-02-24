@@ -55,41 +55,44 @@ impl FilterExpression {
         Parser::new(input).parse_expression()
     }
 
-    /// Convert filter expression to SQL WHERE clause
+    /// Convert filter expression to SQL WHERE clause using EXISTS subqueries on song_tags.
+    /// The songs table is referenced as `songs` (no alias).
     pub fn to_sql(&self) -> (String, Vec<String>) {
         match self {
             FilterExpression::Compare { tag, op, value } => {
-                let column = tag_to_column(tag);
-                let (sql_op, value_param) = match op {
-                    CompareOp::Equal => ("=", value.clone()),
-                    CompareOp::NotEqual => ("!=", value.clone()),
-                    CompareOp::Regex => {
-                        // Convert MPD regex to SQL LIKE pattern
-                        // Simple conversion: .* -> %, . -> _, keep others
-                        let pattern = value.replace(".*", "%").replace('.', "_");
-                        ("LIKE", pattern)
-                    }
-                    CompareOp::NotRegex => {
-                        let pattern = value.replace(".*", "%").replace('.', "_");
-                        ("NOT LIKE", pattern)
-                    }
-                    CompareOp::Less => ("<", value.clone()),
-                    CompareOp::Greater => (">", value.clone()),
-                    CompareOp::LessEqual => ("<=", value.clone()),
-                    CompareOp::GreaterEqual => (">=", value.clone()),
-                    CompareOp::Contains => {
-                        // contains: substring match -> LIKE '%value%'
-                        let pattern = format!("%{value}%");
-                        ("LIKE", pattern)
-                    }
-                    CompareOp::StartsWith => {
-                        // starts_with: prefix match -> LIKE 'value%'
-                        let pattern = format!("{value}%");
-                        ("LIKE", pattern)
-                    }
-                };
+                let tag_lower = tag.to_lowercase();
 
-                (format!("{column} {sql_op} ?"), vec![value_param])
+                // `file` tag matches against the path column directly
+                if tag_lower == "file" {
+                    let (sql_op, value_param) = op_to_sql(op, value);
+                    return (format!("path {sql_op} ?"), vec![value_param]);
+                }
+
+                // For tags with fallback chains, generate OR-ed EXISTS subqueries
+                let fallback_tags = tag_fallback_chain(&tag_lower);
+                let (sql_op, value_param) = op_to_sql(op, value);
+
+                if fallback_tags.len() == 1 {
+                    let sql = format!(
+                        "EXISTS (SELECT 1 FROM song_tags st WHERE st.song_id = songs.id AND st.tag = '{}' AND st.value {sql_op} ?)",
+                        fallback_tags[0]
+                    );
+                    (sql, vec![value_param])
+                } else {
+                    // Multiple fallback tags: EXISTS for first tag OR (NOT EXISTS first AND EXISTS second) etc.
+                    // Simplified: just OR the EXISTS clauses (matches MPD behavior for filter matching)
+                    let clauses: Vec<String> = fallback_tags
+                        .iter()
+                        .map(|t| {
+                            format!(
+                                "EXISTS (SELECT 1 FROM song_tags st WHERE st.song_id = songs.id AND st.tag = '{t}' AND st.value {sql_op} ?)"
+                            )
+                        })
+                        .collect();
+                    let sql = format!("({})", clauses.join(" OR "));
+                    let params = vec![value_param; fallback_tags.len()];
+                    (sql, params)
+                }
             }
             FilterExpression::And(left, right) => {
                 let (left_sql, mut left_params) = left.to_sql();
@@ -111,6 +114,55 @@ impl FilterExpression {
     }
 }
 
+fn op_to_sql(op: &CompareOp, value: &str) -> (&'static str, String) {
+    match op {
+        CompareOp::Equal => ("=", value.to_string()),
+        CompareOp::NotEqual => ("!=", value.to_string()),
+        CompareOp::Regex => ("LIKE", value.replace(".*", "%").replace('.', "_")),
+        CompareOp::NotRegex => ("NOT LIKE", value.replace(".*", "%").replace('.', "_")),
+        CompareOp::Less => ("<", value.to_string()),
+        CompareOp::Greater => (">", value.to_string()),
+        CompareOp::LessEqual => ("<=", value.to_string()),
+        CompareOp::GreaterEqual => (">=", value.to_string()),
+        CompareOp::Contains => ("LIKE", format!("%{value}%")),
+        CompareOp::StartsWith => ("LIKE", format!("{value}%")),
+    }
+}
+
+/// Return the fallback chain for a tag (MPD's Fallback.hxx).
+/// For most tags, returns a single-element vec.
+fn tag_fallback_chain(tag: &str) -> Vec<&str> {
+    match tag {
+        "albumartist" => vec!["albumartist", "artist"],
+        "artistsort" => vec!["artistsort", "artist"],
+        "albumartistsort" => vec!["albumartistsort", "albumartist", "artistsort", "artist"],
+        "albumsort" => vec!["albumsort", "album"],
+        "titlesort" => vec!["titlesort", "title"],
+        "composersort" => vec!["composersort", "composer"],
+        "artist" => vec!["artist"],
+        "album" => vec!["album"],
+        "title" => vec!["title"],
+        "track" => vec!["track"],
+        "date" => vec!["date"],
+        "originaldate" => vec!["originaldate"],
+        "genre" => vec!["genre"],
+        "composer" => vec!["composer"],
+        "performer" => vec!["performer"],
+        "disc" => vec!["disc"],
+        "comment" => vec!["comment"],
+        "grouping" => vec!["grouping"],
+        "label" => vec!["label"],
+        "musicbrainz_artistid" => vec!["musicbrainz_artistid"],
+        "musicbrainz_albumid" => vec!["musicbrainz_albumid"],
+        "musicbrainz_albumartistid" => vec!["musicbrainz_albumartistid"],
+        "musicbrainz_trackid" => vec!["musicbrainz_trackid"],
+        "musicbrainz_releasetrackid" => vec!["musicbrainz_releasetrackid"],
+        "musicbrainz_releasegroupid" => vec!["musicbrainz_releasegroupid"],
+        "musicbrainz_workid" => vec!["musicbrainz_workid"],
+        _ => vec![tag], // unknown tags: search as-is
+    }
+}
+
 struct Parser<'a> {
     input: &'a str,
     pos: usize,
@@ -128,7 +180,6 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_expression(&mut self) -> Result<FilterExpression> {
-        // Entry point - just parse as OR expression (highest level)
         self.parse_or_expression()
     }
 
@@ -165,7 +216,6 @@ impl<'a> Parser<'a> {
     fn parse_primary(&mut self) -> Result<FilterExpression> {
         self.skip_whitespace();
 
-        // Check for nested expression
         if self.peek_str("(") {
             let _ = self.consume_str("(");
             let expr = self.parse_or_expression()?;
@@ -174,7 +224,6 @@ impl<'a> Parser<'a> {
             return Ok(expr);
         }
 
-        // Check for NOT
         if self.peek_str("!") {
             let _ = self.consume_str("!");
             self.skip_whitespace();
@@ -182,22 +231,18 @@ impl<'a> Parser<'a> {
             return Ok(FilterExpression::Not(Box::new(expr)));
         }
 
-        // Must be a comparison
         self.parse_comparison()
     }
 
     fn parse_comparison(&mut self) -> Result<FilterExpression> {
         self.skip_whitespace();
 
-        // Parse tag name
         let tag = self.parse_identifier()?;
         self.skip_whitespace();
 
-        // Parse operator
         let op = self.parse_operator()?;
         self.skip_whitespace();
 
-        // Parse value (quoted string)
         let value = self.parse_quoted_value()?;
 
         Ok(FilterExpression::Compare { tag, op, value })
@@ -220,7 +265,6 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_operator(&mut self) -> Result<CompareOp> {
-        // Try multi-character operators first
         if self.consume_str("starts_with").is_ok() {
             Ok(CompareOp::StartsWith)
         } else if self.consume_str("contains").is_ok() {
@@ -247,21 +291,19 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_quoted_value(&mut self) -> Result<String> {
-        // Accept both single and double quotes (matching MPD's ExpectQuoted)
         let quote_char = self.peek_char()?;
         if quote_char != '\'' && quote_char != '"' {
             return Err(RmpdError::ParseError("Quoted string expected".to_owned()));
         }
-        self.pos += 1; // consume opening quote
+        self.pos += 1;
 
         let mut result = String::new();
         while self.pos < self.input.len() {
             let ch = self.peek_char()?;
             if ch == quote_char {
-                self.pos += 1; // consume closing quote
+                self.pos += 1;
                 return Ok(result);
             } else if ch == '\\' && self.pos + 1 < self.input.len() {
-                // Backslash escapes the following character
                 self.pos += 1;
                 let escaped = self.peek_char()?;
                 result.push(escaped);
@@ -297,7 +339,6 @@ impl<'a> Parser<'a> {
         if !rest.starts_with(keyword) {
             return false;
         }
-        // Check that it's followed by whitespace or special char
         if rest.len() == keyword.len() {
             return true;
         }
@@ -318,39 +359,6 @@ impl<'a> Parser<'a> {
     }
 }
 
-/// Convert MPD tag name to database column expression.
-/// Uses COALESCE for tags with MPD-style fallbacks (e.g. albumartist falls back to artist).
-fn tag_to_column(tag: &str) -> &str {
-    match tag.to_lowercase().as_str() {
-        "artist" => "artist",
-        "artistsort" => "COALESCE(artist_sort, artist)",
-        "albumartist" => "COALESCE(album_artist, artist)",
-        "albumartistsort" => "COALESCE(album_artist_sort, album_artist, artist_sort, artist)",
-        "album" => "album",
-        "title" => "title",
-        "track" => "track",
-        "date" => "date",
-        "year" => "date", // year is stored in date column
-        "originaldate" => "original_date",
-        "genre" => "genre",
-        "composer" => "composer",
-        "performer" => "performer",
-        "disc" => "disc",
-        "comment" => "comment",
-        "grouping" => "grouping",
-        "label" => "label",
-        "musicbrainz_artistid" => "musicbrainz_artistid",
-        "musicbrainz_albumid" => "musicbrainz_albumid",
-        "musicbrainz_albumartistid" => "musicbrainz_albumartistid",
-        "musicbrainz_trackid" => "musicbrainz_trackid",
-        "musicbrainz_releasetrackid" => "musicbrainz_releasetrackid",
-        "musicbrainz_releasegroupid" => "musicbrainz_releasegroupid",
-        "musicbrainz_workid" => "musicbrainz_workid",
-        "file" => "path",
-        _ => tag, // fallback to tag name
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -359,7 +367,8 @@ mod tests {
     fn test_simple_comparison() {
         let expr = FilterExpression::parse("((Artist == 'Radiohead'))").unwrap();
         let (sql, params) = expr.to_sql();
-        assert_eq!(sql, "artist = ?");
+        assert!(sql.contains("song_tags"));
+        assert!(sql.contains("artist"));
         assert_eq!(params, vec!["Radiohead"]);
     }
 
@@ -397,19 +406,34 @@ mod tests {
 
     #[test]
     fn test_double_quoted_values() {
-        // MPD clients send double-quoted values after protocol unquoting
         let expr = FilterExpression::parse("(Artist == \"Amon Tobin\")").unwrap();
         let (sql, params) = expr.to_sql();
-        assert_eq!(sql, "artist = ?");
+        assert!(sql.contains("song_tags"));
         assert_eq!(params, vec!["Amon Tobin"]);
     }
 
     #[test]
     fn test_double_quoted_with_escape() {
-        // Backslash-escaped characters inside double quotes
         let expr = FilterExpression::parse(r#"(Artist == "Guns \"N\" Roses")"#).unwrap();
         let (sql, params) = expr.to_sql();
-        assert_eq!(sql, "artist = ?");
+        assert!(sql.contains("song_tags"));
         assert_eq!(params, vec![r#"Guns "N" Roses"#]);
+    }
+
+    #[test]
+    fn test_albumartist_fallback() {
+        let expr = FilterExpression::parse("(AlbumArtist == 'Led Zeppelin')").unwrap();
+        let (sql, params) = expr.to_sql();
+        assert!(sql.contains("albumartist"));
+        assert!(sql.contains("artist"));
+        assert_eq!(params.len(), 2);
+    }
+
+    #[test]
+    fn test_file_tag() {
+        let expr = FilterExpression::parse("(file == 'some/path.mp3')").unwrap();
+        let (sql, params) = expr.to_sql();
+        assert_eq!(sql, "path = ?");
+        assert_eq!(params, vec!["some/path.mp3"]);
     }
 }

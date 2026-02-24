@@ -231,45 +231,23 @@ impl ResponseBuilder {
             self.field("Format", format!("{}:{}:{}", sr, bits, ch));
         }
         // Tags in MPD canonical order (matching TagType enum order in Names.cxx)
-        self.optional_str_field("Artist", song.artist.as_ref());
-        self.optional_str_field("ArtistSort", song.artist_sort.as_ref());
-        self.optional_str_field("Album", song.album.as_ref());
-        self.optional_str_field("AlbumArtist", song.album_artist.as_ref());
-        self.optional_str_field("AlbumArtistSort", song.album_artist_sort.as_ref());
-        self.optional_str_field("Title", song.title.as_ref());
-        self.optional_field("Track", song.track);
-        self.optional_str_field("Genre", song.genre.as_ref());
-        self.optional_str_field("Date", song.date.as_ref());
-        self.optional_str_field("OriginalDate", song.original_date.as_ref());
-        self.optional_str_field("Composer", song.composer.as_ref());
-        self.optional_str_field("Performer", song.performer.as_ref());
-        self.optional_str_field("Grouping", song.grouping.as_ref());
         // Comment is excluded from default tag mask (MPD's Settings.cxx: All & ~TAG_COMMENT)
-        self.optional_field("Disc", song.disc);
-        self.optional_str_field("Label", song.label.as_ref());
-        // MusicBrainz IDs (in Names.cxx order)
-        self.optional_str_field("MUSICBRAINZ_ARTISTID", song.musicbrainz_artistid.as_ref());
-        self.optional_str_field("MUSICBRAINZ_ALBUMID", song.musicbrainz_albumid.as_ref());
-        self.optional_str_field(
-            "MUSICBRAINZ_ALBUMARTISTID",
-            song.musicbrainz_albumartistid.as_ref(),
-        );
-        self.optional_str_field("MUSICBRAINZ_TRACKID", song.musicbrainz_trackid.as_ref());
-        self.optional_str_field(
-            "MUSICBRAINZ_RELEASETRACKID",
-            song.musicbrainz_releasetrackid.as_ref(),
-        );
-        self.optional_str_field(
-            "MUSICBRAINZ_RELEASEGROUPID",
-            song.musicbrainz_releasegroupid.as_ref(),
-        );
-        self.optional_str_field("MUSICBRAINZ_WORKID", song.musicbrainz_workid.as_ref());
+        for &tag_name in rmpd_core::song::TAG_ORDER {
+            if tag_name == "comment" {
+                continue;
+            }
+            let canonical = rmpd_core::song::canonical_tag_name(tag_name);
+            for value in song.tag_values(tag_name) {
+                if !value.is_empty() {
+                    self.field(canonical, value);
+                }
+            }
+        }
         // Duration
         if let Some(duration) = song.duration {
             self.field("Time", duration.as_millis().saturating_add(500) / 1000);
             self.field("duration", format!("{:.3}", duration.as_secs_f64()));
         }
-
         // Queue position/id (at the end, matching MPD)
         if let Some(pos) = position {
             self.field("Pos", pos);

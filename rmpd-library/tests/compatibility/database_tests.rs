@@ -125,13 +125,13 @@ fn test_find_by_artist() {
 
     assert_eq!(result.len(), 3);
     for song in &result {
-        assert_eq!(song.artist, Some("Target Artist".to_string()));
+        assert_eq!(song.tag("artist"), Some("Target Artist"));
     }
 
     // Results should be ordered by album, track
-    assert_eq!(result[0].track, Some(1));
-    assert_eq!(result[1].track, Some(2));
-    assert_eq!(result[2].track, Some(3));
+    assert_eq!(result[0].tag("track"), Some("1"));
+    assert_eq!(result[1].tag("track"), Some("2"));
+    assert_eq!(result[2].tag("track"), Some("3"));
 }
 
 #[test]
@@ -160,12 +160,15 @@ fn test_find_by_album() {
 
     assert_eq!(result.len(), 5);
     for song in &result {
-        assert_eq!(song.album, Some("Test Album".to_string()));
+        assert_eq!(song.tag("album"), Some("Test Album"));
     }
 
     // Results should be ordered by track number
     for (i, song) in result.iter().enumerate() {
-        assert_eq!(song.track, Some((i + 1) as u32));
+        assert_eq!(
+            song.tag("track").and_then(|t| t.parse::<u32>().ok()),
+            Some((i + 1) as u32)
+        );
     }
 }
 
@@ -372,8 +375,8 @@ fn test_get_song_by_id() {
 
     // Retrieve by ID
     let retrieved = harness.get_song(id).unwrap().unwrap();
-    assert_eq!(retrieved.title, Some("Specific Song".to_string()));
-    assert_eq!(retrieved.artist, Some("Specific Artist".to_string()));
+    assert_eq!(retrieved.tag("title"), Some("Specific Song"));
+    assert_eq!(retrieved.tag("artist"), Some("Specific Artist"));
 
     // Non-existent ID
     let nonexistent = harness.get_song(99999).unwrap();

@@ -72,37 +72,15 @@ pub fn format_iso8601_timestamp(timestamp: i64) -> String {
     format!("{year:04}-{month:02}-{day:02}T{hours:02}:{minutes:02}:{seconds:02}Z")
 }
 
-/// Check if a song's tag matches an exact value.
+/// Check if a song's tag matches an exact value (checks all values for multi-valued tags).
 pub fn song_tag_eq(song: &rmpd_core::song::Song, tag: &str, value: &str) -> bool {
-    match tag {
-        "artist" => song.artist.as_deref() == Some(value),
-        "album" => song.album.as_deref() == Some(value),
-        "title" => song.title.as_deref() == Some(value),
-        "genre" => song.genre.as_deref() == Some(value),
-        "albumartist" => song.album_artist.as_deref() == Some(value),
-        "composer" => song.composer.as_deref() == Some(value),
-        "performer" => song.performer.as_deref() == Some(value),
-        "date" => song.date.as_deref() == Some(value),
-        _ => false,
-    }
+    song.tag_values(tag).any(|v| v == value)
 }
 
-/// Check if a song's tag contains a value (case-insensitive).
+/// Check if a song's tag contains a value (case-insensitive, checks all values for multi-valued tags).
 pub fn song_tag_contains(song: &rmpd_core::song::Song, tag: &str, value_lower: &str) -> bool {
-    let field = match tag {
-        "artist" => song.artist.as_deref(),
-        "album" => song.album.as_deref(),
-        "title" => song.title.as_deref(),
-        "genre" => song.genre.as_deref(),
-        "albumartist" => song.album_artist.as_deref(),
-        "composer" => song.composer.as_deref(),
-        "performer" => song.performer.as_deref(),
-        "date" => song.date.as_deref(),
-        _ => return false,
-    };
-    field
-        .map(|s| s.to_lowercase().contains(value_lower))
-        .unwrap_or(false)
+    song.tag_values(tag)
+        .any(|v| v.to_lowercase().contains(value_lower))
 }
 
 /// Build a FilterExpression from multiple tag/value pairs joined with AND.

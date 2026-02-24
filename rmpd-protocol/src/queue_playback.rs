@@ -183,7 +183,7 @@ impl QueuePlaybackManager {
                         status.audio_format = Some(AudioFormat {
                             sample_rate: sr,
                             channels: ch,
-                            bits_per_sample: bps,
+                            bits_per_sample: bps as u8,
                         });
                     }
 
