@@ -50,6 +50,39 @@ fn get_tag_value<'a>(song: &'a rmpd_core::song::Song, tag: &str) -> std::borrow:
     }
 }
 
+/// Map lowercase tag name to canonical MPD display name.
+fn canonical_tag_name(tag: &str) -> &str {
+    match tag.to_lowercase().as_str() {
+        "artist" => "Artist",
+        "artistsort" => "ArtistSort",
+        "album" => "Album",
+        "albumsort" => "AlbumSort",
+        "albumartist" => "AlbumArtist",
+        "albumartistsort" => "AlbumArtistSort",
+        "title" => "Title",
+        "titlesort" => "TitleSort",
+        "track" => "Track",
+        "name" => "Name",
+        "genre" => "Genre",
+        "mood" => "Mood",
+        "date" => "Date",
+        "originaldate" => "OriginalDate",
+        "composer" => "Composer",
+        "composersort" => "ComposerSort",
+        "performer" => "Performer",
+        "conductor" => "Conductor",
+        "work" => "Work",
+        "movement" => "Movement",
+        "movementnumber" => "MovementNumber",
+        "ensemble" => "Ensemble",
+        "location" => "Location",
+        "grouping" => "Grouping",
+        "disc" => "Disc",
+        "label" => "Label",
+        _ => tag,
+    }
+}
+
 pub async fn handle_find_command(
     state: &AppState,
     filters: &[(String, String)],
@@ -306,13 +339,11 @@ pub async fn handle_list_command(
             );
         }
     } else {
-        // No filter, list all values
-        let result = match tag.to_lowercase().as_str() {
-            "artist" => db.list_artists(),
-            "album" => db.list_albums(),
-            "albumartist" => db.list_album_artists(),
-            "genre" => db.list_genres(),
-            _ => {
+        // No filter, list all values using generic tag query
+        let result = db.list_tag_values(tag);
+        match result {
+            Ok(v) => v,
+            Err(_) => {
                 return ResponseBuilder::error(
                     ACK_ERROR_ARG,
                     0,
@@ -320,28 +351,11 @@ pub async fn handle_list_command(
                     &format!("unsupported tag: {tag}"),
                 );
             }
-        };
-        match result {
-            Ok(v) => v,
-            Err(e) => {
-                return ResponseBuilder::error(
-                    ACK_ERROR_SYSTEM,
-                    0,
-                    "list",
-                    &format!("query error: {e}"),
-                );
-            }
         }
     };
 
     let mut resp = ResponseBuilder::new();
-    let tag_key = match tag.to_lowercase().as_str() {
-        "artist" => "Artist",
-        "album" => "Album",
-        "albumartist" => "AlbumArtist",
-        "genre" => "Genre",
-        _ => tag,
-    };
+    let tag_key = canonical_tag_name(tag);
 
     for value in values {
         resp.field(tag_key, value);
@@ -609,9 +623,13 @@ pub async fn handle_lsinfo_command(state: &AppState, path: Option<&str>) -> Stri
                 display_song.path = display_path.into();
                 resp.song(&display_song, None, None);
             }
-            for dir in &listing.directories {
+            for (dir, mtime) in &listing.directories {
                 let display_dir = strip_music_dir_prefix(dir, music_dir);
                 resp.field("directory", display_dir);
+                if *mtime > 0 {
+                    let ts = format_iso8601_timestamp(*mtime);
+                    resp.field("Last-Modified", &ts);
+                }
             }
 
             // For root directory, also list playlists
@@ -782,11 +800,27 @@ pub async fn handle_listfiles_command(state: &AppState, uri: Option<&str>) -> St
     match db.list_directory(path) {
         Ok(listing) => {
             let mut resp = ResponseBuilder::new();
-            for dir in listing.directories {
-                resp.field("directory", dir);
+            let music_dir = state.music_dir.as_deref();
+            // MPD emits directories before files in listfiles
+            for (dir, mtime) in &listing.directories {
+                let display_dir = strip_music_dir_prefix(dir, music_dir);
+                // listfiles shows just the basename for subdirectories
+                let basename = display_dir.rsplit('/').next().unwrap_or(&display_dir);
+                resp.field("directory", basename);
+                if *mtime > 0 {
+                    let ts = format_iso8601_timestamp(*mtime);
+                    resp.field("Last-Modified", &ts);
+                }
             }
-            for song in listing.songs {
-                resp.field("file", song.path.as_str());
+            for song in &listing.songs {
+                let display_path = strip_music_dir_prefix(song.path.as_str(), music_dir);
+                // listfiles shows just the filename
+                let filename = display_path.rsplit('/').next().unwrap_or(&display_path);
+                resp.field("file", filename);
+                if song.last_modified > 0 {
+                    let ts = format_iso8601_timestamp(song.last_modified);
+                    resp.field("Last-Modified", &ts);
+                }
             }
             resp.ok()
         }

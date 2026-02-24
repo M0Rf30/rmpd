@@ -674,6 +674,19 @@ impl Database {
         Ok(album_artists)
     }
 
+    /// List unique values for any tag supported by tag_to_column.
+    pub fn list_tag_values(&self, tag: &str) -> Result<Vec<String>> {
+        let col = tag_to_column(tag)?;
+        let query = format!(
+            "SELECT DISTINCT {col} FROM songs WHERE {col} IS NOT NULL AND {col} != '' ORDER BY {col} COLLATE NOCASE"
+        );
+        let mut stmt = self.conn.prepare(&query)?;
+        let values = stmt
+            .query_map([], |row| row.get(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(values)
+    }
+
     pub fn list_filtered(
         &self,
         tag: &str,
@@ -822,16 +835,20 @@ impl Database {
         if let Some(id) = dir_id {
             let mut stmt = self
                 .conn
-                .prepare("SELECT path FROM directories WHERE parent_id = ?1 ORDER BY path")?;
-            let rows = stmt.query_map(params![id], |row| row.get::<_, String>(0))?;
+                .prepare("SELECT path, mtime FROM directories WHERE parent_id = ?1 ORDER BY path")?;
+            let rows = stmt.query_map(params![id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })?;
             for row in rows {
                 directories.push(row?);
             }
         } else {
             let mut stmt = self
                 .conn
-                .prepare("SELECT path FROM directories WHERE parent_id IS NULL ORDER BY path")?;
-            let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+                .prepare("SELECT path, mtime FROM directories WHERE parent_id IS NULL ORDER BY path")?;
+            let rows = stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })?;
             for row in rows {
                 directories.push(row?);
             }
@@ -1334,7 +1351,7 @@ impl Database {
 /// Directory listing result
 #[derive(Debug)]
 pub struct DirectoryListing {
-    pub directories: Vec<String>,
+    pub directories: Vec<(String, i64)>,
     pub songs: Vec<Song>,
 }
 
