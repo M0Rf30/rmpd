@@ -511,17 +511,17 @@ pub async fn handle_count_command(
         for (value, (count, playtime)) in &sorted {
             resp.field(tag_key, value);
             resp.field("songs", count);
-            resp.field("playtime", playtime.round() as u64);
+            resp.field("playtime", playtime.floor() as u64);
         }
     } else {
         // No grouping - return totals
-        // Sum fractional seconds, then round (matches MPD which rounds total playtime)
+        // Sum fractional seconds, then truncate (MPD uses duration_cast<seconds> = truncation)
         let total_duration: u64 = songs
             .iter()
             .filter_map(|s| s.duration)
             .map(|d| d.as_secs_f64())
             .sum::<f64>()
-            .round() as u64;
+            .floor() as u64;
         resp.field("songs", songs.len());
         resp.field("playtime", total_duration);
     }
@@ -1008,16 +1008,16 @@ pub async fn handle_searchcount_command(
         for (val, (count, playtime)) in &sorted {
             resp.field(tag_key, val);
             resp.field("songs", count);
-            resp.field("playtime", playtime.round() as u64);
+            resp.field("playtime", playtime.floor() as u64);
         }
     } else {
-        // Sum fractional seconds, then round (matches MPD which rounds total playtime)
+        // Sum fractional seconds, then truncate (MPD uses duration_cast<seconds> = truncation)
         let total_duration: u64 = songs
             .iter()
             .filter_map(|s| s.duration)
             .map(|d| d.as_secs_f64())
             .sum::<f64>()
-            .round() as u64;
+            .floor() as u64;
         resp.field("songs", songs.len());
         resp.field("playtime", total_duration);
     }
