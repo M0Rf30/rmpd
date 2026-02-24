@@ -71,6 +71,8 @@ impl MetadataExtractor {
 
         let tagged_file = Probe::open(path.as_str())
             .map_err(|e| RmpdError::Library(format!("Failed to open file: {e}")))?
+            .guess_file_type()
+            .map_err(|e| RmpdError::Library(format!("Failed to detect file type: {e}")))?
             .read()
             .map_err(|e| RmpdError::Library(format!("Failed to read file: {e}")))?;
 
