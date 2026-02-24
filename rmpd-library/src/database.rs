@@ -765,6 +765,26 @@ impl Database {
         Ok(songs)
     }
 
+    /// Search songs by tag with case-insensitive substring match (for `search`/`searchcount`).
+    pub fn search_songs_by_tag(&self, tag: &str, value: &str) -> Result<Vec<Song>> {
+        let tag_lower = tag.to_lowercase();
+        // Use SQLite LIKE which is case-insensitive for ASCII by default.
+        // Wrap value in % for substring matching.
+        let pattern = format!("%{}%", value.replace('%', "\\%").replace('_', "\\_"));
+        let sql = format!(
+            "SELECT {SONG_COLUMNS} FROM songs
+             WHERE id IN (SELECT song_id FROM song_tags WHERE tag = ?1 AND value LIKE ?2 ESCAPE '\\')
+             ORDER BY id"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let mut songs: Vec<Song> = stmt
+            .query_map(params![tag_lower, pattern], song_from_row)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        self.load_tags_for_songs(&mut songs)?;
+        Ok(songs)
+    }
+
+
     /// Find songs by exact match across all tag values (for `any` tag).
     pub fn find_songs_any(&self, value: &str) -> Result<Vec<Song>> {
         let sql = format!(

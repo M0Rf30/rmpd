@@ -75,13 +75,26 @@ pub async fn handle_listpartitions_command(state: &AppState) -> String {
         }
     };
 
-    let partitions = manager.list_partitions().await;
+    let mut partitions = manager.list_partitions().await;
 
+    // Always include "default" partition (MPD guarantees it exists)
+    if !partitions.contains(&"default".to_string()) {
+        partitions.insert(0, "default".to_string());
+    }
+    // Sort so "default" comes first, others alphabetically
+    partitions.sort_by(|a, b| {
+        if a == "default" {
+            std::cmp::Ordering::Less
+        } else if b == "default" {
+            std::cmp::Ordering::Greater
+        } else {
+            a.cmp(b)
+        }
+    });
     let mut resp = ResponseBuilder::new();
     for name in partitions {
         resp.field("partition", &name);
     }
-
     resp.ok()
 }
 

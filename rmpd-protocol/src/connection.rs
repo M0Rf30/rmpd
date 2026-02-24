@@ -38,8 +38,8 @@ impl ConnectionState {
     /// starts in the "default" partition
     pub fn new() -> Self {
         Self {
-            enabled_tags: None,     // All enabled
-            enabled_features: None, // All enabled
+            enabled_tags: None,                         // All tags enabled
+            enabled_features: Some(HashSet::new()),     // No protocol features enabled by default
             subscribed_channels: Vec::new(),
             current_partition: "default".to_string(),
         }
@@ -178,12 +178,22 @@ impl ConnectionState {
     pub fn enable_all_features(&mut self) {
         self.enabled_features = None;
     }
-
     /// Disable all protocol features
     pub fn disable_all_features(&mut self) {
         self.enabled_features = Some(HashSet::new());
     }
 
+    /// Clear all protocol features (alias for disable_all)
+    pub fn clear_features(&mut self) {
+        self.enabled_features = Some(HashSet::new());
+    }
+
+    /// Set exactly these protocol features (replacing any existing set)
+    pub fn set_features(&mut self, features: Vec<String>) {
+        let mut feature_set = HashSet::new();
+        feature_set.extend(features);
+        self.enabled_features = Some(feature_set);
+    }
     /// Enable specific protocol features
     pub fn enable_features(&mut self, features: Vec<String>) {
         match &mut self.enabled_features {
@@ -199,7 +209,6 @@ impl ConnectionState {
             }
         }
     }
-
     /// Disable specific protocol features
     pub fn disable_features(&mut self, features: Vec<String>) {
         match &mut self.enabled_features {
@@ -220,15 +229,10 @@ impl ConnectionState {
         }
     }
 
-    /// Get the default set of protocol features
+    /// Get the default set of protocol features (none enabled by default,
+    /// matching MPD which starts with no protocol features active).
     fn default_features() -> HashSet<String> {
-        let mut features = HashSet::new();
-        features.insert("binary".to_string());
-        features.insert("command_list_ok".to_string());
-        features.insert("idle".to_string());
-        features.insert("ranges".to_string());
-        features.insert("tags".to_string());
-        features
+        HashSet::new()
     }
 }
 
