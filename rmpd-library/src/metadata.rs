@@ -21,6 +21,17 @@ fn is_bogus_dsf_comment(s: &str) -> bool {
     trimmed.len() >= 16 && trimmed.chars().all(|c| c.is_ascii_hexdigit() || c == ' ')
 }
 
+/// Normalize a Track or Disc value the same way MPD does (Handler.cxx NormalizeDecimal):
+/// strip leading zeros, strip non-digit suffix, treat all-zero result as empty (skip).
+fn normalize_decimal(s: &str) -> Option<String> {
+    let s = s.trim();
+    // Find first non-zero digit
+    let start = s.chars().position(|c| c != '0').unwrap_or(s.len());
+    // Take only ASCII digits from that position
+    let tail: String = s[start..].chars().take_while(|c| c.is_ascii_digit()).collect();
+    if tail.is_empty() { None } else { Some(tail) }
+}
+
 /// MPD-canonical VorbisComment key -> tag name mapping.
 /// Derived from MPD's tag/Names.cxx (tag_item_names) + lib/xiph/XiphTags.cxx.
 /// Only these exact key names (case-insensitive) are recognized for structured tags.
@@ -198,7 +209,16 @@ impl MetadataExtractor {
                     .find(|(k, _)| *k == key_lower)
                     .map(|(_, v)| v)
                 {
-                    tags.push((tag_name.to_string(), val));
+                    // Normalize Track/Disc: strip leading zeros, skip pure-zero values (like MPD)
+                    let effective_val = if tag_name == "track" || tag_name == "disc" {
+                        match normalize_decimal(&val) {
+                            Some(v) => v,
+                            None => continue,
+                        }
+                    } else {
+                        val
+                    };
+                    tags.push((tag_name.to_string(), effective_val));
                 }
             }
         } else if let Some(tag) = tag {
@@ -217,7 +237,14 @@ impl MetadataExtractor {
                         if tag_name == &"comment" && is_bogus_dsf_comment(val) {
                             continue;
                         }
-                        tags.push((tag_name.to_string(), val.clone()));
+                        // Normalize Track/Disc: strip leading zeros, skip pure-zero values (like MPD)
+                        if *tag_name == "track" || *tag_name == "disc" {
+                            if let Some(normalized) = normalize_decimal(val) {
+                                tags.push((tag_name.to_string(), normalized));
+                            }
+                        } else {
+                            tags.push((tag_name.to_string(), val.clone()));
+                        }
                     }
                 }
             }
@@ -257,15 +284,19 @@ impl MetadataExtractor {
 
             // TrackNumber and DiscNumber from tag convenience methods (handles "3/12" format)
             // Only add if not already present from items iteration
-            if !tags.iter().any(|(k, _)| k == "track")
-                && let Some(track) = tag.track()
-            {
-                tags.push(("track".to_string(), track.to_string()));
+            if !tags.iter().any(|(k, _)| k == "track") {
+                if let Some(track) = tag.track() {
+                    if let Some(norm) = normalize_decimal(&track.to_string()) {
+                        tags.push(("track".to_string(), norm));
+                    }
+                }
             }
-            if !tags.iter().any(|(k, _)| k == "disc")
-                && let Some(disc) = tag.disk()
-            {
-                tags.push(("disc".to_string(), disc.to_string()));
+            if !tags.iter().any(|(k, _)| k == "disc") {
+                if let Some(disc) = tag.disk() {
+                    if let Some(norm) = normalize_decimal(&disc.to_string()) {
+                        tags.push(("disc".to_string(), norm));
+                    }
+                }
             }
         }
 
