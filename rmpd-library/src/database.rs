@@ -29,9 +29,9 @@ pub enum WalkEntry<'a> {
 /// Used with `song_from_row` to construct Song structs from query results.
 const SONG_COLUMNS_ALIASED: &str =
     "s.id, s.path, s.mtime, s.duration,
-     s.title, s.artist, s.album, s.album_artist, s.track, s.disc, s.date, s.genre, s.composer, s.performer, s.comment,
+     s.title, s.artist, s.album, s.album_artist, s.track, s.disc, s.date, s.genre, s.composer, s.performer, s.comment, s.grouping,
      s.musicbrainz_trackid, s.musicbrainz_albumid, s.musicbrainz_artistid, s.musicbrainz_albumartistid,
-     s.musicbrainz_releasegroupid, s.musicbrainz_releasetrackid,
+     s.musicbrainz_releasegroupid, s.musicbrainz_releasetrackid, s.musicbrainz_workid,
      s.artist_sort, s.album_artist_sort, s.original_date, s.label,
      s.sample_rate, s.channels, s.bits_per_sample, s.bitrate,
      s.replay_gain_track_gain, s.replay_gain_track_peak,
@@ -40,9 +40,9 @@ const SONG_COLUMNS_ALIASED: &str =
 
 /// Common SELECT columns for song queries (without table alias).
 const SONG_COLUMNS: &str = "id, path, mtime, duration,
-     title, artist, album, album_artist, track, disc, date, genre, composer, performer, comment,
+     title, artist, album, album_artist, track, disc, date, genre, composer, performer, comment, grouping,
      musicbrainz_trackid, musicbrainz_albumid, musicbrainz_artistid, musicbrainz_albumartistid,
-     musicbrainz_releasegroupid, musicbrainz_releasetrackid,
+     musicbrainz_releasegroupid, musicbrainz_releasetrackid, musicbrainz_workid,
      artist_sort, album_artist_sort, original_date, label,
      sample_rate, channels, bits_per_sample, bitrate,
      replay_gain_track_gain, replay_gain_track_peak,
@@ -67,26 +67,28 @@ fn song_from_row(row: &Row<'_>) -> rusqlite::Result<Song> {
         composer: row.get(12)?,
         performer: row.get(13)?,
         comment: row.get(14)?,
-        musicbrainz_trackid: row.get(15)?,
-        musicbrainz_albumid: row.get(16)?,
-        musicbrainz_artistid: row.get(17)?,
-        musicbrainz_albumartistid: row.get(18)?,
-        musicbrainz_releasegroupid: row.get(19)?,
-        musicbrainz_releasetrackid: row.get(20)?,
-        artist_sort: row.get(21)?,
-        album_artist_sort: row.get(22)?,
-        original_date: row.get(23)?,
-        label: row.get(24)?,
-        sample_rate: row.get(25)?,
-        channels: row.get(26)?,
-        bits_per_sample: row.get(27)?,
-        bitrate: row.get(28)?,
-        replay_gain_track_gain: row.get(29)?,
-        replay_gain_track_peak: row.get(30)?,
-        replay_gain_album_gain: row.get(31)?,
-        replay_gain_album_peak: row.get(32)?,
-        added_at: row.get(33)?,
-        last_modified: row.get(34)?,
+        grouping: row.get(15)?,
+        musicbrainz_trackid: row.get(16)?,
+        musicbrainz_albumid: row.get(17)?,
+        musicbrainz_artistid: row.get(18)?,
+        musicbrainz_albumartistid: row.get(19)?,
+        musicbrainz_releasegroupid: row.get(20)?,
+        musicbrainz_releasetrackid: row.get(21)?,
+        musicbrainz_workid: row.get(22)?,
+        artist_sort: row.get(23)?,
+        album_artist_sort: row.get(24)?,
+        original_date: row.get(25)?,
+        label: row.get(26)?,
+        sample_rate: row.get(27)?,
+        channels: row.get(28)?,
+        bits_per_sample: row.get(29)?,
+        bitrate: row.get(30)?,
+        replay_gain_track_gain: row.get(31)?,
+        replay_gain_track_peak: row.get(32)?,
+        replay_gain_album_gain: row.get(33)?,
+        replay_gain_album_peak: row.get(34)?,
+        added_at: row.get(35)?,
+        last_modified: row.get(36)?,
     })
 }
 
@@ -109,26 +111,28 @@ fn song_from_row_optional(row: &Row<'_>) -> rusqlite::Result<Song> {
         composer: row.get(11).ok(),
         performer: row.get(12).ok(),
         comment: row.get(13).ok(),
-        musicbrainz_trackid: row.get(14).ok(),
-        musicbrainz_albumid: row.get(15).ok(),
-        musicbrainz_artistid: row.get(16).ok(),
-        musicbrainz_albumartistid: row.get(17).ok(),
-        musicbrainz_releasegroupid: row.get(18).ok(),
-        musicbrainz_releasetrackid: row.get(19).ok(),
-        artist_sort: row.get(20).ok(),
-        album_artist_sort: row.get(21).ok(),
-        original_date: row.get(22).ok(),
-        label: row.get(23).ok(),
-        sample_rate: row.get(24).ok(),
-        channels: row.get(25).ok(),
-        bits_per_sample: row.get(26).ok(),
-        bitrate: row.get(27).ok(),
-        replay_gain_track_gain: row.get(28).ok(),
-        replay_gain_track_peak: row.get(29).ok(),
-        replay_gain_album_gain: row.get(30).ok(),
-        replay_gain_album_peak: row.get(31).ok(),
-        added_at: row.get(32)?,
-        last_modified: row.get(33)?,
+        grouping: row.get(14).ok(),
+        musicbrainz_trackid: row.get(15).ok(),
+        musicbrainz_albumid: row.get(16).ok(),
+        musicbrainz_artistid: row.get(17).ok(),
+        musicbrainz_albumartistid: row.get(18).ok(),
+        musicbrainz_releasegroupid: row.get(19).ok(),
+        musicbrainz_releasetrackid: row.get(20).ok(),
+        musicbrainz_workid: row.get(21).ok(),
+        artist_sort: row.get(22).ok(),
+        album_artist_sort: row.get(23).ok(),
+        original_date: row.get(24).ok(),
+        label: row.get(25).ok(),
+        sample_rate: row.get(26).ok(),
+        channels: row.get(27).ok(),
+        bits_per_sample: row.get(28).ok(),
+        bitrate: row.get(29).ok(),
+        replay_gain_track_gain: row.get(30).ok(),
+        replay_gain_track_peak: row.get(31).ok(),
+        replay_gain_album_gain: row.get(32).ok(),
+        replay_gain_album_peak: row.get(33).ok(),
+        added_at: row.get(34)?,
+        last_modified: row.get(35)?,
     })
 }
 
@@ -153,6 +157,21 @@ fn tag_to_column(tag: &str) -> std::result::Result<&'static str, RmpdError> {
         "title" => Ok("title"),
         "composer" => Ok("composer"),
         "performer" => Ok("performer"),
+        "comment" => Ok("comment"),
+        "grouping" => Ok("grouping"),
+        "disc" => Ok("CAST(disc AS TEXT)"),
+        "track" => Ok("CAST(track AS TEXT)"),
+        "label" => Ok("label"),
+        "originaldate" => Ok("original_date"),
+        "artistsort" => Ok("artist_sort"),
+        "albumartistsort" => Ok("album_artist_sort"),
+        "musicbrainz_artistid" => Ok("musicbrainz_artistid"),
+        "musicbrainz_albumid" => Ok("musicbrainz_albumid"),
+        "musicbrainz_albumartistid" => Ok("musicbrainz_albumartistid"),
+        "musicbrainz_trackid" => Ok("musicbrainz_trackid"),
+        "musicbrainz_releasetrackid" => Ok("musicbrainz_releasetrackid"),
+        "musicbrainz_releasegroupid" => Ok("musicbrainz_releasegroupid"),
+        "musicbrainz_workid" => Ok("musicbrainz_workid"),
         _ => Err(RmpdError::Database(format!("unsupported tag: {tag}"))),
     }
 }
@@ -204,6 +223,7 @@ impl Database {
                 composer TEXT,
                 performer TEXT,
                 comment TEXT,
+                grouping TEXT,
 
                 -- Audio properties
                 sample_rate INTEGER,
@@ -366,6 +386,7 @@ impl Database {
         // Run migrations for new fields
         self.migrate_add_musicbrainz_fields()?;
 
+        self.migrate_add_grouping_and_workid()?;
         // Triggers to keep FTS index in sync
         self.conn.execute(
             "CREATE TRIGGER IF NOT EXISTS songs_fts_insert AFTER INSERT ON songs BEGIN
@@ -428,6 +449,32 @@ impl Database {
         Ok(())
     }
 
+    fn migrate_add_grouping_and_workid(&self) -> Result<()> {
+        // Add grouping column if missing
+        let has_grouping: bool = self.conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('songs') WHERE name = 'grouping'",
+            [],
+            |row| row.get(0),
+        )?;
+        if !has_grouping {
+            self.conn
+                .execute_batch("ALTER TABLE songs ADD COLUMN grouping TEXT;")?;
+        }
+
+        // Add musicbrainz_workid column if missing
+        let has_workid: bool = self.conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('songs') WHERE name = 'musicbrainz_workid'",
+            [],
+            |row| row.get(0),
+        )?;
+        if !has_workid {
+            self.conn
+                .execute_batch("ALTER TABLE songs ADD COLUMN musicbrainz_workid TEXT;")?;
+        }
+
+        Ok(())
+    }
+
     pub fn add_song(&self, song: &Song) -> Result<u64> {
         // First, ensure directory exists
         let root_path = Utf8PathBuf::from("/");
@@ -437,20 +484,20 @@ impl Database {
         self.conn.execute(
             "INSERT OR REPLACE INTO songs (
                 path, directory_id, mtime, duration,
-                title, artist, album, album_artist, track, disc, date, genre, composer, performer, comment,
+                title, artist, album, album_artist, track, disc, date, genre, composer, performer, comment, grouping,
                 musicbrainz_trackid, musicbrainz_albumid, musicbrainz_artistid, musicbrainz_albumartistid,
-                musicbrainz_releasegroupid, musicbrainz_releasetrackid,
+                musicbrainz_releasegroupid, musicbrainz_releasetrackid, musicbrainz_workid,
                 artist_sort, album_artist_sort, original_date, label,
                 sample_rate, channels, bits_per_sample, bitrate,
                 replay_gain_track_gain, replay_gain_track_peak,
                 replay_gain_album_gain, replay_gain_album_peak
             ) VALUES (
                 ?1, ?2, ?3, ?4,
-                ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
-                ?16, ?17, ?18, ?19, ?20, ?21,
-                ?22, ?23, ?24, ?25,
-                ?26, ?27, ?28, ?29,
-                ?30, ?31, ?32, ?33
+                ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16,
+                ?17, ?18, ?19, ?20, ?21, ?22, ?23,
+                ?24, ?25, ?26, ?27,
+                ?28, ?29, ?30, ?31,
+                ?32, ?33, ?34, ?35
             )",
             params![
                 song.path.as_str(),
@@ -468,12 +515,14 @@ impl Database {
                 song.composer,
                 song.performer,
                 song.comment,
+                song.grouping,
                 song.musicbrainz_trackid,
                 song.musicbrainz_albumid,
                 song.musicbrainz_artistid,
                 song.musicbrainz_albumartistid,
                 song.musicbrainz_releasegroupid,
                 song.musicbrainz_releasetrackid,
+                song.musicbrainz_workid,
                 song.artist_sort,
                 song.album_artist_sort,
                 song.original_date,
@@ -872,9 +921,9 @@ impl Database {
         let mut songs = Vec::new();
         {
             let query = "SELECT id, path, duration,
-                    title, artist, album, album_artist, track, disc, date, genre, composer, performer, comment,
+                    title, artist, album, album_artist, track, disc, date, genre, composer, performer, comment, grouping,
                     musicbrainz_trackid, musicbrainz_albumid, musicbrainz_artistid, musicbrainz_albumartistid,
-                    musicbrainz_releasegroupid, musicbrainz_releasetrackid,
+                    musicbrainz_releasegroupid, musicbrainz_releasetrackid, musicbrainz_workid,
                     artist_sort, album_artist_sort, original_date, label,
                     sample_rate, channels, bits_per_sample, bitrate,
                     replay_gain_track_gain, replay_gain_track_peak,
@@ -897,9 +946,9 @@ impl Database {
     /// List all songs under a directory recursively
     pub fn list_directory_recursive(&self, path: &str) -> Result<Vec<Song>> {
         let query = "SELECT id, path, duration,
-                title, artist, album, album_artist, track, disc, date, genre, composer, performer, comment,
+                title, artist, album, album_artist, track, disc, date, genre, composer, performer, comment, grouping,
                 musicbrainz_trackid, musicbrainz_albumid, musicbrainz_artistid, musicbrainz_albumartistid,
-                musicbrainz_releasegroupid, musicbrainz_releasetrackid,
+                musicbrainz_releasegroupid, musicbrainz_releasetrackid, musicbrainz_workid,
                 artist_sort, album_artist_sort, original_date, label,
                 sample_rate, channels, bits_per_sample, bitrate,
                 replay_gain_track_gain, replay_gain_track_peak,
@@ -967,9 +1016,9 @@ impl Database {
         // Emit songs in this directory first, sorted to match MPD's song_cmp:
         // album (NULL first, then case-insensitive), disc, track, filename (case-insensitive).
         let song_query = "SELECT id, path, duration,
-                title, artist, album, album_artist, track, disc, date, genre, composer, performer, comment,
+                title, artist, album, album_artist, track, disc, date, genre, composer, performer, comment, grouping,
                 musicbrainz_trackid, musicbrainz_albumid, musicbrainz_artistid, musicbrainz_albumartistid,
-                musicbrainz_releasegroupid, musicbrainz_releasetrackid,
+                musicbrainz_releasegroupid, musicbrainz_releasetrackid, musicbrainz_workid,
                 artist_sort, album_artist_sort, original_date, label,
                 sample_rate, channels, bits_per_sample, bitrate,
                 replay_gain_track_gain, replay_gain_track_peak,
@@ -1065,9 +1114,9 @@ impl Database {
 
         let sql = "SELECT s.id, s.path, s.duration,
                     s.title, s.artist, s.album, s.album_artist, s.track, s.disc, s.date, s.genre,
-                    s.composer, s.performer, s.comment,
+                    s.composer, s.performer, s.comment, s.grouping,
                     s.musicbrainz_trackid, s.musicbrainz_albumid, s.musicbrainz_artistid, s.musicbrainz_albumartistid,
-                    s.musicbrainz_releasegroupid, s.musicbrainz_releasetrackid,
+                    s.musicbrainz_releasegroupid, s.musicbrainz_releasetrackid, s.musicbrainz_workid,
                     s.artist_sort, s.album_artist_sort, s.original_date, s.label,
                     s.sample_rate, s.channels, s.bits_per_sample, s.bitrate,
                     s.replay_gain_track_gain, s.replay_gain_track_peak,
