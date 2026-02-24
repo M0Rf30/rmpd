@@ -8,105 +8,128 @@ use crate::response::ResponseBuilder;
 
 pub async fn handle_commands_command() -> String {
     let mut resp = ResponseBuilder::new();
+    // All implemented commands, sorted alphabetically (matching MPD's output).
+    // Excludes internal commands: command_list_begin/end, noidle.
+    let cmds = [
+        "add",
+        "addid",
+        "addtagid",
+        "albumart",
+        "binarylimit",
+        "channels",
+        "clear",
+        "clearerror",
+        "cleartagid",
+        "close",
+        "commands",
+        "config",
+        "consume",
+        "count",
+        "crossfade",
+        "currentsong",
+        "decoders",
+        "delete",
+        "deleteid",
+        "delpartition",
+        "disableoutput",
+        "enableoutput",
+        "find",
+        "findadd",
+        "getfingerprint",
+        "getvol",
+        "idle",
+        "kill",
+        "list",
+        "listall",
+        "listallinfo",
+        "listfiles",
+        "listmounts",
+        "listneighbors",
+        "listpartitions",
+        "listplaylist",
+        "listplaylistinfo",
+        "listplaylists",
+        "load",
+        "lsinfo",
+        "mixrampdb",
+        "mixrampdelay",
+        "mount",
+        "move",
+        "moveid",
+        "moveoutput",
+        "newpartition",
+        "next",
+        "notcommands",
+        "outputset",
+        "outputs",
+        "partition",
+        "password",
+        "pause",
+        "ping",
+        "play",
+        "playid",
+        "playlist",
+        "playlistadd",
+        "playlistclear",
+        "playlistdelete",
+        "playlistfind",
+        "playlistid",
+        "playlistinfo",
+        "playlistlength",
+        "playlistmove",
+        "playlistsearch",
+        "plchanges",
+        "plchangesposid",
+        "previous",
+        "prio",
+        "prioid",
+        "protocol",
+        "random",
+        "rangeid",
+        "readcomments",
+        "readmessages",
+        "readpicture",
+        "rename",
+        "repeat",
+        "replay_gain_mode",
+        "replay_gain_status",
+        "rescan",
+        "rm",
+        "save",
+        "search",
+        "searchadd",
+        "searchaddpl",
+        "searchcount",
+        "searchplaylist",
+        "seek",
+        "seekcur",
+        "seekid",
+        "sendmessage",
+        "setvol",
+        "shuffle",
+        "single",
+        "stats",
+        "status",
+        "sticker",
+        "stickernames",
+        "stickernamestypes",
+        "stickertypes",
+        "stop",
+        "subscribe",
+        "swap",
+        "swapid",
+        "tagtypes",
+        "toggleoutput",
+        "unmount",
+        "unsubscribe",
+        "update",
+        "urlhandlers",
+        "volume",
+    ];
 
-    // Playback control
-    resp.field("command", "play");
-    resp.field("command", "playid");
-    resp.field("command", "pause");
-    resp.field("command", "stop");
-    resp.field("command", "next");
-    resp.field("command", "previous");
-    resp.field("command", "seek");
-    resp.field("command", "seekid");
-    resp.field("command", "seekcur");
-
-    // Queue management
-    resp.field("command", "add");
-    resp.field("command", "addid");
-    resp.field("command", "delete");
-    resp.field("command", "deleteid");
-    resp.field("command", "clear");
-    resp.field("command", "move");
-    resp.field("command", "moveid");
-    resp.field("command", "swap");
-    resp.field("command", "swapid");
-    resp.field("command", "shuffle");
-    resp.field("command", "playlistid");
-
-    // Status & inspection
-    resp.field("command", "status");
-    resp.field("command", "currentsong");
-    resp.field("command", "stats");
-    resp.field("command", "playlistinfo");
-    resp.field("command", "playlistid");
-
-    // Volume
-    resp.field("command", "setvol");
-    resp.field("command", "volume");
-
-    // Options
-    resp.field("command", "repeat");
-    resp.field("command", "random");
-    resp.field("command", "single");
-    resp.field("command", "consume");
-    resp.field("command", "crossfade");
-
-    // Connection
-    resp.field("command", "close");
-    resp.field("command", "ping");
-    resp.field("command", "password");
-
-    // Reflection
-    resp.field("command", "commands");
-    resp.field("command", "notcommands");
-    resp.field("command", "tagtypes");
-    resp.field("command", "urlhandlers");
-    resp.field("command", "decoders");
-
-    // Database
-    resp.field("command", "update");
-    resp.field("command", "rescan");
-    resp.field("command", "find");
-    resp.field("command", "search");
-    resp.field("command", "list");
-    resp.field("command", "listall");
-    resp.field("command", "listallinfo");
-    resp.field("command", "lsinfo");
-    resp.field("command", "count");
-
-    // Album art
-    resp.field("command", "albumart");
-    resp.field("command", "readpicture");
-
-    // Stored playlists
-    resp.field("command", "save");
-    resp.field("command", "load");
-    resp.field("command", "listplaylists");
-    resp.field("command", "listplaylist");
-    resp.field("command", "listplaylistinfo");
-    resp.field("command", "playlistadd");
-    resp.field("command", "playlistclear");
-    resp.field("command", "playlistdelete");
-    resp.field("command", "playlistmove");
-    resp.field("command", "rm");
-    resp.field("command", "rename");
-
-    // Idle
-    resp.field("command", "idle");
-    resp.field("command", "noidle");
-
-    // Outputs
-    resp.field("command", "outputs");
-    resp.field("command", "enableoutput");
-    resp.field("command", "disableoutput");
-    resp.field("command", "toggleoutput");
-    resp.field("command", "outputset");
-
-    // Command batching
-    resp.field("command", "command_list_begin");
-    resp.field("command", "command_list_ok_begin");
-    resp.field("command", "command_list_end");
-
+    for cmd in cmds {
+        resp.field("command", cmd);
+    }
     resp.ok()
 }
 
@@ -125,7 +148,8 @@ pub async fn handle_tagtypes_command(
 
     match subcommand {
         None | Some(TagTypesSubcommand::Available) => {
-            // List all currently enabled metadata tags for this connection
+            // List all currently enabled metadata tags for this connection.
+            // Must match MPD's tagtypes output order.
             let all_tags = vec![
                 "Artist",
                 "ArtistSort",
@@ -134,14 +158,34 @@ pub async fn handle_tagtypes_command(
                 "AlbumArtist",
                 "AlbumArtistSort",
                 "Title",
+                "TitleSort",
                 "Track",
                 "Name",
                 "Genre",
+                "Mood",
                 "Date",
+                "OriginalDate",
                 "Composer",
+                "ComposerSort",
                 "Performer",
+                "Conductor",
+                "Work",
+                "Movement",
+                "MovementNumber",
+                "ShowMovement",
+                "Ensemble",
+                "Location",
+                "Grouping",
                 "Comment",
                 "Disc",
+                "Label",
+                "MUSICBRAINZ_ARTISTID",
+                "MUSICBRAINZ_ALBUMID",
+                "MUSICBRAINZ_ALBUMARTISTID",
+                "MUSICBRAINZ_TRACKID",
+                "MUSICBRAINZ_RELEASETRACKID",
+                "MUSICBRAINZ_WORKID",
+                "MUSICBRAINZ_RELEASEGROUPID",
             ];
 
             for tag in all_tags {
