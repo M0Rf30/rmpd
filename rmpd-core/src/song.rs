@@ -37,6 +37,7 @@ pub const TAG_ORDER: &[&str] = &[
     "musicbrainz_albumartistid",
     "musicbrainz_trackid",
     "musicbrainz_releasetrackid",
+    "musicbrainz_releasegroupid",
     "musicbrainz_workid",
 ];
 
@@ -105,7 +106,7 @@ pub struct Song {
 
     /// All tags as (lowercase_tag_name, value) pairs.
     /// The same tag name may appear multiple times for multi-valued tags.
-    /// Tags are stored in insertion order; output ordering uses TAG_ORDER.
+    /// Tags are stored in file insertion order; output preserves this order to match MPD.
     pub tags: Vec<(String, String)>,
 }
 

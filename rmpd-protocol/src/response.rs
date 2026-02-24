@@ -211,8 +211,7 @@ impl ResponseBuilder {
 
     pub fn song(&mut self, song: &Song, position: Option<u32>, id: Option<u32>) -> &mut Self {
         self.field("file", &song.path);
-        // MPD order: Last-Modified, Added, Format, then tags in Names.cxx order, then Time/duration, then Pos/Id
-        // Last-Modified and Added timestamps
+        // MPD order: Last-Modified, Added, tags in Names.cxx order, Format, Time/duration, Pos/Id
         if song.last_modified > 0 {
             let ts = crate::commands::utils::format_iso8601_timestamp(song.last_modified);
             self.field("Last-Modified", &ts);
@@ -221,27 +220,23 @@ impl ResponseBuilder {
             let ts = crate::commands::utils::format_iso8601_timestamp(song.added_at);
             self.field("Added", &ts);
         }
-        // Format: samplerate:bits:channels (e.g. "44100:16:2", "44100:f:2")
+        // Tags in file insertion order (matching MPD which outputs tags as stored in the file).
+        // Comment is excluded from default tag mask (MPD's Settings.cxx: All & ~TAG_COMMENT)
+        for (tag, value) in &song.tags {
+            if tag == "comment" || value.is_empty() {
+                continue;
+            }
+            let canonical = rmpd_core::song::canonical_tag_name(tag);
+            self.field(canonical, value);
+        }
+        // Format: samplerate:bits:channels — AFTER tags, before Time/duration
         if let Some(sr) = song.sample_rate {
             let bits = match song.bits_per_sample {
-                Some(0) | None => "f".to_string(), // float
+                Some(0) | None => "f".to_string(),
                 Some(b) => b.to_string(),
             };
             let ch = song.channels.unwrap_or(2);
             self.field("Format", format!("{}:{}:{}", sr, bits, ch));
-        }
-        // Tags in MPD canonical order (matching TagType enum order in Names.cxx)
-        // Comment is excluded from default tag mask (MPD's Settings.cxx: All & ~TAG_COMMENT)
-        for &tag_name in rmpd_core::song::TAG_ORDER {
-            if tag_name == "comment" {
-                continue;
-            }
-            let canonical = rmpd_core::song::canonical_tag_name(tag_name);
-            for value in song.tag_values(tag_name) {
-                if !value.is_empty() {
-                    self.field(canonical, value);
-                }
-            }
         }
         // Duration
         if let Some(duration) = song.duration {
@@ -255,7 +250,6 @@ impl ResponseBuilder {
         if let Some(song_id) = id {
             self.field("Id", song_id);
         }
-
         self
     }
 

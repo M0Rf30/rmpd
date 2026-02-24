@@ -677,15 +677,36 @@ impl Database {
             all_values
         };
 
-        // Sort with ICU collation to match MPD: empties first, then ICU root-locale order.
-        let collator =
-            CollatorBorrowed::try_new(CollatorPreferences::default(), Default::default())
-                .unwrap_or_else(|_| panic!("ICU collator unavailable"));
+        // MPD includes an empty string entry for songs that have no value for this tag.
+        // Check if any song lacks all tags in the fallback chain.
+        let has_missing: bool = {
+            let tag_list: Vec<&str> = chain.clone();
+            let placeholders = tag_list
+                .iter()
+                .enumerate()
+                .map(|(i, _)| format!("?{}", i + 1))
+                .collect::<Vec<_>>()
+                .join(",");
+            let sql = format!(
+                "SELECT EXISTS(SELECT 1 FROM songs WHERE id NOT IN \
+                 (SELECT DISTINCT song_id FROM song_tags WHERE tag IN ({placeholders})))"
+            );
+            let mut stmt = self.conn.prepare(&sql)?;
+            stmt.query_row(rusqlite::params_from_iter(tag_list.iter()), |row| {
+                row.get(0)
+            })
+            .unwrap_or(false)
+        };
+        if has_missing {
+            values.push(String::new());
+        }
+        // Sort with lexicographic order to match MPD which uses std::map<std::string>
+        // (pure byte/codepoint order). Empties sort first (matching MPD's empty string behavior).
         values.sort_by(|a, b| match (a.is_empty(), b.is_empty()) {
             (true, true) => Ordering::Equal,
             (true, false) => Ordering::Less,
             (false, true) => Ordering::Greater,
-            (false, false) => collator.compare(a, b),
+            (false, false) => a.cmp(b),
         });
         Ok(values)
     }
