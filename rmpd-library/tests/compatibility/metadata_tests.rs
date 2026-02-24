@@ -14,12 +14,12 @@ fn test_flac_metadata_extraction() {
     let song = harness.extract_metadata(path.to_str().unwrap()).unwrap();
 
     // Verify core metadata
-    assert_eq!(song.title, Some("Test Song".to_string()));
-    assert_eq!(song.artist, Some("Test Artist".to_string()));
-    assert_eq!(song.album, Some("Test Album".to_string()));
-    assert_eq!(song.genre, Some("Rock".to_string()));
-    assert_eq!(song.date, Some("2024".to_string()));
-    assert_eq!(song.track, Some(1));
+    assert_eq!(song.tag("title"), Some("Test Song"));
+    assert_eq!(song.tag("artist"), Some("Test Artist"));
+    assert_eq!(song.tag("album"), Some("Test Album"));
+    assert_eq!(song.tag("genre"), Some("Rock"));
+    assert_eq!(song.tag("date"), Some("2024"));
+    assert_eq!(song.tag("track"), Some("1"));
 
     // Verify audio properties
     assert_eq!(song.sample_rate, Some(44100));
@@ -41,10 +41,10 @@ fn test_mp3_metadata_extraction() {
     let path = pregenerated::basic_mp3();
     let song = harness.extract_metadata(path.to_str().unwrap()).unwrap();
 
-    assert_eq!(song.title, Some("Test Song MP3".to_string()));
-    assert_eq!(song.artist, Some("Test Artist MP3".to_string()));
-    assert_eq!(song.album, Some("Test Album MP3".to_string()));
-    assert_eq!(song.genre, Some("Pop".to_string()));
+    assert_eq!(song.tag("title"), Some("Test Song MP3"));
+    assert_eq!(song.tag("artist"), Some("Test Artist MP3"));
+    assert_eq!(song.tag("album"), Some("Test Album MP3"));
+    assert_eq!(song.tag("genre"), Some("Pop"));
 
     // MP3 should have bitrate
     assert!(song.bitrate.is_some());
@@ -56,9 +56,9 @@ fn test_ogg_vorbis_metadata_extraction() {
     let path = pregenerated::basic_ogg();
     let song = harness.extract_metadata(path.to_str().unwrap()).unwrap();
 
-    assert_eq!(song.title, Some("Test Song OGG".to_string()));
-    assert_eq!(song.artist, Some("Test Artist OGG".to_string()));
-    assert_eq!(song.album, Some("Test Album OGG".to_string()));
+    assert_eq!(song.tag("title"), Some("Test Song OGG"));
+    assert_eq!(song.tag("artist"), Some("Test Artist OGG"));
+    assert_eq!(song.tag("album"), Some("Test Album OGG"));
 }
 
 #[test]
@@ -67,9 +67,9 @@ fn test_opus_metadata_extraction() {
     let path = pregenerated::basic_opus();
     let song = harness.extract_metadata(path.to_str().unwrap()).unwrap();
 
-    assert_eq!(song.title, Some("Test Song Opus".to_string()));
-    assert_eq!(song.artist, Some("Test Artist Opus".to_string()));
-    assert_eq!(song.album, Some("Test Album Opus".to_string()));
+    assert_eq!(song.tag("title"), Some("Test Song Opus"));
+    assert_eq!(song.tag("artist"), Some("Test Artist Opus"));
+    assert_eq!(song.tag("album"), Some("Test Album Opus"));
 
     // Opus has specific sample rate (48kHz)
     assert_eq!(song.sample_rate, Some(48000));
@@ -81,9 +81,9 @@ fn test_m4a_metadata_extraction() {
     let path = pregenerated::basic_m4a();
     let song = harness.extract_metadata(path.to_str().unwrap()).unwrap();
 
-    assert_eq!(song.title, Some("Test Song M4A".to_string()));
-    assert_eq!(song.artist, Some("Test Artist M4A".to_string()));
-    assert_eq!(song.album, Some("Test Album M4A".to_string()));
+    assert_eq!(song.tag("title"), Some("Test Song M4A"));
+    assert_eq!(song.tag("artist"), Some("Test Artist M4A"));
+    assert_eq!(song.tag("album"), Some("Test Album M4A"));
 }
 
 #[test]
@@ -106,10 +106,10 @@ fn test_unicode_metadata_extraction() {
     let song = harness.extract_metadata(path.to_str().unwrap()).unwrap();
 
     // Verify unicode characters are preserved
-    assert_eq!(song.title, Some("テストソング".to_string()));
-    assert_eq!(song.artist, Some("Тестовый исполнитель".to_string()));
-    assert_eq!(song.album, Some("Τεστ Άλμπουμ".to_string()));
-    assert_eq!(song.genre, Some("الموسيقى".to_string()));
+    assert_eq!(song.tag("title"), Some("テストソング"));
+    assert_eq!(song.tag("artist"), Some("Тестовый исполнитель"));
+    assert_eq!(song.tag("album"), Some("Τεστ Άλμπουμ"));
+    assert_eq!(song.tag("genre"), Some("الموسيقى"));
 }
 
 #[test]
@@ -119,14 +119,14 @@ fn test_minimal_metadata() {
     let song = harness.extract_metadata(path.to_str().unwrap()).unwrap();
 
     // Core tags should be present
-    assert_eq!(song.title, Some("Minimal".to_string()));
-    assert_eq!(song.artist, Some("Artist".to_string()));
-    assert_eq!(song.album, Some("Album".to_string()));
+    assert_eq!(song.tag("title"), Some("Minimal"));
+    assert_eq!(song.tag("artist"), Some("Artist"));
+    assert_eq!(song.tag("album"), Some("Album"));
 
     // Optional tags should be None
-    assert_eq!(song.genre, None);
-    assert_eq!(song.composer, None);
-    assert_eq!(song.comment, None);
+    assert!(song.tag("genre").is_none());
+    assert!(song.tag("composer").is_none());
+    assert!(song.tag("comment").is_none());
 }
 
 #[test]
@@ -135,14 +135,14 @@ fn test_extended_metadata() {
     let path = pregenerated::extended_flac();
     let song = harness.extract_metadata(path.to_str().unwrap()).unwrap();
 
-    assert_eq!(song.title, Some("Extended Metadata".to_string()));
-    assert_eq!(song.artist, Some("Extended Artist".to_string()));
-    assert_eq!(song.album, Some("Extended Album".to_string()));
-    assert_eq!(song.album_artist, Some("Various Artists".to_string()));
-    assert_eq!(song.composer, Some("Test Composer".to_string()));
-    assert_eq!(song.genre, Some("Jazz".to_string()));
-    assert_eq!(song.track, Some(5));
-    assert_eq!(song.disc, Some(2));
+    assert_eq!(song.tag("title"), Some("Extended Metadata"));
+    assert_eq!(song.tag("artist"), Some("Extended Artist"));
+    assert_eq!(song.tag("album"), Some("Extended Album"));
+    assert_eq!(song.tag("albumartist"), Some("Various Artists"));
+    assert_eq!(song.tag("composer"), Some("Test Composer"));
+    assert_eq!(song.tag("genre"), Some("Jazz"));
+    assert_eq!(song.tag("track"), Some("5"));
+    assert_eq!(song.tag("disc"), Some("2"));
 }
 
 #[test]
@@ -169,7 +169,7 @@ fn test_metadata_extraction_performance() {
         );
 
         // Verify at least basic metadata was extracted
-        assert!(song.title.is_some());
+        assert!(song.tag("title").is_some());
         assert!(song.duration.is_some());
     }
 }
@@ -210,17 +210,17 @@ fn test_multiple_formats_consistency() {
 
         // All should have basic metadata
         assert!(
-            song.title.is_some(),
+            song.tag("title").is_some(),
             "Missing title for {:?}",
             path.file_name()
         );
         assert!(
-            song.artist.is_some(),
+            song.tag("artist").is_some(),
             "Missing artist for {:?}",
             path.file_name()
         );
         assert!(
-            song.album.is_some(),
+            song.tag("album").is_some(),
             "Missing album for {:?}",
             path.file_name()
         );

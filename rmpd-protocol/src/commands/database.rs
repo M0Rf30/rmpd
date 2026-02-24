@@ -32,117 +32,10 @@ use super::utils::{
 };
 
 /// Helper function to get tag value with MPD-style fallback.
-/// When albumartist is missing, falls back to artist; artistsort falls back to artist; etc.
+/// Delegates to Song::tag_with_fallback() for the normalized tag storage.
 fn get_tag_value<'a>(song: &'a rmpd_core::song::Song, tag: &str) -> std::borrow::Cow<'a, str> {
     use std::borrow::Cow;
-    match tag.to_lowercase().as_str() {
-        "artist" => Cow::Borrowed(song.artist.as_deref().unwrap_or_default()),
-        "artistsort" => Cow::Borrowed(
-            song.artist_sort
-                .as_deref()
-                .or(song.artist.as_deref())
-                .unwrap_or_default(),
-        ),
-        "album" => Cow::Borrowed(song.album.as_deref().unwrap_or_default()),
-        "albumartist" => Cow::Borrowed(
-            song.album_artist
-                .as_deref()
-                .or(song.artist.as_deref())
-                .unwrap_or_default(),
-        ),
-        "albumartistsort" => Cow::Borrowed(
-            song.album_artist_sort
-                .as_deref()
-                .or(song.album_artist.as_deref())
-                .or(song.artist_sort.as_deref())
-                .or(song.artist.as_deref())
-                .unwrap_or_default(),
-        ),
-        "title" => Cow::Borrowed(song.title.as_deref().unwrap_or_default()),
-        "track" => song
-            .track
-            .map_or(Cow::Borrowed(""), |t| Cow::Owned(t.to_string())),
-        "disc" => song
-            .disc
-            .map_or(Cow::Borrowed(""), |d| Cow::Owned(d.to_string())),
-        "date" => Cow::Borrowed(song.date.as_deref().unwrap_or_default()),
-        "originaldate" => Cow::Borrowed(song.original_date.as_deref().unwrap_or_default()),
-        "genre" => Cow::Borrowed(song.genre.as_deref().unwrap_or_default()),
-        "composer" => Cow::Borrowed(song.composer.as_deref().unwrap_or_default()),
-        "performer" => Cow::Borrowed(song.performer.as_deref().unwrap_or_default()),
-        "grouping" => Cow::Borrowed(song.grouping.as_deref().unwrap_or_default()),
-        "comment" => Cow::Borrowed(song.comment.as_deref().unwrap_or_default()),
-        "label" => Cow::Borrowed(song.label.as_deref().unwrap_or_default()),
-        "musicbrainz_artistid" => {
-            Cow::Borrowed(song.musicbrainz_artistid.as_deref().unwrap_or_default())
-        }
-        "musicbrainz_albumid" => {
-            Cow::Borrowed(song.musicbrainz_albumid.as_deref().unwrap_or_default())
-        }
-        "musicbrainz_albumartistid" => Cow::Borrowed(
-            song.musicbrainz_albumartistid
-                .as_deref()
-                .unwrap_or_default(),
-        ),
-        "musicbrainz_trackid" => {
-            Cow::Borrowed(song.musicbrainz_trackid.as_deref().unwrap_or_default())
-        }
-        "musicbrainz_releasetrackid" => Cow::Borrowed(
-            song.musicbrainz_releasetrackid
-                .as_deref()
-                .unwrap_or_default(),
-        ),
-        "musicbrainz_releasegroupid" => Cow::Borrowed(
-            song.musicbrainz_releasegroupid
-                .as_deref()
-                .unwrap_or_default(),
-        ),
-        "musicbrainz_workid" => {
-            Cow::Borrowed(song.musicbrainz_workid.as_deref().unwrap_or_default())
-        }
-        _ => Cow::Borrowed(""),
-    }
-}
-
-/// Map lowercase tag name to canonical MPD display name.
-fn canonical_tag_name(tag: &str) -> &str {
-    match tag.to_lowercase().as_str() {
-        "artist" => "Artist",
-        "artistsort" => "ArtistSort",
-        "album" => "Album",
-        "albumsort" => "AlbumSort",
-        "albumartist" => "AlbumArtist",
-        "albumartistsort" => "AlbumArtistSort",
-        "title" => "Title",
-        "titlesort" => "TitleSort",
-        "track" => "Track",
-        "name" => "Name",
-        "genre" => "Genre",
-        "mood" => "Mood",
-        "date" => "Date",
-        "originaldate" => "OriginalDate",
-        "composer" => "Composer",
-        "composersort" => "ComposerSort",
-        "performer" => "Performer",
-        "conductor" => "Conductor",
-        "work" => "Work",
-        "movement" => "Movement",
-        "movementnumber" => "MovementNumber",
-        "ensemble" => "Ensemble",
-        "location" => "Location",
-        "grouping" => "Grouping",
-        "comment" => "Comment",
-        "disc" => "Disc",
-        "label" => "Label",
-        "musicbrainz_artistid" => "MUSICBRAINZ_ARTISTID",
-        "musicbrainz_albumid" => "MUSICBRAINZ_ALBUMID",
-        "musicbrainz_albumartistid" => "MUSICBRAINZ_ALBUMARTISTID",
-        "musicbrainz_trackid" => "MUSICBRAINZ_TRACKID",
-        "musicbrainz_releasetrackid" => "MUSICBRAINZ_RELEASETRACKID",
-        "musicbrainz_releasegroupid" => "MUSICBRAINZ_RELEASEGROUPID",
-        "musicbrainz_workid" => "MUSICBRAINZ_WORKID",
-        _ => tag,
-    }
+    Cow::Borrowed(song.tag_with_fallback(tag).unwrap_or_default())
 }
 
 pub async fn handle_find_command(
@@ -354,9 +247,11 @@ pub async fn handle_list_command(
                         // Extract unique values of the requested tag
                         let mut seen = std::collections::BTreeSet::new();
                         for song in &songs {
-                            let val = get_tag_value(song, tag);
-                            if !val.is_empty() {
-                                seen.insert(val.into_owned());
+                            let vals = song.tag_values_with_fallback(tag);
+                            for val in vals {
+                                if !val.is_empty() {
+                                    seen.insert(val.to_string());
+                                }
                             }
                         }
                         seen.into_iter().collect()
@@ -412,7 +307,7 @@ pub async fn handle_list_command(
     };
 
     let mut resp = ResponseBuilder::new();
-    let tag_key = canonical_tag_name(tag);
+    let tag_key = rmpd_core::song::canonical_tag_name(&tag.to_lowercase());
 
     for value in values {
         resp.field(tag_key, value);
@@ -525,18 +420,21 @@ pub async fn handle_count_command(
         use std::collections::HashMap;
         let mut groups: HashMap<String, (usize, u64)> = HashMap::new();
         for song in &songs {
-            let group_value = get_tag_value(song, group_tag).into_owned();
-            let entry = groups.entry(group_value).or_insert((0, 0));
-            entry.0 += 1;
-            if let Some(duration) = song.duration {
-                entry.1 += duration.as_secs();
+            let vals = song.tag_values_with_fallback(group_tag);
+            let vals: Vec<&str> = if vals.is_empty() { vec![""] } else { vals };
+            for group_value in vals {
+                let entry = groups.entry(group_value.to_string()).or_insert((0, 0));
+                entry.0 += 1;
+                if let Some(duration) = song.duration {
+                    entry.1 += duration.as_secs();
+                }
             }
         }
 
         // Sort by tag value (MPD uses std::map which sorts lexicographically)
         let mut sorted: Vec<_> = groups.into_iter().collect();
         sorted.sort_by(|a, b| a.0.cmp(&b.0));
-        let tag_key = canonical_tag_name(group_tag);
+        let tag_key = rmpd_core::song::canonical_tag_name(&group_tag.to_lowercase());
         for (value, (count, playtime)) in &sorted {
             resp.field(tag_key, value);
             resp.field("songs", count);
@@ -1050,7 +948,9 @@ pub async fn handle_readcomments_command(state: &AppState, uri: &str) -> String 
 
     if let Ok(Some(song)) = db.get_song_by_path(uri) {
         let mut resp = ResponseBuilder::new();
-        if let Some(ref comment) = song.comment {
+        if let Some(comment) = song.tag("comment")
+            && !comment.is_empty()
+        {
             resp.field("comment", comment);
         }
         return resp.ok();

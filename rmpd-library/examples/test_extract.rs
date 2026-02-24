@@ -8,16 +8,19 @@ fn main() {
     match MetadataExtractor::extract_from_file(&dsd_path) {
         Ok(song) => {
             println!("\nExtracted DSD metadata:");
-            println!("  Title: {:?}", song.title);
-            println!("  Artist: {:?}", song.artist);
-            println!("  Album: {:?}", song.album);
-            println!("  Date: {:?}", song.date);
-            println!("  Genre: {:?}", song.genre);
+            println!("  Title: {:?}", song.tag("title"));
+            println!("  Artist: {:?}", song.tag("artist"));
+            println!("  Album: {:?}", song.tag("album"));
+            println!("  Date: {:?}", song.tag("date"));
+            println!("  Genre: {:?}", song.tag("genre"));
             println!("  Sample Rate: {:?}", song.sample_rate);
             println!("  Channels: {:?}", song.channels);
             println!("  Bits Per Sample: {:?}", song.bits_per_sample);
             println!("  Duration: {:?}", song.duration);
-            println!("  MusicBrainz TrackID: {:?}", song.musicbrainz_trackid);
+            println!(
+                "  MusicBrainz TrackID: {:?}",
+                song.tag("musicbrainz_trackid")
+            );
         }
         Err(e) => {
             eprintln!("Error extracting DSD metadata: {}", e);
@@ -34,10 +37,13 @@ fn main() {
     match MetadataExtractor::extract_from_file(&mp3_path) {
         Ok(song) => {
             println!("\nExtracted MP3 metadata:");
-            println!("  Title: {:?}", song.title);
-            println!("  Artist: {:?}", song.artist);
-            println!("  Album: {:?}", song.album);
-            println!("  MusicBrainz TrackID: {:?}", song.musicbrainz_trackid);
+            println!("  Title: {:?}", song.tag("title"));
+            println!("  Artist: {:?}", song.tag("artist"));
+            println!("  Album: {:?}", song.tag("album"));
+            println!(
+                "  MusicBrainz TrackID: {:?}",
+                song.tag("musicbrainz_trackid")
+            );
         }
         Err(e) => {
             eprintln!("Error extracting MP3 metadata: {}", e);

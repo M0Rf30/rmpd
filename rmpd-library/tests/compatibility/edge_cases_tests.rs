@@ -47,9 +47,9 @@ fn test_missing_all_optional_tags() {
     // Should still be able to find the song
     let results = harness.find_by_artist("Minimal Artist").unwrap();
     assert_eq!(results.len(), 1);
-    assert_eq!(results[0].title, Some("Minimal Song".to_string()));
-    assert_eq!(results[0].genre, None);
-    assert_eq!(results[0].date, None);
+    assert_eq!(results[0].tag("title"), Some("Minimal Song"));
+    assert!(results[0].tag("genre").is_none());
+    assert!(results[0].tag("date").is_none());
 }
 
 #[test]
@@ -72,7 +72,7 @@ fn test_empty_tag_values() {
     let song = harness.extract_metadata(path.to_str().unwrap()).unwrap();
 
     // Empty strings should be handled gracefully (as None or empty)
-    assert!(song.genre.is_none() || song.genre == Some(String::new()));
+    assert!(song.tag("genre").is_none() || song.tag("genre") == Some(""));
 }
 
 #[test]
@@ -100,9 +100,9 @@ fn test_very_long_metadata() {
 
     // Verify we can retrieve and the data is intact
     let retrieved = harness.get_song(id).unwrap().unwrap();
-    assert_eq!(retrieved.title, Some(long_title));
-    assert_eq!(retrieved.artist, Some(long_artist));
-    assert_eq!(retrieved.album, Some(long_album));
+    assert_eq!(retrieved.tag("title"), Some(long_title.as_str()));
+    assert_eq!(retrieved.tag("artist"), Some(long_artist.as_str()));
+    assert_eq!(retrieved.tag("album"), Some(long_album.as_str()));
 }
 
 #[test]
@@ -127,10 +127,10 @@ fn test_unicode_in_all_fields() {
     harness.add_song(&song).unwrap();
 
     // Verify unicode is preserved (note: some fields may not be preserved by FFmpeg)
-    assert_eq!(song.title, Some("テストソング".to_string()));
-    assert_eq!(song.artist, Some("Тестовый исполнитель".to_string()));
-    assert_eq!(song.album, Some("Τεστ Άλμπουμ".to_string()));
-    assert_eq!(song.genre, Some("الموسيقى".to_string()));
+    assert_eq!(song.tag("title"), Some("テストソング"));
+    assert_eq!(song.tag("artist"), Some("Тестовый исполнитель"));
+    assert_eq!(song.tag("album"), Some("Τεστ Άλμπουμ"));
+    assert_eq!(song.tag("genre"), Some("الموسيقى"));
     // Composer may not be preserved by all FFmpeg/format combinations
     // assert_eq!(song.composer, Some("测试作曲家".to_string()));
 
@@ -160,8 +160,8 @@ fn test_special_characters_in_metadata() {
     harness.add_song(&song).unwrap();
 
     // Special characters should be preserved
-    assert!(song.title.as_ref().unwrap().contains("Quotes"));
-    assert!(song.artist.as_ref().unwrap().contains("Slash"));
+    assert!(song.tag("title").unwrap().contains("Quotes"));
+    assert!(song.tag("artist").unwrap().contains("Slash"));
 }
 
 #[test]
@@ -257,7 +257,10 @@ fn test_duplicate_paths_update() {
     harness.add_song(&song1).unwrap();
 
     // Simulate updating metadata for same file
-    song1.title = Some("Updated Title".to_string());
+    song1.tags.retain(|(k, _)| k != "title");
+    song1
+        .tags
+        .push(("title".to_string(), "Updated Title".to_string()));
     harness.add_song(&song1).unwrap();
 
     // Should have updated, not duplicated
@@ -269,7 +272,7 @@ fn test_duplicate_paths_update() {
         .get_song_by_path(song1.path.as_str())
         .unwrap()
         .unwrap();
-    assert_eq!(retrieved.title, Some("Updated Title".to_string()));
+    assert_eq!(retrieved.tag("title"), Some("Updated Title"));
 }
 
 #[test]
@@ -369,8 +372,8 @@ fn test_maximum_track_numbers() {
     harness.add_song(&song).unwrap();
 
     // Large track/disc numbers should work
-    assert_eq!(song.track, Some(999));
-    assert_eq!(song.disc, Some(99));
+    assert_eq!(song.tag("track"), Some("999"));
+    assert_eq!(song.tag("disc"), Some("99"));
 }
 
 #[test]
@@ -394,7 +397,7 @@ fn test_zero_track_numbers() {
     harness.add_song(&song).unwrap();
 
     // Zero track numbers should be handled
-    assert_eq!(song.track, Some(0));
+    assert_eq!(song.tag("track"), Some("0"));
 }
 
 #[test]
@@ -448,7 +451,7 @@ fn test_date_format_variations() {
         harness.add_song(&song).unwrap();
 
         // All date formats should be accepted
-        assert_eq!(song.date, Some(date.to_string()));
+        assert_eq!(song.tag("date"), Some(date));
     }
 }
 

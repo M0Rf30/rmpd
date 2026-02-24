@@ -53,7 +53,7 @@ pub async fn handle_play_command(state: &AppState, position: Option<u32>) -> Str
                 status.audio_format = Some(rmpd_core::song::AudioFormat {
                     sample_rate: sr,
                     channels: ch,
-                    bits_per_sample: bps,
+                    bits_per_sample: bps as u8,
                 });
             }
 

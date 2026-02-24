@@ -51,42 +51,53 @@ pub fn compare_songs(
     mpd_song: &Song,
     config: &ComparisonConfig,
 ) -> Vec<(String, ComparisonResult)> {
+    let rmpd_title = rmpd_song.tag("title").map(|s| s.to_string());
+    let mpd_title = mpd_song.tag("title").map(|s| s.to_string());
+    let rmpd_artist = rmpd_song.tag("artist").map(|s| s.to_string());
+    let mpd_artist = mpd_song.tag("artist").map(|s| s.to_string());
+    let rmpd_album = rmpd_song.tag("album").map(|s| s.to_string());
+    let mpd_album = mpd_song.tag("album").map(|s| s.to_string());
+    let rmpd_album_artist = rmpd_song.tag("albumartist").map(|s| s.to_string());
+    let mpd_album_artist = mpd_song.tag("albumartist").map(|s| s.to_string());
+    let rmpd_genre = rmpd_song.tag("genre").map(|s| s.to_string());
+    let mpd_genre = mpd_song.tag("genre").map(|s| s.to_string());
+    let rmpd_mb_trackid = rmpd_song.tag("musicbrainz_trackid").map(|s| s.to_string());
+    let mpd_mb_trackid = mpd_song.tag("musicbrainz_trackid").map(|s| s.to_string());
+    let rmpd_mb_albumid = rmpd_song.tag("musicbrainz_albumid").map(|s| s.to_string());
+    let mpd_mb_albumid = mpd_song.tag("musicbrainz_albumid").map(|s| s.to_string());
+    let rmpd_date = rmpd_song.tag("date").map(|s| s.to_string());
+    let mpd_date = mpd_song.tag("date").map(|s| s.to_string());
+
     vec![
         // Level 1: Exact comparisons (core tags, MusicBrainz IDs)
         (
             "title".to_string(),
-            compare_option_exact(&rmpd_song.title, &mpd_song.title),
+            compare_option_exact(&rmpd_title, &mpd_title),
         ),
         (
             "artist".to_string(),
-            compare_option_exact(&rmpd_song.artist, &mpd_song.artist),
+            compare_option_exact(&rmpd_artist, &mpd_artist),
         ),
         (
             "album".to_string(),
-            compare_option_exact(&rmpd_song.album, &mpd_song.album),
+            compare_option_exact(&rmpd_album, &mpd_album),
         ),
         (
             "album_artist".to_string(),
-            compare_option_exact(&rmpd_song.album_artist, &mpd_song.album_artist),
+            compare_option_exact(&rmpd_album_artist, &mpd_album_artist),
         ),
         (
             "genre".to_string(),
-            compare_option_exact(&rmpd_song.genre, &mpd_song.genre),
+            compare_option_exact(&rmpd_genre, &mpd_genre),
         ),
         // MusicBrainz IDs (should be exact)
         (
             "musicbrainz_trackid".to_string(),
-            compare_option_exact(
-                &rmpd_song.musicbrainz_trackid,
-                &mpd_song.musicbrainz_trackid,
-            ),
+            compare_option_exact(&rmpd_mb_trackid, &mpd_mb_trackid),
         ),
         (
             "musicbrainz_albumid".to_string(),
-            compare_option_exact(
-                &rmpd_song.musicbrainz_albumid,
-                &mpd_song.musicbrainz_albumid,
-            ),
+            compare_option_exact(&rmpd_mb_albumid, &mpd_mb_albumid),
         ),
         // Level 2: Fuzzy comparisons (duration, bitrate, dates)
         (
@@ -107,7 +118,7 @@ pub fn compare_songs(
         ),
         (
             "date".to_string(),
-            compare_date(&rmpd_song.date, &mpd_song.date, config.strict_date_format),
+            compare_date(&rmpd_date, &mpd_date, config.strict_date_format),
         ),
         // Level 3: Presence checks (ReplayGain, comments)
         (
@@ -119,7 +130,10 @@ pub fn compare_songs(
         ),
         (
             "comment".to_string(),
-            compare_presence(rmpd_song.comment.is_some(), mpd_song.comment.is_some()),
+            compare_presence(
+                rmpd_song.tag("comment").is_some(),
+                mpd_song.tag("comment").is_some(),
+            ),
         ),
         // Audio properties
         (
@@ -278,29 +292,6 @@ mod tests {
             id: 1,
             path: "/music/test.mp3".into(),
             duration: Some(Duration::from_secs(180)),
-            title: Some("Test Song".to_string()),
-            artist: Some("Test Artist".to_string()),
-            album: Some("Test Album".to_string()),
-            album_artist: None,
-            track: Some(1),
-            disc: None,
-            date: Some("2024".to_string()),
-            genre: Some("Rock".to_string()),
-            composer: None,
-            performer: None,
-            comment: None,
-            grouping: None,
-            musicbrainz_trackid: Some("12345678-1234-1234-1234-123456789012".to_string()),
-            musicbrainz_albumid: None,
-            musicbrainz_artistid: None,
-            musicbrainz_albumartistid: None,
-            musicbrainz_releasegroupid: None,
-            musicbrainz_releasetrackid: None,
-            musicbrainz_workid: None,
-            artist_sort: None,
-            album_artist_sort: None,
-            original_date: None,
-            label: None,
             sample_rate: Some(44100),
             channels: Some(2),
             bits_per_sample: Some(16),
@@ -311,6 +302,18 @@ mod tests {
             replay_gain_album_peak: None,
             added_at: 0,
             last_modified: 0,
+            tags: vec![
+                ("title".to_string(), "Test Song".to_string()),
+                ("artist".to_string(), "Test Artist".to_string()),
+                ("album".to_string(), "Test Album".to_string()),
+                ("track".to_string(), "1".to_string()),
+                ("date".to_string(), "2024".to_string()),
+                ("genre".to_string(), "Rock".to_string()),
+                (
+                    "musicbrainz_trackid".to_string(),
+                    "12345678-1234-1234-1234-123456789012".to_string(),
+                ),
+            ],
         }
     }
 

@@ -450,7 +450,7 @@ pub async fn handle_plchanges_command(
             if item.priority > 0 {
                 resp.field("Prio", item.priority);
             }
-            if let Some(ref title) = item.song.title {
+            if let Some(title) = item.song.tag("title") {
                 resp.field("Title", title);
             }
         }

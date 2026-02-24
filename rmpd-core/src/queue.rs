@@ -323,9 +323,9 @@ mod tests {
         }
 
         // Check that items outside the range weren't affected
-        assert_eq!(queue.get(0).unwrap().song.title, Some("Song 0".to_string()));
-        assert_eq!(queue.get(1).unwrap().song.title, Some("Song 1".to_string()));
-        assert_eq!(queue.get(5).unwrap().song.title, Some("Song 5".to_string()));
+        assert_eq!(queue.get(0).unwrap().song.tag("title"), Some("Song 0"));
+        assert_eq!(queue.get(1).unwrap().song.tag("title"), Some("Song 1"));
+        assert_eq!(queue.get(5).unwrap().song.tag("title"), Some("Song 5"));
     }
 
     #[test]

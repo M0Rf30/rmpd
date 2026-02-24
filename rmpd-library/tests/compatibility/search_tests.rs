@@ -45,17 +45,17 @@ fn test_full_text_search_basic() {
     // Search for "Queen"
     let results = harness.search("Queen").unwrap();
     assert_eq!(results.len(), 1);
-    assert_eq!(results[0].artist, Some("Queen".to_string()));
+    assert_eq!(results[0].tag("artist"), Some("Queen"));
 
     // Search for "California"
     let results = harness.search("California").unwrap();
     assert_eq!(results.len(), 1);
-    assert_eq!(results[0].title, Some("Hotel California".to_string()));
+    assert_eq!(results[0].tag("title"), Some("Hotel California"));
 
     // Search for "Led"
     let results = harness.search("Led").unwrap();
     assert_eq!(results.len(), 1);
-    assert_eq!(results[0].artist, Some("Led Zeppelin".to_string()));
+    assert_eq!(results[0].tag("artist"), Some("Led Zeppelin"));
 }
 
 #[test]
@@ -82,7 +82,7 @@ fn test_case_insensitive_search() {
     for query in test_queries {
         let results = harness.search(query).unwrap();
         assert_eq!(results.len(), 1, "Query '{}' should find 1 result", query);
-        assert_eq!(results[0].title, Some("Thunder Road".to_string()));
+        assert_eq!(results[0].tag("title"), Some("Thunder Road"));
     }
 }
 
@@ -149,7 +149,7 @@ fn test_multi_field_search() {
     let results = harness.search("Floyd").unwrap();
     assert_eq!(results.len(), 2);
     for song in &results {
-        assert_eq!(song.artist, Some("Pink Floyd".to_string()));
+        assert_eq!(song.tag("artist"), Some("Pink Floyd"));
     }
 
     // Search for "Dark" should find 2 songs (one with "Dark" in title, one in album)
@@ -179,12 +179,12 @@ fn test_unicode_search() {
     // Search with unicode characters
     let results = harness.search("さくら").unwrap();
     assert_eq!(results.len(), 1);
-    assert_eq!(results[0].title, Some("さくら".to_string()));
+    assert_eq!(results[0].tag("title"), Some("さくら"));
 
     // Search artist name
     let results = harness.search("いきものがかり").unwrap();
     assert_eq!(results.len(), 1);
-    assert_eq!(results[0].artist, Some("いきものがかり".to_string()));
+    assert_eq!(results[0].tag("artist"), Some("いきものがかり"));
 }
 
 #[test]
@@ -219,13 +219,13 @@ fn test_search_by_genre() {
     let results = harness.search("Rock").unwrap();
     assert_eq!(results.len(), 2);
     for song in &results {
-        assert_eq!(song.genre, Some("Rock".to_string()));
+        assert_eq!(song.tag("genre"), Some("Rock"));
     }
 
     // Search for "Jazz" genre
     let results = harness.search("Jazz").unwrap();
     assert_eq!(results.len(), 1);
-    assert_eq!(results[0].genre, Some("Jazz".to_string()));
+    assert_eq!(results[0].tag("genre"), Some("Jazz"));
 }
 
 #[test]
@@ -250,10 +250,7 @@ fn test_search_by_composer() {
     // Search for composer
     let results = harness.search("Beethoven").unwrap();
     assert_eq!(results.len(), 1);
-    assert_eq!(
-        results[0].composer,
-        Some("Ludwig van Beethoven".to_string())
-    );
+    assert_eq!(results[0].tag("composer"), Some("Ludwig van Beethoven"));
 }
 
 #[test]
