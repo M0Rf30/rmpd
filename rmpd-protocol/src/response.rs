@@ -134,10 +134,14 @@ impl ResponseBuilder {
         };
         self.field("consume", consume_val);
 
+        self.field("partition", "default");
+
         self.field("playlist", status.playlist_version);
         self.field("playlistlength", status.playlist_length);
         self.field("mixrampdb", status.mixramp_db);
-        self.field("mixrampdelay", status.mixramp_delay);
+        if status.mixramp_delay > 0.0 {
+            self.field("mixrampdelay", status.mixramp_delay);
+        }
 
         let state_str = match status.state {
             rmpd_core::state::PlayerState::Stop => "stop",
@@ -145,6 +149,7 @@ impl ResponseBuilder {
             rmpd_core::state::PlayerState::Pause => "pause",
         };
         self.field("state", state_str);
+        self.field("lastloadedplaylist", "");
 
         if let Some(pos) = &status.current_song {
             self.field("song", pos.position);
@@ -266,13 +271,13 @@ impl ResponseBuilder {
     }
 
     pub fn stats(&mut self, stats: &Stats) -> &mut Self {
+        self.field("uptime", stats.uptime);
+        self.field("playtime", stats.playtime);
         self.field("artists", stats.artists);
         self.field("albums", stats.albums);
         self.field("songs", stats.songs);
-        self.field("uptime", stats.uptime);
         self.field("db_playtime", stats.db_playtime);
         self.field("db_update", stats.db_update);
-        self.field("playtime", stats.playtime);
         self
     }
 }
