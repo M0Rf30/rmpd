@@ -576,15 +576,18 @@ pub async fn handle_listall_command(state: &AppState, path: Option<&str>) -> Str
     };
 
     let path_str = path.unwrap_or("");
+    let mut resp = ResponseBuilder::new();
 
-    match db.list_directory_recursive(path_str) {
-        Ok(songs) => {
-            let mut resp = ResponseBuilder::new();
-            for song in &songs {
-                resp.field("file", &song.path);
-            }
-            resp.ok()
+    let result = db.walk_recursive(path_str, &mut |entry| {
+        match entry {
+            rmpd_library::WalkEntry::Song(song) => { resp.field("file", &song.path); }
+            rmpd_library::WalkEntry::Directory(dir) => { resp.field("directory", dir); }
         }
+        Ok(())
+    });
+
+    match result {
+        Ok(()) => resp.ok(),
         Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "listall", &format!("Error: {e}")),
     }
 }
@@ -596,15 +599,18 @@ pub async fn handle_listallinfo_command(state: &AppState, path: Option<&str>) ->
     };
 
     let path_str = path.unwrap_or("");
+    let mut resp = ResponseBuilder::new();
 
-    match db.list_directory_recursive(path_str) {
-        Ok(songs) => {
-            let mut resp = ResponseBuilder::new();
-            for song in &songs {
-                resp.song(song, None, None);
-            }
-            resp.ok()
+    let result = db.walk_recursive(path_str, &mut |entry| {
+        match entry {
+            rmpd_library::WalkEntry::Song(song) => { resp.song(song, None, None); }
+            rmpd_library::WalkEntry::Directory(dir) => { resp.field("directory", dir); }
         }
+        Ok(())
+    });
+
+    match result {
+        Ok(()) => resp.ok(),
         Err(e) => {
             ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "listallinfo", &format!("Error: {e}"))
         }
