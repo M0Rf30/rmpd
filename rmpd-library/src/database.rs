@@ -538,7 +538,7 @@ impl Database {
             [],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
-        Ok((song_count, artists, albums, playtime as u64, last_update))
+        Ok((song_count, artists, albums, playtime.round() as u64, last_update))
     }
 
     fn get_or_create_directory(&self, path: &camino::Utf8Path) -> Result<i64> {
