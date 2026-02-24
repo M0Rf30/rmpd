@@ -537,19 +537,16 @@ pub async fn handle_lsinfo_command(state: &AppState, path: Option<&str>) -> Stri
             let mut resp = ResponseBuilder::new();
             let music_dir = state.music_dir.as_deref();
 
-            // List subdirectories first
-            for dir in &listing.directories {
-                let display_dir = strip_music_dir_prefix(dir, music_dir);
-                resp.field("directory", display_dir);
-            }
-
-            // Then list songs
+            // Songs first, then directories (matches MPD's lsinfo output order)
             for song in &listing.songs {
-                // Create a modified song with stripped path for display
                 let display_path = strip_music_dir_prefix(song.path.as_str(), music_dir);
                 let mut display_song = song.clone();
                 display_song.path = display_path.into();
                 resp.song(&display_song, None, None);
+            }
+            for dir in &listing.directories {
+                let display_dir = strip_music_dir_prefix(dir, music_dir);
+                resp.field("directory", display_dir);
             }
 
             // For root directory, also list playlists
