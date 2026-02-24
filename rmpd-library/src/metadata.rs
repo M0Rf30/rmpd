@@ -175,7 +175,15 @@ impl MetadataExtractor {
             label,
             sample_rate,
             channels,
-            bits_per_sample: Some(properties.bit_depth().unwrap_or(16)),
+            // For lossy codecs decoded as float (M4A/AAC), use 0 as sentinel for "f" format.
+            // MPD's FAAD decoder always outputs SampleFormat::FLOAT for AAC.
+            bits_per_sample: {
+                let ext = path.extension().map(|e| e.to_lowercase());
+                match ext.as_deref() {
+                    Some("m4a" | "aac") => Some(0), // float
+                    _ => Some(properties.bit_depth().unwrap_or(16)),
+                }
+            },
             bitrate,
             replay_gain_track_gain,
             replay_gain_track_peak,
