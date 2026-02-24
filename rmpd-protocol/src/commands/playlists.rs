@@ -4,8 +4,22 @@ use crate::response::ResponseBuilder;
 use crate::state::AppState;
 
 use super::utils::{
-    ACK_ERROR_SYSTEM, apply_range, format_iso8601_timestamp, open_db, song_tag_contains,
+    ACK_ERROR_SYSTEM, format_iso8601_timestamp, open_db, song_tag_contains,
 };
+
+/// Parse an .m3u playlist file and return the list of relative paths.
+/// Lines starting with '#' are comments and are skipped.
+fn read_m3u_playlist(playlist_dir: &str, name: &str) -> Result<Vec<String>, String> {
+    let path = std::path::Path::new(playlist_dir).join(format!("{name}.m3u"));
+    let content = std::fs::read_to_string(&path)
+        .map_err(|e| format!("No such playlist: {e}"))?;
+    let paths: Vec<String> = content
+        .lines()
+        .filter(|l| !l.trim_start().starts_with('#') && !l.trim().is_empty())
+        .map(|l| l.to_string())
+        .collect();
+    Ok(paths)
+}
 
 pub async fn handle_listplaylists_command(state: &AppState) -> String {
     let playlist_dir = match &state.playlist_dir {
@@ -249,54 +263,70 @@ pub async fn handle_listplaylist_command(
     name: &str,
     range: Option<(u32, u32)>,
 ) -> String {
-    let db = match open_db(state, "listplaylist") {
-        Ok(d) => d,
-        Err(e) => return e,
+    let playlist_dir = match &state.playlist_dir {
+        Some(d) => d.clone(),
+        None => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "listplaylist", "playlist directory not configured"),
     };
 
-    match db.get_playlist_songs(name) {
-        Ok(songs) => {
-            let filtered = apply_range(&songs, range);
+    let paths = match read_m3u_playlist(&playlist_dir, name) {
+        Ok(p) => p,
+        Err(e) => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "listplaylist", &e),
+    };
 
-            let mut resp = ResponseBuilder::new();
-            for song in filtered {
-                resp.field("file", &song.path);
-            }
-            resp.ok()
-        }
-        Err(e) => {
-            ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "listplaylist", &format!("Error: {e}"))
-        }
+    let total = paths.len();
+    let (start, end) = if let Some((s, e)) = range {
+        (s as usize, (e as usize).min(total))
+    } else {
+        (0, total)
+    };
+    let slice = &paths[start.min(total)..end.min(total)];
+
+    let mut resp = ResponseBuilder::new();
+    for path in slice {
+        resp.field("file", path);
     }
+    resp.ok()
 }
-
 pub async fn handle_listplaylistinfo_command(
     state: &AppState,
     name: &str,
     range: Option<(u32, u32)>,
 ) -> String {
+    let playlist_dir = match &state.playlist_dir {
+        Some(d) => d.clone(),
+        None => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "listplaylistinfo", "playlist directory not configured"),
+    };
+
+    let paths = match read_m3u_playlist(&playlist_dir, name) {
+        Ok(p) => p,
+        Err(e) => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "listplaylistinfo", &e),
+    };
     let db = match open_db(state, "listplaylistinfo") {
         Ok(d) => d,
         Err(e) => return e,
     };
 
-    match db.get_playlist_songs(name) {
-        Ok(songs) => {
-            let filtered = apply_range(&songs, range);
+    let total = paths.len();
+    let (start, end) = if let Some((s, e)) = range {
+        (s as usize, (e as usize).min(total))
+    } else {
+        (0, total)
+    };
+    let slice = &paths[start.min(total)..end.min(total)];
 
-            let mut resp = ResponseBuilder::new();
-            for song in filtered {
-                resp.song(song, None, None);
+    let mut resp = ResponseBuilder::new();
+    for path in slice {
+        match db.find_songs("file", path) {
+            Ok(songs) if !songs.is_empty() => {
+                resp.song(&songs[0], None, None);
             }
-            resp.ok()
+            _ => {
+                // Song not in DB — emit just the file path like MPD does for unknown tracks
+                resp.field("file", path);
+            }
         }
-        Err(e) => ResponseBuilder::error(
-            ACK_ERROR_SYSTEM,
-            0,
-            "listplaylistinfo",
-            &format!("Error: {e}"),
-        ),
     }
+    resp.ok()
 }
 
 pub async fn handle_playlistadd_command(
