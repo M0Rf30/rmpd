@@ -21,6 +21,8 @@ pub struct Song {
     pub performer: Option<String>,
     pub comment: Option<String>,
 
+    pub grouping: Option<String>,
+
     // MusicBrainz IDs
     pub musicbrainz_trackid: Option<String>,
     pub musicbrainz_albumid: Option<String>,
@@ -28,6 +30,8 @@ pub struct Song {
     pub musicbrainz_albumartistid: Option<String>,
     pub musicbrainz_releasegroupid: Option<String>,
     pub musicbrainz_releasetrackid: Option<String>,
+
+    pub musicbrainz_workid: Option<String>,
 
     // Extended metadata
     pub artist_sort: Option<String>,
