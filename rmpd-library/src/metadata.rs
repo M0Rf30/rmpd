@@ -9,6 +9,16 @@ use std::time::SystemTime;
 
 use crate::database::system_time_to_unix_secs;
 
+/// Detect bogus DSF ReplayGain hex data stored in the Comment field.
+/// DSF files sometimes embed raw ReplayGain binary data in the COMM frame
+/// which lofty decodes as a hex string. MPD suppresses these; we do the same.
+fn is_bogus_dsf_comment(s: &str) -> bool {
+    // Bogus comments are long hex strings (typically 32+ chars of 0-9a-fA-F),
+    // possibly with spaces between groups (e.g. " 00000219 00000219 ...")
+    let trimmed = s.trim();
+    trimmed.len() >= 16 && trimmed.chars().all(|c| c.is_ascii_hexdigit() || c == ' ')
+}
+
 /// Represents extracted artwork from an audio file
 #[derive(Debug, Clone)]
 pub struct Artwork {
@@ -60,12 +70,14 @@ impl MetadataExtractor {
             composer,
             performer,
             comment,
+            grouping,
             musicbrainz_trackid,
             musicbrainz_albumid,
             musicbrainz_artistid,
             musicbrainz_albumartistid,
             musicbrainz_releasegroupid,
             musicbrainz_releasetrackid,
+            musicbrainz_workid,
             artist_sort,
             album_artist_sort,
             original_date,
@@ -84,7 +96,10 @@ impl MetadataExtractor {
                 tag.genre().map(|s| s.to_string()),
                 tag.get_string(ItemKey::Composer).map(|s| s.to_string()),
                 tag.get_string(ItemKey::Performer).map(|s| s.to_string()),
-                tag.comment().map(|s| s.to_string()),
+                tag.comment()
+                    .filter(|s| !is_bogus_dsf_comment(s))
+                    .map(|s| s.to_string()),
+                tag.get_string(ItemKey::ContentGroup).map(|s| s.to_string()),
                 // MusicBrainz IDs
                 // Note: lofty's MusicBrainzRecordingId = Vorbis MUSICBRAINZ_TRACKID = MPD's MUSICBRAINZ_TRACKID
                 // and lofty's MusicBrainzTrackId = Vorbis MUSICBRAINZ_RELEASETRACKID = MPD's MUSICBRAINZ_RELEASETRACKID
@@ -99,6 +114,8 @@ impl MetadataExtractor {
                 tag.get_string(ItemKey::MusicBrainzReleaseGroupId)
                     .map(|s| s.to_string()),
                 tag.get_string(ItemKey::MusicBrainzTrackId)
+                    .map(|s| s.to_string()),
+                tag.get_string(ItemKey::MusicBrainzWorkId)
                     .map(|s| s.to_string()),
                 // Extended metadata
                 tag.get_string(ItemKey::TrackArtistSortOrder)
@@ -119,12 +136,14 @@ impl MetadataExtractor {
                     }
                     best
                 },
-                tag.get_string(ItemKey::Label).map(|s| s.to_string()),
+                tag.get_string(ItemKey::Label)
+                    .or_else(|| tag.get_string(ItemKey::Publisher))
+                    .map(|s| s.to_string()),
             )
         } else {
             (
                 None, None, None, None, None, None, None, None, None, None, None, None, None, None,
-                None, None, None, None, None, None, None,
+                None, None, None, None, None, None, None, None, None,
             )
         };
 
@@ -164,12 +183,14 @@ impl MetadataExtractor {
             composer,
             performer,
             comment,
+            grouping,
             musicbrainz_trackid,
             musicbrainz_albumid,
             musicbrainz_artistid,
             musicbrainz_albumartistid,
             musicbrainz_releasegroupid,
             musicbrainz_releasetrackid,
+            musicbrainz_workid,
             artist_sort,
             album_artist_sort,
             original_date,
