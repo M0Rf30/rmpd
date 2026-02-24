@@ -542,6 +542,15 @@ impl Database {
     }
 
     fn get_or_create_directory(&self, path: &camino::Utf8Path) -> Result<i64> {
+        self.get_or_create_directory_with_mtime(path, None)
+    }
+
+    /// Get or create a directory record. `dir_mtime` is the filesystem mtime (None → use now).
+    pub fn get_or_create_directory_with_mtime(
+        &self,
+        path: &camino::Utf8Path,
+        dir_mtime: Option<i64>,
+    ) -> Result<i64> {
         if let Some(id) = self
             .conn
             .query_row(
@@ -553,19 +562,17 @@ impl Database {
         {
             return Ok(id);
         }
-
         let parent_id = if let Some(parent) = path.parent() {
             Some(self.get_or_create_directory(parent)?)
         } else {
             None
         };
 
-        let now = system_time_to_unix_secs(SystemTime::now());
+        let mtime = dir_mtime.unwrap_or_else(|| system_time_to_unix_secs(SystemTime::now()));
         self.conn.execute(
             "INSERT INTO directories (path, parent_id, mtime) VALUES (?1, ?2, ?3)",
-            params![path.as_str(), parent_id, now],
+            params![path.as_str(), parent_id, mtime],
         )?;
-
         Ok(self.conn.last_insert_rowid())
     }
 
@@ -767,15 +774,29 @@ impl Database {
 
     pub fn find_songs(&self, tag: &str, value: &str) -> Result<Vec<Song>> {
         let tag_lower = tag.to_lowercase();
-        let sql = format!(
-            "SELECT {SONG_COLUMNS} FROM songs
-             WHERE id IN (SELECT song_id FROM song_tags WHERE tag = ?1 AND value = ?2)
-             ORDER BY id"
-        );
+        let sql = if value.is_empty() {
+            // MPD semantics: empty value matches songs with no value for this tag
+            // (i.e. no song_tags row with this tag, or explicit empty-value row)
+            format!(
+                "SELECT {SONG_COLUMNS} FROM songs
+                 WHERE id NOT IN (SELECT song_id FROM song_tags WHERE tag = ?1 AND value != '')
+                 ORDER BY id"
+            )
+        } else {
+            format!(
+                "SELECT {SONG_COLUMNS} FROM songs
+                 WHERE id IN (SELECT song_id FROM song_tags WHERE tag = ?1 AND value = ?2)
+                 ORDER BY id"
+            )
+        };
         let mut stmt = self.conn.prepare(&sql)?;
-        let mut songs: Vec<Song> = stmt
-            .query_map(params![tag_lower, value], song_from_row)?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let mut songs: Vec<Song> = if value.is_empty() {
+            stmt.query_map(params![tag_lower], song_from_row)?
+                .collect::<std::result::Result<Vec<_>, _>>()?
+        } else {
+            stmt.query_map(params![tag_lower, value], song_from_row)?
+                .collect::<std::result::Result<Vec<_>, _>>()?
+        };
         self.load_tags_for_songs(&mut songs)?;
         Ok(songs)
     }
