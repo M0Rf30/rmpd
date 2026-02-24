@@ -19,6 +19,8 @@ pub async fn handle_config_command(state: &AppState) -> String {
         resp.field("playlist_directory", playlist_dir);
     }
 
+    // MPD reports pcre support; rmpd uses basic regex matching
+    resp.field("pcre", "0");
     resp.ok()
 }
 
