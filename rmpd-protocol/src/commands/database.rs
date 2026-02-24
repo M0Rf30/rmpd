@@ -36,16 +36,52 @@ fn get_tag_value<'a>(song: &'a rmpd_core::song::Song, tag: &str) -> std::borrow:
     use std::borrow::Cow;
     match tag.to_lowercase().as_str() {
         "artist" => Cow::Borrowed(song.artist.as_deref().unwrap_or_default()),
+        "artistsort" => Cow::Borrowed(song.artist_sort.as_deref().unwrap_or_default()),
         "album" => Cow::Borrowed(song.album.as_deref().unwrap_or_default()),
         "albumartist" => Cow::Borrowed(song.album_artist.as_deref().unwrap_or_default()),
+        "albumartistsort" => Cow::Borrowed(song.album_artist_sort.as_deref().unwrap_or_default()),
         "title" => Cow::Borrowed(song.title.as_deref().unwrap_or_default()),
         "track" => song
             .track
             .map_or(Cow::Borrowed(""), |t| Cow::Owned(t.to_string())),
+        "disc" => song
+            .disc
+            .map_or(Cow::Borrowed(""), |d| Cow::Owned(d.to_string())),
         "date" => Cow::Borrowed(song.date.as_deref().unwrap_or_default()),
+        "originaldate" => Cow::Borrowed(song.original_date.as_deref().unwrap_or_default()),
         "genre" => Cow::Borrowed(song.genre.as_deref().unwrap_or_default()),
         "composer" => Cow::Borrowed(song.composer.as_deref().unwrap_or_default()),
         "performer" => Cow::Borrowed(song.performer.as_deref().unwrap_or_default()),
+        "grouping" => Cow::Borrowed(song.grouping.as_deref().unwrap_or_default()),
+        "comment" => Cow::Borrowed(song.comment.as_deref().unwrap_or_default()),
+        "label" => Cow::Borrowed(song.label.as_deref().unwrap_or_default()),
+        "musicbrainz_artistid" => {
+            Cow::Borrowed(song.musicbrainz_artistid.as_deref().unwrap_or_default())
+        }
+        "musicbrainz_albumid" => {
+            Cow::Borrowed(song.musicbrainz_albumid.as_deref().unwrap_or_default())
+        }
+        "musicbrainz_albumartistid" => Cow::Borrowed(
+            song.musicbrainz_albumartistid
+                .as_deref()
+                .unwrap_or_default(),
+        ),
+        "musicbrainz_trackid" => {
+            Cow::Borrowed(song.musicbrainz_trackid.as_deref().unwrap_or_default())
+        }
+        "musicbrainz_releasetrackid" => Cow::Borrowed(
+            song.musicbrainz_releasetrackid
+                .as_deref()
+                .unwrap_or_default(),
+        ),
+        "musicbrainz_releasegroupid" => Cow::Borrowed(
+            song.musicbrainz_releasegroupid
+                .as_deref()
+                .unwrap_or_default(),
+        ),
+        "musicbrainz_workid" => {
+            Cow::Borrowed(song.musicbrainz_workid.as_deref().unwrap_or_default())
+        }
         _ => Cow::Borrowed(""),
     }
 }
@@ -77,8 +113,16 @@ fn canonical_tag_name(tag: &str) -> &str {
         "ensemble" => "Ensemble",
         "location" => "Location",
         "grouping" => "Grouping",
+        "comment" => "Comment",
         "disc" => "Disc",
         "label" => "Label",
+        "musicbrainz_artistid" => "MUSICBRAINZ_ARTISTID",
+        "musicbrainz_albumid" => "MUSICBRAINZ_ALBUMID",
+        "musicbrainz_albumartistid" => "MUSICBRAINZ_ALBUMARTISTID",
+        "musicbrainz_trackid" => "MUSICBRAINZ_TRACKID",
+        "musicbrainz_releasetrackid" => "MUSICBRAINZ_RELEASETRACKID",
+        "musicbrainz_releasegroupid" => "MUSICBRAINZ_RELEASEGROUPID",
+        "musicbrainz_workid" => "MUSICBRAINZ_WORKID",
         _ => tag,
     }
 }
@@ -369,7 +413,22 @@ pub async fn handle_count_command(
     };
 
     if filters.is_empty() {
-        return ResponseBuilder::error(ACK_ERROR_ARG, 0, "count", "missing arguments");
+        return ResponseBuilder::error(
+            ACK_ERROR_ARG,
+            0,
+            "count",
+            "too few arguments for \"count\"",
+        );
+    }
+
+    // Bare tag without value (e.g. "count Genre") should error like MPD
+    if !filters[0].0.starts_with('(') && filters.len() == 1 && filters[0].1.is_empty() {
+        return ResponseBuilder::error(
+            ACK_ERROR_ARG,
+            0,
+            "count",
+            "too few arguments for \"count\"",
+        );
     }
 
     // Get songs based on filters
