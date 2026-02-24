@@ -84,3 +84,13 @@ rmpd.local.toml
 
 # Clippy/Rustfmt cache
 .clippy.toml.cache
+
+# Node/JS tooling
+node_modules/
+
+# AI tooling artifacts
+.grepai/
+
+# Generated docs (not in version control)
+docs/
+DSD_PCM_CONVERSION_CHANGES.md

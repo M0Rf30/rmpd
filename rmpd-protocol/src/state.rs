@@ -54,7 +54,11 @@ impl fmt::Debug for AppState {
 }
 
 impl AppState {
-    fn build(db_path: Option<String>, music_dir: Option<String>, playlist_dir: Option<String>) -> Self {
+    fn build(
+        db_path: Option<String>,
+        music_dir: Option<String>,
+        playlist_dir: Option<String>,
+    ) -> Self {
         let event_bus = EventBus::new();
         let status = Arc::new(RwLock::new(PlayerStatus::default()));
         let atomic_state = Arc::new(std::sync::atomic::AtomicU8::new(

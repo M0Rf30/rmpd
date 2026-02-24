@@ -331,12 +331,7 @@ pub async fn handle_list_command(
                 }
             }
         } else {
-            return ResponseBuilder::error(
-                ACK_ERROR_ARG,
-                0,
-                "list",
-                "missing filter value",
-            );
+            return ResponseBuilder::error(ACK_ERROR_ARG, 0, "list", "missing filter value");
         }
     } else {
         // No filter, list all values using generic tag query
@@ -660,8 +655,12 @@ pub async fn handle_listall_command(state: &AppState, path: Option<&str>) -> Str
 
     let result = db.walk_recursive(path_str, &mut |entry| {
         match entry {
-            rmpd_library::WalkEntry::Song(song) => { resp.field("file", &song.path); }
-            rmpd_library::WalkEntry::Directory(dir) => { resp.field("directory", dir); }
+            rmpd_library::WalkEntry::Song(song) => {
+                resp.field("file", &song.path);
+            }
+            rmpd_library::WalkEntry::Directory(dir) => {
+                resp.field("directory", dir);
+            }
         }
         Ok(())
     });
@@ -683,8 +682,12 @@ pub async fn handle_listallinfo_command(state: &AppState, path: Option<&str>) ->
 
     let result = db.walk_recursive(path_str, &mut |entry| {
         match entry {
-            rmpd_library::WalkEntry::Song(song) => { resp.song(song, None, None); }
-            rmpd_library::WalkEntry::Directory(dir) => { resp.field("directory", dir); }
+            rmpd_library::WalkEntry::Song(song) => {
+                resp.song(song, None, None);
+            }
+            rmpd_library::WalkEntry::Directory(dir) => {
+                resp.field("directory", dir);
+            }
         }
         Ok(())
     });
@@ -838,7 +841,10 @@ pub async fn handle_listfiles_command(state: &AppState, uri: Option<&str>) -> St
 
                     if let Ok(mtime) = meta.modified() {
                         let ts = format_iso8601_timestamp(
-                            mtime.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() as i64,
+                            mtime
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs() as i64,
                         );
                         resp.field("Last-Modified", &ts);
                     }
@@ -863,7 +869,7 @@ pub async fn handle_listfiles_command(state: &AppState, uri: Option<&str>) -> St
             // MPD emits directories before files in listfiles
             for (dir, mtime) in &listing.directories {
                 let display_dir = strip_music_dir_prefix(dir, music_dir);
-                let basename = display_dir.rsplit('/').next().unwrap_or(&display_dir);
+                let basename = display_dir.rsplit('/').next().unwrap_or(display_dir);
                 resp.field("directory", basename);
                 if *mtime > 0 {
                     let ts = format_iso8601_timestamp(*mtime);
@@ -872,7 +878,7 @@ pub async fn handle_listfiles_command(state: &AppState, uri: Option<&str>) -> St
             }
             for song in &listing.songs {
                 let display_path = strip_music_dir_prefix(song.path.as_str(), music_dir);
-                let filename = display_path.rsplit('/').next().unwrap_or(&display_path);
+                let filename = display_path.rsplit('/').next().unwrap_or(display_path);
                 resp.field("file", filename);
                 if song.last_modified > 0 {
                     let ts = format_iso8601_timestamp(song.last_modified);

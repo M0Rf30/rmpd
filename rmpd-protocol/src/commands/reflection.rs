@@ -44,7 +44,6 @@ pub async fn handle_commands_command() -> String {
         "listallinfo",
         "listfiles",
         "listmounts",
-
         "listpartitions",
         "listplaylist",
         "listplaylistinfo",
@@ -176,7 +175,6 @@ pub async fn handle_tagtypes_command(
                 "Ensemble",
                 "Location",
                 "Grouping",
-
                 "Disc",
                 "Label",
                 "MUSICBRAINZ_ARTISTID",

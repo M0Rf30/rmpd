@@ -78,7 +78,9 @@ impl MetadataExtractor {
                 tag.get_string(ItemKey::AlbumArtist).map(|s| s.to_string()),
                 tag.track(),
                 tag.disk(),
-                tag.get_string(ItemKey::RecordingDate).or_else(|| tag.get_string(ItemKey::Year)).map(|s| s.to_string()),
+                tag.get_string(ItemKey::RecordingDate)
+                    .or_else(|| tag.get_string(ItemKey::Year))
+                    .map(|s| s.to_string()),
                 tag.genre().map(|s| s.to_string()),
                 tag.get_string(ItemKey::Composer).map(|s| s.to_string()),
                 tag.get_string(ItemKey::Performer).map(|s| s.to_string()),
@@ -108,12 +110,11 @@ impl MetadataExtractor {
                     // since lofty maps both ORIGINALDATE and ORIGINALYEAR to the same key.
                     let mut best: Option<String> = None;
                     for item in tag.items() {
-                        if item.key() == ItemKey::OriginalReleaseDate {
-                            if let Some(val) = item.value().text() {
-                                if best.as_ref().map_or(true, |b| val.len() > b.len()) {
-                                    best = Some(val.to_string());
-                                }
-                            }
+                        if item.key() == ItemKey::OriginalReleaseDate
+                            && let Some(val) = item.value().text()
+                            && best.as_ref().is_none_or(|b| val.len() > b.len())
+                        {
+                            best = Some(val.to_string());
                         }
                     }
                     best

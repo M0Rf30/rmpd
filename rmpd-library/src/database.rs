@@ -2,7 +2,7 @@ use camino::Utf8PathBuf;
 use icu_collator::{CollatorBorrowed, CollatorPreferences};
 use rmpd_core::error::{Result, RmpdError};
 use rmpd_core::song::Song;
-use rusqlite::{params, Connection, OptionalExtension, Row};
+use rusqlite::{Connection, OptionalExtension, Row, params};
 use std::cmp::Ordering;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -679,23 +679,20 @@ impl Database {
     pub fn list_tag_values(&self, tag: &str) -> Result<Vec<String>> {
         let col = tag_to_column(tag)?;
         // Include empty strings (MPD emits them first), exclude only NULL.
-        let query = format!(
-            "SELECT DISTINCT COALESCE({col}, '') FROM songs"
-        );
+        let query = format!("SELECT DISTINCT COALESCE({col}, '') FROM songs");
         let mut stmt = self.conn.prepare(&query)?;
         let mut values: Vec<String> = stmt
             .query_map([], |row| row.get(0))?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         // Sort with ICU collation to match MPD: empties first, then ICU root-locale order.
-        let collator = CollatorBorrowed::try_new(CollatorPreferences::default(), Default::default())
-            .unwrap_or_else(|_| panic!("ICU collator unavailable"));
-        values.sort_by(|a, b| {
-            match (a.is_empty(), b.is_empty()) {
-                (true, true) => Ordering::Equal,
-                (true, false) => Ordering::Less,
-                (false, true) => Ordering::Greater,
-                (false, false) => collator.compare(a, b),
-            }
+        let collator =
+            CollatorBorrowed::try_new(CollatorPreferences::default(), Default::default())
+                .unwrap_or_else(|_| panic!("ICU collator unavailable"));
+        values.sort_by(|a, b| match (a.is_empty(), b.is_empty()) {
+            (true, true) => Ordering::Equal,
+            (true, false) => Ordering::Less,
+            (false, true) => Ordering::Greater,
+            (false, false) => collator.compare(a, b),
         });
         Ok(values)
     }
@@ -718,8 +715,9 @@ impl Database {
             .query_map([filter_value], |row| row.get(0))?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         // Sort with ICU collation to match MPD's IcuCollate().
-        let collator = CollatorBorrowed::try_new(CollatorPreferences::default(), Default::default())
-            .unwrap_or_else(|_| panic!("ICU collator unavailable"));
+        let collator =
+            CollatorBorrowed::try_new(CollatorPreferences::default(), Default::default())
+                .unwrap_or_else(|_| panic!("ICU collator unavailable"));
         values.sort_by(|a, b| collator.compare(a, b));
         Ok(values)
     }
@@ -848,9 +846,9 @@ impl Database {
         // Get subdirectories
         let mut directories = Vec::new();
         if let Some(id) = dir_id {
-            let mut stmt = self
-                .conn
-                .prepare("SELECT path, mtime FROM directories WHERE parent_id = ?1 ORDER BY path")?;
+            let mut stmt = self.conn.prepare(
+                "SELECT path, mtime FROM directories WHERE parent_id = ?1 ORDER BY path",
+            )?;
             let rows = stmt.query_map(params![id], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
             })?;
@@ -858,9 +856,9 @@ impl Database {
                 directories.push(row?);
             }
         } else {
-            let mut stmt = self
-                .conn
-                .prepare("SELECT path, mtime FROM directories WHERE parent_id IS NULL ORDER BY path")?;
+            let mut stmt = self.conn.prepare(
+                "SELECT path, mtime FROM directories WHERE parent_id IS NULL ORDER BY path",
+            )?;
             let rows = stmt.query_map([], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
             })?;
