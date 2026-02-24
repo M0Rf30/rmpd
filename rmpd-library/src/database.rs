@@ -763,7 +763,7 @@ impl Database {
 
     /// Get all songs from the database.
     pub fn get_all_songs(&self) -> Result<Vec<Song>> {
-        let sql = format!("SELECT {SONG_COLUMNS} FROM songs ORDER BY id");
+        let sql = format!("SELECT {SONG_COLUMNS} FROM songs ORDER BY path");
         let mut stmt = self.conn.prepare(&sql)?;
         let mut songs: Vec<Song> = stmt
             .query_map([], song_from_row)?
@@ -780,13 +780,13 @@ impl Database {
             format!(
                 "SELECT {SONG_COLUMNS} FROM songs
                  WHERE id NOT IN (SELECT song_id FROM song_tags WHERE tag = ?1 AND value != '')
-                 ORDER BY id"
+                 ORDER BY path"
             )
         } else {
             format!(
                 "SELECT {SONG_COLUMNS} FROM songs
                  WHERE id IN (SELECT song_id FROM song_tags WHERE tag = ?1 AND value = ?2)
-                 ORDER BY id"
+                 ORDER BY path"
             )
         };
         let mut stmt = self.conn.prepare(&sql)?;
@@ -810,7 +810,7 @@ impl Database {
         let sql = format!(
             "SELECT {SONG_COLUMNS} FROM songs
              WHERE id IN (SELECT song_id FROM song_tags WHERE tag = ?1 AND value LIKE ?2 ESCAPE '\\')
-             ORDER BY id"
+             ORDER BY path"
         );
         let mut stmt = self.conn.prepare(&sql)?;
         let mut songs: Vec<Song> = stmt
@@ -827,7 +827,7 @@ impl Database {
             "SELECT {SONG_COLUMNS} FROM songs
              WHERE id IN (SELECT song_id FROM song_tags WHERE value = ?1)
                 OR path = ?1
-             ORDER BY id"
+             ORDER BY path"
         );
         let mut stmt = self.conn.prepare(&sql)?;
         let mut songs: Vec<Song> = stmt
@@ -844,7 +844,7 @@ impl Database {
     ) -> Result<Vec<Song>> {
         let (where_clause, filter_params) = filter_expr.to_sql();
 
-        let sql = format!("SELECT {SONG_COLUMNS} FROM songs WHERE {where_clause} ORDER BY id");
+        let sql = format!("SELECT {SONG_COLUMNS} FROM songs WHERE {where_clause} ORDER BY path");
 
         let mut stmt = self.conn.prepare(&sql)?;
 
