@@ -144,6 +144,7 @@ impl ConnectionState {
 
     /// Get the default set of tag types
     fn default_tags() -> HashSet<String> {
+        // MPD default = All tags EXCEPT Comment (see Settings.cxx: All & ~TAG_COMMENT)
         let mut tags = HashSet::new();
         tags.insert("Artist".to_string());
         tags.insert("ArtistSort".to_string());
@@ -156,10 +157,20 @@ impl ConnectionState {
         tags.insert("Name".to_string());
         tags.insert("Genre".to_string());
         tags.insert("Date".to_string());
+        tags.insert("OriginalDate".to_string());
         tags.insert("Composer".to_string());
         tags.insert("Performer".to_string());
-        tags.insert("Comment".to_string());
+        tags.insert("Grouping".to_string());
+        // Comment is excluded by default (matches MPD's global_tag_mask)
         tags.insert("Disc".to_string());
+        tags.insert("Label".to_string());
+        tags.insert("MUSICBRAINZ_ARTISTID".to_string());
+        tags.insert("MUSICBRAINZ_ALBUMID".to_string());
+        tags.insert("MUSICBRAINZ_ALBUMARTISTID".to_string());
+        tags.insert("MUSICBRAINZ_TRACKID".to_string());
+        tags.insert("MUSICBRAINZ_RELEASETRACKID".to_string());
+        tags.insert("MUSICBRAINZ_WORKID".to_string());
+        tags.insert("MUSICBRAINZ_RELEASEGROUPID".to_string());
         tags
     }
 
