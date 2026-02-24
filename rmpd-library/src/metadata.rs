@@ -84,7 +84,9 @@ impl MetadataExtractor {
                 tag.get_string(ItemKey::Performer).map(|s| s.to_string()),
                 tag.comment().map(|s| s.to_string()),
                 // MusicBrainz IDs
-                tag.get_string(ItemKey::MusicBrainzTrackId)
+                // Note: lofty's MusicBrainzRecordingId = Vorbis MUSICBRAINZ_TRACKID = MPD's MUSICBRAINZ_TRACKID
+                // and lofty's MusicBrainzTrackId = Vorbis MUSICBRAINZ_RELEASETRACKID = MPD's MUSICBRAINZ_RELEASETRACKID
+                tag.get_string(ItemKey::MusicBrainzRecordingId)
                     .map(|s| s.to_string()),
                 tag.get_string(ItemKey::MusicBrainzReleaseId)
                     .map(|s| s.to_string()),
@@ -94,7 +96,7 @@ impl MetadataExtractor {
                     .map(|s| s.to_string()),
                 tag.get_string(ItemKey::MusicBrainzReleaseGroupId)
                     .map(|s| s.to_string()),
-                tag.get_string(ItemKey::MusicBrainzRecordingId)
+                tag.get_string(ItemKey::MusicBrainzTrackId)
                     .map(|s| s.to_string()),
                 // Extended metadata
                 tag.get_string(ItemKey::TrackArtistSortOrder)
