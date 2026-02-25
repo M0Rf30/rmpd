@@ -259,12 +259,19 @@ pub async fn handle_move_command(
 
     match from {
         MoveFrom::Position(from_pos) => {
+            let queue_len = state.queue.read().await.len() as u32;
+            if from_pos >= queue_len {
+                return ResponseBuilder::error(ACK_ERROR_ARG, 0, "move", "Bad song index");
+            }
+            if to >= queue_len {
+                return ResponseBuilder::error(ACK_ERROR_ARG, 0, "move", &format!("Number too large: {to}"));
+            }
             if state.queue.write().await.move_item(from_pos, to) {
                 let mut status = state.status.write().await;
                 status.playlist_version += 1;
                 ResponseBuilder::new().ok()
             } else {
-                ResponseBuilder::error(ACK_ERROR_ARG, 0, "move", &format!("Number too large: {to}"))
+                ResponseBuilder::error(ACK_ERROR_ARG, 0, "move", "Bad song index")
             }
         }
         MoveFrom::Range(start, end) => {
