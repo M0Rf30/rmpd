@@ -189,6 +189,10 @@ async fn handle_client(mut stream: TcpStream, state: AppState) -> Result<()> {
         writer.flush().await?; // Flush immediately to ensure low latency
     }
 
+    // Cleanup: unregister any channel subscriptions when connection closes
+    for channel in conn_state.subscribed_channels() {
+        state.message_broker.unregister_subscriber(channel).await;
+    }
     Ok(())
 }
 
@@ -536,7 +540,7 @@ async fn handle_command(
             unreachable!()
         }
         Command::Unknown(cmd) => {
-            ResponseBuilder::error(ACK_ERROR_UNKNOWN, 0, &cmd, "unknown command")
+            ResponseBuilder::error(ACK_ERROR_UNKNOWN, 0, "", &format!("unknown command {:?}", cmd))
         }
         Command::UnknownSubcmd(main_cmd, _sub) => {
             ResponseBuilder::error(crate::commands::utils::ACK_ERROR_ARG, 0, &main_cmd, "Unknown sub command")
@@ -678,10 +682,10 @@ async fn handle_command(
         Command::ListNeighbors => storage::handle_listneighbors_command(state).await,
         // Client messaging
         Command::Subscribe { channel } => {
-            messaging::handle_subscribe_command(conn_state, &channel).await
+            messaging::handle_subscribe_command(state, conn_state, &channel).await
         }
         Command::Unsubscribe { channel } => {
-            messaging::handle_unsubscribe_command(conn_state, &channel).await
+            messaging::handle_unsubscribe_command(state, conn_state, &channel).await
         }
         Command::Channels => messaging::handle_channels_command(state).await,
         Command::ReadMessages => messaging::handle_readmessages_command(state, conn_state).await,
