@@ -85,6 +85,7 @@ async fn restore_state(
         status.crossfade = saved_state.crossfade;
         status.mixramp_db = saved_state.mixramp_db;
         status.mixramp_delay = saved_state.mixramp_delay;
+        status.replay_gain_mode = saved_state.replay_gain_mode.clone();
     }
 
     // Restore playlist

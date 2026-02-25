@@ -67,6 +67,7 @@ pub struct PlayerStatus {
     pub playlist_length: u32,
     pub updating_db: Option<u32>,
     pub error: Option<String>,
+    pub replay_gain_mode: String,
 }
 
 impl Default for PlayerStatus {
@@ -85,12 +86,13 @@ impl Default for PlayerStatus {
             bitrate: None,
             audio_format: None,
             crossfade: 0,
-            mixramp_db: -17.0,
+            mixramp_db: 0.0,
             mixramp_delay: 0.0,
             playlist_version: 0,
             playlist_length: 0,
             updating_db: None,
             error: None,
+            replay_gain_mode: "off".to_string(),
         }
     }
 }

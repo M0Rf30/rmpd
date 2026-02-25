@@ -776,10 +776,8 @@ impl Database {
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
 
-        let collator =
-            CollatorBorrowed::try_new(CollatorPreferences::default(), Default::default())
-                .unwrap_or_else(|_| panic!("ICU collator unavailable"));
-        values.sort_by(|a, b| collator.compare(a, b));
+        // MPD uses std::map<std::string> which sorts by byte order (not ICU collation).
+        values.sort();
         Ok(values)
     }
 
@@ -987,13 +985,37 @@ impl Database {
             }
         }
 
-        // Get songs in this directory
-        let sql = format!("SELECT {SONG_COLUMNS} FROM songs WHERE directory_id = ?1 ORDER BY path");
-        let mut stmt = self.conn.prepare(&sql)?;
+        // Get songs in this directory (no ORDER BY; sort in Rust after loading tags)
+        let mut stmt = self.conn.prepare(&format!("SELECT {SONG_COLUMNS} FROM songs WHERE directory_id = ?1"))?;
         let mut songs: Vec<Song> = stmt
             .query_map(params![dir_id.unwrap_or(0)], song_from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         self.load_tags_for_songs(&mut songs)?;
+
+        // Sort to match MPD's song_cmp: Album (ICU) -> Disc -> Track -> Filename (ICU)
+        let col = CollatorBorrowed::try_new(CollatorPreferences::default(), Default::default())
+            .unwrap_or_else(|_| panic!("ICU collator unavailable"));
+        songs.sort_by(|a, b| {
+            let album_ord = icu_cmp_opt(&col, a.tag("album"), b.tag("album"));
+            if album_ord != Ordering::Equal {
+                return album_ord;
+            }
+            let disc_a: u32 = a.tag("disc").and_then(|v| v.parse().ok()).unwrap_or(0);
+            let disc_b: u32 = b.tag("disc").and_then(|v| v.parse().ok()).unwrap_or(0);
+            let disc_ord = disc_a.cmp(&disc_b);
+            if disc_ord != Ordering::Equal {
+                return disc_ord;
+            }
+            let track_a: u32 = a.tag("track").and_then(|v| v.parse().ok()).unwrap_or(0);
+            let track_b: u32 = b.tag("track").and_then(|v| v.parse().ok()).unwrap_or(0);
+            let track_ord = track_a.cmp(&track_b);
+            if track_ord != Ordering::Equal {
+                return track_ord;
+            }
+            let a_name = a.path.file_name().unwrap_or(a.path.as_str());
+            let b_name = b.path.file_name().unwrap_or(b.path.as_str());
+            col.compare(a_name, b_name)
+        });
 
         Ok(DirectoryListing { directories, songs })
     }

@@ -18,9 +18,9 @@ pub async fn handle_setvol_command(state: &AppState, volume: u8) -> String {
     }
 }
 
-pub async fn handle_volume_command(state: &AppState, change: i8) -> String {
+pub async fn handle_volume_command(state: &AppState, change: i32) -> String {
     let current_vol = state.status.read().await.volume;
-    let new_vol = (current_vol as i16 + change as i16).clamp(0, 100) as u8;
+    let new_vol = (current_vol as i32 + change).clamp(0, 100) as u8;
 
     match state.engine.write().await.set_volume(new_vol).await {
         Ok(_) => {
@@ -48,7 +48,7 @@ pub async fn handle_single_command(state: &AppState, mode: &str) -> String {
         "0" => rmpd_core::state::SingleMode::Off,
         "1" => rmpd_core::state::SingleMode::On,
         "oneshot" => rmpd_core::state::SingleMode::Oneshot,
-        _ => return ResponseBuilder::error(ACK_ERROR_ARG, 0, "single", "Invalid mode"),
+        _ => return ResponseBuilder::error(ACK_ERROR_ARG, 0, "single", "Unrecognized single mode, expected 0, 1, or oneshot"),
     };
     state.status.write().await.single = single_mode;
     ResponseBuilder::new().ok()
@@ -59,7 +59,7 @@ pub async fn handle_consume_command(state: &AppState, mode: &str) -> String {
         "0" => rmpd_core::state::ConsumeMode::Off,
         "1" => rmpd_core::state::ConsumeMode::On,
         "oneshot" => rmpd_core::state::ConsumeMode::Oneshot,
-        _ => return ResponseBuilder::error(ACK_ERROR_ARG, 0, "consume", "Invalid mode"),
+        _ => return ResponseBuilder::error(ACK_ERROR_ARG, 0, "consume", "Unrecognized consume mode, expected 0, 1, or oneshot"),
     };
     state.status.write().await.consume = consume_mode;
     ResponseBuilder::new().ok()
@@ -83,16 +83,23 @@ pub async fn handle_mixrampdelay_command(state: &AppState, seconds: f32) -> Stri
 }
 
 pub async fn handle_replaygain_mode_command(state: &AppState, mode: &str) -> String {
-    // Set ReplayGain mode (off, track, album, auto)
-    // Store in player status or engine config
-    let _ = (state, mode);
-    ResponseBuilder::new().ok()
+    match mode {
+        "off" | "track" | "album" | "auto" => {
+            state.status.write().await.replay_gain_mode = mode.to_string();
+            ResponseBuilder::new().ok()
+        }
+        _ => ResponseBuilder::error(
+            ACK_ERROR_ARG,
+            0,
+            "replay_gain_mode",
+            "Unrecognized replay gain mode",
+        ),
+    }
 }
 
 pub async fn handle_replaygain_status_command(state: &AppState) -> String {
-    // Return current ReplayGain status
-    let _ = state;
+    let mode = state.status.read().await.replay_gain_mode.clone();
     let mut resp = ResponseBuilder::new();
-    resp.field("replay_gain_mode", "off");
+    resp.field("replay_gain_mode", &mode);
     resp.ok()
 }

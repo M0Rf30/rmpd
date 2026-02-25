@@ -104,10 +104,10 @@ pub enum Command {
 
     // Volume
     SetVol {
-        volume: u8,
+        volume: u8,  // validated [0, 100] in parser
     },
     Volume {
-        change: i8,
+        change: i32,  // validated [-100, 100] in parser
     },
     GetVol,
 
@@ -428,6 +428,9 @@ pub enum Command {
     /// Unknown subcommand for a known command (e.g. `tagtypes list`, `protocol list`)
     /// Fields: (main_command, unknown_subcommand)
     UnknownSubcmd(String, String),
+    /// Argument validation error (ACK [2]) — command parsed ok but arg value is invalid.
+    /// Fields: (command_name, error_message, raw_arg)
+    ArgError(String, String, String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -616,36 +619,60 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
         }
         "setvol" => {
             let val_str = parse_quoted_or_unquoted.parse_next(input)?;
-            let volume = val_str
-                .parse::<u8>()
-                .map_err(|_| ErrMode::Cut(ContextError::default()))?;
-            Ok(Command::SetVol { volume })
+            match val_str.parse::<i64>() {
+                Ok(v) if v >= 0 && v <= 100 => Ok(Command::SetVol { volume: v as u8 }),
+                Ok(v) => Ok(Command::ArgError(
+                    "setvol".into(),
+                    format!("Number too large: {v}"),
+                    val_str,
+                )),
+                Err(_) => Ok(Command::ArgError(
+                    "setvol".into(),
+                    format!("Number too large: {val_str}"),
+                    val_str,
+                )),
+            }
         }
         "volume" => {
             let val_str = parse_quoted_or_unquoted.parse_next(input)?;
-            let change = val_str
-                .parse::<i8>()
-                .map_err(|_| ErrMode::Cut(ContextError::default()))?;
-            Ok(Command::Volume { change })
+            match val_str.parse::<i32>() {
+                Ok(v) if v >= -100 && v <= 100 => Ok(Command::Volume { change: v }),
+                Ok(v) => Ok(Command::ArgError(
+                    "volume".into(),
+                    format!("Number too large: {v}"),
+                    val_str,
+                )),
+                Err(_) => Ok(Command::ArgError(
+                    "volume".into(),
+                    format!("Integer expected: {val_str}"),
+                    val_str,
+                )),
+            }
         }
         "getvol" => Ok(Command::GetVol),
         "repeat" => {
             let val = parse_quoted_or_unquoted.parse_next(input)?;
-            let enabled = match val.as_str() {
-                "0" => false,
-                "1" => true,
-                _ => return Err(ErrMode::Cut(ContextError::default())),
-            };
-            Ok(Command::Repeat { enabled })
+            match val.as_str() {
+                "0" => Ok(Command::Repeat { enabled: false }),
+                "1" => Ok(Command::Repeat { enabled: true }),
+                _ => Ok(Command::ArgError(
+                    "repeat".into(),
+                    format!("Boolean (0/1) expected: {val}"),
+                    val,
+                )),
+            }
         }
         "random" => {
             let val = parse_quoted_or_unquoted.parse_next(input)?;
-            let enabled = match val.as_str() {
-                "0" => false,
-                "1" => true,
-                _ => return Err(ErrMode::Cut(ContextError::default())),
-            };
-            Ok(Command::Random { enabled })
+            match val.as_str() {
+                "0" => Ok(Command::Random { enabled: false }),
+                "1" => Ok(Command::Random { enabled: true }),
+                _ => Ok(Command::ArgError(
+                    "random".into(),
+                    format!("Boolean (0/1) expected: {val}"),
+                    val,
+                )),
+            }
         }
         "single" => {
             let mode = parse_quoted_or_unquoted.parse_next(input)?;
@@ -656,8 +683,20 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
             Ok(Command::Consume { mode })
         }
         "crossfade" => {
-            let seconds = parse_u32.parse_next(input)?;
-            Ok(Command::Crossfade { seconds })
+            let val_str = parse_quoted_or_unquoted.parse_next(input)?;
+            match val_str.parse::<i64>() {
+                Ok(v) if v >= 0 => Ok(Command::Crossfade { seconds: v as u32 }),
+                Ok(v) => Ok(Command::ArgError(
+                    "crossfade".into(),
+                    format!("Number too large: {v}"),
+                    val_str,
+                )),
+                Err(_) => Ok(Command::ArgError(
+                    "crossfade".into(),
+                    format!("Integer expected: {val_str}"),
+                    val_str,
+                )),
+            }
         }
         "replay_gain_mode" => {
             let mode = parse_string.parse_next(input)?;

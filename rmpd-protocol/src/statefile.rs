@@ -63,6 +63,7 @@ impl StateFile {
         content.push_str(&format!("crossfade: {}\n", status.crossfade));
         content.push_str(&format!("mixrampdb: {:.6}\n", status.mixramp_db));
         content.push_str(&format!("mixrampdelay: {:.6}\n", status.mixramp_delay));
+        content.push_str(&format!("replay_gain_mode: {}\n", status.replay_gain_mode));
 
         // Playlist
         content.push_str("playlist_begin\n");
@@ -90,7 +91,7 @@ impl StateFile {
 
         let content = fs::read_to_string(path)?;
 
-        let mut state = SavedState::default();
+        let mut state = SavedState { replay_gain_mode: "off".to_string(), ..Default::default() };
         let mut in_playlist = false;
         let mut playlist_items = Vec::new();
 
@@ -166,6 +167,9 @@ impl StateFile {
                         "mixrampdelay" => {
                             state.mixramp_delay = value.parse().unwrap_or(-1.0);
                         }
+                        "replay_gain_mode" => {
+                            state.replay_gain_mode = value.to_string();
+                        }
                         _ => {} // Ignore unknown keys
                     }
                 }
@@ -192,6 +196,7 @@ pub struct SavedState {
     pub crossfade: u32,
     pub mixramp_db: f32,
     pub mixramp_delay: f32,
+    pub replay_gain_mode: String,
     pub playlist_paths: Vec<String>,
 }
 
