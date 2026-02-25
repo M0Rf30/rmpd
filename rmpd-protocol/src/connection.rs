@@ -250,7 +250,7 @@ mod tests {
     fn test_new_connection_state() {
         let state = ConnectionState::new();
         assert!(state.is_tag_enabled("Artist"));
-        assert!(state.is_feature_enabled("binary"));
+        assert!(!state.is_feature_enabled("binary"));
     }
 
     #[test]

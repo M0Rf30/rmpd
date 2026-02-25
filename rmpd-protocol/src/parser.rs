@@ -428,7 +428,7 @@ pub enum Command {
     /// Unknown subcommand for a known command (e.g. `tagtypes list`, `protocol list`)
     /// Fields: (main_command, unknown_subcommand)
     UnknownSubcmd(String, String),
-    /// Argument validation error (ACK [2]) — command parsed ok but arg value is invalid.
+    /// Argument validation error (ACK \[2\]) — command parsed ok but arg value is invalid.
     /// Fields: (command_name, error_message, raw_arg)
     ArgError(String, String, String),
 }
