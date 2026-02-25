@@ -3,7 +3,7 @@
 use crate::response::ResponseBuilder;
 use crate::state::AppState;
 
-use super::utils::{ACK_ERROR_ARG, ACK_ERROR_SYSTEM};
+use super::utils::ACK_ERROR_SYSTEM;
 
 pub async fn handle_outputs_command(state: &AppState) -> String {
     let outputs = state.outputs.read().await;
@@ -74,8 +74,8 @@ pub async fn handle_outputset_command(
     // Verify output exists
     let outputs = state.outputs.read().await;
     if outputs.iter().any(|o| o.id == id) {
-        // No output attributes are configurable in rmpd yet
-        ResponseBuilder::error(ACK_ERROR_ARG, 0, "outputset", "Unsupported attribute")
+        // MPD silently accepts outputset even for unsupported attributes
+        ResponseBuilder::new().ok()
     } else {
         ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "outputset", "No such audio output")
     }

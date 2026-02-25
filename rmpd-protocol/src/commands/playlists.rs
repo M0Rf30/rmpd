@@ -97,7 +97,7 @@ pub async fn handle_save_command(
         }
     };
     let pl_path = Path::new(&playlist_dir).join(format!("{name}.m3u"));
-    let mode = mode.unwrap_or(SaveMode::Create);
+    let mode = mode.unwrap_or(SaveMode::Replace);
 
     // Enforce mode preconditions (matching MPD's PlaylistSave.cxx spl_save_queue)
     match mode {
@@ -111,10 +111,13 @@ pub async fn handle_save_command(
                 );
             }
         }
-        SaveMode::Append | SaveMode::Replace => {
+        SaveMode::Append => {
             if !pl_path.exists() {
                 return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "save", "No such playlist");
             }
+        }
+        SaveMode::Replace => {
+            // Replace works whether playlist exists or not (create-or-overwrite)
         }
     }
 

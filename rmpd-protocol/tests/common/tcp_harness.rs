@@ -220,6 +220,8 @@ pub async fn setup_with_db(num_songs: u32) -> (MpdTestServer, MpdTestClient, Tem
     let db_path_str = db_path.to_str().unwrap().to_string();
     let music_dir = tmp.path().join("music");
     std::fs::create_dir_all(&music_dir).unwrap();
+    let playlist_dir = tmp.path().join("playlists");
+    std::fs::create_dir_all(&playlist_dir).unwrap();
 
     // Populate the database
     {
@@ -230,7 +232,11 @@ pub async fn setup_with_db(num_songs: u32) -> (MpdTestServer, MpdTestClient, Tem
         }
     }
 
-    let mut state = AppState::with_paths(db_path_str, music_dir.to_str().unwrap().to_string());
+    let mut state = AppState::with_all_paths(
+        db_path_str,
+        music_dir.to_str().unwrap().to_string(),
+        playlist_dir.to_str().unwrap().to_string(),
+    );
     state.disable_actual_mount = true;
     let server = MpdTestServer::start_with_state(state).await;
     let client = MpdTestClient::connect(server.port()).await;
