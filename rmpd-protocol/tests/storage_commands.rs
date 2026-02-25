@@ -104,10 +104,10 @@ async fn test_listmounts_command() {
 
     // List should show both
     let response2 = storage::handle_listmounts_command(&state).await;
-    assert!(response2.contains("mount: nfs://192.168.1.100/music"));
-    assert!(response2.contains("storage: remote/nas1"));
-    assert!(response2.contains("mount: smb://server/share"));
-    assert!(response2.contains("storage: remote/nas2"));
+    assert!(response2.contains("mount: remote/nas1"));
+    assert!(response2.contains("storage: nfs://192.168.1.100/music"));
+    assert!(response2.contains("mount: remote/nas2"));
+    assert!(response2.contains("storage: smb://server/share"));
     assert!(response2.ends_with("OK\n"));
 }
 
