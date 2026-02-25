@@ -7,8 +7,8 @@ use crate::response::ResponseBuilder;
 use crate::state::AppState;
 
 use super::utils::{
-    ACK_ERROR_SYSTEM, add_queue_item_metadata, apply_range, open_db, prepare_song_for_playback,
-    song_tag_contains, song_tag_eq, update_next_song,
+    ACK_ERROR_ARG, ACK_ERROR_PERMISSION, ACK_ERROR_SYSTEM, add_queue_item_metadata, apply_range,
+    open_db, prepare_song_for_playback, song_tag_contains, song_tag_eq, update_next_song,
 };
 
 pub async fn handle_add_command(state: &AppState, uri: &str, position: Option<u32>) -> String {
@@ -49,9 +49,7 @@ pub async fn handle_add_command(state: &AppState, uri: &str, position: Option<u3
         status.playlist_length = state.queue.read().await.len() as u32;
     }
 
-    let mut resp = ResponseBuilder::new();
-    resp.field("Id", id);
-    resp.ok()
+    ResponseBuilder::new().ok()
 }
 
 pub async fn handle_clear_command(state: &AppState) -> String {
@@ -395,36 +393,45 @@ pub async fn handle_rangeid_command(state: &AppState, id: u32, range: (f64, f64)
 ///
 /// Adds a custom tag to a queue item.
 pub async fn handle_addtagid_command(state: &AppState, id: u32, tag: &str, value: &str) -> String {
-    let found = {
-        let mut queue = state.queue.write().await;
-        queue.add_tag_by_id(id, tag.to_string(), value.to_string())
-    };
-
-    if found {
-        let mut status = state.status.write().await;
-        status.playlist_version += 1;
-        ResponseBuilder::new().ok()
-    } else {
-        ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "addtagid", "No such song")
+    // Validate tag type
+    if rmpd_core::song::canonical_tag_name(&tag.to_lowercase()) == "Unknown" {
+        return ResponseBuilder::error(ACK_ERROR_ARG, 0, "addtagid", &format!("Unknown tag type: {tag}"));
     }
+
+    // Check song exists
+    let queue = state.queue.read().await;
+    if queue.get_by_id(id).is_none() {
+        return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "addtagid", "No such song");
+    }
+    drop(queue);
+
+    // Local files cannot have tags edited at runtime
+    ResponseBuilder::error(ACK_ERROR_PERMISSION, 0, "addtagid", "Cannot edit tags of local file")
 }
 
 /// Clear tags from a queue item
 ///
 /// If tag is specified, clears only that tag. Otherwise clears all tags.
 pub async fn handle_cleartagid_command(state: &AppState, id: u32, tag: Option<&str>) -> String {
-    let found = {
-        let mut queue = state.queue.write().await;
-        queue.clear_tags_by_id(id, tag)
-    };
-
-    if found {
-        let mut status = state.status.write().await;
-        status.playlist_version += 1;
-        ResponseBuilder::new().ok()
-    } else {
-        ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "cleartagid", "No such song")
+    // Validate tag type if specified
+    // Normalize empty tag to None (parser may return Some("") for missing arg)
+    let tag = tag.filter(|t| !t.is_empty());
+    // Validate tag type if specified
+    if let Some(t) = tag {
+        if rmpd_core::song::canonical_tag_name(&t.to_lowercase()) == "Unknown" {
+            return ResponseBuilder::error(ACK_ERROR_ARG, 0, "cleartagid", &format!("Unknown tag type: {t}"));
+        }
     }
+
+    // Check song exists
+    let queue = state.queue.read().await;
+    if queue.get_by_id(id).is_none() {
+        return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "cleartagid", "No such song");
+    }
+    drop(queue);
+
+    // Local files cannot have tags edited at runtime
+    ResponseBuilder::error(ACK_ERROR_PERMISSION, 0, "cleartagid", "Cannot edit tags of local file")
 }
 
 /// Return changes in queue since version
@@ -436,23 +443,16 @@ pub async fn handle_plchanges_command(
     version: u32,
     range: Option<(u32, u32)>,
 ) -> String {
+    let current_version = state.status.read().await.playlist_version;
     let queue = state.queue.read().await;
     let mut resp = ResponseBuilder::new();
 
-    if version == 0 || queue.version() > version {
+    if version == 0 || current_version > version {
         let items = queue.items();
         let filtered = apply_range(items, range);
 
         for item in filtered {
-            resp.field("file", item.song.path.as_str());
-            resp.field("Pos", item.position.to_string());
-            resp.field("Id", item.id.to_string());
-            if item.priority > 0 {
-                resp.field("Prio", item.priority);
-            }
-            if let Some(title) = item.song.tag("title") {
-                resp.field("Title", title);
-            }
+            resp.song(&item.song, Some(item.position), Some(item.id));
         }
     }
     resp.ok()
@@ -467,10 +467,11 @@ pub async fn handle_plchangesposid_command(
     version: u32,
     range: Option<(u32, u32)>,
 ) -> String {
+    let current_version = state.status.read().await.playlist_version;
     let queue = state.queue.read().await;
     let mut resp = ResponseBuilder::new();
 
-    if version == 0 || queue.version() > version {
+    if version == 0 || current_version > version {
         let items = queue.items();
         let filtered = apply_range(items, range);
 

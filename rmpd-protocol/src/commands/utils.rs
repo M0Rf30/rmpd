@@ -5,8 +5,10 @@ use crate::response::ResponseBuilder;
 /// MPD protocol error codes (ACK error types)
 /// Reference: <https://mpd.readthedocs.io/en/latest/protocol.html#ack-errors>
 pub const ACK_ERROR_ARG: i32 = 2;
+pub const ACK_ERROR_PERMISSION: i32 = 4;
 pub const ACK_ERROR_UNKNOWN: i32 = 5;
 pub const ACK_ERROR_SYSTEM: i32 = 50;
+pub const ACK_ERROR_EXIST: i32 = 56;
 
 /// Open the music database, returning an error response string on failure.
 /// This eliminates the repeated db_path check + Database::open boilerplate.
