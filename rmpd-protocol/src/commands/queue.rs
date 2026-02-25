@@ -298,6 +298,13 @@ pub async fn handle_playlistinfo_command(state: &AppState, range: Option<(u32, u
     let items = queue.items();
     let mut resp = ResponseBuilder::new();
 
+    // Validate range: if a specific range is given, the start must be within bounds.
+    if let Some((start, _)) = range {
+        if start as usize > items.len() {
+            return ResponseBuilder::error(ACK_ERROR_ARG, 0, "playlistinfo", "Bad song index");
+        }
+    }
+
     let filtered = apply_range(items, range);
 
     for item in filtered {
