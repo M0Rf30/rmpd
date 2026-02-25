@@ -424,7 +424,7 @@ pub async fn handle_rename_command(state: &AppState, from: &str, to: &str) -> St
         return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "rename", "No such playlist");
     }
     if to_path.exists() {
-        return ResponseBuilder::error(ACK_ERROR_EXIST, 0, "rename", "Playlist already exists");
+        return ResponseBuilder::error(ACK_ERROR_EXIST, 0, "rename", "Playlist exists already");
     }
     match std::fs::rename(&from_path, &to_path) {
         Ok(_) => ResponseBuilder::new().ok(),
