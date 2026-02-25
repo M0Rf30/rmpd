@@ -13,7 +13,45 @@ use super::utils::{
 
 pub async fn handle_add_command(state: &AppState, uri: &str, position: Option<u32>) -> String {
     debug!("add command received with URI: [{}]", uri);
-    // Get song from database
+    // Handle URI schemes
+    if let Some(scheme_end) = uri.find("://") {
+        let scheme = &uri[..scheme_end];
+        // Known streaming/network schemes that MPD supports: add as stream entry
+        let is_known_scheme = matches!(scheme,
+            "http" | "https" | "ftp" | "ftps" | "rtsp" | "rtsps" | "rtmp" | "rtmpe"
+            | "rtmps" | "rtmpt" | "rtmpte" | "rtmpts" | "rtp" | "mms" | "mmsh"
+            | "mmst" | "mmsu" | "hls+http" | "hls+https" | "nfs" | "smb"
+            | "scp" | "sftp" | "srtp" | "gopher" | "alsa" | "cdda" | "file"
+        );
+        if !is_known_scheme {
+            return ResponseBuilder::error(ACK_ERROR_ARG, 0, "add", "Unsupported URI scheme");
+        }
+        if scheme != "file" {
+            // Stream URL: create a minimal song entry and add to queue
+            let stream_song = rmpd_core::song::Song {
+                id: 0,
+                path: camino::Utf8PathBuf::from(uri),
+                duration: None,
+                sample_rate: None,
+                channels: None,
+                bits_per_sample: None,
+                bitrate: None,
+                replay_gain_track_gain: None,
+                replay_gain_track_peak: None,
+                replay_gain_album_gain: None,
+                replay_gain_album_peak: None,
+                added_at: 0,
+                last_modified: 0,
+                tags: vec![],
+            };
+            let _id = state.queue.write().await.add_at(stream_song, position);
+            let mut status = state.status.write().await;
+            status.playlist_version += 1;
+            status.playlist_length = state.queue.read().await.len() as u32;
+            return ResponseBuilder::new().ok();
+        }
+    }
+    // Get song from database (file:// or relative path)
     let db = match open_db(state, "add") {
         Ok(d) => d,
         Err(e) => return e,
@@ -40,7 +78,7 @@ pub async fn handle_add_command(state: &AppState, uri: &str, position: Option<u3
     };
 
     // Add to queue at specified position or at end
-    let id = state.queue.write().await.add_at(song, position);
+    let _id = state.queue.write().await.add_at(song, position);
 
     // Update status to reflect playlist changes
     {
@@ -122,7 +160,42 @@ pub async fn handle_addid_command(state: &AppState, uri: &str, position: Option<
         "addid command received with URI: [{}], position: {:?}",
         uri, position
     );
-
+    // Handle URI schemes
+    if let Some(scheme_end) = uri.find("://") {
+        let scheme = &uri[..scheme_end];
+        let is_known_scheme = matches!(scheme,
+            "http" | "https" | "ftp" | "ftps" | "rtsp" | "rtsps" | "rtmp" | "rtmpe"
+            | "rtmps" | "rtmpt" | "rtmpte" | "rtmpts" | "rtp" | "mms" | "mmsh"
+            | "mmst" | "mmsu" | "hls+http" | "hls+https" | "nfs" | "smb"
+            | "scp" | "sftp" | "srtp" | "gopher" | "alsa" | "cdda" | "file"
+        );
+        if !is_known_scheme {
+            return ResponseBuilder::error(ACK_ERROR_ARG, 0, "addid", "Unsupported URI scheme");
+        }
+        if scheme != "file" {
+            // Stream URL: create a minimal song entry and add to queue
+            let stream_song = rmpd_core::song::Song {
+                id: 0,
+                path: camino::Utf8PathBuf::from(uri),
+                duration: None,
+                sample_rate: None,
+                channels: None,
+                bits_per_sample: None,
+                bitrate: None,
+                replay_gain_track_gain: None,
+                replay_gain_track_peak: None,
+                replay_gain_album_gain: None,
+                replay_gain_album_peak: None,
+                added_at: 0,
+                last_modified: 0,
+                tags: vec![],
+            };
+            let id = state.queue.write().await.add_at(stream_song, position);
+            let mut resp = ResponseBuilder::new();
+            resp.field("Id", id);
+            return resp.ok();
+        }
+    }
     let db = match open_db(state, "addid") {
         Ok(d) => d,
         Err(e) => return e,
