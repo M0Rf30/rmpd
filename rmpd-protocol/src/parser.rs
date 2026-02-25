@@ -491,9 +491,8 @@ pub fn parse_command(input: &str) -> Result<Command, String> {
             cmd_name,
             "addid" | "add" | "find" | "search" | "list" | "findadd" | "searchadd"
                 | "searchaddpl" | "listplaylist" | "listplaylistinfo"
-                | "playlistlength" | "searchplaylist"
-                | "rename" | "load" | "save" | "playlistfind" | "playlistsearch"
-                | "rename" | "load" | "save" | "playlistfind" | "playlistsearch"
+                | "searchplaylist"
+                | "load" | "save" | "playlistfind" | "playlistsearch"
         );
         if too_few {
             format!("too few arguments for \"{cmd_name}\"")

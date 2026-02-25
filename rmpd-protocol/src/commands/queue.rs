@@ -73,28 +73,17 @@ pub async fn handle_delete_command(
 
     match target {
         DeleteTarget::Position(position) => {
-            if state.queue.write().await.delete(position).is_some() {
-                let mut status = state.status.write().await;
-                status.playlist_version += 1;
-                status.playlist_length = state.queue.read().await.len() as u32;
-                ResponseBuilder::new().ok()
-            } else {
-                ResponseBuilder::error(ACK_ERROR_ARG, 0, "delete", "Bad song index")
-            }
-        }
-        DeleteTarget::Range(start, end) => {
-            // Delete songs in range [start, end) (exclusive end)
             let mut queue = state.queue.write().await;
-            let mut deleted_count = 0;
-
-            // Delete from highest to lowest to avoid position shifts
-            for pos in (start..end).rev() {
-                if queue.delete(pos).is_some() {
-                    deleted_count += 1;
-                }
+            let len = queue.len() as u32;
+            // MPD rule: start > count -> error; start == count -> no-op OK
+            if position > len {
+                return ResponseBuilder::error(ACK_ERROR_ARG, 0, "delete", "Bad song index");
             }
-
-            if deleted_count > 0 {
+            if position == len {
+                // No-op: empty range (start == count)
+                return ResponseBuilder::new().ok();
+            }
+            if queue.delete(position).is_some() {
                 let mut status = state.status.write().await;
                 status.playlist_version += 1;
                 status.playlist_length = queue.len() as u32;
@@ -102,6 +91,28 @@ pub async fn handle_delete_command(
             } else {
                 ResponseBuilder::error(ACK_ERROR_ARG, 0, "delete", "Bad song index")
             }
+        }
+        DeleteTarget::Range(start, end) => {
+            let mut queue = state.queue.write().await;
+            let len = queue.len() as u32;
+            // MPD CheckClip: start > count -> error
+            if start > len {
+                return ResponseBuilder::error(ACK_ERROR_ARG, 0, "delete", "Bad song index");
+            }
+            // Clip end to len
+            let end = end.min(len);
+            if start >= end {
+                // Empty range: no-op
+                return ResponseBuilder::new().ok();
+            }
+            // Delete from highest to lowest to avoid position shifts
+            for pos in (start..end).rev() {
+                queue.delete(pos);
+            }
+            let mut status = state.status.write().await;
+            status.playlist_version += 1;
+            status.playlist_length = queue.len() as u32;
+            ResponseBuilder::new().ok()
         }
     }
 }
