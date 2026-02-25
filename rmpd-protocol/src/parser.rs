@@ -665,7 +665,7 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
         "setvol" => {
             let val_str = parse_quoted_or_unquoted.parse_next(input)?;
             match val_str.parse::<i64>() {
-                Ok(v) if v >= 0 && v <= 100 => Ok(Command::SetVol { volume: v as u8 }),
+                Ok(v) if (0..=100).contains(&v) => Ok(Command::SetVol { volume: v as u8 }),
                 Ok(v) => Ok(Command::ArgError(
                     "setvol".into(),
                     format!("Number too large: {v}"),
@@ -681,7 +681,7 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
         "volume" => {
             let val_str = parse_quoted_or_unquoted.parse_next(input)?;
             match val_str.parse::<i32>() {
-                Ok(v) if v >= -100 && v <= 100 => Ok(Command::Volume { change: v }),
+                Ok(v) if (-100..=100).contains(&v) => Ok(Command::Volume { change: v }),
                 Ok(v) => Ok(Command::ArgError(
                     "volume".into(),
                     format!("Number too large: {v}"),

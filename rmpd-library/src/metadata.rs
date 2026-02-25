@@ -165,11 +165,10 @@ impl MetadataExtractor {
                     if let Some(f) = file {
                         let mut reader = BufReader::new(f);
                         if let Ok(flac) = FlacFile::read_from(&mut reader, ParseOptions::default())
+                            && let Some(vc) = flac.vorbis_comments()
                         {
-                            if let Some(vc) = flac.vorbis_comments() {
-                                for (k, v) in vc.items() {
-                                    pairs.push((k.to_string(), v.to_string()));
-                                }
+                            for (k, v) in vc.items() {
+                                pairs.push((k.to_string(), v.to_string()));
                             }
                         }
                     }
@@ -291,19 +290,17 @@ impl MetadataExtractor {
 
             // TrackNumber and DiscNumber from tag convenience methods (handles "3/12" format)
             // Only add if not already present from items iteration
-            if !tags.iter().any(|(k, _)| k == "track") {
-                if let Some(track) = tag.track() {
-                    if let Some(norm) = normalize_decimal(&track.to_string()) {
-                        tags.push(("track".to_string(), norm));
-                    }
-                }
+            if !tags.iter().any(|(k, _)| k == "track")
+                && let Some(track) = tag.track()
+                && let Some(norm) = normalize_decimal(&track.to_string())
+            {
+                tags.push(("track".to_string(), norm));
             }
-            if !tags.iter().any(|(k, _)| k == "disc") {
-                if let Some(disc) = tag.disk() {
-                    if let Some(norm) = normalize_decimal(&disc.to_string()) {
-                        tags.push(("disc".to_string(), norm));
-                    }
-                }
+            if !tags.iter().any(|(k, _)| k == "disc")
+                && let Some(disc) = tag.disk()
+                && let Some(norm) = normalize_decimal(&disc.to_string())
+            {
+                tags.push(("disc".to_string(), norm));
             }
         }
 
@@ -579,10 +576,10 @@ impl MetadataExtractor {
         {
             let tag_type = tag.tag_type();
             for item in tag.items() {
-                if let Some(key) = item.key().map_key(tag_type) {
-                    if let Some(value) = item.value().text() {
-                        pairs.push((key.to_string(), value.to_string()));
-                    }
+                if let Some(key) = item.key().map_key(tag_type)
+                    && let Some(value) = item.value().text()
+                {
+                    pairs.push((key.to_string(), value.to_string()));
                 }
             }
         }
