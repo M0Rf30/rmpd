@@ -7,7 +7,7 @@ use crate::response::ResponseBuilder;
 use crate::state::AppState;
 
 use super::utils::{
-    ACK_ERROR_ARG, ACK_ERROR_PERMISSION, ACK_ERROR_SYSTEM, add_queue_item_metadata, apply_range,
+    ACK_ERROR_ARG, ACK_ERROR_NO_EXIST, ACK_ERROR_PERMISSION, ACK_ERROR_SYSTEM, add_queue_item_metadata, apply_range,
     open_db, prepare_song_for_playback, song_tag_contains, song_tag_eq, update_next_song,
 };
 
@@ -375,6 +375,16 @@ pub async fn handle_prio_command(state: &AppState, priority: u8, ranges: &[(u32,
 /// Sets the priority for all songs with the specified IDs.
 /// Priority is 0-255 where higher values have higher priority.
 pub async fn handle_prioid_command(state: &AppState, priority: u8, ids: &[u32]) -> String {
+    // Validate all IDs exist before making any changes (MPD errors on first bad ID)
+    {
+        let queue = state.queue.read().await;
+        for &id in ids {
+            if queue.get_by_id(id).is_none() {
+                return ResponseBuilder::error(ACK_ERROR_NO_EXIST, 0, "prioid", "No such song");
+            }
+        }
+    }
+
     let mut queue = state.queue.write().await;
     let changed = queue.set_priority_ids(priority, ids);
 
@@ -400,7 +410,7 @@ pub async fn handle_rangeid_command(state: &AppState, id: u32, range: (f64, f64)
         status.playlist_version += 1;
         ResponseBuilder::new().ok()
     } else {
-        ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "rangeid", "No such song")
+        ResponseBuilder::error(ACK_ERROR_NO_EXIST, 0, "rangeid", "No such song")
     }
 }
 

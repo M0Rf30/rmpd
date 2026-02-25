@@ -4,13 +4,21 @@
 //! This module handles channel subscription and message passing commands.
 
 use super::{AppState, ResponseBuilder};
-use crate::commands::utils::ACK_ERROR_SYSTEM;
+use crate::commands::utils::{ACK_ERROR_ARG, ACK_ERROR_EXIST, ACK_ERROR_NO_EXIST};
 use crate::connection::ConnectionState;
 
 /// Subscribe to a message channel
 ///
 /// Clients can subscribe to named channels to receive messages.
 pub async fn handle_subscribe_command(state: &AppState, conn_state: &mut ConnectionState, channel: &str) -> String {
+    // Validate channel name: alphanumeric or _-.:  (MPD rule)
+    if channel.is_empty() || !channel.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.' || c == ':') {
+        return ResponseBuilder::error(ACK_ERROR_ARG, 0, "subscribe", "invalid channel name");
+    }
+    // Check if already subscribed
+    if conn_state.subscribed_channels().contains(&channel.to_string()) {
+        return ResponseBuilder::error(ACK_ERROR_EXIST, 0, "subscribe", "already subscribed to this channel");
+    }
     conn_state.subscribe(channel.to_string());
     state.message_broker.register_subscriber(channel).await;
     ResponseBuilder::new().ok()
@@ -21,7 +29,7 @@ pub async fn handle_subscribe_command(state: &AppState, conn_state: &mut Connect
 /// Removes the subscription to a channel.
 pub async fn handle_unsubscribe_command(state: &AppState, conn_state: &mut ConnectionState, channel: &str) -> String {
     if !conn_state.subscribed_channels().contains(&channel.to_string()) {
-        return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "unsubscribe", "not subscribed to this channel");
+        return ResponseBuilder::error(ACK_ERROR_NO_EXIST, 0, "unsubscribe", "not subscribed to this channel");
     }
     conn_state.unsubscribe(channel);
     state.message_broker.unregister_subscriber(channel).await;
@@ -74,6 +82,6 @@ pub async fn handle_sendmessage_command(state: &AppState, channel: &str, message
     if ok {
         ResponseBuilder::new().ok()
     } else {
-        ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "sendmessage", "nobody is subscribed to this channel")
+        ResponseBuilder::error(ACK_ERROR_NO_EXIST, 0, "sendmessage", "nobody is subscribed to this channel")
     }
 }

@@ -1626,13 +1626,34 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
         "rangeid" => {
             let id = parse_u32.parse_next(input)?;
             let _ = space0.parse_next(input)?;
-            let start = parse_f64.parse_next(input)?;
-            let _ = space0.parse_next(input)?;
-            let end = parse_f64.parse_next(input)?;
-            Ok(Command::RangeId {
-                id,
-                range: (start, end),
-            })
+            // MPD format: start:end (floats with colon separator)
+            // Both parts optional: ":" means clear range, "0.5:" means start only, etc.
+            let rest = input.trim();
+            let range = if let Some(colon_pos) = rest.find(':') {
+                let start_str = &rest[..colon_pos];
+                let end_str = &rest[colon_pos + 1..];
+                let start: Option<f64> = if start_str.is_empty() {
+                    None
+                } else {
+                    Some(start_str.parse().map_err(|_| {
+                        winnow::error::ErrMode::Backtrack(winnow::error::ContextError::new())
+                    })?)
+                };
+                let end: Option<f64> = if end_str.is_empty() {
+                    None
+                } else {
+                    Some(end_str.parse().map_err(|_| {
+                        winnow::error::ErrMode::Backtrack(winnow::error::ContextError::new())
+                    })?)
+                };
+                *input = "";
+                (start.unwrap_or(0.0), end.unwrap_or(0.0))
+            } else {
+                return Err(winnow::error::ErrMode::Backtrack(
+                    winnow::error::ContextError::new(),
+                ));
+            };
+            Ok(Command::RangeId { id, range })
         }
         "addtagid" => {
             let id = parse_u32.parse_next(input)?;
