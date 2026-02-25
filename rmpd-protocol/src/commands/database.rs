@@ -1099,7 +1099,7 @@ pub async fn handle_readcomments_command(state: &AppState, uri: &str) -> String 
 
     let path = Utf8PathBuf::from(&abs_path);
     if !path.exists() {
-        return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "readcomments", "No such file");
+        return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "readcomments", "No such song");
     }
 
     match MetadataExtractor::read_raw_comments(&path) {
@@ -1120,7 +1120,7 @@ pub async fn handle_readcomments_command(state: &AppState, uri: &str) -> String 
         }
         Err(e) => {
             error!("readcomments error for {uri}: {e}");
-            ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "readcomments", "No such file")
+            ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "readcomments", "No such song")
         }
     }
 }

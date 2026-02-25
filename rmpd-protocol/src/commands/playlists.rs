@@ -14,7 +14,7 @@ use std::path::Path;
 fn read_m3u_playlist(playlist_dir: &str, name: &str) -> Result<Vec<String>, String> {
     let path = std::path::Path::new(playlist_dir).join(format!("{name}.m3u"));
     let content = std::fs::read_to_string(&path)
-        .map_err(|e| format!("No such playlist: {e}"))?;
+        .map_err(|_| "No such playlist".to_string())?;
     let paths: Vec<String> = content
         .lines()
         .filter(|l| !l.trim_start().starts_with('#') && !l.trim().is_empty())
@@ -445,7 +445,7 @@ pub async fn handle_searchplaylist_command(
     };
     let paths = match read_m3u_playlist(&playlist_dir, name) {
         Ok(p) => p,
-        Err(_) => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "searchplaylist", "Playlist not found"),
+        Err(_) => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "searchplaylist", "No such playlist"),
     };
     let db = match open_db(state, "searchplaylist") {
         Ok(d) => d,
@@ -472,7 +472,7 @@ pub async fn handle_playlistlength_command(state: &AppState, name: &str) -> Stri
     };
     let paths = match read_m3u_playlist(&playlist_dir, name) {
         Ok(p) => p,
-        Err(_) => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "playlistlength", "Playlist not found"),
+        Err(_) => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "playlistlength", "No such playlist"),
     };
     let db = match open_db(state, "playlistlength") {
         Ok(d) => d,
