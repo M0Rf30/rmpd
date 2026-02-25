@@ -51,12 +51,7 @@ pub async fn handle_partition_command(
         conn_state.current_partition = name.to_string();
         ResponseBuilder::new().ok()
     } else {
-        ResponseBuilder::error(
-            ACK_ERROR_NO_EXIST,
-            0,
-            "partition",
-            "partition does not exist",
-        )
+        ResponseBuilder::error(ACK_ERROR_NO_EXIST, 0, "partition", "No such partition")
     }
 }
 
@@ -122,7 +117,7 @@ pub async fn handle_newpartition_command(state: &AppState, name: &str) -> String
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
     if !is_valid {
-        return ResponseBuilder::error(ACK_ERROR_ARG, 0, "newpartition", "bad name");
+        return ResponseBuilder::error(ACK_ERROR_ARG, 0, "newpartition", "Invalid partition name");
     }
 
     let manager = match &state.partition_manager {
@@ -182,10 +177,10 @@ pub async fn handle_delpartition_command(state: &AppState, name: &str) -> String
             ACK_ERROR_UNKNOWN,
             0,
             "delpartition",
-            "cannot delete the default partition",
+            "Cannot delete default partition",
         ),
         Err(e) if e.contains("not found") || e.contains("Not found") => {
-            ResponseBuilder::error(ACK_ERROR_NO_EXIST, 0, "delpartition", "no such partition")
+            ResponseBuilder::error(ACK_ERROR_NO_EXIST, 0, "delpartition", "No such partition")
         }
         Err(e) if e.contains("still has clients") => ResponseBuilder::error(
             ACK_ERROR_UNKNOWN,
