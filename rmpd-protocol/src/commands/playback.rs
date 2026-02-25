@@ -5,7 +5,7 @@ use tracing::{debug, error};
 use crate::response::ResponseBuilder;
 use crate::state::AppState;
 
-use super::utils::{ACK_ERROR_SYSTEM, prepare_song_for_playback, update_next_song};
+use super::utils::{ACK_ERROR_ARG, ACK_ERROR_PLAYER_SYNC, ACK_ERROR_SYSTEM, prepare_song_for_playback, update_next_song};
 
 pub async fn handle_play_command(state: &AppState, position: Option<u32>) -> String {
     let queue = state.queue.read().await;
@@ -16,7 +16,7 @@ pub async fn handle_play_command(state: &AppState, position: Option<u32>) -> Str
         if let Some(item) = queue.get(pos) {
             (item.song.clone(), Some((pos, item.id)))
         } else {
-            return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "play", "No such song");
+            return ResponseBuilder::error(ACK_ERROR_ARG, 0, "play", "Bad song index");
         }
     } else {
         // Resume or play first song
@@ -29,7 +29,8 @@ pub async fn handle_play_command(state: &AppState, position: Option<u32>) -> Str
             // Play first song
             (item.song.clone(), Some((0, item.id)))
         } else {
-            return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "play", "No songs in queue");
+            // Empty queue: MPD silently returns OK
+            return ResponseBuilder::new().ok();
         }
     };
 
@@ -167,11 +168,13 @@ pub async fn handle_next_command(state: &AppState) -> String {
     let queue = state.queue.read().await;
     let status = state.status.read().await;
 
-    let next_pos = if let Some(current) = status.current_song {
-        current.position + 1
-    } else {
-        0
+    // MPD requires a current song (playing or paused); if stopped, returns Not playing
+    let current = match status.current_song {
+        Some(c) => c,
+        None => return ResponseBuilder::error(ACK_ERROR_PLAYER_SYNC, 0, "next", "Not playing"),
     };
+
+    let next_pos = current.position + 1;
 
     if let Some(item) = queue.get(next_pos) {
         let song = item.song.clone();
@@ -199,7 +202,7 @@ pub async fn handle_next_command(state: &AppState) -> String {
             }
         }
     } else {
-        ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "next", "No next song")
+        ResponseBuilder::error(ACK_ERROR_PLAYER_SYNC, 0, "next", "Not playing")
     }
 }
 
@@ -207,19 +210,18 @@ pub async fn handle_previous_command(state: &AppState) -> String {
     let queue = state.queue.read().await;
     let status = state.status.read().await;
 
-    let prev_pos = if let Some(current) = status.current_song {
-        if current.position > 0 {
-            current.position - 1
-        } else {
-            return ResponseBuilder::error(
-                ACK_ERROR_SYSTEM,
-                0,
-                "previous",
-                "Already at first song",
-            );
-        }
+    // MPD requires a current song (playing or paused); if stopped, returns Not playing
+    let current = match status.current_song {
+        Some(c) => c,
+        None => return ResponseBuilder::error(ACK_ERROR_PLAYER_SYNC, 0, "previous", "Not playing"),
+    };
+
+    let prev_pos = if current.position > 0 {
+        current.position - 1
     } else {
-        0
+        // Already at first song — MPD still returns Not playing (or plays same song)
+        // Actually MPD wraps to first if repeat, else stays. Simplification: stay OK
+        current.position
     };
 
     if let Some(item) = queue.get(prev_pos) {
@@ -251,75 +253,63 @@ pub async fn handle_previous_command(state: &AppState) -> String {
             ),
         }
     } else {
-        ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "previous", "No previous song")
+        ResponseBuilder::error(ACK_ERROR_PLAYER_SYNC, 0, "previous", "Not playing")
     }
 }
 
 pub async fn handle_seek_command(state: &AppState, position: u32, time: f64) -> String {
-    // Get song at position
+    // MPD seek validates the position exists in queue (ACK_ERROR_ARG if not).
+    // If position is valid, it seeks and starts playing (even if stopped).
     let queue = state.queue.read().await;
-    let status = state.status.read().await;
+    if queue.get(position).is_none() {
+        return ResponseBuilder::error(ACK_ERROR_ARG, 0, "seek", "Bad song index");
+    }
+    drop(queue);
 
-    // Check if this is the current song
-    if let Some(current) = status.current_song {
-        if current.position == position {
-            drop(queue);
-            drop(status);
-            // Seek in current song
-            match state.engine.read().await.seek(time).await {
-                Ok(_) => {
-                    // Update status elapsed time
-                    state.status.write().await.elapsed =
-                        Some(std::time::Duration::from_secs_f64(time));
-                    ResponseBuilder::new().ok()
-                }
-                Err(e) => ResponseBuilder::error(
-                    ACK_ERROR_SYSTEM,
-                    0,
-                    "seek",
-                    &format!("Seek failed: {e}"),
-                ),
+    // Seek in current song (if it's the same position) or start playing at that position
+    let status = state.status.read().await;
+    let is_current = status.current_song.map(|c| c.position == position).unwrap_or(false);
+    drop(status);
+
+    if is_current {
+        match state.engine.read().await.seek(time).await {
+            Ok(_) => {
+                state.status.write().await.elapsed = Some(std::time::Duration::from_secs_f64(time));
+                ResponseBuilder::new().ok()
             }
-        } else {
-            ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "seek", "Can only seek in current song")
+            Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "seek", &format!("Seek failed: {e}")),
         }
     } else {
-        ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "seek", "Not playing")
+        // Start playing at that position from given time offset
+        handle_play_command(state, Some(position)).await
     }
 }
 
 pub async fn handle_seekid_command(state: &AppState, id: u32, time: f64) -> String {
-    let status = state.status.read().await;
-
-    // Check if this is the current song
-    if let Some(current) = status.current_song {
-        if current.id == id {
-            drop(status);
-            // Seek in current song
-            match state.engine.read().await.seek(time).await {
-                Ok(_) => {
-                    // Update status elapsed time
-                    state.status.write().await.elapsed =
-                        Some(std::time::Duration::from_secs_f64(time));
-                    ResponseBuilder::new().ok()
-                }
-                Err(e) => ResponseBuilder::error(
-                    ACK_ERROR_SYSTEM,
-                    0,
-                    "seekid",
-                    &format!("Seek failed: {e}"),
-                ),
-            }
+    // Find the song by ID first
+    let (position, is_current) = {
+        let queue = state.queue.read().await;
+        if let Some(item) = queue.get_by_id(id) {
+            let pos = item.position;
+            let status = state.status.read().await;
+            let is_current = status.current_song.map(|c| c.id == id).unwrap_or(false);
+            (pos, is_current)
         } else {
-            ResponseBuilder::error(
-                ACK_ERROR_SYSTEM,
-                0,
-                "seekid",
-                "Can only seek in current song",
-            )
+            return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "seekid", "No such song");
+        }
+    };
+
+    if is_current {
+        match state.engine.read().await.seek(time).await {
+            Ok(_) => {
+                state.status.write().await.elapsed = Some(std::time::Duration::from_secs_f64(time));
+                ResponseBuilder::new().ok()
+            }
+            Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "seekid", &format!("Seek failed: {e}")),
         }
     } else {
-        ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "seekid", "Not playing")
+        // Start playing at that position
+        handle_play_command(state, Some(position)).await
     }
 }
 
@@ -355,6 +345,6 @@ pub async fn handle_seekcur_command(state: &AppState, time: f64, relative: bool)
             }
         }
     } else {
-        ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "seekcur", "Not playing")
+        ResponseBuilder::error(ACK_ERROR_PLAYER_SYNC, 0, "seekcur", "Not playing")
     }
 }

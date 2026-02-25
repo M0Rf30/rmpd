@@ -79,7 +79,7 @@ pub async fn handle_delete_command(
                 status.playlist_length = state.queue.read().await.len() as u32;
                 ResponseBuilder::new().ok()
             } else {
-                ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "delete", "No such song")
+                ResponseBuilder::error(ACK_ERROR_ARG, 0, "delete", "Bad song index")
             }
         }
         DeleteTarget::Range(start, end) => {
@@ -100,7 +100,7 @@ pub async fn handle_delete_command(
                 status.playlist_length = queue.len() as u32;
                 ResponseBuilder::new().ok()
             } else {
-                ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "delete", "No such songs in range")
+                ResponseBuilder::error(ACK_ERROR_ARG, 0, "delete", "Bad song index")
             }
         }
     }
@@ -180,7 +180,7 @@ pub async fn handle_move_command(
                 status.playlist_version += 1;
                 ResponseBuilder::new().ok()
             } else {
-                ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "move", "Invalid position")
+                ResponseBuilder::error(ACK_ERROR_ARG, 0, "move", &format!("Number too large: {to}"))
             }
         }
         MoveFrom::Range(start, end) => {
@@ -189,7 +189,15 @@ pub async fn handle_move_command(
             let mut queue = state.queue.write().await;
 
             if start >= end || start >= queue.len() as u32 {
-                return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "move", "Invalid range");
+                return ResponseBuilder::error(ACK_ERROR_ARG, 0, "move", "Bad song index");
+            }
+
+            let range_size = end.saturating_sub(start).min(queue.len() as u32 - start);
+            // After removing range_size items, the queue has (len - range_size) slots.
+            // `to` must be in [0, len - range_size].
+            let max_to = queue.len() as u32 - range_size;
+            if to > max_to {
+                return ResponseBuilder::error(ACK_ERROR_ARG, 0, "move", &format!("Number too large: {to}"));
             }
 
             let range_size = end.saturating_sub(start);
@@ -202,10 +210,10 @@ pub async fn handle_move_command(
                 for i in 0..range_size.min(queue.len() as u32 - start) {
                     if !queue.move_item(start, to + i) {
                         return ResponseBuilder::error(
-                            ACK_ERROR_SYSTEM,
+                            ACK_ERROR_ARG,
                             0,
                             "move",
-                            "Invalid position",
+                            "Bad song index",
                         );
                     }
                 }
@@ -215,10 +223,10 @@ pub async fn handle_move_command(
                 for _ in 0..(actual_end - start) {
                     if !queue.move_item(start, to.saturating_sub(1)) {
                         return ResponseBuilder::error(
-                            ACK_ERROR_SYSTEM,
+                            ACK_ERROR_ARG,
                             0,
                             "move",
-                            "Invalid position",
+                            "Bad song index",
                         );
                     }
                 }
@@ -237,7 +245,7 @@ pub async fn handle_swap_command(state: &AppState, pos1: u32, pos2: u32) -> Stri
         status.playlist_version += 1;
         ResponseBuilder::new().ok()
     } else {
-        ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "swap", "Invalid position")
+        ResponseBuilder::error(ACK_ERROR_ARG, 0, "swap", "Bad song index")
     }
 }
 

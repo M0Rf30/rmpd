@@ -7,8 +7,19 @@ use crate::response::ResponseBuilder;
 pub const ACK_ERROR_ARG: i32 = 2;
 pub const ACK_ERROR_PERMISSION: i32 = 4;
 pub const ACK_ERROR_UNKNOWN: i32 = 5;
-pub const ACK_ERROR_SYSTEM: i32 = 50;
+pub const ACK_ERROR_NO_EXIST: i32 = 50;
+#[allow(dead_code)]
+pub const ACK_ERROR_PLAYLIST_MAX: i32 = 51;
+#[allow(dead_code)]
+pub const ACK_ERROR_SYS: i32 = 52;
+#[allow(dead_code)]
+pub const ACK_ERROR_PLAYLIST_LOAD: i32 = 53;
+#[allow(dead_code)]
+pub const ACK_ERROR_UPDATE_ALREADY: i32 = 54;
+pub const ACK_ERROR_PLAYER_SYNC: i32 = 55;
 pub const ACK_ERROR_EXIST: i32 = 56;
+/// Alias kept for backward compat within rmpd (maps to ACK_ERROR_NO_EXIST = 50)
+pub const ACK_ERROR_SYSTEM: i32 = ACK_ERROR_NO_EXIST;
 
 /// Open the music database, returning an error response string on failure.
 /// This eliminates the repeated db_path check + Database::open boilerplate.
