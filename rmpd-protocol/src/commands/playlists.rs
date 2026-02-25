@@ -4,8 +4,10 @@ use crate::response::ResponseBuilder;
 use crate::state::AppState;
 
 use super::utils::{
-    ACK_ERROR_SYSTEM, format_iso8601_timestamp, open_db, song_tag_contains,
+    ACK_ERROR_ARG, ACK_ERROR_EXIST, ACK_ERROR_SYSTEM, format_iso8601_timestamp, open_db,
+    song_tag_contains,
 };
+use std::path::Path;
 
 /// Parse an .m3u playlist file and return the list of relative paths.
 /// Lines starting with '#' are comments and are skipped.
@@ -71,88 +73,48 @@ pub async fn handle_save_command(
 ) -> String {
     use crate::parser::SaveMode;
 
-    let db = match open_db(state, "save") {
-        Ok(d) => d,
-        Err(e) => return e,
+    let playlist_dir = match &state.playlist_dir {
+        Some(d) => d.clone(),
+        None => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "save", "playlist directory not configured"),
     };
+    let pl_path = Path::new(&playlist_dir).join(format!("{name}.m3u"));
+    let mode = mode.unwrap_or(SaveMode::Create);
 
-    // Get current queue
-    let songs: Vec<_> = {
-        let queue = state.queue.read().await;
-        queue.items().iter().map(|item| item.song.clone()).collect()
-    };
-
-    // MPD default: replace existing playlist (or create if new)
-    let mode = mode.unwrap_or(SaveMode::Replace);
-
+    // Enforce mode preconditions (matching MPD's PlaylistSave.cxx spl_save_queue)
     match mode {
         SaveMode::Create => {
-            // Default: create new playlist or fail if exists
-            // Check if playlist already exists
-            match db.load_playlist(name) {
-                Ok(_) => {
-                    // Playlist exists, fail
-                    ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "save", "Playlist already exists")
-                }
-                Err(_) => {
-                    // Playlist doesn't exist, create it
-                    match db.save_playlist(name, &songs) {
-                        Ok(_) => ResponseBuilder::new().ok(),
-                        Err(e) => ResponseBuilder::error(
-                            ACK_ERROR_SYSTEM,
-                            0,
-                            "save",
-                            &format!("Error: {e}"),
-                        ),
-                    }
-                }
+            if pl_path.exists() {
+                return ResponseBuilder::error(ACK_ERROR_EXIST, 0, "save", "Playlist already exists");
             }
         }
-        SaveMode::Replace => {
-            // Replace existing playlist or create if doesn't exist
-            // Delete existing playlist if it exists (ignore errors)
-            let _ = db.delete_playlist(name);
+        SaveMode::Append | SaveMode::Replace => {
+            if !pl_path.exists() {
+                return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "save", "No such playlist");
+            }
+        }
+    }
 
-            // Save new playlist
-            match db.save_playlist(name, &songs) {
-                Ok(_) => ResponseBuilder::new().ok(),
-                Err(e) => {
-                    ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "save", &format!("Error: {e}"))
-                }
-            }
-        }
-        SaveMode::Append => {
-            // Append to existing playlist or create if doesn't exist
-            match db.load_playlist(name) {
-                Ok(mut existing_songs) => {
-                    // Playlist exists, append to it
-                    existing_songs.extend(songs);
+    // Collect current queue paths
+    let new_paths: Vec<String> = {
+        let queue = state.queue.read().await;
+        queue.items().iter().map(|item| item.song.path.to_string()).collect()
+    };
 
-                    // Save updated playlist
-                    match db.save_playlist(name, &existing_songs) {
-                        Ok(_) => ResponseBuilder::new().ok(),
-                        Err(e) => ResponseBuilder::error(
-                            ACK_ERROR_SYSTEM,
-                            0,
-                            "save",
-                            &format!("Error: {e}"),
-                        ),
-                    }
-                }
-                Err(_) => {
-                    // Playlist doesn't exist, create it
-                    match db.save_playlist(name, &songs) {
-                        Ok(_) => ResponseBuilder::new().ok(),
-                        Err(e) => ResponseBuilder::error(
-                            ACK_ERROR_SYSTEM,
-                            0,
-                            "save",
-                            &format!("Error: {e}"),
-                        ),
-                    }
-                }
-            }
-        }
+    // For append mode, prepend existing paths
+    let paths_to_write: Vec<String> = if matches!(mode, SaveMode::Append) {
+        let mut existing = read_m3u_playlist(&playlist_dir, name).unwrap_or_default();
+        existing.extend(new_paths);
+        existing
+    } else {
+        new_paths
+    };
+
+    // Write the .m3u file
+    let content = paths_to_write.iter().map(|p| p.as_str()).collect::<Vec<_>>().join("\n");
+    let content = if content.is_empty() { content } else { content + "\n" };
+    match std::fs::write(&pl_path, &content) {
+        Ok(_) => ResponseBuilder::new().ok(),
+        Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "save", &format!("Error writing playlist: {e}")),
     }
 }
 
@@ -162,48 +124,53 @@ pub async fn handle_load_command(
     range: Option<(u32, u32)>,
     position: Option<u32>,
 ) -> String {
+    let playlist_dir = match &state.playlist_dir {
+        Some(d) => d.clone(),
+        None => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "load", "playlist directory not configured"),
+    };
+
+    let mut paths = match read_m3u_playlist(&playlist_dir, name) {
+        Ok(p) => p,
+        Err(e) => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "load", &e),
+    };
+
+    // Apply range filter if specified
+    if let Some((start, end)) = range {
+        let start = start as usize;
+        let end = (end as usize).min(paths.len());
+        if start <= paths.len() {
+            paths = paths[start..end].to_vec();
+        } else {
+            return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "load", "Invalid range");
+        }
+    }
+
+    // Look up songs from DB; fall back to stub Song if not found
     let db = match open_db(state, "load") {
         Ok(d) => d,
         Err(e) => return e,
     };
+    let songs: Vec<rmpd_core::song::Song> = paths.iter().filter_map(|path| {
+        db.get_song_by_path(path).ok().flatten()
+    }).collect();
 
-    match db.load_playlist(name) {
-        Ok(mut songs) => {
-            // Apply range filter if specified
-            if let Some((start, end)) = range {
-                let start = start as usize;
-                let end = end.min(songs.len() as u32) as usize;
-                if start < songs.len() {
-                    songs = songs[start..end].to_vec();
-                } else {
-                    return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "load", "Invalid range");
-                }
+    {
+        let mut queue = state.queue.write().await;
+        if let Some(pos) = position {
+            for (i, song) in songs.into_iter().enumerate() {
+                queue.add_at(song, Some(pos + i as u32));
             }
-
-            {
-                let mut queue = state.queue.write().await;
-                if let Some(pos) = position {
-                    // Insert at specified position
-                    for (i, song) in songs.into_iter().enumerate() {
-                        queue.add_at(song, Some(pos + i as u32));
-                    }
-                } else {
-                    // MPD spec: load appends to queue
-                    for song in songs {
-                        queue.add(song);
-                    }
-                }
+        } else {
+            for song in songs {
+                queue.add(song);
             }
-
-            // Update status
-            let mut status = state.status.write().await;
-            status.playlist_version += 1;
-            status.playlist_length = state.queue.read().await.len() as u32;
-
-            ResponseBuilder::new().ok()
         }
-        Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "load", &format!("Error: {e}")),
     }
+
+    let mut status = state.status.write().await;
+    status.playlist_version += 1;
+    status.playlist_length = state.queue.read().await.len() as u32;
+    ResponseBuilder::new().ok()
 }
 
 pub async fn handle_searchaddpl_command(
@@ -212,7 +179,10 @@ pub async fn handle_searchaddpl_command(
     tag: &str,
     value: &str,
 ) -> String {
-    // Search and add results to stored playlist
+    let playlist_dir = match &state.playlist_dir {
+        Some(d) => d.clone(),
+        None => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "searchaddpl", "playlist directory not configured"),
+    };
     let db = match open_db(state, "searchaddpl") {
         Ok(d) => d,
         Err(e) => return e,
@@ -221,41 +191,26 @@ pub async fn handle_searchaddpl_command(
     let songs = if tag.eq_ignore_ascii_case("any") {
         match db.search_songs(value) {
             Ok(s) => s,
-            Err(e) => {
-                return ResponseBuilder::error(
-                    ACK_ERROR_SYSTEM,
-                    0,
-                    "searchaddpl",
-                    &format!("search error: {e}"),
-                );
-            }
+            Err(e) => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "searchaddpl", &format!("search error: {e}")),
         }
     } else {
         match db.find_songs(tag, value) {
             Ok(s) => s,
-            Err(e) => {
-                return ResponseBuilder::error(
-                    ACK_ERROR_SYSTEM,
-                    0,
-                    "searchaddpl",
-                    &format!("query error: {e}"),
-                );
-            }
+            Err(e) => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "searchaddpl", &format!("query error: {e}")),
         }
     };
 
-    for song in songs {
-        if let Err(e) = db.playlist_add(name, song.path.as_str()) {
-            return ResponseBuilder::error(
-                ACK_ERROR_SYSTEM,
-                0,
-                "searchaddpl",
-                &format!("Error: {e}"),
-            );
-        }
+    let pl_path = Path::new(&playlist_dir).join(format!("{name}.m3u"));
+    let mut paths = if pl_path.exists() { read_m3u_playlist(&playlist_dir, name).unwrap_or_default() } else { vec![] };
+    for song in &songs {
+        paths.push(song.path.to_string());
     }
-
-    ResponseBuilder::new().ok()
+    let content = paths.iter().map(|p| p.as_str()).collect::<Vec<_>>().join("\n");
+    let content = if content.is_empty() { content } else { content + "\n" };
+    match std::fs::write(&pl_path, &content) {
+        Ok(_) => ResponseBuilder::new().ok(),
+        Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "searchaddpl", &format!("Error: {e}")),
+    }
 }
 
 pub async fn handle_listplaylist_command(
@@ -335,51 +290,80 @@ pub async fn handle_playlistadd_command(
     uri: &str,
     position: Option<u32>,
 ) -> String {
+    let playlist_dir = match &state.playlist_dir {
+        Some(d) => d.clone(),
+        None => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "playlistadd", "playlist directory not configured"),
+    };
     let db = match open_db(state, "playlistadd") {
         Ok(d) => d,
         Err(e) => return e,
     };
 
-    // TODO: Implement position support in database layer
-    // For now, position parameter is parsed but not used
-    let _ = position;
+    // Look up songs matching the URI in the database (song or directory prefix)
+    let songs = match db.find_songs_by_prefix(uri) {
+        Ok(s) if !s.is_empty() => s,
+        Ok(_) => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "playlistadd", "No such directory"),
+        Err(e) => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "playlistadd", &format!("Error: {e}")),
+    };
 
-    match db.playlist_add(name, uri) {
-        Ok(_) => ResponseBuilder::new().ok(),
-        Err(e) => {
-            ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "playlistadd", &format!("Error: {e}"))
+    let pl_path = Path::new(&playlist_dir).join(format!("{name}.m3u"));
+    let mut paths = if pl_path.exists() { read_m3u_playlist(&playlist_dir, name).unwrap_or_default() } else { vec![] };
+
+    // Collect new paths to append (sorted, matching MPD behavior)
+    let start_pos = position.map(|p| p as usize);
+    let new_paths: Vec<String> = songs.iter().map(|s| s.path.to_string()).collect();
+    if let Some(pos) = start_pos {
+        let pos = pos.min(paths.len());
+        for (i, p) in new_paths.into_iter().enumerate() {
+            paths.insert(pos + i, p);
         }
+    } else {
+        paths.extend(new_paths);
+    }
+
+    let content = paths.iter().map(|p| p.as_str()).collect::<Vec<_>>().join("\n");
+    let content = if content.is_empty() { content } else { content + "\n" };
+    match std::fs::write(&pl_path, &content) {
+        Ok(_) => ResponseBuilder::new().ok(),
+        Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "playlistadd", &format!("Error: {e}")),
     }
 }
 
 pub async fn handle_playlistclear_command(state: &AppState, name: &str) -> String {
-    let db = match open_db(state, "playlistclear") {
-        Ok(d) => d,
-        Err(e) => return e,
+    let playlist_dir = match &state.playlist_dir {
+        Some(d) => d.clone(),
+        None => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "playlistclear", "playlist directory not configured"),
     };
-
-    match db.playlist_clear(name) {
+    let pl_path = Path::new(&playlist_dir).join(format!("{name}.m3u"));
+    if !pl_path.exists() {
+        return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "playlistclear", "No such playlist");
+    }
+    match std::fs::write(&pl_path, "") {
         Ok(_) => ResponseBuilder::new().ok(),
-        Err(e) => {
-            ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "playlistclear", &format!("Error: {e}"))
-        }
+        Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "playlistclear", &format!("Error: {e}")),
     }
 }
 
 pub async fn handle_playlistdelete_command(state: &AppState, name: &str, position: u32) -> String {
-    let db = match open_db(state, "playlistdelete") {
-        Ok(d) => d,
-        Err(e) => return e,
+    let playlist_dir = match &state.playlist_dir {
+        Some(d) => d.clone(),
+        None => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "playlistdelete", "playlist directory not configured"),
     };
-
-    match db.playlist_delete_pos(name, position) {
+    let mut paths = match read_m3u_playlist(&playlist_dir, name) {
+        Ok(p) => p,
+        Err(e) => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "playlistdelete", &e),
+    };
+    let pos = position as usize;
+    if pos >= paths.len() {
+        return ResponseBuilder::error(ACK_ERROR_ARG, 0, "playlistdelete", "Bad song index");
+    }
+    paths.remove(pos);
+    let content = paths.iter().map(|p| p.as_str()).collect::<Vec<_>>().join("\n");
+    let content = if content.is_empty() { content } else { content + "\n" };
+    let pl_path = Path::new(&playlist_dir).join(format!("{name}.m3u"));
+    match std::fs::write(&pl_path, &content) {
         Ok(_) => ResponseBuilder::new().ok(),
-        Err(e) => ResponseBuilder::error(
-            ACK_ERROR_SYSTEM,
-            0,
-            "playlistdelete",
-            &format!("Error: {e}"),
-        ),
+        Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "playlistdelete", &format!("Error: {e}")),
     }
 }
 
@@ -389,38 +373,60 @@ pub async fn handle_playlistmove_command(
     from: u32,
     to: u32,
 ) -> String {
-    let db = match open_db(state, "playlistmove") {
-        Ok(d) => d,
-        Err(e) => return e,
+    let playlist_dir = match &state.playlist_dir {
+        Some(d) => d.clone(),
+        None => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "playlistmove", "playlist directory not configured"),
     };
-
-    match db.playlist_move(name, from, to) {
+    let mut paths = match read_m3u_playlist(&playlist_dir, name) {
+        Ok(p) => p,
+        Err(e) => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "playlistmove", &e),
+    };
+    let from = from as usize;
+    let to = to as usize;
+    if from >= paths.len() || to > paths.len() {
+        return ResponseBuilder::error(ACK_ERROR_ARG, 0, "playlistmove", "Bad song index");
+    }
+    let song = paths.remove(from);
+    let insert_pos = if to > from { to - 1 } else { to };
+    paths.insert(insert_pos.min(paths.len()), song);
+    let content = paths.iter().map(|p| p.as_str()).collect::<Vec<_>>().join("\n");
+    let content = if content.is_empty() { content } else { content + "\n" };
+    let pl_path = Path::new(&playlist_dir).join(format!("{name}.m3u"));
+    match std::fs::write(&pl_path, &content) {
         Ok(_) => ResponseBuilder::new().ok(),
-        Err(e) => {
-            ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "playlistmove", &format!("Error: {e}"))
-        }
+        Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "playlistmove", &format!("Error: {e}")),
     }
 }
 
 pub async fn handle_rm_command(state: &AppState, name: &str) -> String {
-    let db = match open_db(state, "rm") {
-        Ok(d) => d,
-        Err(e) => return e,
+    let playlist_dir = match &state.playlist_dir {
+        Some(d) => d.clone(),
+        None => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "rm", "playlist directory not configured"),
     };
-
-    match db.delete_playlist(name) {
+    let pl_path = Path::new(&playlist_dir).join(format!("{name}.m3u"));
+    if !pl_path.exists() {
+        return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "rm", "No such playlist");
+    }
+    match std::fs::remove_file(&pl_path) {
         Ok(_) => ResponseBuilder::new().ok(),
         Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "rm", &format!("Error: {e}")),
     }
 }
 
 pub async fn handle_rename_command(state: &AppState, from: &str, to: &str) -> String {
-    let db = match open_db(state, "rename") {
-        Ok(d) => d,
-        Err(e) => return e,
+    let playlist_dir = match &state.playlist_dir {
+        Some(d) => d.clone(),
+        None => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "rename", "playlist directory not configured"),
     };
-
-    match db.rename_playlist(from, to) {
+    let from_path = Path::new(&playlist_dir).join(format!("{from}.m3u"));
+    let to_path = Path::new(&playlist_dir).join(format!("{to}.m3u"));
+    if !from_path.exists() {
+        return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "rename", "No such playlist");
+    }
+    if to_path.exists() {
+        return ResponseBuilder::error(ACK_ERROR_EXIST, 0, "rename", "Playlist already exists");
+    }
+    match std::fs::rename(&from_path, &to_path) {
         Ok(_) => ResponseBuilder::new().ok(),
         Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "rename", &format!("Error: {e}")),
     }
@@ -433,61 +439,59 @@ pub async fn handle_searchplaylist_command(
     tag: &str,
     value: &str,
 ) -> String {
+    let playlist_dir = match &state.playlist_dir {
+        Some(d) => d.clone(),
+        None => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "searchplaylist", "playlist directory not configured"),
+    };
+    let paths = match read_m3u_playlist(&playlist_dir, name) {
+        Ok(p) => p,
+        Err(_) => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "searchplaylist", "Playlist not found"),
+    };
     let db = match open_db(state, "searchplaylist") {
         Ok(d) => d,
         Err(e) => return e,
     };
 
-    let songs = match db.load_playlist(name) {
-        Ok(s) => s,
-        Err(_) => {
-            return ResponseBuilder::error(
-                ACK_ERROR_SYSTEM,
-                0,
-                "searchplaylist",
-                "Playlist not found",
-            );
-        }
-    };
-
     let mut resp = ResponseBuilder::new();
     let value_lower = value.to_lowercase();
     let tag_lower = tag.to_lowercase();
-
-    for song in songs {
-        if song_tag_contains(&song, &tag_lower, &value_lower) {
-            resp.song(&song, None, None);
+    for path in &paths {
+        if let Ok(Some(song)) = db.get_song_by_path(path) {
+            if song_tag_contains(&song, &tag_lower, &value_lower) {
+                resp.song(&song, None, None);
+            }
         }
     }
     resp.ok()
 }
 
 pub async fn handle_playlistlength_command(state: &AppState, name: &str) -> String {
+    let playlist_dir = match &state.playlist_dir {
+        Some(d) => d.clone(),
+        None => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "playlistlength", "playlist directory not configured"),
+    };
+    let paths = match read_m3u_playlist(&playlist_dir, name) {
+        Ok(p) => p,
+        Err(_) => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "playlistlength", "Playlist not found"),
+    };
     let db = match open_db(state, "playlistlength") {
         Ok(d) => d,
         Err(e) => return e,
     };
 
-    let songs = match db.load_playlist(name) {
-        Ok(s) => s,
-        Err(_) => {
-            return ResponseBuilder::error(
-                ACK_ERROR_SYSTEM,
-                0,
-                "playlistlength",
-                "Playlist not found",
-            );
+    let mut total_duration = 0.0_f64;
+    let mut count = 0usize;
+    for path in &paths {
+        if let Ok(Some(song)) = db.get_song_by_path(path) {
+            total_duration += song.duration.map(|d| d.as_secs_f64()).unwrap_or(0.0);
+            count += 1;
+        } else {
+            count += 1; // count even if not in DB
         }
-    };
-
-    let total_duration: f64 = songs
-        .iter()
-        .filter_map(|s| s.duration)
-        .map(|d| d.as_secs_f64())
-        .sum();
+    }
 
     let mut resp = ResponseBuilder::new();
-    resp.field("songs", songs.len().to_string());
+    resp.field("songs", count.to_string());
     resp.field("playtime", format!("{total_duration:.3}"));
     resp.ok()
 }

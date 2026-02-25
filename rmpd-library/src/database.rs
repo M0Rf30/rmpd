@@ -503,6 +503,28 @@ impl Database {
         }
     }
 
+    /// Find songs whose path equals `prefix` (exact match as a song) or starts with `prefix/` (directory prefix).
+    /// Returns songs sorted by path, matching MPD's behavior for `playlistadd <directory>`.
+    pub fn find_songs_by_prefix(&self, prefix: &str) -> Result<Vec<Song>> {
+        let dir_prefix = if prefix.ends_with('/') {
+            prefix.to_string()
+        } else {
+            format!("{prefix}/")
+        };
+        let query = format!("SELECT {SONG_COLUMNS} FROM songs WHERE path = ?1 OR path LIKE ?2 ORDER BY path");
+        let like_prefix = format!("{}%", dir_prefix.replace('%', "\\%").replace('_', "\\_"));
+        let mut stmt = self.conn.prepare(&query)?;
+        let songs: Result<Vec<Song>> = stmt
+            .query_map(params![prefix, like_prefix], song_from_row)?
+            .map(|r| r.map_err(Into::into))
+            .collect();
+        let mut songs = songs?;
+        for song in &mut songs {
+            song.tags = self.load_tags_for_song(song.id)?;
+        }
+        Ok(songs)
+    }
+
     pub fn count_songs(&self) -> Result<u32> {
         Ok(self
             .conn
