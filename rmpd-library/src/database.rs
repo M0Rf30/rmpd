@@ -1067,6 +1067,10 @@ impl Database {
         visitor: &mut impl FnMut(WalkEntry<'_>) -> Result<()>,
     ) -> Result<()> {
         let dir_id = self.resolve_dir_id(path)?;
+        // If path is non-empty and not found in DB, report the error.
+        if !path.is_empty() && path != "/" && dir_id.is_none() {
+            return Err(RmpdError::Library("No such directory".to_string()));
+        }
         self.walk_dir(dir_id, visitor)
     }
 

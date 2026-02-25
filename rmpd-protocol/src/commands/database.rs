@@ -760,7 +760,11 @@ pub async fn handle_listall_command(state: &AppState, path: Option<&str>) -> Str
 
     match result {
         Ok(()) => resp.ok(),
-        Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "listall", &format!("Error: {e}")),
+        Err(e) => {
+            let msg = e.to_string();
+            let msg = msg.strip_prefix("Library error: ").unwrap_or(&msg);
+            ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "listall", msg)
+        }
     }
 }
 
@@ -788,7 +792,9 @@ pub async fn handle_listallinfo_command(state: &AppState, path: Option<&str>) ->
     match result {
         Ok(()) => resp.ok(),
         Err(e) => {
-            ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "listallinfo", &format!("Error: {e}"))
+            let msg = e.to_string();
+            let msg = msg.strip_prefix("Library error: ").unwrap_or(&msg);
+            ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "listallinfo", msg)
         }
     }
 }
