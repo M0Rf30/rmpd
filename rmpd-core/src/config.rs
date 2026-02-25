@@ -204,7 +204,7 @@ fn default_buffer_time() -> u32 {
 }
 
 fn default_mixramp_db() -> f32 {
-    -17.0
+    0.0
 }
 
 fn default_true() -> bool {

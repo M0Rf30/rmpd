@@ -545,6 +545,9 @@ async fn handle_command(
         Command::UnknownSubcmd(main_cmd, _sub) => {
             ResponseBuilder::error(crate::commands::utils::ACK_ERROR_ARG, 0, &main_cmd, "Unknown sub command")
         }
+        Command::ArgError(cmd, msg, _raw) => {
+            ResponseBuilder::error(crate::commands::utils::ACK_ERROR_ARG, 0, &cmd, &msg)
+        }
         Command::Repeat { enabled } => options::handle_repeat_command(state, enabled).await,
         Command::Random { enabled } => options::handle_random_command(state, enabled).await,
         Command::Single { mode } => options::handle_single_command(state, &mode).await,

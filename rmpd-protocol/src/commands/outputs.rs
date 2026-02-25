@@ -14,9 +14,6 @@ pub async fn handle_outputs_command(state: &AppState) -> String {
         resp.field("outputname", &output.name);
         resp.field("plugin", &output.plugin);
         resp.field("outputenabled", if output.enabled { "1" } else { "0" });
-        if let Some(partition) = &output.partition {
-            resp.field("partition", partition);
-        }
         // Add blank line between outputs, but not after the last one
         if i < outputs.len() - 1 {
             resp.blank_line();
@@ -36,7 +33,7 @@ pub async fn handle_enableoutput_command(state: &AppState, id: u32) -> String {
             .emit(rmpd_core::event::Event::OutputsChanged);
         ResponseBuilder::new().ok()
     } else {
-        ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "enableoutput", "No such output")
+        ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "enableoutput", "No such audio output")
     }
 }
 
@@ -50,7 +47,7 @@ pub async fn handle_disableoutput_command(state: &AppState, id: u32) -> String {
             .emit(rmpd_core::event::Event::OutputsChanged);
         ResponseBuilder::new().ok()
     } else {
-        ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "disableoutput", "No such output")
+        ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "disableoutput", "No such audio output")
     }
 }
 
@@ -64,7 +61,7 @@ pub async fn handle_toggleoutput_command(state: &AppState, id: u32) -> String {
             .emit(rmpd_core::event::Event::OutputsChanged);
         ResponseBuilder::new().ok()
     } else {
-        ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "toggleoutput", "No such output")
+        ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "toggleoutput", "No such audio output")
     }
 }
 
@@ -81,6 +78,6 @@ pub async fn handle_outputset_command(
         // when we have configurable output properties
         ResponseBuilder::new().ok()
     } else {
-        ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "outputset", "No such output")
+        ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "outputset", "No such audio output")
     }
 }

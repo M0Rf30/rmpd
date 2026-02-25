@@ -233,8 +233,12 @@ pub async fn handle_listneighbors_command(state: &AppState) -> String {
     let discovery = match &state.discovery {
         Some(d) => d,
         None => {
-            // Discovery not available (mDNS initialization failed)
-            return ResponseBuilder::new().ok();
+            return ResponseBuilder::error(
+                crate::commands::utils::ACK_ERROR_UNKNOWN,
+                0,
+                "listneighbors",
+                "No neighbor plugin configured",
+            );
         }
     };
 
