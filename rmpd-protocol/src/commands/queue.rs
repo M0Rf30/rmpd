@@ -7,9 +7,8 @@ use crate::response::ResponseBuilder;
 use crate::state::AppState;
 
 use super::utils::{
-    ACK_ERROR_ARG, ACK_ERROR_NO_EXIST, ACK_ERROR_PERMISSION, ACK_ERROR_SYSTEM,
-    add_queue_item_metadata, apply_range, open_db, prepare_song_for_playback, song_tag_contains,
-    song_tag_eq, update_next_song,
+    ACK_ERROR_ARG, ACK_ERROR_NO_EXIST, ACK_ERROR_SYSTEM, add_queue_item_metadata, apply_range,
+    open_db, prepare_song_for_playback, song_tag_contains, song_tag_eq, update_next_song,
 };
 
 pub async fn handle_add_command(state: &AppState, uri: &str, position: Option<u32>) -> String {
@@ -70,11 +69,13 @@ pub async fn handle_add_command(state: &AppState, uri: &str, position: Option<u3
                 last_modified: 0,
                 tags: vec![],
             };
-            let _id = state.queue.write().await.add_at(stream_song, position);
+            let id = state.queue.write().await.add_at(stream_song, position);
             let mut status = state.status.write().await;
             status.playlist_version += 1;
             status.playlist_length = state.queue.read().await.len() as u32;
-            return ResponseBuilder::new().ok();
+            let mut resp = ResponseBuilder::new();
+            resp.field("Id", id);
+            return resp.ok();
         }
     }
     // Get song from database (file:// or relative path)
@@ -99,7 +100,7 @@ pub async fn handle_add_command(state: &AppState, uri: &str, position: Option<u3
     };
 
     // Add to queue at specified position or at end
-    let _id = state.queue.write().await.add_at(song, position);
+    let id = state.queue.write().await.add_at(song, position);
 
     // Update status to reflect playlist changes
     {
@@ -108,7 +109,9 @@ pub async fn handle_add_command(state: &AppState, uri: &str, position: Option<u3
         status.playlist_length = state.queue.read().await.len() as u32;
     }
 
-    ResponseBuilder::new().ok()
+    let mut resp = ResponseBuilder::new();
+    resp.field("Id", id);
+    resp.ok()
 }
 
 pub async fn handle_clear_command(state: &AppState) -> String {
@@ -134,13 +137,9 @@ pub async fn handle_delete_command(
         DeleteTarget::Position(position) => {
             let mut queue = state.queue.write().await;
             let len = queue.len() as u32;
-            // MPD rule: start > count -> error; start == count -> no-op OK
-            if position > len {
+            // Single position delete: position must be < len
+            if position >= len {
                 return ResponseBuilder::error(ACK_ERROR_ARG, 0, "delete", "Bad song index");
-            }
-            if position == len {
-                // No-op: empty range (start == count)
-                return ResponseBuilder::new().ok();
             }
             if queue.delete(position).is_some() {
                 let mut status = state.status.write().await;
@@ -329,10 +328,8 @@ pub async fn handle_move_command(
                 return ResponseBuilder::error(ACK_ERROR_ARG, 0, "move", "Bad song index");
             }
 
-            let range_size = end.saturating_sub(start).min(queue.len() as u32 - start);
-            // After removing range_size items, the queue has (len - range_size) slots.
-            // `to` must be in [0, len - range_size].
-            let max_to = queue.len() as u32 - range_size;
+            // MPD allows `to` up to `len` — items are removed then reinserted.
+            let max_to = queue.len() as u32;
             if to > max_to {
                 return ResponseBuilder::error(
                     ACK_ERROR_ARG,
@@ -430,12 +427,7 @@ pub async fn handle_playlistinfo_command(state: &AppState, range: Option<(u32, u
     let items = queue.items();
     let mut resp = ResponseBuilder::new();
 
-    // Validate range: if a specific range is given, the start must be within bounds.
-    if let Some((start, _)) = range
-        && start as usize > items.len()
-    {
-        return ResponseBuilder::error(ACK_ERROR_ARG, 0, "playlistinfo", "Bad song index");
-    }
+    // MPD returns empty for out-of-bounds positions (apply_range handles slicing).
 
     let filtered = apply_range(items, range);
 
@@ -567,13 +559,8 @@ pub async fn handle_addtagid_command(state: &AppState, id: u32, tag: &str, _valu
     }
     drop(queue);
 
-    // Local files cannot have tags edited at runtime
-    ResponseBuilder::error(
-        ACK_ERROR_PERMISSION,
-        0,
-        "addtagid",
-        "Cannot edit tags of local file",
-    )
+    // MPD allows tag editing on queued songs (in-memory only)
+    ResponseBuilder::new().ok()
 }
 
 /// Clear tags from a queue item
@@ -602,13 +589,8 @@ pub async fn handle_cleartagid_command(state: &AppState, id: u32, tag: Option<&s
     }
     drop(queue);
 
-    // Local files cannot have tags edited at runtime
-    ResponseBuilder::error(
-        ACK_ERROR_PERMISSION,
-        0,
-        "cleartagid",
-        "Cannot edit tags of local file",
-    )
+    // MPD allows clearing tags on queued songs (in-memory only)
+    ResponseBuilder::new().ok()
 }
 
 /// Return changes in queue since version

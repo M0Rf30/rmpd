@@ -31,7 +31,7 @@ async fn command_list_error_stops_batch() {
         .await;
     assert!(resp.starts_with("ACK "), "batch error should return ACK");
     // The ACK should include the index of the failing command
-    assert!(resp.contains("1@"), "ACK should reference index 1: {resp}");
+    assert!(resp.contains("@1"), "ACK should reference index 1: {resp}");
 }
 
 #[tokio::test]

@@ -218,9 +218,9 @@ pub async fn handle_tagtypes_command(
 }
 
 /// Known protocol features in MPD 0.24.x.
-/// Only `hide_playlists_in_root` is a negotiable feature; everything else
-/// (binary, idle, ranges, tags) is a hardcoded capability, not a feature flag.
-const KNOWN_PROTOCOL_FEATURES: &[&str] = &["hide_playlists_in_root"];
+/// These are negotiable features that clients can enable/disable via the
+/// `protocol` command.
+const KNOWN_PROTOCOL_FEATURES: &[&str] = &["hide_playlists_in_root", "binary"];
 pub async fn handle_protocol_command(
     conn_state: &mut ConnectionState,
     subcommand: Option<crate::parser::ProtocolSubcommand>,
