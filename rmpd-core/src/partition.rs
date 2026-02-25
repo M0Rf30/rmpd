@@ -93,8 +93,11 @@ pub struct PartitionManager {
 impl PartitionManager {
     /// Create a new partition manager with a default partition
     pub fn new() -> Arc<Self> {
+        let mut partitions = HashMap::new();
+        // Always pre-populate the "default" partition — MPD always has it
+        partitions.insert("default".to_string(), Arc::new(PartitionState::new("default".to_string())));
         Arc::new(Self {
-            partitions: RwLock::new(HashMap::new()),
+            partitions: RwLock::new(partitions),
         })
     }
 

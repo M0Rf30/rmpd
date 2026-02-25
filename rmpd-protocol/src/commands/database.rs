@@ -728,7 +728,12 @@ pub async fn handle_lsinfo_command(state: &AppState, path: Option<&str>) -> Stri
 
             resp.ok()
         }
-        Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "lsinfo", &format!("Error: {e}")),
+        Err(e) => {
+            // Strip the "Library error: " prefix that RmpdError::Library adds
+            let msg = e.to_string();
+            let msg = msg.strip_prefix("Library error: ").unwrap_or(&msg);
+            ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "lsinfo", msg)
+        }
     }
 }
 
