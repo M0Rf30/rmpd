@@ -486,11 +486,26 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
 
     match cmd {
         "play" => {
-            let pos = opt(parse_u32_or_quoted).parse_next(input)?;
+            // MPD treats play -1 same as play (no position) — skip negative values
+            let _ = space0.parse_next(input)?;
+            let pos = if input.starts_with('-') {
+                // Consume the negative token and treat as no-arg
+                let _ = take_while(1.., |c: char| !c.is_whitespace()).parse_next(input)?;
+                None
+            } else {
+                opt(parse_u32_or_quoted).parse_next(input)?
+            };
             Ok(Command::Play { position: pos })
         }
         "playid" => {
-            let id = opt(parse_u32_or_quoted).parse_next(input)?;
+            // MPD treats playid -1 same as playid (no id) — skip negative values
+            let _ = space0.parse_next(input)?;
+            let id = if input.starts_with('-') {
+                let _ = take_while(1.., |c: char| !c.is_whitespace()).parse_next(input)?;
+                None
+            } else {
+                opt(parse_u32_or_quoted).parse_next(input)?
+            };
             Ok(Command::PlayId { id })
         }
         "pause" => {

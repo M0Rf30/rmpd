@@ -222,13 +222,37 @@ async fn execute_command_list(
                     }
                 };
 
-                // Check for errors
-                if cmd_response_str.starts_with("ACK") {
-                    // Return error with command list index
-                    return Response::Text(
-                        cmd_response_str.replace("ACK [", &format!("ACK [{index}@")),
-                    );
+                // Check for errors: re-emit ACK with the correct command-list index
+                if cmd_response_str.starts_with("ACK [") {
+                    // In ok_mode, flush accumulated response (list_OK for prior cmds) THEN the ACK.
+                    // MPD emits list_OK for each successful cmd before the error.
+                    // The 'response' already contains list_OKs for prior cmds, so
+                    // we just append the fixed ACK to it and return.
+                    //
+                    // Parse: ACK [{code}@{old_idx}] {cmd} msg
+                    // Rebuild with actual `index` as the command-list position.
+                    let fixed = if let Some(at_pos) = cmd_response_str.find('@') {
+                        if let Some(bracket_end) = cmd_response_str.find(']') {
+                            // code_part is text between '[' and '@'
+                            let code_part = &cmd_response_str[5..at_pos]; // after "ACK ["
+                            // rest starts AFTER ']' (skip the ']' itself)
+                            let rest = &cmd_response_str[bracket_end + 1..];
+                            format!("ACK [{}@{}]{}", code_part, index, rest)
+                        } else {
+                            cmd_response_str.clone()
+                        }
+                    } else {
+                        cmd_response_str.clone()
+                    };
+                    response.push_str(&fixed);
+                    return Response::Text(response);
                 }
+
+                // Successful command: append response body (strip trailing "OK\n") to buffer
+                let body = cmd_response_str
+                    .strip_suffix("OK\n")
+                    .unwrap_or(&cmd_response_str);
+                response.push_str(body);
 
                 if ok_mode {
                     // In OK mode, append list_OK after each successful command
