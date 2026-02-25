@@ -961,6 +961,11 @@ impl Database {
     pub fn list_directory(&self, path: &str) -> Result<DirectoryListing> {
         let dir_id = self.resolve_dir_id(path)?;
 
+        // If the path is non-empty and not found, the directory does not exist.
+        if !path.is_empty() && path != "/" && dir_id.is_none() {
+            return Err(RmpdError::Library("No such directory".to_string()));
+        }
+
         // Get subdirectories
         let mut directories = Vec::new();
         if let Some(id) = dir_id {
