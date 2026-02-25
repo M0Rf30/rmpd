@@ -710,6 +710,24 @@ pub async fn handle_lsinfo_command(state: &AppState, path: Option<&str>) -> Stri
 
     let path_str = path.unwrap_or("");
 
+    // First check if path refers to a single file (song), matching MPD behavior
+    // where `lsinfo <file>` returns just that file's info.
+    if !path_str.is_empty() && path_str != "/" {
+        match db.get_song_by_path(path_str) {
+            Ok(Some(song)) => {
+                let mut resp = ResponseBuilder::new();
+                let music_dir = state.music_dir.as_deref();
+                let display_path = strip_music_dir_prefix(song.path.as_str(), music_dir);
+                let mut display_song = song.clone();
+                display_song.path = display_path.into();
+                resp.song(&display_song, None, None);
+                return resp.ok();
+            }
+            Ok(None) => {}
+            Err(_) => {}
+        }
+    }
+
     // Get directory listing
     match db.list_directory(path_str) {
         Ok(listing) => {
