@@ -697,14 +697,32 @@ pub async fn handle_lsinfo_command(state: &AppState, path: Option<&str>) -> Stri
                 }
             }
 
-            // For root directory, also list playlists
-            if (path_str.is_empty() || path_str == "/")
-                && let Ok(playlists) = db.list_playlists()
-            {
-                for playlist in &playlists {
-                    resp.field("playlist", &playlist.name);
-                    let timestamp_str = format_iso8601_timestamp(playlist.last_modified);
-                    resp.field("Last-Modified", &timestamp_str);
+            // For root directory, also list playlists (read from filesystem, matching MPD behavior)
+            if path_str.is_empty() || path_str == "/" {
+                if let Some(playlist_dir) = &state.playlist_dir {
+                    let mut entries: Vec<(String, i64)> = Vec::new();
+                    if let Ok(dir) = std::fs::read_dir(playlist_dir) {
+                        for entry in dir.flatten() {
+                            let fpath = entry.path();
+                            if fpath.extension().and_then(|e| e.to_str()) == Some("m3u") {
+                                if let Some(stem) = fpath.file_stem().and_then(|s| s.to_str()) {
+                                    let mtime = entry.metadata()
+                                        .ok()
+                                        .and_then(|m| m.modified().ok())
+                                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                                        .map(|d| d.as_secs() as i64)
+                                        .unwrap_or(0);
+                                    entries.push((stem.to_string(), mtime));
+                                }
+                            }
+                        }
+                    }
+                    entries.sort_by(|a, b| a.0.cmp(&b.0));
+                    for (name, mtime) in &entries {
+                        resp.field("playlist", name);
+                        let timestamp_str = format_iso8601_timestamp(*mtime);
+                        resp.field("Last-Modified", &timestamp_str);
+                    }
                 }
             }
 

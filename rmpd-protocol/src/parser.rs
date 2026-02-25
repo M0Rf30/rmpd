@@ -989,10 +989,39 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
 
                     (Some(next_token.unwrap()), None, group_type)
                 } else {
-                    // Traditional: list TAG FILTER_TAG FILTER_VALUE [group GROUPTYPE]
+                    // Traditional: list TAG FILTER_TAG FILTER_VALUE [t2 v2 ...] [group GROUPTYPE]
                     let _ = space0.parse_next(input)?;
                     let fv = parse_quoted_or_unquoted.parse_next(input)?;
                     let _ = space0.parse_next(input)?;
+
+                    // Collect additional filter pairs (MPD legacy multi-filter support)
+                    let mut extra_pairs: Vec<(String, String)> = Vec::new();
+                    loop {
+                        let saved_loop = *input;
+                        let maybe_tag = opt(parse_quoted_or_unquoted).parse_next(input)?.filter(|s| !s.is_empty());
+                        match maybe_tag {
+                            None => break,
+                            Some(ref t) if t == "group" => {
+                                *input = saved_loop;
+                                break;
+                            }
+                            Some(t) => {
+                                // looks like another filter tag - read its value
+                                let _ = space0.parse_next(input)?;
+                                match opt(parse_quoted_or_unquoted).parse_next(input)? {
+                                    Some(v) if !v.is_empty() => {
+                                        extra_pairs.push((t, v));
+                                        let _ = space0.parse_next(input)?;
+                                    }
+                                    _ => {
+                                        // Couldn't read value; backtrack and stop
+                                        *input = saved_loop;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
 
                     // Check for optional "group" keyword
                     let saved_input2 = *input;
@@ -1010,7 +1039,20 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
                         None
                     };
 
-                    (Some(next_token.unwrap()), Some(fv), group_type)
+                    // If we have extra pairs, build a combined expression string
+                    let (ft_out, fv_out) = if extra_pairs.is_empty() {
+                        (Some(next_token.unwrap()), Some(fv))
+                    } else {
+                        // Build AND filter expression from all pairs
+                        let first_tag = next_token.unwrap();
+                        let mut expr = format!("({} == {:?})", first_tag, fv);
+                        for (et, ev) in &extra_pairs {
+                            expr.push_str(&format!(" AND ({} == {:?})", et, ev));
+                        }
+                        (Some(expr), None)
+                    };
+
+                    (ft_out, fv_out, group_type)
                 }
             } else {
                 // Format: list TAG

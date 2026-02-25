@@ -28,6 +28,8 @@ pub struct MessageBroker {
 struct MessageBrokerInner {
     /// Messages queued for each channel
     channels: HashMap<String, VecDeque<Message>>,
+    /// Number of active subscribers per channel
+    subscriber_counts: HashMap<String, usize>,
 }
 
 impl MessageBroker {
@@ -36,13 +38,20 @@ impl MessageBroker {
         Self {
             inner: Arc::new(RwLock::new(MessageBrokerInner {
                 channels: HashMap::new(),
+                subscriber_counts: HashMap::new(),
             })),
         }
     }
 
-    /// Send a message to a channel
-    pub async fn send_message(&self, channel: String, text: String) {
+    /// Send a message to a channel. Returns false if nobody is subscribed.
+    /// Send a message to a channel. Returns false if nobody is subscribed.
+    pub async fn send_message(&self, channel: String, text: String) -> bool {
         let mut inner = self.inner.write().await;
+        // Check if anyone is subscribed
+        let count = inner.subscriber_counts.get(&channel).copied().unwrap_or(0);
+        if count == 0 {
+            return false;
+        }
         let message = Message {
             channel: channel.clone(),
             text,
@@ -54,6 +63,26 @@ impl MessageBroker {
         // Limit queue size
         if queue.len() > MAX_MESSAGES_PER_CHANNEL {
             queue.pop_front();
+        }
+        true
+    }
+
+    /// Register a subscription to a channel.
+    pub async fn register_subscriber(&self, channel: &str) {
+        let mut inner = self.inner.write().await;
+        *inner.subscriber_counts.entry(channel.to_string()).or_insert(0) += 1;
+    }
+
+    /// Unregister a subscription from a channel.
+    pub async fn unregister_subscriber(&self, channel: &str) {
+        let mut inner = self.inner.write().await;
+        if let Some(count) = inner.subscriber_counts.get_mut(channel) {
+            if *count > 0 {
+                *count -= 1;
+            }
+            if *count == 0 {
+                inner.subscriber_counts.remove(channel);
+            }
         }
     }
 
@@ -75,12 +104,19 @@ impl MessageBroker {
     /// Get list of all active channels (channels with messages or subscribers)
     pub async fn list_channels(&self) -> Vec<String> {
         let inner = self.inner.read().await;
-        inner
+        // Include channels with messages OR active subscribers
+        let mut channels: std::collections::HashSet<String> = inner
             .channels
             .iter()
             .filter(|(_, queue)| !queue.is_empty())
             .map(|(name, _)| name.clone())
-            .collect()
+            .collect();
+        for name in inner.subscriber_counts.keys() {
+            channels.insert(name.clone());
+        }
+        let mut result: Vec<String> = channels.into_iter().collect();
+        result.sort();
+        result
     }
 }
 
@@ -98,6 +134,7 @@ mod tests {
     async fn test_send_and_read_message() {
         let broker = MessageBroker::new();
 
+        broker.register_subscriber("test").await;
         broker
             .send_message("test".to_string(), "hello".to_string())
             .await;
@@ -112,6 +149,8 @@ mod tests {
     async fn test_multiple_channels() {
         let broker = MessageBroker::new();
 
+        broker.register_subscriber("channel1").await;
+        broker.register_subscriber("channel2").await;
         broker
             .send_message("channel1".to_string(), "msg1".to_string())
             .await;
@@ -132,6 +171,7 @@ mod tests {
     async fn test_messages_are_consumed() {
         let broker = MessageBroker::new();
 
+        broker.register_subscriber("test").await;
         broker
             .send_message("test".to_string(), "hello".to_string())
             .await;
@@ -149,6 +189,8 @@ mod tests {
     async fn test_list_channels() {
         let broker = MessageBroker::new();
 
+        broker.register_subscriber("channel1").await;
+        broker.register_subscriber("channel2").await;
         broker
             .send_message("channel1".to_string(), "msg1".to_string())
             .await;
@@ -166,6 +208,7 @@ mod tests {
     async fn test_max_messages_limit() {
         let broker = MessageBroker::new();
 
+        broker.register_subscriber("test").await;
         // Send more than MAX_MESSAGES_PER_CHANNEL
         for i in 0..150 {
             broker
@@ -178,5 +221,5 @@ mod tests {
         assert_eq!(messages.len(), MAX_MESSAGES_PER_CHANNEL);
         // First message should be msg50 (last 100 messages)
         assert_eq!(messages[0].text, "msg50");
-    }
+}
 }
