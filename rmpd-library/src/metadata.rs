@@ -32,7 +32,16 @@ fn normalize_decimal(s: &str) -> Option<String> {
         .chars()
         .take_while(|c| c.is_ascii_digit())
         .collect();
-    if tail.is_empty() { None } else { Some(tail) }
+    if tail.is_empty() {
+        // All digits were zeros (e.g. "0", "00") — preserve as "0"
+        if s.starts_with('0') {
+            Some("0".to_string())
+        } else {
+            None
+        }
+    } else {
+        Some(tail)
+    }
 }
 
 /// MPD-canonical VorbisComment key -> tag name mapping.
@@ -215,7 +224,7 @@ impl MetadataExtractor {
                     .find(|(k, _)| *k == key_lower)
                     .map(|(_, v)| v)
                 {
-                    // Normalize Track/Disc: strip leading zeros, skip pure-zero values (like MPD)
+                    // Normalize Track/Disc: strip leading zeros, preserve zero values
                     let effective_val = if tag_name == "track" || tag_name == "disc" {
                         match normalize_decimal(&val) {
                             Some(v) => v,
@@ -243,7 +252,7 @@ impl MetadataExtractor {
                         if tag_name == &"comment" && is_bogus_dsf_comment(val) {
                             continue;
                         }
-                        // Normalize Track/Disc: strip leading zeros, skip pure-zero values (like MPD)
+                        // Normalize Track/Disc: strip leading zeros, preserve zero values
                         if *tag_name == "track" || *tag_name == "disc" {
                             if let Some(normalized) = normalize_decimal(val) {
                                 tags.push((tag_name.to_string(), normalized));
