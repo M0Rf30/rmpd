@@ -5,7 +5,10 @@ use tracing::{debug, error};
 use crate::response::ResponseBuilder;
 use crate::state::AppState;
 
-use super::utils::{ACK_ERROR_ARG, ACK_ERROR_PLAYER_SYNC, ACK_ERROR_SYSTEM, prepare_song_for_playback, update_next_song};
+use super::utils::{
+    ACK_ERROR_ARG, ACK_ERROR_PLAYER_SYNC, ACK_ERROR_SYSTEM, prepare_song_for_playback,
+    update_next_song,
+};
 
 pub async fn handle_play_command(state: &AppState, position: Option<u32>) -> String {
     let queue = state.queue.read().await;
@@ -268,7 +271,10 @@ pub async fn handle_seek_command(state: &AppState, position: u32, time: f64) -> 
 
     // Seek in current song (if it's the same position) or start playing at that position
     let status = state.status.read().await;
-    let is_current = status.current_song.map(|c| c.position == position).unwrap_or(false);
+    let is_current = status
+        .current_song
+        .map(|c| c.position == position)
+        .unwrap_or(false);
     drop(status);
 
     if is_current {
@@ -277,7 +283,9 @@ pub async fn handle_seek_command(state: &AppState, position: u32, time: f64) -> 
                 state.status.write().await.elapsed = Some(std::time::Duration::from_secs_f64(time));
                 ResponseBuilder::new().ok()
             }
-            Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "seek", &format!("Seek failed: {e}")),
+            Err(e) => {
+                ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "seek", &format!("Seek failed: {e}"))
+            }
         }
     } else {
         // Start playing at that position from given time offset
@@ -305,7 +313,9 @@ pub async fn handle_seekid_command(state: &AppState, id: u32, time: f64) -> Stri
                 state.status.write().await.elapsed = Some(std::time::Duration::from_secs_f64(time));
                 ResponseBuilder::new().ok()
             }
-            Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "seekid", &format!("Seek failed: {e}")),
+            Err(e) => {
+                ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "seekid", &format!("Seek failed: {e}"))
+            }
         }
     } else {
         // Start playing at that position

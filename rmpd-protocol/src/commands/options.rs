@@ -48,7 +48,14 @@ pub async fn handle_single_command(state: &AppState, mode: &str) -> String {
         "0" => rmpd_core::state::SingleMode::Off,
         "1" => rmpd_core::state::SingleMode::On,
         "oneshot" => rmpd_core::state::SingleMode::Oneshot,
-        _ => return ResponseBuilder::error(ACK_ERROR_ARG, 0, "single", "Unrecognized single mode, expected 0, 1, or oneshot"),
+        _ => {
+            return ResponseBuilder::error(
+                ACK_ERROR_ARG,
+                0,
+                "single",
+                "Unrecognized single mode, expected 0, 1, or oneshot",
+            );
+        }
     };
     state.status.write().await.single = single_mode;
     ResponseBuilder::new().ok()
@@ -59,7 +66,14 @@ pub async fn handle_consume_command(state: &AppState, mode: &str) -> String {
         "0" => rmpd_core::state::ConsumeMode::Off,
         "1" => rmpd_core::state::ConsumeMode::On,
         "oneshot" => rmpd_core::state::ConsumeMode::Oneshot,
-        _ => return ResponseBuilder::error(ACK_ERROR_ARG, 0, "consume", "Unrecognized consume mode, expected 0, 1, or oneshot"),
+        _ => {
+            return ResponseBuilder::error(
+                ACK_ERROR_ARG,
+                0,
+                "consume",
+                "Unrecognized consume mode, expected 0, 1, or oneshot",
+            );
+        }
     };
     state.status.write().await.consume = consume_mode;
     ResponseBuilder::new().ok()

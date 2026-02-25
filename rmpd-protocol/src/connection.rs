@@ -38,8 +38,8 @@ impl ConnectionState {
     /// starts in the "default" partition
     pub fn new() -> Self {
         Self {
-            enabled_tags: None,                         // All tags enabled
-            enabled_features: Some(HashSet::new()),     // No protocol features enabled by default
+            enabled_tags: None,                     // All tags enabled
+            enabled_features: Some(HashSet::new()), // No protocol features enabled by default
             subscribed_channels: Vec::new(),
             current_partition: "default".to_string(),
         }

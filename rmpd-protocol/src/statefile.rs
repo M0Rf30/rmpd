@@ -91,7 +91,10 @@ impl StateFile {
 
         let content = fs::read_to_string(path)?;
 
-        let mut state = SavedState { replay_gain_mode: "off".to_string(), ..Default::default() };
+        let mut state = SavedState {
+            replay_gain_mode: "off".to_string(),
+            ..Default::default()
+        };
         let mut in_playlist = false;
         let mut playlist_items = Vec::new();
 
@@ -268,6 +271,7 @@ mod tests {
             playlist_length: 2,
             updating_db: None,
             error: None,
+            replay_gain_mode: "off".to_string(),
         };
 
         statefile.save(&status, &queue).await.unwrap();
@@ -313,6 +317,7 @@ mod tests {
             playlist_length: 0,
             updating_db: None,
             error: None,
+            replay_gain_mode: "off".to_string(),
         };
 
         statefile.save(&status, &queue).await.unwrap();
@@ -366,6 +371,7 @@ mod tests {
             playlist_length: 0,
             updating_db: None,
             error: None,
+            replay_gain_mode: "off".to_string(),
         };
 
         // Test SingleMode::Off
@@ -413,6 +419,7 @@ mod tests {
             playlist_length: 0,
             updating_db: None,
             error: None,
+            replay_gain_mode: "off".to_string(),
         };
 
         // Test ConsumeMode::Off
@@ -460,6 +467,7 @@ mod tests {
             playlist_length: 0,
             updating_db: None,
             error: None,
+            replay_gain_mode: "off".to_string(),
         };
 
         statefile.save(&status, &queue).await.unwrap();
@@ -498,6 +506,7 @@ mod tests {
             playlist_length: 1000,
             updating_db: None,
             error: None,
+            replay_gain_mode: "off".to_string(),
         };
 
         statefile.save(&status, &queue).await.unwrap();
@@ -534,6 +543,7 @@ mod tests {
             playlist_length: 0,
             updating_db: None,
             error: None,
+            replay_gain_mode: "off".to_string(),
         };
 
         statefile.save(&status, &queue).await.unwrap();
@@ -654,6 +664,7 @@ mod tests {
             playlist_length: 0,
             updating_db: None,
             error: None,
+            replay_gain_mode: "off".to_string(),
         };
 
         statefile.save(&status, &queue).await.unwrap();

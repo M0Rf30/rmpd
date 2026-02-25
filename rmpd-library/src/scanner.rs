@@ -100,12 +100,13 @@ impl Scanner {
                 if let Ok(utf8_dir) = Utf8PathBuf::try_from(entry_path.clone()) {
                     if let Ok(rel_dir) = self.make_relative_path(&utf8_dir) {
                         let dir_mtime = system_time_to_unix_secs(
-                            metadata.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH),
+                            metadata
+                                .modified()
+                                .unwrap_or(std::time::SystemTime::UNIX_EPOCH),
                         );
-                        if let Err(e) = db.get_or_create_directory_with_mtime(
-                            rel_dir.as_path(),
-                            Some(dir_mtime),
-                        ) {
+                        if let Err(e) = db
+                            .get_or_create_directory_with_mtime(rel_dir.as_path(), Some(dir_mtime))
+                        {
                             warn!("failed to record directory {:?}: {}", entry_path, e);
                         }
                     }

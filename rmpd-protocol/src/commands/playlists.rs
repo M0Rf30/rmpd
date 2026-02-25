@@ -13,8 +13,7 @@ use std::path::Path;
 /// Lines starting with '#' are comments and are skipped.
 fn read_m3u_playlist(playlist_dir: &str, name: &str) -> Result<Vec<String>, String> {
     let path = std::path::Path::new(playlist_dir).join(format!("{name}.m3u"));
-    let content = std::fs::read_to_string(&path)
-        .map_err(|_| "No such playlist".to_string())?;
+    let content = std::fs::read_to_string(&path).map_err(|_| "No such playlist".to_string())?;
     let paths: Vec<String> = content
         .lines()
         .filter(|l| !l.trim_start().starts_with('#') && !l.trim().is_empty())
@@ -26,7 +25,14 @@ fn read_m3u_playlist(playlist_dir: &str, name: &str) -> Result<Vec<String>, Stri
 pub async fn handle_listplaylists_command(state: &AppState) -> String {
     let playlist_dir = match &state.playlist_dir {
         Some(d) => d.clone(),
-        None => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "listplaylists", "playlist directory not configured"),
+        None => {
+            return ResponseBuilder::error(
+                ACK_ERROR_SYSTEM,
+                0,
+                "listplaylists",
+                "playlist directory not configured",
+            );
+        }
     };
 
     let mut resp = ResponseBuilder::new();
@@ -35,7 +41,12 @@ pub async fn handle_listplaylists_command(state: &AppState) -> String {
     let dir = match std::fs::read_dir(&playlist_dir) {
         Ok(d) => d,
         Err(e) => {
-            return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "listplaylists", &format!("Error reading playlist directory: {e}"));
+            return ResponseBuilder::error(
+                ACK_ERROR_SYSTEM,
+                0,
+                "listplaylists",
+                &format!("Error reading playlist directory: {e}"),
+            );
         }
     };
 
@@ -44,7 +55,8 @@ pub async fn handle_listplaylists_command(state: &AppState) -> String {
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) == Some("m3u") {
             if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                let mtime = entry.metadata()
+                let mtime = entry
+                    .metadata()
                     .ok()
                     .and_then(|m| m.modified().ok())
                     .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
@@ -63,7 +75,7 @@ pub async fn handle_listplaylists_command(state: &AppState) -> String {
         let timestamp_str = format_iso8601_timestamp(*mtime);
         resp.field("Last-Modified", &timestamp_str);
     }
-            resp.ok()
+    resp.ok()
 }
 
 pub async fn handle_save_command(
@@ -75,7 +87,14 @@ pub async fn handle_save_command(
 
     let playlist_dir = match &state.playlist_dir {
         Some(d) => d.clone(),
-        None => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "save", "playlist directory not configured"),
+        None => {
+            return ResponseBuilder::error(
+                ACK_ERROR_SYSTEM,
+                0,
+                "save",
+                "playlist directory not configured",
+            );
+        }
     };
     let pl_path = Path::new(&playlist_dir).join(format!("{name}.m3u"));
     let mode = mode.unwrap_or(SaveMode::Create);
@@ -84,7 +103,12 @@ pub async fn handle_save_command(
     match mode {
         SaveMode::Create => {
             if pl_path.exists() {
-                return ResponseBuilder::error(ACK_ERROR_EXIST, 0, "save", "Playlist already exists");
+                return ResponseBuilder::error(
+                    ACK_ERROR_EXIST,
+                    0,
+                    "save",
+                    "Playlist already exists",
+                );
             }
         }
         SaveMode::Append | SaveMode::Replace => {
@@ -97,7 +121,11 @@ pub async fn handle_save_command(
     // Collect current queue paths
     let new_paths: Vec<String> = {
         let queue = state.queue.read().await;
-        queue.items().iter().map(|item| item.song.path.to_string()).collect()
+        queue
+            .items()
+            .iter()
+            .map(|item| item.song.path.to_string())
+            .collect()
     };
 
     // For append mode, prepend existing paths
@@ -110,11 +138,24 @@ pub async fn handle_save_command(
     };
 
     // Write the .m3u file
-    let content = paths_to_write.iter().map(|p| p.as_str()).collect::<Vec<_>>().join("\n");
-    let content = if content.is_empty() { content } else { content + "\n" };
+    let content = paths_to_write
+        .iter()
+        .map(|p| p.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let content = if content.is_empty() {
+        content
+    } else {
+        content + "\n"
+    };
     match std::fs::write(&pl_path, &content) {
         Ok(_) => ResponseBuilder::new().ok(),
-        Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "save", &format!("Error writing playlist: {e}")),
+        Err(e) => ResponseBuilder::error(
+            ACK_ERROR_SYSTEM,
+            0,
+            "save",
+            &format!("Error writing playlist: {e}"),
+        ),
     }
 }
 
@@ -126,7 +167,14 @@ pub async fn handle_load_command(
 ) -> String {
     let playlist_dir = match &state.playlist_dir {
         Some(d) => d.clone(),
-        None => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "load", "playlist directory not configured"),
+        None => {
+            return ResponseBuilder::error(
+                ACK_ERROR_SYSTEM,
+                0,
+                "load",
+                "playlist directory not configured",
+            );
+        }
     };
 
     let mut paths = match read_m3u_playlist(&playlist_dir, name) {
@@ -150,9 +198,10 @@ pub async fn handle_load_command(
         Ok(d) => d,
         Err(e) => return e,
     };
-    let songs: Vec<rmpd_core::song::Song> = paths.iter().filter_map(|path| {
-        db.get_song_by_path(path).ok().flatten()
-    }).collect();
+    let songs: Vec<rmpd_core::song::Song> = paths
+        .iter()
+        .filter_map(|path| db.get_song_by_path(path).ok().flatten())
+        .collect();
 
     {
         let mut queue = state.queue.write().await;
@@ -181,7 +230,14 @@ pub async fn handle_searchaddpl_command(
 ) -> String {
     let playlist_dir = match &state.playlist_dir {
         Some(d) => d.clone(),
-        None => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "searchaddpl", "playlist directory not configured"),
+        None => {
+            return ResponseBuilder::error(
+                ACK_ERROR_SYSTEM,
+                0,
+                "searchaddpl",
+                "playlist directory not configured",
+            );
+        }
     };
     let db = match open_db(state, "searchaddpl") {
         Ok(d) => d,
@@ -191,25 +247,53 @@ pub async fn handle_searchaddpl_command(
     let songs = if tag.eq_ignore_ascii_case("any") {
         match db.search_songs(value) {
             Ok(s) => s,
-            Err(e) => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "searchaddpl", &format!("search error: {e}")),
+            Err(e) => {
+                return ResponseBuilder::error(
+                    ACK_ERROR_SYSTEM,
+                    0,
+                    "searchaddpl",
+                    &format!("search error: {e}"),
+                );
+            }
         }
     } else {
         match db.find_songs(tag, value) {
             Ok(s) => s,
-            Err(e) => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "searchaddpl", &format!("query error: {e}")),
+            Err(e) => {
+                return ResponseBuilder::error(
+                    ACK_ERROR_SYSTEM,
+                    0,
+                    "searchaddpl",
+                    &format!("query error: {e}"),
+                );
+            }
         }
     };
 
     let pl_path = Path::new(&playlist_dir).join(format!("{name}.m3u"));
-    let mut paths = if pl_path.exists() { read_m3u_playlist(&playlist_dir, name).unwrap_or_default() } else { vec![] };
+    let mut paths = if pl_path.exists() {
+        read_m3u_playlist(&playlist_dir, name).unwrap_or_default()
+    } else {
+        vec![]
+    };
     for song in &songs {
         paths.push(song.path.to_string());
     }
-    let content = paths.iter().map(|p| p.as_str()).collect::<Vec<_>>().join("\n");
-    let content = if content.is_empty() { content } else { content + "\n" };
+    let content = paths
+        .iter()
+        .map(|p| p.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let content = if content.is_empty() {
+        content
+    } else {
+        content + "\n"
+    };
     match std::fs::write(&pl_path, &content) {
         Ok(_) => ResponseBuilder::new().ok(),
-        Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "searchaddpl", &format!("Error: {e}")),
+        Err(e) => {
+            ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "searchaddpl", &format!("Error: {e}"))
+        }
     }
 }
 
@@ -220,7 +304,14 @@ pub async fn handle_listplaylist_command(
 ) -> String {
     let playlist_dir = match &state.playlist_dir {
         Some(d) => d.clone(),
-        None => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "listplaylist", "playlist directory not configured"),
+        None => {
+            return ResponseBuilder::error(
+                ACK_ERROR_SYSTEM,
+                0,
+                "listplaylist",
+                "playlist directory not configured",
+            );
+        }
     };
 
     let paths = match read_m3u_playlist(&playlist_dir, name) {
@@ -249,7 +340,14 @@ pub async fn handle_listplaylistinfo_command(
 ) -> String {
     let playlist_dir = match &state.playlist_dir {
         Some(d) => d.clone(),
-        None => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "listplaylistinfo", "playlist directory not configured"),
+        None => {
+            return ResponseBuilder::error(
+                ACK_ERROR_SYSTEM,
+                0,
+                "listplaylistinfo",
+                "playlist directory not configured",
+            );
+        }
     };
 
     let paths = match read_m3u_playlist(&playlist_dir, name) {
@@ -292,7 +390,14 @@ pub async fn handle_playlistadd_command(
 ) -> String {
     let playlist_dir = match &state.playlist_dir {
         Some(d) => d.clone(),
-        None => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "playlistadd", "playlist directory not configured"),
+        None => {
+            return ResponseBuilder::error(
+                ACK_ERROR_SYSTEM,
+                0,
+                "playlistadd",
+                "playlist directory not configured",
+            );
+        }
     };
     let db = match open_db(state, "playlistadd") {
         Ok(d) => d,
@@ -302,12 +407,25 @@ pub async fn handle_playlistadd_command(
     // Look up songs matching the URI in the database (song or directory prefix)
     let songs = match db.find_songs_by_prefix(uri) {
         Ok(s) if !s.is_empty() => s,
-        Ok(_) => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "playlistadd", "No such directory"),
-        Err(e) => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "playlistadd", &format!("Error: {e}")),
+        Ok(_) => {
+            return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "playlistadd", "No such directory");
+        }
+        Err(e) => {
+            return ResponseBuilder::error(
+                ACK_ERROR_SYSTEM,
+                0,
+                "playlistadd",
+                &format!("Error: {e}"),
+            );
+        }
     };
 
     let pl_path = Path::new(&playlist_dir).join(format!("{name}.m3u"));
-    let mut paths = if pl_path.exists() { read_m3u_playlist(&playlist_dir, name).unwrap_or_default() } else { vec![] };
+    let mut paths = if pl_path.exists() {
+        read_m3u_playlist(&playlist_dir, name).unwrap_or_default()
+    } else {
+        vec![]
+    };
 
     // Collect new paths to append (sorted, matching MPD behavior)
     let start_pos = position.map(|p| p as usize);
@@ -321,18 +439,35 @@ pub async fn handle_playlistadd_command(
         paths.extend(new_paths);
     }
 
-    let content = paths.iter().map(|p| p.as_str()).collect::<Vec<_>>().join("\n");
-    let content = if content.is_empty() { content } else { content + "\n" };
+    let content = paths
+        .iter()
+        .map(|p| p.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let content = if content.is_empty() {
+        content
+    } else {
+        content + "\n"
+    };
     match std::fs::write(&pl_path, &content) {
         Ok(_) => ResponseBuilder::new().ok(),
-        Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "playlistadd", &format!("Error: {e}")),
+        Err(e) => {
+            ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "playlistadd", &format!("Error: {e}"))
+        }
     }
 }
 
 pub async fn handle_playlistclear_command(state: &AppState, name: &str) -> String {
     let playlist_dir = match &state.playlist_dir {
         Some(d) => d.clone(),
-        None => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "playlistclear", "playlist directory not configured"),
+        None => {
+            return ResponseBuilder::error(
+                ACK_ERROR_SYSTEM,
+                0,
+                "playlistclear",
+                "playlist directory not configured",
+            );
+        }
     };
     let pl_path = Path::new(&playlist_dir).join(format!("{name}.m3u"));
     if !pl_path.exists() {
@@ -340,14 +475,23 @@ pub async fn handle_playlistclear_command(state: &AppState, name: &str) -> Strin
     }
     match std::fs::write(&pl_path, "") {
         Ok(_) => ResponseBuilder::new().ok(),
-        Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "playlistclear", &format!("Error: {e}")),
+        Err(e) => {
+            ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "playlistclear", &format!("Error: {e}"))
+        }
     }
 }
 
 pub async fn handle_playlistdelete_command(state: &AppState, name: &str, position: u32) -> String {
     let playlist_dir = match &state.playlist_dir {
         Some(d) => d.clone(),
-        None => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "playlistdelete", "playlist directory not configured"),
+        None => {
+            return ResponseBuilder::error(
+                ACK_ERROR_SYSTEM,
+                0,
+                "playlistdelete",
+                "playlist directory not configured",
+            );
+        }
     };
     let mut paths = match read_m3u_playlist(&playlist_dir, name) {
         Ok(p) => p,
@@ -358,12 +502,25 @@ pub async fn handle_playlistdelete_command(state: &AppState, name: &str, positio
         return ResponseBuilder::error(ACK_ERROR_ARG, 0, "playlistdelete", "Bad song index");
     }
     paths.remove(pos);
-    let content = paths.iter().map(|p| p.as_str()).collect::<Vec<_>>().join("\n");
-    let content = if content.is_empty() { content } else { content + "\n" };
+    let content = paths
+        .iter()
+        .map(|p| p.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let content = if content.is_empty() {
+        content
+    } else {
+        content + "\n"
+    };
     let pl_path = Path::new(&playlist_dir).join(format!("{name}.m3u"));
     match std::fs::write(&pl_path, &content) {
         Ok(_) => ResponseBuilder::new().ok(),
-        Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "playlistdelete", &format!("Error: {e}")),
+        Err(e) => ResponseBuilder::error(
+            ACK_ERROR_SYSTEM,
+            0,
+            "playlistdelete",
+            &format!("Error: {e}"),
+        ),
     }
 }
 
@@ -375,7 +532,14 @@ pub async fn handle_playlistmove_command(
 ) -> String {
     let playlist_dir = match &state.playlist_dir {
         Some(d) => d.clone(),
-        None => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "playlistmove", "playlist directory not configured"),
+        None => {
+            return ResponseBuilder::error(
+                ACK_ERROR_SYSTEM,
+                0,
+                "playlistmove",
+                "playlist directory not configured",
+            );
+        }
     };
     let mut paths = match read_m3u_playlist(&playlist_dir, name) {
         Ok(p) => p,
@@ -389,19 +553,36 @@ pub async fn handle_playlistmove_command(
     let song = paths.remove(from);
     let insert_pos = if to > from { to - 1 } else { to };
     paths.insert(insert_pos.min(paths.len()), song);
-    let content = paths.iter().map(|p| p.as_str()).collect::<Vec<_>>().join("\n");
-    let content = if content.is_empty() { content } else { content + "\n" };
+    let content = paths
+        .iter()
+        .map(|p| p.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let content = if content.is_empty() {
+        content
+    } else {
+        content + "\n"
+    };
     let pl_path = Path::new(&playlist_dir).join(format!("{name}.m3u"));
     match std::fs::write(&pl_path, &content) {
         Ok(_) => ResponseBuilder::new().ok(),
-        Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "playlistmove", &format!("Error: {e}")),
+        Err(e) => {
+            ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "playlistmove", &format!("Error: {e}"))
+        }
     }
 }
 
 pub async fn handle_rm_command(state: &AppState, name: &str) -> String {
     let playlist_dir = match &state.playlist_dir {
         Some(d) => d.clone(),
-        None => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "rm", "playlist directory not configured"),
+        None => {
+            return ResponseBuilder::error(
+                ACK_ERROR_SYSTEM,
+                0,
+                "rm",
+                "playlist directory not configured",
+            );
+        }
     };
     let pl_path = Path::new(&playlist_dir).join(format!("{name}.m3u"));
     if !pl_path.exists() {
@@ -416,7 +597,14 @@ pub async fn handle_rm_command(state: &AppState, name: &str) -> String {
 pub async fn handle_rename_command(state: &AppState, from: &str, to: &str) -> String {
     let playlist_dir = match &state.playlist_dir {
         Some(d) => d.clone(),
-        None => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "rename", "playlist directory not configured"),
+        None => {
+            return ResponseBuilder::error(
+                ACK_ERROR_SYSTEM,
+                0,
+                "rename",
+                "playlist directory not configured",
+            );
+        }
     };
     let from_path = Path::new(&playlist_dir).join(format!("{from}.m3u"));
     let to_path = Path::new(&playlist_dir).join(format!("{to}.m3u"));
@@ -441,11 +629,25 @@ pub async fn handle_searchplaylist_command(
 ) -> String {
     let playlist_dir = match &state.playlist_dir {
         Some(d) => d.clone(),
-        None => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "searchplaylist", "playlist directory not configured"),
+        None => {
+            return ResponseBuilder::error(
+                ACK_ERROR_SYSTEM,
+                0,
+                "searchplaylist",
+                "playlist directory not configured",
+            );
+        }
     };
     let paths = match read_m3u_playlist(&playlist_dir, name) {
         Ok(p) => p,
-        Err(_) => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "searchplaylist", "No such playlist"),
+        Err(_) => {
+            return ResponseBuilder::error(
+                ACK_ERROR_SYSTEM,
+                0,
+                "searchplaylist",
+                "No such playlist",
+            );
+        }
     };
     let db = match open_db(state, "searchplaylist") {
         Ok(d) => d,
@@ -468,11 +670,25 @@ pub async fn handle_searchplaylist_command(
 pub async fn handle_playlistlength_command(state: &AppState, name: &str) -> String {
     let playlist_dir = match &state.playlist_dir {
         Some(d) => d.clone(),
-        None => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "playlistlength", "playlist directory not configured"),
+        None => {
+            return ResponseBuilder::error(
+                ACK_ERROR_SYSTEM,
+                0,
+                "playlistlength",
+                "playlist directory not configured",
+            );
+        }
     };
     let paths = match read_m3u_playlist(&playlist_dir, name) {
         Ok(p) => p,
-        Err(_) => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "playlistlength", "No such playlist"),
+        Err(_) => {
+            return ResponseBuilder::error(
+                ACK_ERROR_SYSTEM,
+                0,
+                "playlistlength",
+                "No such playlist",
+            );
+        }
     };
     let db = match open_db(state, "playlistlength") {
         Ok(d) => d,

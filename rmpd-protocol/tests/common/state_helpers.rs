@@ -154,6 +154,7 @@ impl StatusBuilder {
             playlist_length,
             updating_db: None,
             error: None,
+            replay_gain_mode: "off".to_string(),
         }
     }
 }

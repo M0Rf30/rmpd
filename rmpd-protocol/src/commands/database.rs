@@ -27,8 +27,8 @@ fn strip_music_dir_prefix<'a>(path: &'a str, music_dir: Option<&str>) -> &'a str
 }
 
 use super::utils::{
-    ACK_ERROR_ARG, ACK_ERROR_SYSTEM, apply_range, build_and_filter, build_search_filter, format_iso8601_timestamp,
-    open_db,
+    ACK_ERROR_ARG, ACK_ERROR_SYSTEM, apply_range, build_and_filter, build_search_filter,
+    format_iso8601_timestamp, open_db,
 };
 
 /// Helper function to get tag value with MPD-style fallback.
@@ -249,14 +249,18 @@ pub async fn handle_list_command(
                         Ok(s) => s,
                         Err(e) => {
                             return ResponseBuilder::error(
-                                ACK_ERROR_SYSTEM, 0, "list",
+                                ACK_ERROR_SYSTEM,
+                                0,
+                                "list",
                                 &format!("query error: {e}"),
                             );
                         }
                     },
                     Err(e) => {
                         return ResponseBuilder::error(
-                            ACK_ERROR_ARG, 0, "list",
+                            ACK_ERROR_ARG,
+                            0,
+                            "list",
                             &format!("filter parse error: {e}"),
                         );
                     }
@@ -266,7 +270,9 @@ pub async fn handle_list_command(
                     Ok(s) => s,
                     Err(e) => {
                         return ResponseBuilder::error(
-                            ACK_ERROR_SYSTEM, 0, "list",
+                            ACK_ERROR_SYSTEM,
+                            0,
+                            "list",
                             &format!("query error: {e}"),
                         );
                     }
@@ -279,7 +285,9 @@ pub async fn handle_list_command(
                 Ok(s) => s,
                 Err(e) => {
                     return ResponseBuilder::error(
-                        ACK_ERROR_SYSTEM, 0, "list",
+                        ACK_ERROR_SYSTEM,
+                        0,
+                        "list",
                         &format!("query error: {e}"),
                     );
                 }
@@ -297,7 +305,11 @@ pub async fn handle_list_command(
             let group_vals = song.tag_values_with_fallback(&group_tag_lower);
             let tag_vals = song.tag_values_with_fallback(&tag_lower);
 
-            let group_vals: Vec<&str> = if group_vals.is_empty() { vec![""] } else { group_vals };
+            let group_vals: Vec<&str> = if group_vals.is_empty() {
+                vec![""]
+            } else {
+                group_vals
+            };
 
             for gv in &group_vals {
                 let tag_set = groups.entry(gv.to_string()).or_default();
@@ -652,7 +664,10 @@ pub async fn handle_readpicture_command(state: &AppState, uri: &str, offset: usi
             Some(music_dir) => format!("{music_dir}/{uri}"),
             None => {
                 return Response::Text(ResponseBuilder::error(
-                    50, 0, "readpicture", "music directory not configured",
+                    50,
+                    0,
+                    "readpicture",
+                    "music directory not configured",
                 ));
             }
         }
@@ -759,7 +774,8 @@ pub async fn handle_lsinfo_command(state: &AppState, path: Option<&str>) -> Stri
                             let fpath = entry.path();
                             if fpath.extension().and_then(|e| e.to_str()) == Some("m3u") {
                                 if let Some(stem) = fpath.file_stem().and_then(|s| s.to_str()) {
-                                    let mtime = entry.metadata()
+                                    let mtime = entry
+                                        .metadata()
                                         .ok()
                                         .and_then(|m| m.modified().ok())
                                         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
@@ -1051,7 +1067,8 @@ pub async fn handle_listfiles_command(state: &AppState, uri: Option<&str>) -> St
                         0,
                         "listfiles",
                         // Strip the " (os error N)" suffix from Rust's error message
-                        &format!("Failed to open {}: {}",
+                        &format!(
+                            "Failed to open {}: {}",
                             full_path.display(),
                             e.to_string().split(" (os error ").next().unwrap_or(""),
                         ),
@@ -1115,7 +1132,9 @@ pub async fn handle_searchcount_command(
         Ok(s) => s,
         Err(e) => {
             return ResponseBuilder::error(
-                ACK_ERROR_SYSTEM, 0, "searchcount",
+                ACK_ERROR_SYSTEM,
+                0,
+                "searchcount",
                 &format!("query error: {e}"),
             );
         }
@@ -1226,8 +1245,13 @@ pub async fn handle_readcomments_command(state: &AppState, uri: &str) -> String 
                 // MPD's IsValidName: must start with alpha, all chars [A-Za-z_-]
                 // MPD's IsValidValue: no control chars (< 0x20)
                 let valid_name = !key.is_empty()
-                    && key.chars().next().map_or(false, |c| c.is_ascii_alphabetic())
-                    && key.chars().all(|c| c.is_ascii_alphabetic() || c == '_' || c == '-');
+                    && key
+                        .chars()
+                        .next()
+                        .map_or(false, |c| c.is_ascii_alphabetic())
+                    && key
+                        .chars()
+                        .all(|c| c.is_ascii_alphabetic() || c == '_' || c == '-');
                 let valid_value = value.bytes().all(|b| b >= 0x20);
                 if valid_name && valid_value {
                     resp.field(&key, &value);

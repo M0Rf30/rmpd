@@ -12,7 +12,9 @@
 //!
 //! Note: Command handlers still need updating to use partition context
 
-use super::utils::{ACK_ERROR_ARG, ACK_ERROR_EXIST, ACK_ERROR_NO_EXIST, ACK_ERROR_SYSTEM, ACK_ERROR_UNKNOWN};
+use super::utils::{
+    ACK_ERROR_ARG, ACK_ERROR_EXIST, ACK_ERROR_NO_EXIST, ACK_ERROR_SYSTEM, ACK_ERROR_UNKNOWN,
+};
 use super::{AppState, ResponseBuilder};
 use crate::connection::ConnectionState;
 use tracing::info;
@@ -49,7 +51,12 @@ pub async fn handle_partition_command(
         conn_state.current_partition = name.to_string();
         ResponseBuilder::new().ok()
     } else {
-        ResponseBuilder::error(ACK_ERROR_NO_EXIST, 0, "partition", "partition does not exist")
+        ResponseBuilder::error(
+            ACK_ERROR_NO_EXIST,
+            0,
+            "partition",
+            "partition does not exist",
+        )
     }
 }
 
@@ -135,8 +142,12 @@ pub async fn handle_newpartition_command(state: &AppState, name: &str) -> String
             info!("created new partition: {}", name);
             ResponseBuilder::new().ok()
         }
-        Err(e) if e.contains("already exists") => ResponseBuilder::error(ACK_ERROR_EXIST, 0, "newpartition", "name already exists"),
-        Err(_) => ResponseBuilder::error(ACK_ERROR_UNKNOWN, 0, "newpartition", "too many partitions"),
+        Err(e) if e.contains("already exists") => {
+            ResponseBuilder::error(ACK_ERROR_EXIST, 0, "newpartition", "name already exists")
+        }
+        Err(_) => {
+            ResponseBuilder::error(ACK_ERROR_UNKNOWN, 0, "newpartition", "too many partitions")
+        }
     }
 }
 
@@ -167,11 +178,33 @@ pub async fn handle_delpartition_command(state: &AppState, name: &str) -> String
             info!("deleted partition: {}", name);
             ResponseBuilder::new().ok()
         }
-        Err(e) if e.contains("Cannot delete default") => ResponseBuilder::error(ACK_ERROR_UNKNOWN, 0, "delpartition", "cannot delete the default partition"),
-        Err(e) if e.contains("not found") || e.contains("Not found") => ResponseBuilder::error(ACK_ERROR_NO_EXIST, 0, "delpartition", "no such partition"),
-        Err(e) if e.contains("still has clients") => ResponseBuilder::error(ACK_ERROR_UNKNOWN, 0, "delpartition", "partition still has clients"),
-        Err(e) if e.contains("still has outputs") => ResponseBuilder::error(ACK_ERROR_UNKNOWN, 0, "delpartition", "partition still has outputs"),
-        Err(_) => ResponseBuilder::error(ACK_ERROR_UNKNOWN, 0, "delpartition", "cannot delete the default partition"),
+        Err(e) if e.contains("Cannot delete default") => ResponseBuilder::error(
+            ACK_ERROR_UNKNOWN,
+            0,
+            "delpartition",
+            "cannot delete the default partition",
+        ),
+        Err(e) if e.contains("not found") || e.contains("Not found") => {
+            ResponseBuilder::error(ACK_ERROR_NO_EXIST, 0, "delpartition", "no such partition")
+        }
+        Err(e) if e.contains("still has clients") => ResponseBuilder::error(
+            ACK_ERROR_UNKNOWN,
+            0,
+            "delpartition",
+            "partition still has clients",
+        ),
+        Err(e) if e.contains("still has outputs") => ResponseBuilder::error(
+            ACK_ERROR_UNKNOWN,
+            0,
+            "delpartition",
+            "partition still has outputs",
+        ),
+        Err(_) => ResponseBuilder::error(
+            ACK_ERROR_UNKNOWN,
+            0,
+            "delpartition",
+            "cannot delete the default partition",
+        ),
     }
 }
 
