@@ -167,31 +167,33 @@ impl ResponseBuilder {
             self.field("songid", pos.id);
         }
 
-        // Show time and elapsed fields
-        if let Some(elapsed) = status.elapsed {
-            if let Some(duration) = status.duration {
+        // Show time/elapsed/duration/bitrate/audio only when playing or paused (not stopped)
+        if !matches!(status.state, rmpd_core::state::PlayerState::Stop) {
+            if let Some(elapsed) = status.elapsed {
+                if let Some(duration) = status.duration {
+                    self.field(
+                        "time",
+                        format!("{}:{}", elapsed.as_secs(), duration.as_secs()),
+                    );
+                }
+                self.field("elapsed", format!("{:.3}", elapsed.as_secs_f64()));
+            }
+
+            self.optional_field(
+                "duration",
+                status.duration.map(|d| format!("{:.3}", d.as_secs_f64())),
+            );
+            self.optional_field("bitrate", status.bitrate);
+
+            if let Some(fmt) = status.audio_format {
                 self.field(
-                    "time",
-                    format!("{}:{}", elapsed.as_secs(), duration.as_secs()),
+                    "audio",
+                    format!(
+                        "{}:{}:{}",
+                        fmt.sample_rate, fmt.bits_per_sample, fmt.channels
+                    ),
                 );
             }
-            self.field("elapsed", format!("{:.3}", elapsed.as_secs_f64()));
-        }
-
-        self.optional_field(
-            "duration",
-            status.duration.map(|d| format!("{:.3}", d.as_secs_f64())),
-        );
-        self.optional_field("bitrate", status.bitrate);
-
-        if let Some(fmt) = status.audio_format {
-            self.field(
-                "audio",
-                format!(
-                    "{}:{}:{}",
-                    fmt.sample_rate, fmt.bits_per_sample, fmt.channels
-                ),
-            );
         }
 
         if let Some(next) = &status.next_song {
