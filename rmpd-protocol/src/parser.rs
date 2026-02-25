@@ -1476,7 +1476,22 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
                 "find" => {
                     let name = parse_string.parse_next(input)?;
                     let _ = space0.parse_next(input)?;
-                    let value = opt(parse_quoted_or_unquoted).parse_next(input)?;
+                    // MPD supports optional comparison: [eq|ne|lt|gt|lte|gte VALUE]
+                    // Parse up to two more optional tokens (operator and value)
+                    let first = opt(parse_quoted_or_unquoted).parse_next(input)?;
+                    let _ = space0.parse_next(input)?;
+                    let second = opt(parse_quoted_or_unquoted).parse_next(input)?;
+                    // If two tokens: first is operator, second is comparison value
+                    // If one token: it is the sticker value filter
+                    let value = match (first, second) {
+                        (Some(op), Some(val)) => {
+                            // operator + value form — store value, ignore op for now
+                            let _ = op;
+                            Some(val)
+                        }
+                        (Some(v), None) => Some(v),
+                        (None, _) => None,
+                    };
                     Ok(Command::StickerFind { uri, name, value })
                 }
                 "inc" => {

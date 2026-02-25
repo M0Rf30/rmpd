@@ -579,8 +579,9 @@ async fn handle_command(
         Command::Shuffle { range } => queue::handle_shuffle_command(state, range).await,
         Command::PlaylistId { id } => queue::handle_playlistid_command(state, id).await,
         Command::Password { password: _ } => {
-            // No password protection implemented yet
-            ResponseBuilder::new().ok()
+            // rmpd has no password protection; always reject per MPD protocol
+            // (ACK_ERROR_PASSWORD = 3)
+            ResponseBuilder::error(3, 0, "password", "incorrect password")
         }
         Command::AlbumArt { .. } | Command::ReadPicture { .. } => {
             // Already handled at the beginning of the function
