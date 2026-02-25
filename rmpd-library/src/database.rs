@@ -21,8 +21,8 @@ fn icu_cmp_opt(col: &CollatorBorrowed<'_>, a: Option<&str>, b: Option<&str>) -> 
 pub enum WalkEntry<'a> {
     /// A song file.
     Song(&'a Song),
-    /// A directory (emitted before its contents are visited).
-    Directory(&'a str),
+    /// A directory (path, mtime) emitted before its contents are visited.
+    Directory(&'a str, i64),
 }
 
 /// SELECT columns for song audio properties (no tags — those come from song_tags).
@@ -1102,6 +1102,29 @@ impl Database {
         }
     }
 
+    /// Get the mtime of a directory by its path (empty path = root).
+    pub fn get_directory_mtime(&self, path: &str) -> Result<Option<i64>> {
+        if path.is_empty() || path == "/" {
+            Ok(self
+                .conn
+                .query_row(
+                    "SELECT mtime FROM directories WHERE parent_id IS NULL LIMIT 1",
+                    [],
+                    |row| row.get(0),
+                )
+                .optional()?)
+        } else {
+            Ok(self
+                .conn
+                .query_row(
+                    "SELECT mtime FROM directories WHERE path = ?1",
+                    params![path],
+                    |row| row.get(0),
+                )
+                .optional()?)
+        }
+    }
+
     /// Walk a directory tree recursively in DFS order, matching MPD's traversal.
     pub fn walk_recursive(
         &self,
@@ -1166,13 +1189,13 @@ impl Database {
         // Collect immediate subdirectories, sorted by path
         let mut dir_stmt = self
             .conn
-            .prepare("SELECT id, path FROM directories WHERE parent_id = ?1 ORDER BY path")?;
-        let subdirs: Vec<(i64, String)> = dir_stmt
-            .query_map(params![id], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .prepare("SELECT id, path, mtime FROM directories WHERE parent_id = ?1 ORDER BY path")?;
+        let subdirs: Vec<(i64, String, i64)> = dir_stmt
+            .query_map(params![id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
             .collect::<std::result::Result<Vec<_>, _>>()?;
 
-        for (child_id, child_path) in &subdirs {
-            visitor(WalkEntry::Directory(child_path.as_str()))?;
+        for (child_id, child_path, child_mtime) in &subdirs {
+            visitor(WalkEntry::Directory(child_path.as_str(), *child_mtime))?;
             self.walk_dir(Some(*child_id), visitor)?;
         }
 

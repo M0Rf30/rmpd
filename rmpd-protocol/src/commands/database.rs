@@ -799,12 +799,27 @@ pub async fn handle_listall_command(state: &AppState, path: Option<&str>) -> Str
     let path_str = path.unwrap_or("");
     let mut resp = ResponseBuilder::new();
 
+    // If a specific path is given, check if it's a file first
+    if !path_str.is_empty() && path_str != "/" {
+        match db.get_song_by_path(path_str) {
+            Ok(Some(song)) => {
+                // MPD returns just the file entry for a file path
+                resp.field("file", &song.path);
+                return resp.ok();
+            }
+            Ok(None) => {}
+            Err(_) => {}
+        }
+        // It's a directory path: emit the directory itself first (MPD behavior)
+        resp.field("directory", path_str);
+    }
+
     let result = db.walk_recursive(path_str, &mut |entry| {
         match entry {
             rmpd_library::WalkEntry::Song(song) => {
                 resp.field("file", &song.path);
             }
-            rmpd_library::WalkEntry::Directory(dir) => {
+            rmpd_library::WalkEntry::Directory(dir, _mtime) => {
                 resp.field("directory", dir);
             }
         }
@@ -830,13 +845,36 @@ pub async fn handle_listallinfo_command(state: &AppState, path: Option<&str>) ->
     let path_str = path.unwrap_or("");
     let mut resp = ResponseBuilder::new();
 
+    // If a specific path is given, check if it's a file first
+    if !path_str.is_empty() && path_str != "/" {
+        match db.get_song_by_path(path_str) {
+            Ok(Some(song)) => {
+                // MPD returns just the file's full info for a file path
+                resp.song(&song, None, None);
+                return resp.ok();
+            }
+            Ok(None) => {}
+            Err(_) => {}
+        }
+        // It's a directory path: emit the directory itself + Last-Modified first (MPD behavior)
+        resp.field("directory", path_str);
+        if let Ok(Some(mtime)) = db.get_directory_mtime(path_str) {
+            if mtime > 0 {
+                resp.field("Last-Modified", &format_iso8601_timestamp(mtime));
+            }
+        }
+    }
+
     let result = db.walk_recursive(path_str, &mut |entry| {
         match entry {
             rmpd_library::WalkEntry::Song(song) => {
                 resp.song(song, None, None);
             }
-            rmpd_library::WalkEntry::Directory(dir) => {
+            rmpd_library::WalkEntry::Directory(dir, mtime) => {
                 resp.field("directory", dir);
+                if mtime > 0 {
+                    resp.field("Last-Modified", &format_iso8601_timestamp(mtime));
+                }
             }
         }
         Ok(())
