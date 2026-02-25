@@ -104,8 +104,46 @@ impl Database {
         conn.execute_batch("PRAGMA foreign_keys = ON;")?;
 
         let db = Self { conn };
+        db.migrate_schema()?;
         db.init_schema()?;
         Ok(db)
+    }
+
+    /// Perform schema migrations for existing databases.
+    /// Currently handles:
+    ///   v1→v2: Remove UNIQUE(song_id, tag, value) from song_tags to allow duplicate tag values
+    fn migrate_schema(&self) -> Result<()> {
+        // Check if song_tags already exists with the old UNIQUE constraint.
+        // We detect this by looking at sqlite_master for the table definition.
+        let table_sql: Option<String> = self.conn.query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='song_tags'",
+            [],
+            |row| row.get(0),
+        ).optional()?;
+
+        if let Some(sql) = table_sql {
+            // If the table was created with a UNIQUE constraint, migrate it.
+            if sql.contains("UNIQUE") {
+                self.conn.execute_batch("
+                    PRAGMA foreign_keys = OFF;
+                    BEGIN;
+                    CREATE TABLE song_tags_new (
+                        song_id INTEGER NOT NULL REFERENCES songs(id) ON DELETE CASCADE,
+                        tag TEXT NOT NULL,
+                        value TEXT NOT NULL DEFAULT ''
+                    );
+                    INSERT INTO song_tags_new SELECT song_id, tag, value FROM song_tags;
+                    DROP TABLE song_tags;
+                    ALTER TABLE song_tags_new RENAME TO song_tags;
+                    -- Reset all song mtimes to 0 so the next scan re-reads tags
+                    UPDATE songs SET last_modified = 0;
+                    COMMIT;
+                    PRAGMA foreign_keys = ON;
+                ")?;
+            }
+        }
+
+        Ok(())
     }
 
     pub fn init_schema(&self) -> Result<()> {
@@ -137,12 +175,10 @@ impl Database {
             "CREATE TABLE IF NOT EXISTS song_tags (
                 song_id INTEGER NOT NULL REFERENCES songs(id) ON DELETE CASCADE,
                 tag TEXT NOT NULL,
-                value TEXT NOT NULL DEFAULT '',
-                UNIQUE(song_id, tag, value)
+                value TEXT NOT NULL DEFAULT ''
             )",
             [],
         )?;
-
         // Directories table
         self.conn.execute(
             "CREATE TABLE IF NOT EXISTS directories (
@@ -451,7 +487,13 @@ impl Database {
             ],
         )?;
 
-        let song_id = self.conn.last_insert_rowid() as u64;
+        // Use a SELECT to reliably get the song id regardless of insert vs upsert.
+        // last_insert_rowid() is unreliable for ON CONFLICT DO UPDATE in a fresh connection.
+        let song_id: u64 = self.conn.query_row(
+            "SELECT id FROM songs WHERE path = ?1",
+            params![song.path.as_str()],
+            |row| row.get::<_, i64>(0),
+        )? as u64;
 
         // Delete old tags (in case of replace)
         self.conn.execute(
@@ -462,7 +504,7 @@ impl Database {
         // Insert all tags
         let mut tag_stmt = self
             .conn
-            .prepare("INSERT OR IGNORE INTO song_tags (song_id, tag, value) VALUES (?1, ?2, ?3)")?;
+            .prepare("INSERT INTO song_tags (song_id, tag, value) VALUES (?1, ?2, ?3)")?;
         for (tag, value) in &song.tags {
             tag_stmt.execute(params![song_id as i64, tag, value])?;
         }

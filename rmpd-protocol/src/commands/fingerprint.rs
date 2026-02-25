@@ -1,5 +1,5 @@
 use super::ResponseBuilder;
-use super::utils::ACK_ERROR_SYSTEM;
+use super::utils::{ACK_ERROR_SYSTEM, ACK_ERROR_UNKNOWN};
 use crate::state::AppState;
 use rmpd_library::Fingerprinter;
 use std::path::PathBuf;
@@ -52,11 +52,12 @@ pub async fn handle_getfingerprint_command(state: &AppState, uri: &str) -> Strin
         }
         Ok(Err(e)) => {
             error!("fingerprinting failed: {}", e);
+            // Match MPD's error format: ACK [5@0] {} <error message>
             ResponseBuilder::error(
-                50,
+                ACK_ERROR_UNKNOWN,
                 0,
-                "getfingerprint",
-                &format!("Fingerprinting failed: {e}"),
+                "",
+                &e.to_string()
             )
         }
         Err(_) => {
