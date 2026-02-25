@@ -431,10 +431,10 @@ pub async fn handle_playlistinfo_command(state: &AppState, range: Option<(u32, u
     let mut resp = ResponseBuilder::new();
 
     // Validate range: if a specific range is given, the start must be within bounds.
-    if let Some((start, _)) = range {
-        if start as usize > items.len() {
-            return ResponseBuilder::error(ACK_ERROR_ARG, 0, "playlistinfo", "Bad song index");
-        }
+    if let Some((start, _)) = range
+        && start as usize > items.len()
+    {
+        return ResponseBuilder::error(ACK_ERROR_ARG, 0, "playlistinfo", "Bad song index");
     }
 
     let filtered = apply_range(items, range);
@@ -549,7 +549,7 @@ pub async fn handle_rangeid_command(state: &AppState, id: u32, range: (f64, f64)
 /// Add a tag to a queue item
 ///
 /// Adds a custom tag to a queue item.
-pub async fn handle_addtagid_command(state: &AppState, id: u32, tag: &str, value: &str) -> String {
+pub async fn handle_addtagid_command(state: &AppState, id: u32, tag: &str, _value: &str) -> String {
     // Validate tag type
     if rmpd_core::song::canonical_tag_name(&tag.to_lowercase()) == "Unknown" {
         return ResponseBuilder::error(
@@ -584,15 +584,15 @@ pub async fn handle_cleartagid_command(state: &AppState, id: u32, tag: Option<&s
     // Normalize empty tag to None (parser may return Some("") for missing arg)
     let tag = tag.filter(|t| !t.is_empty());
     // Validate tag type if specified
-    if let Some(t) = tag {
-        if rmpd_core::song::canonical_tag_name(&t.to_lowercase()) == "Unknown" {
-            return ResponseBuilder::error(
-                ACK_ERROR_ARG,
-                0,
-                "cleartagid",
-                &format!("Unknown tag type: {t}"),
-            );
-        }
+    if let Some(t) = tag
+        && rmpd_core::song::canonical_tag_name(&t.to_lowercase()) == "Unknown"
+    {
+        return ResponseBuilder::error(
+            ACK_ERROR_ARG,
+            0,
+            "cleartagid",
+            &format!("Unknown tag type: {t}"),
+        );
     }
 
     // Check song exists

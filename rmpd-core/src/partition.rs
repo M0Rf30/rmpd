@@ -256,10 +256,8 @@ mod tests {
     async fn test_cannot_delete_default_partition() {
         let manager = PartitionManager::new();
 
-        manager
-            .create_partition("default".to_string())
-            .await
-            .unwrap();
+        // "default" partition is already created by PartitionManager::new(),
+        // so we just try to delete it directly.
         let result = manager.delete_partition("default").await;
 
         assert!(result.is_err());
@@ -274,9 +272,10 @@ mod tests {
         manager.create_partition("part2".to_string()).await.unwrap();
 
         let names = manager.list_partitions().await;
-        assert_eq!(names.len(), 2);
+        assert_eq!(names.len(), 3);
         assert!(names.contains(&"part1".to_string()));
         assert!(names.contains(&"part2".to_string()));
+        assert!(names.contains(&"default".to_string()));
     }
 
     #[tokio::test]

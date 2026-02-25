@@ -53,17 +53,17 @@ pub async fn handle_listplaylists_command(state: &AppState) -> String {
     let mut entries: Vec<(String, i64)> = Vec::new();
     for entry in dir.flatten() {
         let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) == Some("m3u") {
-            if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                let mtime = entry
-                    .metadata()
-                    .ok()
-                    .and_then(|m| m.modified().ok())
-                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|d| d.as_secs() as i64)
-                    .unwrap_or(0);
-                entries.push((stem.to_string(), mtime));
-            }
+        if path.extension().and_then(|e| e.to_str()) == Some("m3u")
+            && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
+        {
+            let mtime = entry
+                .metadata()
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            entries.push((stem.to_string(), mtime));
         }
     }
 
@@ -658,10 +658,10 @@ pub async fn handle_searchplaylist_command(
     let value_lower = value.to_lowercase();
     let tag_lower = tag.to_lowercase();
     for path in &paths {
-        if let Ok(Some(song)) = db.get_song_by_path(path) {
-            if song_tag_contains(&song, &tag_lower, &value_lower) {
-                resp.song(&song, None, None);
-            }
+        if let Ok(Some(song)) = db.get_song_by_path(path)
+            && song_tag_contains(&song, &tag_lower, &value_lower)
+        {
+            resp.song(&song, None, None);
         }
     }
     resp.ok()

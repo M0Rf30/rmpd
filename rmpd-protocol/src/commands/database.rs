@@ -296,8 +296,11 @@ pub async fn handle_list_command(
 
         // Build map: group_value -> BTreeSet<tag_value> (sorted set)
         // Group values are sorted by MPD's std::map order (lexicographic)
-        let mut groups: std::collections::BTreeMap<String, std::collections::BTreeSet<String>> =
-            std::collections::BTreeMap::new();
+        #[allow(clippy::disallowed_types)]
+        let mut groups: std::collections::BTreeMap<
+            String,
+            std::collections::BTreeSet<String>,
+        > = std::collections::BTreeMap::new();
 
         let group_tag_lower = group_tag.to_lowercase();
         let tag_lower = tag.to_lowercase();
@@ -766,32 +769,32 @@ pub async fn handle_lsinfo_command(state: &AppState, path: Option<&str>) -> Stri
             }
 
             // For root directory, also list playlists (read from filesystem, matching MPD behavior)
-            if path_str.is_empty() || path_str == "/" {
-                if let Some(playlist_dir) = &state.playlist_dir {
-                    let mut entries: Vec<(String, i64)> = Vec::new();
-                    if let Ok(dir) = std::fs::read_dir(playlist_dir) {
-                        for entry in dir.flatten() {
-                            let fpath = entry.path();
-                            if fpath.extension().and_then(|e| e.to_str()) == Some("m3u") {
-                                if let Some(stem) = fpath.file_stem().and_then(|s| s.to_str()) {
-                                    let mtime = entry
-                                        .metadata()
-                                        .ok()
-                                        .and_then(|m| m.modified().ok())
-                                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                                        .map(|d| d.as_secs() as i64)
-                                        .unwrap_or(0);
-                                    entries.push((stem.to_string(), mtime));
-                                }
-                            }
+            if (path_str.is_empty() || path_str == "/")
+                && let Some(playlist_dir) = &state.playlist_dir
+            {
+                let mut entries: Vec<(String, i64)> = Vec::new();
+                if let Ok(dir) = std::fs::read_dir(playlist_dir) {
+                    for entry in dir.flatten() {
+                        let fpath = entry.path();
+                        if fpath.extension().and_then(|e| e.to_str()) == Some("m3u")
+                            && let Some(stem) = fpath.file_stem().and_then(|s| s.to_str())
+                        {
+                            let mtime = entry
+                                .metadata()
+                                .ok()
+                                .and_then(|m| m.modified().ok())
+                                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                                .map(|d| d.as_secs() as i64)
+                                .unwrap_or(0);
+                            entries.push((stem.to_string(), mtime));
                         }
                     }
-                    entries.sort_by(|a, b| a.0.cmp(&b.0));
-                    for (name, mtime) in &entries {
-                        resp.field("playlist", name);
-                        let timestamp_str = format_iso8601_timestamp(*mtime);
-                        resp.field("Last-Modified", &timestamp_str);
-                    }
+                }
+                entries.sort_by(|a, b| a.0.cmp(&b.0));
+                for (name, mtime) in &entries {
+                    resp.field("playlist", name);
+                    let timestamp_str = format_iso8601_timestamp(*mtime);
+                    resp.field("Last-Modified", &timestamp_str);
                 }
             }
 
@@ -874,10 +877,10 @@ pub async fn handle_listallinfo_command(state: &AppState, path: Option<&str>) ->
         }
         // It's a directory path: emit the directory itself + Last-Modified first (MPD behavior)
         resp.field("directory", path_str);
-        if let Ok(Some(mtime)) = db.get_directory_mtime(path_str) {
-            if mtime > 0 {
-                resp.field("Last-Modified", &format_iso8601_timestamp(mtime));
-            }
+        if let Ok(Some(mtime)) = db.get_directory_mtime(path_str)
+            && mtime > 0
+        {
+            resp.field("Last-Modified", format_iso8601_timestamp(mtime));
         }
     }
 
@@ -889,7 +892,7 @@ pub async fn handle_listallinfo_command(state: &AppState, path: Option<&str>) ->
             rmpd_library::WalkEntry::Directory(dir, mtime) => {
                 resp.field("directory", dir);
                 if mtime > 0 {
-                    resp.field("Last-Modified", &format_iso8601_timestamp(mtime));
+                    resp.field("Last-Modified", format_iso8601_timestamp(mtime));
                 }
             }
         }
@@ -1245,10 +1248,7 @@ pub async fn handle_readcomments_command(state: &AppState, uri: &str) -> String 
                 // MPD's IsValidName: must start with alpha, all chars [A-Za-z_-]
                 // MPD's IsValidValue: no control chars (< 0x20)
                 let valid_name = !key.is_empty()
-                    && key
-                        .chars()
-                        .next()
-                        .map_or(false, |c| c.is_ascii_alphabetic())
+                    && key.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
                     && key
                         .chars()
                         .all(|c| c.is_ascii_alphabetic() || c == '_' || c == '-');
