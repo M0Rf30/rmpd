@@ -53,12 +53,7 @@ pub async fn handle_getfingerprint_command(state: &AppState, uri: &str) -> Strin
         Ok(Err(e)) => {
             error!("fingerprinting failed: {}", e);
             // Match MPD's error format: ACK [5@0] {} <error message>
-            ResponseBuilder::error(
-                ACK_ERROR_UNKNOWN,
-                0,
-                "",
-                &e.to_string()
-            )
+            ResponseBuilder::error(ACK_ERROR_UNKNOWN, 0, "", &e.to_string())
         }
         Err(_) => {
             error!("fingerprinting task panicked");

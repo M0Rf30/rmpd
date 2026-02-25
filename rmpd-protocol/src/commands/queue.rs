@@ -7,8 +7,9 @@ use crate::response::ResponseBuilder;
 use crate::state::AppState;
 
 use super::utils::{
-    ACK_ERROR_ARG, ACK_ERROR_NO_EXIST, ACK_ERROR_PERMISSION, ACK_ERROR_SYSTEM, add_queue_item_metadata, apply_range,
-    open_db, prepare_song_for_playback, song_tag_contains, song_tag_eq, update_next_song,
+    ACK_ERROR_ARG, ACK_ERROR_NO_EXIST, ACK_ERROR_PERMISSION, ACK_ERROR_SYSTEM,
+    add_queue_item_metadata, apply_range, open_db, prepare_song_for_playback, song_tag_contains,
+    song_tag_eq, update_next_song,
 };
 
 pub async fn handle_add_command(state: &AppState, uri: &str, position: Option<u32>) -> String {
@@ -17,11 +18,36 @@ pub async fn handle_add_command(state: &AppState, uri: &str, position: Option<u3
     if let Some(scheme_end) = uri.find("://") {
         let scheme = &uri[..scheme_end];
         // Known streaming/network schemes that MPD supports: add as stream entry
-        let is_known_scheme = matches!(scheme,
-            "http" | "https" | "ftp" | "ftps" | "rtsp" | "rtsps" | "rtmp" | "rtmpe"
-            | "rtmps" | "rtmpt" | "rtmpte" | "rtmpts" | "rtp" | "mms" | "mmsh"
-            | "mmst" | "mmsu" | "hls+http" | "hls+https" | "nfs" | "smb"
-            | "scp" | "sftp" | "srtp" | "gopher" | "alsa" | "cdda" | "file"
+        let is_known_scheme = matches!(
+            scheme,
+            "http"
+                | "https"
+                | "ftp"
+                | "ftps"
+                | "rtsp"
+                | "rtsps"
+                | "rtmp"
+                | "rtmpe"
+                | "rtmps"
+                | "rtmpt"
+                | "rtmpte"
+                | "rtmpts"
+                | "rtp"
+                | "mms"
+                | "mmsh"
+                | "mmst"
+                | "mmsu"
+                | "hls+http"
+                | "hls+https"
+                | "nfs"
+                | "smb"
+                | "scp"
+                | "sftp"
+                | "srtp"
+                | "gopher"
+                | "alsa"
+                | "cdda"
+                | "file"
         );
         if !is_known_scheme {
             return ResponseBuilder::error(ACK_ERROR_ARG, 0, "add", "Unsupported URI scheme");
@@ -60,12 +86,7 @@ pub async fn handle_add_command(state: &AppState, uri: &str, position: Option<u3
     let song = match db.get_song_by_path(uri) {
         Ok(Some(s)) => s,
         Ok(None) => {
-            return ResponseBuilder::error(
-                ACK_ERROR_SYSTEM,
-                0,
-                "add",
-                "No such directory",
-            );
+            return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "add", "No such directory");
         }
         Err(e) => {
             return ResponseBuilder::error(
@@ -163,11 +184,36 @@ pub async fn handle_addid_command(state: &AppState, uri: &str, position: Option<
     // Handle URI schemes
     if let Some(scheme_end) = uri.find("://") {
         let scheme = &uri[..scheme_end];
-        let is_known_scheme = matches!(scheme,
-            "http" | "https" | "ftp" | "ftps" | "rtsp" | "rtsps" | "rtmp" | "rtmpe"
-            | "rtmps" | "rtmpt" | "rtmpte" | "rtmpts" | "rtp" | "mms" | "mmsh"
-            | "mmst" | "mmsu" | "hls+http" | "hls+https" | "nfs" | "smb"
-            | "scp" | "sftp" | "srtp" | "gopher" | "alsa" | "cdda" | "file"
+        let is_known_scheme = matches!(
+            scheme,
+            "http"
+                | "https"
+                | "ftp"
+                | "ftps"
+                | "rtsp"
+                | "rtsps"
+                | "rtmp"
+                | "rtmpe"
+                | "rtmps"
+                | "rtmpt"
+                | "rtmpte"
+                | "rtmpts"
+                | "rtp"
+                | "mms"
+                | "mmsh"
+                | "mmst"
+                | "mmsu"
+                | "hls+http"
+                | "hls+https"
+                | "nfs"
+                | "smb"
+                | "scp"
+                | "sftp"
+                | "srtp"
+                | "gopher"
+                | "alsa"
+                | "cdda"
+                | "file"
         );
         if !is_known_scheme {
             return ResponseBuilder::error(ACK_ERROR_ARG, 0, "addid", "Unsupported URI scheme");
@@ -204,12 +250,7 @@ pub async fn handle_addid_command(state: &AppState, uri: &str, position: Option<
     let song = match db.get_song_by_path(uri) {
         Ok(Some(s)) => s,
         Ok(None) => {
-            return ResponseBuilder::error(
-                ACK_ERROR_SYSTEM,
-                0,
-                "addid",
-                "No such song",
-            );
+            return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "addid", "No such song");
         }
         Err(e) => {
             return ResponseBuilder::error(
@@ -264,7 +305,12 @@ pub async fn handle_move_command(
                 return ResponseBuilder::error(ACK_ERROR_ARG, 0, "move", "Bad song index");
             }
             if to >= queue_len {
-                return ResponseBuilder::error(ACK_ERROR_ARG, 0, "move", &format!("Number too large: {to}"));
+                return ResponseBuilder::error(
+                    ACK_ERROR_ARG,
+                    0,
+                    "move",
+                    &format!("Number too large: {to}"),
+                );
             }
             if state.queue.write().await.move_item(from_pos, to) {
                 let mut status = state.status.write().await;
@@ -288,7 +334,12 @@ pub async fn handle_move_command(
             // `to` must be in [0, len - range_size].
             let max_to = queue.len() as u32 - range_size;
             if to > max_to {
-                return ResponseBuilder::error(ACK_ERROR_ARG, 0, "move", &format!("Number too large: {to}"));
+                return ResponseBuilder::error(
+                    ACK_ERROR_ARG,
+                    0,
+                    "move",
+                    &format!("Number too large: {to}"),
+                );
             }
 
             let range_size = end.saturating_sub(start);
@@ -300,12 +351,7 @@ pub async fn handle_move_command(
                 // Moving up in the queue
                 for i in 0..range_size.min(queue.len() as u32 - start) {
                     if !queue.move_item(start, to + i) {
-                        return ResponseBuilder::error(
-                            ACK_ERROR_ARG,
-                            0,
-                            "move",
-                            "Bad song index",
-                        );
+                        return ResponseBuilder::error(ACK_ERROR_ARG, 0, "move", "Bad song index");
                     }
                 }
             } else {
@@ -313,12 +359,7 @@ pub async fn handle_move_command(
                 let actual_end = end.min(queue.len() as u32);
                 for _ in 0..(actual_end - start) {
                     if !queue.move_item(start, to.saturating_sub(1)) {
-                        return ResponseBuilder::error(
-                            ACK_ERROR_ARG,
-                            0,
-                            "move",
-                            "Bad song index",
-                        );
+                        return ResponseBuilder::error(ACK_ERROR_ARG, 0, "move", "Bad song index");
                     }
                 }
             }
@@ -511,7 +552,12 @@ pub async fn handle_rangeid_command(state: &AppState, id: u32, range: (f64, f64)
 pub async fn handle_addtagid_command(state: &AppState, id: u32, tag: &str, value: &str) -> String {
     // Validate tag type
     if rmpd_core::song::canonical_tag_name(&tag.to_lowercase()) == "Unknown" {
-        return ResponseBuilder::error(ACK_ERROR_ARG, 0, "addtagid", &format!("Unknown tag type: {tag}"));
+        return ResponseBuilder::error(
+            ACK_ERROR_ARG,
+            0,
+            "addtagid",
+            &format!("Unknown tag type: {tag}"),
+        );
     }
 
     // Check song exists
@@ -522,7 +568,12 @@ pub async fn handle_addtagid_command(state: &AppState, id: u32, tag: &str, value
     drop(queue);
 
     // Local files cannot have tags edited at runtime
-    ResponseBuilder::error(ACK_ERROR_PERMISSION, 0, "addtagid", "Cannot edit tags of local file")
+    ResponseBuilder::error(
+        ACK_ERROR_PERMISSION,
+        0,
+        "addtagid",
+        "Cannot edit tags of local file",
+    )
 }
 
 /// Clear tags from a queue item
@@ -535,7 +586,12 @@ pub async fn handle_cleartagid_command(state: &AppState, id: u32, tag: Option<&s
     // Validate tag type if specified
     if let Some(t) = tag {
         if rmpd_core::song::canonical_tag_name(&t.to_lowercase()) == "Unknown" {
-            return ResponseBuilder::error(ACK_ERROR_ARG, 0, "cleartagid", &format!("Unknown tag type: {t}"));
+            return ResponseBuilder::error(
+                ACK_ERROR_ARG,
+                0,
+                "cleartagid",
+                &format!("Unknown tag type: {t}"),
+            );
         }
     }
 
@@ -547,7 +603,12 @@ pub async fn handle_cleartagid_command(state: &AppState, id: u32, tag: Option<&s
     drop(queue);
 
     // Local files cannot have tags edited at runtime
-    ResponseBuilder::error(ACK_ERROR_PERMISSION, 0, "cleartagid", "Cannot edit tags of local file")
+    ResponseBuilder::error(
+        ACK_ERROR_PERMISSION,
+        0,
+        "cleartagid",
+        "Cannot edit tags of local file",
+    )
 }
 
 /// Return changes in queue since version

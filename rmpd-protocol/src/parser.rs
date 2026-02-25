@@ -104,10 +104,10 @@ pub enum Command {
 
     // Volume
     SetVol {
-        volume: u8,  // validated [0, 100] in parser
+        volume: u8, // validated [0, 100] in parser
     },
     Volume {
-        change: i32,  // validated [-100, 100] in parser
+        change: i32, // validated [-100, 100] in parser
     },
     GetVol,
 
@@ -481,18 +481,26 @@ pub fn parse_command(input: &str) -> Result<Command, String> {
         // Extract just the command name (first token) for a useful error message.
         // If parsing fails after the command name is known, it is almost always an
         // arg-count mismatch, so report "wrong number of arguments for \"cmd\"".
-        let cmd_name = input
-            .split_whitespace()
-            .next()
-            .unwrap_or(input);
+        let cmd_name = input.split_whitespace().next().unwrap_or(input);
         // Commands with min=max args use "wrong number"; those with min<max use
         // "too few". We use a small lookup table to match MPD exactly.
         let too_few = matches!(
             cmd_name,
-            "addid" | "add" | "find" | "search" | "list" | "findadd" | "searchadd"
-                | "searchaddpl" | "listplaylist" | "listplaylistinfo"
+            "addid"
+                | "add"
+                | "find"
+                | "search"
+                | "list"
+                | "findadd"
+                | "searchadd"
+                | "searchaddpl"
+                | "listplaylist"
+                | "listplaylistinfo"
                 | "searchplaylist"
-                | "load" | "save" | "playlistfind" | "playlistsearch"
+                | "load"
+                | "save"
+                | "playlistfind"
+                | "playlistsearch"
         );
         if too_few {
             format!("too few arguments for \"{cmd_name}\"")
@@ -791,7 +799,10 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
                             subcommand: Some(ProtocolSubcommand::Disable { features }),
                         })
                     }
-                    _ => Ok(Command::UnknownSubcmd("protocol".to_string(), subcommand_str.to_string())),
+                    _ => Ok(Command::UnknownSubcmd(
+                        "protocol".to_string(),
+                        subcommand_str.to_string(),
+                    )),
                 }
             }
         }
@@ -849,7 +860,10 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
                             subcommand: Some(TagTypesSubcommand::Reset { tags }),
                         })
                     }
-                    _ => Ok(Command::UnknownSubcmd("tagtypes".to_string(), subcommand_str)),
+                    _ => Ok(Command::UnknownSubcmd(
+                        "tagtypes".to_string(),
+                        subcommand_str,
+                    )),
                 }
             }
         }
@@ -1074,7 +1088,9 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
                     let mut extra_pairs: Vec<(String, String)> = Vec::new();
                     loop {
                         let saved_loop = *input;
-                        let maybe_tag = opt(parse_quoted_or_unquoted).parse_next(input)?.filter(|s| !s.is_empty());
+                        let maybe_tag = opt(parse_quoted_or_unquoted)
+                            .parse_next(input)?
+                            .filter(|s| !s.is_empty());
                         match maybe_tag {
                             None => break,
                             Some(ref t) if t == "group" => {

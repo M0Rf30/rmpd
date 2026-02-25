@@ -246,7 +246,12 @@ pub async fn handle_protocol_command(
         }
         Some(ProtocolSubcommand::All) => {
             // Enable all known protocol features for this client
-            conn_state.set_features(KNOWN_PROTOCOL_FEATURES.iter().map(|s| s.to_string()).collect());
+            conn_state.set_features(
+                KNOWN_PROTOCOL_FEATURES
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect(),
+            );
         }
         Some(ProtocolSubcommand::Clear) => {
             // Disable all protocol features for this client

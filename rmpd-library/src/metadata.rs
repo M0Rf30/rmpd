@@ -28,7 +28,10 @@ fn normalize_decimal(s: &str) -> Option<String> {
     // Find first non-zero digit
     let start = s.chars().position(|c| c != '0').unwrap_or(s.len());
     // Take only ASCII digits from that position
-    let tail: String = s[start..].chars().take_while(|c| c.is_ascii_digit()).collect();
+    let tail: String = s[start..]
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
     if tail.is_empty() { None } else { Some(tail) }
 }
 
@@ -161,7 +164,8 @@ impl MetadataExtractor {
                     let mut pairs = Vec::new();
                     if let Some(f) = file {
                         let mut reader = BufReader::new(f);
-                        if let Ok(flac) = FlacFile::read_from(&mut reader, ParseOptions::default()) {
+                        if let Ok(flac) = FlacFile::read_from(&mut reader, ParseOptions::default())
+                        {
                             if let Some(vc) = flac.vorbis_comments() {
                                 for (k, v) in vc.items() {
                                     pairs.push((k.to_string(), v.to_string()));
@@ -176,7 +180,8 @@ impl MetadataExtractor {
                     let mut pairs: Vec<(String, String)> = Vec::new();
                     if let Some(f) = file {
                         let mut reader = BufReader::new(f);
-                        if let Ok(ogg) = VorbisFile::read_from(&mut reader, ParseOptions::default()) {
+                        if let Ok(ogg) = VorbisFile::read_from(&mut reader, ParseOptions::default())
+                        {
                             for (k, v) in ogg.vorbis_comments().items() {
                                 pairs.push((k.to_string(), v.to_string()));
                             }
@@ -189,7 +194,8 @@ impl MetadataExtractor {
                     let mut pairs: Vec<(String, String)> = Vec::new();
                     if let Some(f) = file {
                         let mut reader = BufReader::new(f);
-                        if let Ok(opus) = OpusFile::read_from(&mut reader, ParseOptions::default()) {
+                        if let Ok(opus) = OpusFile::read_from(&mut reader, ParseOptions::default())
+                        {
                             for (k, v) in opus.vorbis_comments().items() {
                                 pairs.push((k.to_string(), v.to_string()));
                             }
@@ -205,7 +211,8 @@ impl MetadataExtractor {
                     continue;
                 }
                 let key_lower = raw_key.to_lowercase();
-                if let Some(&tag_name) = VORBIS_TAG_MAP.iter()
+                if let Some(&tag_name) = VORBIS_TAG_MAP
+                    .iter()
                     .find(|(k, _)| *k == key_lower)
                     .map(|(_, v)| v)
                 {
@@ -566,7 +573,10 @@ impl MetadataExtractor {
             .read()
             .map_err(|e| RmpdError::Library(format!("Failed to read file: {e}")))?;
         let mut pairs = Vec::new();
-        if let Some(tag) = tagged_file.primary_tag().or_else(|| tagged_file.first_tag()) {
+        if let Some(tag) = tagged_file
+            .primary_tag()
+            .or_else(|| tagged_file.first_tag())
+        {
             let tag_type = tag.tag_type();
             for item in tag.items() {
                 if let Some(key) = item.key().map_key(tag_type) {

@@ -115,16 +115,20 @@ impl Database {
     fn migrate_schema(&self) -> Result<()> {
         // Check if song_tags already exists with the old UNIQUE constraint.
         // We detect this by looking at sqlite_master for the table definition.
-        let table_sql: Option<String> = self.conn.query_row(
-            "SELECT sql FROM sqlite_master WHERE type='table' AND name='song_tags'",
-            [],
-            |row| row.get(0),
-        ).optional()?;
+        let table_sql: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='song_tags'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
 
         if let Some(sql) = table_sql {
             // If the table was created with a UNIQUE constraint, migrate it.
             if sql.contains("UNIQUE") {
-                self.conn.execute_batch("
+                self.conn.execute_batch(
+                    "
                     PRAGMA foreign_keys = OFF;
                     BEGIN;
                     CREATE TABLE song_tags_new (
@@ -139,7 +143,8 @@ impl Database {
                     UPDATE songs SET last_modified = 0;
                     COMMIT;
                     PRAGMA foreign_keys = ON;
-                ")?;
+                ",
+                )?;
             }
         }
 
@@ -553,7 +558,9 @@ impl Database {
         } else {
             format!("{prefix}/")
         };
-        let query = format!("SELECT {SONG_COLUMNS} FROM songs WHERE path = ?1 OR path LIKE ?2 ORDER BY path");
+        let query = format!(
+            "SELECT {SONG_COLUMNS} FROM songs WHERE path = ?1 OR path LIKE ?2 ORDER BY path"
+        );
         let like_prefix = format!("{}%", dir_prefix.replace('%', "\\%").replace('_', "\\_"));
         let mut stmt = self.conn.prepare(&query)?;
         let songs: Result<Vec<Song>> = stmt
@@ -602,7 +609,13 @@ impl Database {
             [],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
-        Ok((song_count, artists, albums, playtime.floor() as u64, last_update))
+        Ok((
+            song_count,
+            artists,
+            albums,
+            playtime.floor() as u64,
+            last_update,
+        ))
     }
 
     fn get_or_create_directory(&self, path: &camino::Utf8Path) -> Result<i64> {
@@ -879,7 +892,9 @@ impl Database {
         // `file` is a pseudo-tag matching the path column, not song_tags
         if tag_lower == "file" {
             let pattern = format!("%{}%", value.replace('%', "\\%").replace('_', "\\_"));
-            let sql = format!("SELECT {SONG_COLUMNS} FROM songs WHERE path LIKE ?1 ESCAPE '\\' ORDER BY path");
+            let sql = format!(
+                "SELECT {SONG_COLUMNS} FROM songs WHERE path LIKE ?1 ESCAPE '\\' ORDER BY path"
+            );
             let mut stmt = self.conn.prepare(&sql)?;
             let mut songs: Vec<Song> = stmt
                 .query_map(params![pattern], song_from_row)?
@@ -902,7 +917,6 @@ impl Database {
         self.load_tags_for_songs(&mut songs)?;
         Ok(songs)
     }
-
 
     /// Find songs by exact match across all tag values (for `any` tag).
     pub fn find_songs_any(&self, value: &str) -> Result<Vec<Song>> {
@@ -1033,7 +1047,9 @@ impl Database {
         }
 
         // Get songs in this directory (no ORDER BY; sort in Rust after loading tags)
-        let mut stmt = self.conn.prepare(&format!("SELECT {SONG_COLUMNS} FROM songs WHERE directory_id = ?1"))?;
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {SONG_COLUMNS} FROM songs WHERE directory_id = ?1"
+        ))?;
         let mut songs: Vec<Song> = stmt
             .query_map(params![dir_id.unwrap_or(0)], song_from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -1187,11 +1203,13 @@ impl Database {
         }
 
         // Collect immediate subdirectories, sorted by path
-        let mut dir_stmt = self
-            .conn
-            .prepare("SELECT id, path, mtime FROM directories WHERE parent_id = ?1 ORDER BY path")?;
+        let mut dir_stmt = self.conn.prepare(
+            "SELECT id, path, mtime FROM directories WHERE parent_id = ?1 ORDER BY path",
+        )?;
         let subdirs: Vec<(i64, String, i64)> = dir_stmt
-            .query_map(params![id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+            .query_map(params![id], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
 
         for (child_id, child_path, child_mtime) in &subdirs {

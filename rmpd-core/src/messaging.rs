@@ -70,7 +70,10 @@ impl MessageBroker {
     /// Register a subscription to a channel.
     pub async fn register_subscriber(&self, channel: &str) {
         let mut inner = self.inner.write().await;
-        *inner.subscriber_counts.entry(channel.to_string()).or_insert(0) += 1;
+        *inner
+            .subscriber_counts
+            .entry(channel.to_string())
+            .or_insert(0) += 1;
     }
 
     /// Unregister a subscription from a channel.
@@ -221,5 +224,5 @@ mod tests {
         assert_eq!(messages.len(), MAX_MESSAGES_PER_CHANNEL);
         // First message should be msg50 (last 100 messages)
         assert_eq!(messages[0].text, "msg50");
-}
+    }
 }

@@ -20,8 +20,7 @@ const PROTOCOL_VERSION: &str = "0.24.0";
 /// Arg-count errors ("wrong number / too few arguments") → code 2;
 /// unknown-command errors → code 5.
 fn parse_error_to_ack(cmd_line: &str, err: &str, index: i32) -> String {
-    if err.starts_with("wrong number of arguments for")
-        || err.starts_with("too few arguments for")
+    if err.starts_with("wrong number of arguments for") || err.starts_with("too few arguments for")
     {
         // Extract the command name from the double-quoted portion of `err`.
         let cmd_name = err
@@ -587,12 +586,18 @@ async fn handle_command(
             // Already handled at the beginning of the function
             unreachable!()
         }
-        Command::Unknown(cmd) => {
-            ResponseBuilder::error(ACK_ERROR_UNKNOWN, 0, "", &format!("unknown command {:?}", cmd))
-        }
-        Command::UnknownSubcmd(main_cmd, _sub) => {
-            ResponseBuilder::error(crate::commands::utils::ACK_ERROR_ARG, 0, &main_cmd, "Unknown sub command")
-        }
+        Command::Unknown(cmd) => ResponseBuilder::error(
+            ACK_ERROR_UNKNOWN,
+            0,
+            "",
+            &format!("unknown command {:?}", cmd),
+        ),
+        Command::UnknownSubcmd(main_cmd, _sub) => ResponseBuilder::error(
+            crate::commands::utils::ACK_ERROR_ARG,
+            0,
+            &main_cmd,
+            "Unknown sub command",
+        ),
         Command::ArgError(cmd, msg, _raw) => {
             ResponseBuilder::error(crate::commands::utils::ACK_ERROR_ARG, 0, &cmd, &msg)
         }
