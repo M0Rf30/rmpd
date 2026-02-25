@@ -630,23 +630,58 @@ pub async fn handle_albumart_command(state: &AppState, uri: &str, offset: usize)
             Response::Binary(resp.to_binary_response())
         }
         Ok(None) => {
-            // When offset is past the end of data, return OK (not an error)
-            // This is the correct MPD protocol behavior for chunked transfers
-            Response::Text(ResponseBuilder::new().ok())
+            // File exists but no album art found
+            Response::Text(ResponseBuilder::error(50, 0, "albumart", "No file exists"))
         }
-        Err(e) => Response::Text(ResponseBuilder::error(
-            50,
-            0,
-            "albumart",
-            &format!("Error: {e}"),
-        )),
+        Err(_) => Response::Text(ResponseBuilder::error(50, 0, "albumart", "No file exists")),
     }
 }
 
 pub async fn handle_readpicture_command(state: &AppState, uri: &str, offset: usize) -> Response {
-    // readpicture is similar to albumart but returns any embedded picture
-    // For now, we'll use the same implementation
-    handle_albumart_command(state, uri, offset).await
+    // readpicture returns embedded pictures from audio files.
+    // Unlike albumart: file-not-found -> "No such song", no picture -> OK (empty)
+    let db = match open_db(state, "readpicture") {
+        Ok(d) => d,
+        Err(e) => return Response::Text(e),
+    };
+
+    let absolute_path = if uri.starts_with('/') {
+        uri.to_string()
+    } else {
+        match &state.music_dir {
+            Some(music_dir) => format!("{music_dir}/{uri}"),
+            None => {
+                return Response::Text(ResponseBuilder::error(
+                    50, 0, "readpicture", "music directory not configured",
+                ));
+            }
+        }
+    };
+
+    let extractor = rmpd_library::AlbumArtExtractor::new(db);
+    match extractor.get_artwork(uri, &absolute_path, offset) {
+        Ok(Some(artwork)) => {
+            let mut resp = ResponseBuilder::new();
+            resp.field("size", artwork.total_size);
+            resp.field("type", &artwork.mime_type);
+            resp.binary_field("binary", &artwork.data);
+            Response::Binary(resp.to_binary_response())
+        }
+        Ok(None) => {
+            // File exists but no embedded picture — return empty OK
+            Response::Text(ResponseBuilder::new().ok())
+        }
+        Err(_) => {
+            // Check if the file actually exists
+            // If it does, treat the error as "no embedded picture" -> OK
+            // If it doesn't, return "No such song"
+            if std::path::Path::new(&absolute_path).exists() {
+                Response::Text(ResponseBuilder::new().ok())
+            } else {
+                Response::Text(ResponseBuilder::error(50, 0, "readpicture", "No such song"))
+            }
+        }
+    }
 }
 
 // Queue inspection
