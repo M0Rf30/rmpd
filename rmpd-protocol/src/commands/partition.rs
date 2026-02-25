@@ -12,7 +12,7 @@
 //!
 //! Note: Command handlers still need updating to use partition context
 
-use super::utils::ACK_ERROR_SYSTEM;
+use super::utils::{ACK_ERROR_ARG, ACK_ERROR_EXIST, ACK_ERROR_NO_EXIST, ACK_ERROR_SYSTEM, ACK_ERROR_UNKNOWN};
 use super::{AppState, ResponseBuilder};
 use crate::connection::ConnectionState;
 use tracing::info;
@@ -49,7 +49,7 @@ pub async fn handle_partition_command(
         conn_state.current_partition = name.to_string();
         ResponseBuilder::new().ok()
     } else {
-        ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "partition", "No such partition")
+        ResponseBuilder::error(ACK_ERROR_NO_EXIST, 0, "partition", "partition does not exist")
     }
 }
 
@@ -109,23 +109,13 @@ pub async fn handle_listpartitions_command(state: &AppState) -> String {
 /// - ACK `[50@0]` {newpartition} Invalid partition name
 pub async fn handle_newpartition_command(state: &AppState, name: &str) -> String {
     // Validate partition name
-    if name.is_empty() {
-        return ResponseBuilder::error(
-            ACK_ERROR_SYSTEM,
-            0,
-            "newpartition",
-            "Invalid partition name",
-        );
-    }
-
-    // Check for invalid characters
-    if name.contains('/') || name.contains('\\') || name.contains('\0') {
-        return ResponseBuilder::error(
-            ACK_ERROR_SYSTEM,
-            0,
-            "newpartition",
-            "Invalid partition name",
-        );
+    // Validate partition name: only alphanumeric, '-', '_' allowed (MPD IsValidPartitionName)
+    let is_valid = !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    if !is_valid {
+        return ResponseBuilder::error(ACK_ERROR_ARG, 0, "newpartition", "bad name");
     }
 
     let manager = match &state.partition_manager {
@@ -145,7 +135,8 @@ pub async fn handle_newpartition_command(state: &AppState, name: &str) -> String
             info!("created new partition: {}", name);
             ResponseBuilder::new().ok()
         }
-        Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "newpartition", &e),
+        Err(e) if e.contains("already exists") => ResponseBuilder::error(ACK_ERROR_EXIST, 0, "newpartition", "name already exists"),
+        Err(_) => ResponseBuilder::error(ACK_ERROR_UNKNOWN, 0, "newpartition", "too many partitions"),
     }
 }
 
@@ -176,7 +167,11 @@ pub async fn handle_delpartition_command(state: &AppState, name: &str) -> String
             info!("deleted partition: {}", name);
             ResponseBuilder::new().ok()
         }
-        Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "delpartition", &e),
+        Err(e) if e.contains("Cannot delete default") => ResponseBuilder::error(ACK_ERROR_UNKNOWN, 0, "delpartition", "cannot delete the default partition"),
+        Err(e) if e.contains("not found") || e.contains("Not found") => ResponseBuilder::error(ACK_ERROR_NO_EXIST, 0, "delpartition", "no such partition"),
+        Err(e) if e.contains("still has clients") => ResponseBuilder::error(ACK_ERROR_UNKNOWN, 0, "delpartition", "partition still has clients"),
+        Err(e) if e.contains("still has outputs") => ResponseBuilder::error(ACK_ERROR_UNKNOWN, 0, "delpartition", "partition still has outputs"),
+        Err(_) => ResponseBuilder::error(ACK_ERROR_UNKNOWN, 0, "delpartition", "cannot delete the default partition"),
     }
 }
 

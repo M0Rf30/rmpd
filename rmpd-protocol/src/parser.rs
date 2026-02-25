@@ -477,7 +477,30 @@ pub fn parse_command(input: &str) -> Result<Command, String> {
         return Err("Empty command".to_string());
     }
 
-    command_parser.parse(input).map_err(|e| e.to_string())
+    command_parser.parse(input).map_err(|_| {
+        // Extract just the command name (first token) for a useful error message.
+        // If parsing fails after the command name is known, it is almost always an
+        // arg-count mismatch, so report "wrong number of arguments for \"cmd\"".
+        let cmd_name = input
+            .split_whitespace()
+            .next()
+            .unwrap_or(input);
+        // Commands with min=max args use "wrong number"; those with min<max use
+        // "too few". We use a small lookup table to match MPD exactly.
+        let too_few = matches!(
+            cmd_name,
+            "addid" | "add" | "find" | "search" | "list" | "findadd" | "searchadd"
+                | "searchaddpl" | "listplaylist" | "listplaylistinfo"
+                | "playlistlength" | "searchplaylist"
+                | "rename" | "load" | "save" | "playlistfind" | "playlistsearch"
+                | "mount" | "unmount"
+        );
+        if too_few {
+            format!("too few arguments for \"{cmd_name}\"")
+        } else {
+            format!("wrong number of arguments for \"{cmd_name}\"")
+        }
+    })
 }
 
 fn command_parser(input: &mut &str) -> PResult<Command> {
@@ -1727,7 +1750,7 @@ fn parse_bool_or_quoted(input: &mut &str) -> PResult<bool> {
 }
 
 fn parse_string(input: &mut &str) -> PResult<String> {
-    take_till(0.., |c: char| c.is_whitespace() || c == '\n' || c == '\r')
+    take_till(1.., |c: char| c.is_whitespace() || c == '\n' || c == '\r')
         .map(|s: &str| s.to_string())
         .parse_next(input)
 }

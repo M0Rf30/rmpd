@@ -4,7 +4,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::broadcast;
 use tracing::{debug, error, info};
 
-use crate::commands::utils::ACK_ERROR_UNKNOWN;
+use crate::commands::utils::{ACK_ERROR_ARG, ACK_ERROR_UNKNOWN};
 use crate::commands::{
     connection, database, fingerprint, messaging, options, outputs, partition, playback, playlists,
     queue, reflection, stickers, storage,
@@ -15,6 +15,34 @@ use crate::response::{Response, ResponseBuilder, Stats};
 use crate::state::AppState;
 
 const PROTOCOL_VERSION: &str = "0.24.0";
+
+/// Convert a `parse_command` error into the correct ACK response string.
+/// Arg-count errors ("wrong number / too few arguments") → code 2;
+/// unknown-command errors → code 5.
+fn parse_error_to_ack(cmd_line: &str, err: &str, index: i32) -> String {
+    if err.starts_with("wrong number of arguments for")
+        || err.starts_with("too few arguments for")
+    {
+        // Extract the command name from the double-quoted portion of `err`.
+        let cmd_name = err
+            .find('"')
+            .and_then(|s| {
+                let rest = &err[s + 1..];
+                rest.find('"').map(|e| &rest[..e])
+            })
+            .unwrap_or(cmd_line);
+        ResponseBuilder::error(ACK_ERROR_ARG, index, cmd_name, err)
+    } else {
+        // Unknown command or malformed syntax.
+        let cmd_name = cmd_line.split_whitespace().next().unwrap_or(cmd_line);
+        ResponseBuilder::error(
+            ACK_ERROR_UNKNOWN,
+            index,
+            cmd_name,
+            &format!("unknown command \"{cmd_name}\""),
+        )
+    }
+}
 
 /// Convert Unix timestamp to ISO 8601 format (RFC 3339)
 #[derive(Debug)]
@@ -182,7 +210,7 @@ async fn handle_client(mut stream: TcpStream, state: AppState) -> Result<()> {
                 break;
             }
             Ok(cmd) => handle_command(cmd, &state, &mut conn_state).await,
-            Err(e) => Response::Text(ResponseBuilder::error(ACK_ERROR_UNKNOWN, 0, trimmed, &e)),
+            Err(e) => Response::Text(parse_error_to_ack(trimmed, &e, 0)),
         };
 
         writer.write_all(response.as_bytes()).await?;
@@ -261,12 +289,7 @@ async fn execute_command_list(
             }
             Err(e) => {
                 // Parse error - return ACK with index
-                return Response::Text(ResponseBuilder::error(
-                    ACK_ERROR_UNKNOWN,
-                    index as i32,
-                    cmd_str,
-                    &e,
-                ));
+                return Response::Text(parse_error_to_ack(cmd_str, &e, index as i32));
             }
         }
     }

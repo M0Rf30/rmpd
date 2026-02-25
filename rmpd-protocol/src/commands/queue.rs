@@ -26,7 +26,7 @@ pub async fn handle_add_command(state: &AppState, uri: &str, position: Option<u3
                 ACK_ERROR_SYSTEM,
                 0,
                 "add",
-                "song not found in database",
+                "No such song",
             );
         }
         Err(e) => {
@@ -124,7 +124,7 @@ pub async fn handle_addid_command(state: &AppState, uri: &str, position: Option<
                 ACK_ERROR_SYSTEM,
                 0,
                 "addid",
-                "song not found in database",
+                "No such song",
             );
         }
         Err(e) => {
