@@ -985,8 +985,23 @@ pub async fn handle_listfiles_command(state: &AppState, uri: Option<&str>) -> St
                 }
                 return resp.ok();
             }
-            Err(_) => {
-                // Fall through to DB-based listing
+            Err(e) => {
+                // If not found or not a directory, return MPD-style error immediately
+                // MPD uses ACK_ERROR_SYS (52) with message format:
+                // "Failed to open {path}: {os error}"
+                if !path.is_empty() {
+                    return ResponseBuilder::error(
+                        52, // ACK_ERROR_SYS
+                        0,
+                        "listfiles",
+                        // Strip the " (os error N)" suffix from Rust's error message
+                        &format!("Failed to open {}: {}",
+                            full_path.display(),
+                            e.to_string().split(" (os error ").next().unwrap_or(""),
+                        ),
+                    );
+                }
+                // For empty path (root), fall through to DB-based listing
             }
         }
     }
