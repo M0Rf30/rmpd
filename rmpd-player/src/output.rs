@@ -36,7 +36,7 @@ impl CpalOutput {
         // Find suitable PCM format using utility
         let mut device_config = CpalDeviceConfig {
             device: self.device.clone(),
-            config: self.config.clone(),
+            config: self.config,
             sample_format: SampleFormat::F32,
         };
         let sample_format = device_config.find_pcm_format()?;
@@ -55,7 +55,7 @@ impl CpalOutput {
             SampleFormat::F32 => {
                 self.device
                     .build_output_stream(
-                        &self.config,
+                        self.config,
                         move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
                             // Fill output buffer
                             for sample in data.iter_mut() {
@@ -88,7 +88,7 @@ impl CpalOutput {
             SampleFormat::I16 => {
                 self.device
                     .build_output_stream(
-                        &self.config,
+                        self.config,
                         move |data: &mut [i16], _: &cpal::OutputCallbackInfo| {
                             // Fill output buffer with converted samples
                             for sample in data.iter_mut() {
@@ -122,7 +122,7 @@ impl CpalOutput {
             SampleFormat::I32 => {
                 self.device
                     .build_output_stream(
-                        &self.config,
+                        self.config,
                         move |data: &mut [i32], _: &cpal::OutputCallbackInfo| {
                             // Fill output buffer with converted samples
                             for sample in data.iter_mut() {

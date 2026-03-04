@@ -46,7 +46,7 @@ impl DopOutput {
         // Find suitable DoP format using utility
         let mut device_config = CpalDeviceConfig {
             device: self.device.clone(),
-            config: self.config.clone(),
+            config: self.config,
             sample_format: SampleFormat::I32,
         };
         let sample_format = device_config.find_dop_format()?;
@@ -68,7 +68,7 @@ impl DopOutput {
             SampleFormat::I32 | SampleFormat::I24 => {
                 self.device
                     .build_output_stream(
-                        &self.config,
+                        self.config,
                         move |data: &mut [i32], _: &cpal::OutputCallbackInfo| {
                             // Fill output buffer with DoP samples
                             for sample in data.iter_mut() {
@@ -104,7 +104,7 @@ impl DopOutput {
                 tracing::warn!("no I32 format available, using fallback conversion");
                 self.device
                     .build_output_stream(
-                        &self.config,
+                        self.config,
                         move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
                             for sample in data.iter_mut() {
                                 if buffer_pos >= sample_buffer.len()
