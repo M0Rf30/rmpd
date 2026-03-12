@@ -13,6 +13,8 @@ ignored = ["rubato", "thiserror"]
 
 [features]
 # Enable PipeWire audio backend. Requires bindgen at build time (slow).
+asio = ["cpal/asio"]
+jack = ["cpal/jack"]
 pipewire = ["cpal/pipewire"]
 
 [dependencies]

@@ -85,6 +85,35 @@ fn read_xspf_playlist(playlist_dir: &str, name: &str) -> Result<Vec<String>, Str
         .collect())
 }
 
+fn read_asx_playlist(playlist_dir: &str, name: &str) -> Result<Vec<String>, String> {
+    let path = std::path::Path::new(playlist_dir).join(format!("{name}.asx"));
+    let content = std::fs::read_to_string(&path).map_err(|_| "No such playlist".to_string())?;
+
+    // ASX: <REF HREF="..."/> or <ref href="..."/>
+    let mut paths = Vec::new();
+    let mut remaining = content.as_str();
+    while let Some(pos) = remaining.to_ascii_lowercase().find("<ref ") {
+        let chunk = &remaining[pos..];
+        if let Some(href_pos) = chunk.to_ascii_lowercase().find("href=") {
+            let after_href = &chunk[href_pos + 5..];
+            let trimmed = after_href.trim_start_matches(|c: char| c.is_ascii_whitespace());
+            let (quote, rest) = if trimmed.starts_with('"') {
+                ('"', &trimmed[1..])
+            } else if trimmed.starts_with('\'') {
+                ('\'', &trimmed[1..])
+            } else {
+                remaining = &remaining[pos + 5..];
+                continue;
+            };
+            if let Some(end) = rest.find(quote) {
+                paths.push(strip_file_uri_prefix(&rest[..end]));
+            }
+        }
+        remaining = &remaining[pos + 5..];
+    }
+    Ok(paths)
+}
+
 fn read_cue_playlist(playlist_dir: &str, name: &str) -> Result<Vec<String>, String> {
     let cue_path = std::path::Path::new(playlist_dir).join(format!("{name}.cue"));
     let content = std::fs::read_to_string(&cue_path).map_err(|_| "No such playlist".to_string())?;
@@ -123,6 +152,8 @@ fn read_playlist(playlist_dir: &str, name: &str) -> Result<Vec<String>, String> 
     let path_xspf = std::path::Path::new(playlist_dir).join(format!("{name}.xspf"));
     let path_cue = std::path::Path::new(playlist_dir).join(format!("{name}.cue"));
 
+    let path_asx = std::path::Path::new(playlist_dir).join(format!("{name}.asx"));
+
     if path_m3u.exists() {
         read_m3u_playlist(playlist_dir, name)
     } else if path_pls.exists() {
@@ -131,6 +162,8 @@ fn read_playlist(playlist_dir: &str, name: &str) -> Result<Vec<String>, String> 
         read_xspf_playlist(playlist_dir, name)
     } else if path_cue.exists() {
         read_cue_playlist(playlist_dir, name)
+    } else if path_asx.exists() {
+        read_asx_playlist(playlist_dir, name)
     } else {
         Err(format!("No such playlist: {name}"))
     }
@@ -168,7 +201,7 @@ pub async fn handle_listplaylists_command(state: &AppState) -> String {
     for entry in dir.flatten() {
         let path = entry.path();
         let ext = path.extension().and_then(|e| e.to_str());
-        if matches!(ext, Some("m3u") | Some("pls") | Some("xspf") | Some("cue"))
+        if matches!(ext, Some("m3u") | Some("pls") | Some("xspf") | Some("cue") | Some("asx"))
             && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
         {
             let mtime = entry

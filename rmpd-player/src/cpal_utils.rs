@@ -30,6 +30,46 @@ impl CpalDeviceConfig {
         })
     }
 
+    /// Create a device configuration using the JACK host.
+    #[cfg(feature = "jack")]
+    pub fn new_jack(sample_rate: SampleRate, channels: u16) -> Result<Self> {
+        let host = cpal::host_from_id(cpal::HostId::Jack)
+            .map_err(|e| RmpdError::Player(format!("JACK host not available: {e}")))?;
+        let device = host
+            .default_output_device()
+            .ok_or_else(|| RmpdError::Player("No JACK output device available".to_owned()))?;
+        let config = StreamConfig {
+            channels,
+            sample_rate,
+            buffer_size: cpal::BufferSize::Default,
+        };
+        Ok(Self {
+            device,
+            config,
+            sample_format: SampleFormat::F32,
+        })
+    }
+
+    /// Create a device configuration using the ASIO host (Windows pro audio).
+    #[cfg(feature = "asio")]
+    pub fn new_asio(sample_rate: SampleRate, channels: u16) -> Result<Self> {
+        let host = cpal::host_from_id(cpal::HostId::Asio)
+            .map_err(|e| RmpdError::Player(format!("ASIO host not available: {e}")))?;
+        let device = host
+            .default_output_device()
+            .ok_or_else(|| RmpdError::Player("No ASIO output device available".to_owned()))?;
+        let config = StreamConfig {
+            channels,
+            sample_rate,
+            buffer_size: cpal::BufferSize::Default,
+        };
+        Ok(Self {
+            device,
+            config,
+            sample_format: SampleFormat::F32,
+        })
+    }
+
     /// Find the best PCM format (prefers F32, then I16, then I32)
     pub fn find_pcm_format(&mut self) -> Result<SampleFormat> {
         let preferences = &[SampleFormat::F32, SampleFormat::I16, SampleFormat::I32];

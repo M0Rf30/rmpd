@@ -31,6 +31,12 @@ pub enum PlayerOutputConfig {
     Pipe { command: String },
     /// Record audio to a WAV file.
     Recorder { path: String },
+    /// Use the JACK audio server via cpal.
+    #[cfg(feature = "jack")]
+    Jack,
+    /// Use the ASIO audio host (Windows pro audio).
+    #[cfg(feature = "asio")]
+    Asio,
 }
 
 const BUFFER_SIZE: usize = 4096;
@@ -423,6 +429,10 @@ impl PlaybackEngine {
             PlayerOutputConfig::Recorder { path } => {
                 Ok(Box::new(RecorderOutput::new(path.clone(), format)))
             }
+            #[cfg(feature = "jack")]
+            PlayerOutputConfig::Jack => Ok(Box::new(CpalOutput::new_jack(format)?)),
+            #[cfg(feature = "asio")]
+            PlayerOutputConfig::Asio => Ok(Box::new(CpalOutput::new_asio(format)?)),
         }
     }
 

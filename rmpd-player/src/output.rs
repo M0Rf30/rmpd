@@ -29,6 +29,32 @@ impl CpalOutput {
         })
     }
 
+    /// Create a CpalOutput using the JACK audio host.
+    #[cfg(feature = "jack")]
+    pub fn new_jack(format: AudioFormat) -> Result<Self> {
+        let device_config = CpalDeviceConfig::new_jack(format.sample_rate, format.channels as u16)?;
+        Ok(Self {
+            device: device_config.device,
+            stream: None,
+            sample_sender: None,
+            config: device_config.config,
+            is_paused: false,
+        })
+    }
+
+    /// Create a CpalOutput using the ASIO host (Windows pro audio).
+    #[cfg(feature = "asio")]
+    pub fn new_asio(format: AudioFormat) -> Result<Self> {
+        let device_config = CpalDeviceConfig::new_asio(format.sample_rate, format.channels as u16)?;
+        Ok(Self {
+            device: device_config.device,
+            stream: None,
+            sample_sender: None,
+            config: device_config.config,
+            is_paused: false,
+        })
+    }
+
     pub fn start(&mut self) -> Result<()> {
         if self.stream.is_some() {
             return Ok(()); // Already started
