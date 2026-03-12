@@ -43,7 +43,7 @@ impl CpalOutput {
     }
 
     /// Create a CpalOutput using the ASIO host (Windows pro audio).
-    #[cfg(feature = "asio")]
+    #[cfg(all(feature = "asio", target_os = "windows"))]
     pub fn new_asio(format: AudioFormat) -> Result<Self> {
         let device_config = CpalDeviceConfig::new_asio(format.sample_rate, format.channels as u16)?;
         Ok(Self {

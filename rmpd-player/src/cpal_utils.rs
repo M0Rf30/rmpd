@@ -51,7 +51,7 @@ impl CpalDeviceConfig {
     }
 
     /// Create a device configuration using the ASIO host (Windows pro audio).
-    #[cfg(feature = "asio")]
+    #[cfg(all(feature = "asio", target_os = "windows"))]
     pub fn new_asio(sample_rate: SampleRate, channels: u16) -> Result<Self> {
         let host = cpal::host_from_id(cpal::HostId::Asio)
             .map_err(|e| RmpdError::Player(format!("ASIO host not available: {e}")))?;

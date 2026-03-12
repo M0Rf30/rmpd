@@ -35,7 +35,7 @@ pub enum PlayerOutputConfig {
     #[cfg(feature = "jack")]
     Jack,
     /// Use the ASIO audio host (Windows pro audio).
-    #[cfg(feature = "asio")]
+    #[cfg(all(feature = "asio", target_os = "windows"))]
     Asio,
 }
 
@@ -431,7 +431,7 @@ impl PlaybackEngine {
             }
             #[cfg(feature = "jack")]
             PlayerOutputConfig::Jack => Ok(Box::new(CpalOutput::new_jack(format)?)),
-            #[cfg(feature = "asio")]
+            #[cfg(all(feature = "asio", target_os = "windows"))]
             PlayerOutputConfig::Asio => Ok(Box::new(CpalOutput::new_asio(format)?)),
         }
     }
