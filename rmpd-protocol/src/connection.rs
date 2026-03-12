@@ -5,6 +5,15 @@
 
 use std::collections::HashSet;
 
+/// Permission level constants matching MPD's permission system.
+pub const PERMISSION_NONE: u8 = 0;
+pub const PERMISSION_READ: u8 = 1;
+pub const PERMISSION_ADD: u8 = 2;
+pub const PERMISSION_CONTROL: u8 = 4;
+pub const PERMISSION_ADMIN: u8 = 8;
+pub const PERMISSION_ALL: u8 =
+    PERMISSION_READ | PERMISSION_ADD | PERMISSION_CONTROL | PERMISSION_ADMIN;
+
 /// Per-client connection state
 ///
 /// Each client connection maintains its own state for:
@@ -29,6 +38,9 @@ pub struct ConnectionState {
 
     /// Current partition for this connection (defaults to "default")
     pub current_partition: String,
+
+    /// MPD permissions bitmask for this connection
+    pub permissions: u8,
 }
 
 impl ConnectionState {
@@ -42,6 +54,7 @@ impl ConnectionState {
             enabled_features: Some(HashSet::new()), // No protocol features enabled by default
             subscribed_channels: Vec::new(),
             current_partition: "default".to_string(),
+            permissions: PERMISSION_ALL,
         }
     }
 
@@ -60,6 +73,21 @@ impl ConnectionState {
     /// Get list of subscribed channels
     pub fn subscribed_channels(&self) -> &[String] {
         &self.subscribed_channels
+    }
+
+    /// Check whether the connection holds at least `required` permission bits.
+    pub fn has_permission(&self, required: u8) -> bool {
+        required == PERMISSION_NONE || (self.permissions & required) != 0
+    }
+
+    /// Grant all permissions (called after successful password auth or when no password configured).
+    pub fn grant_all_permissions(&mut self) {
+        self.permissions = PERMISSION_ALL;
+    }
+
+    /// OR-in additional permission bits.
+    pub fn grant_permissions(&mut self, perms: u8) {
+        self.permissions |= perms;
     }
 
     /// Check if a tag type is enabled for this connection

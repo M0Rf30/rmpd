@@ -4,6 +4,8 @@
 //! and connection management.
 
 use super::{AppState, ResponseBuilder};
+use crate::commands::utils::ACK_ERROR_PASSWORD;
+use crate::connection::ConnectionState;
 
 /// Return server configuration
 ///
@@ -33,4 +35,30 @@ pub async fn handle_kill_command(state: &AppState) -> String {
         let _ = shutdown_tx.send(());
     }
     ResponseBuilder::new().ok()
+}
+
+/// Handle the `password` command.
+///
+/// If no password is configured any value is accepted.
+/// On success all permissions are granted; on failure an ACK error is returned.
+pub async fn handle_password_command(
+    state: &AppState,
+    conn_state: &mut ConnectionState,
+    password: &str,
+) -> String {
+    match &state.password {
+        None => {
+            // No password configured — any password is accepted, grant all permissions
+            conn_state.grant_all_permissions();
+            ResponseBuilder::new().ok()
+        }
+        Some(configured) => {
+            if password == configured.as_str() {
+                conn_state.grant_all_permissions();
+                ResponseBuilder::new().ok()
+            } else {
+                ResponseBuilder::error(ACK_ERROR_PASSWORD, 0, "password", "incorrect password")
+            }
+        }
+    }
 }

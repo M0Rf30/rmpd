@@ -1,3 +1,4 @@
+use crate::audio_output::AudioOutput;
 use crate::cpal_utils::CpalDeviceConfig;
 use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{Device, SampleFormat, Stream, StreamConfig};
@@ -19,6 +20,32 @@ impl CpalOutput {
     pub fn new(format: AudioFormat) -> Result<Self> {
         let device_config = CpalDeviceConfig::new(format.sample_rate, format.channels as u16)?;
 
+        Ok(Self {
+            device: device_config.device,
+            stream: None,
+            sample_sender: None,
+            config: device_config.config,
+            is_paused: false,
+        })
+    }
+
+    /// Create a CpalOutput using the JACK audio host.
+    #[cfg(feature = "jack")]
+    pub fn new_jack(format: AudioFormat) -> Result<Self> {
+        let device_config = CpalDeviceConfig::new_jack(format.sample_rate, format.channels as u16)?;
+        Ok(Self {
+            device: device_config.device,
+            stream: None,
+            sample_sender: None,
+            config: device_config.config,
+            is_paused: false,
+        })
+    }
+
+    /// Create a CpalOutput using the ASIO host (Windows pro audio).
+    #[cfg(all(feature = "asio", target_os = "windows"))]
+    pub fn new_asio(format: AudioFormat) -> Result<Self> {
+        let device_config = CpalDeviceConfig::new_asio(format.sample_rate, format.channels as u16)?;
         Ok(Self {
             device: device_config.device,
             stream: None,
@@ -233,10 +260,23 @@ impl Drop for CpalOutput {
     }
 }
 
-/// Trait for audio outputs
-pub trait AudioOutput {
-    fn write(&mut self, samples: &[f32]) -> Result<usize>;
-    fn pause(&mut self) -> Result<()>;
-    fn resume(&mut self) -> Result<()>;
-    fn stop(&mut self) -> Result<()>;
+impl AudioOutput for CpalOutput {
+    fn start(&mut self) -> rmpd_core::error::Result<()> {
+        CpalOutput::start(self)
+    }
+    fn write(&mut self, samples: &[f32]) -> rmpd_core::error::Result<()> {
+        CpalOutput::write(self, samples).map(|_| ())
+    }
+    fn pause(&mut self) -> rmpd_core::error::Result<()> {
+        CpalOutput::pause(self)
+    }
+    fn resume(&mut self) -> rmpd_core::error::Result<()> {
+        CpalOutput::resume(self)
+    }
+    fn stop(&mut self) -> rmpd_core::error::Result<()> {
+        CpalOutput::stop(self)
+    }
+    fn is_paused(&self) -> bool {
+        CpalOutput::is_paused(self)
+    }
 }

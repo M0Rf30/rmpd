@@ -14,6 +14,9 @@ pub async fn run(bind_address: String, config: Config) -> Result<()> {
 
     let mut state = AppState::with_all_paths(db_path.clone(), music_dir.clone(), playlist_dir);
 
+    // Configure password authentication if set in config.
+    state.set_password(config.network.password.clone());
+
     // Load state from file if it exists
     let state_file = StateFile::new(state_file_path.clone());
     if let Ok(Some(saved_state)) = state_file.load() {
@@ -33,6 +36,10 @@ pub async fn run(bind_address: String, config: Config) -> Result<()> {
 
     // Set shutdown sender in state for kill command
     state.set_shutdown_sender(shutdown_tx.clone());
+
+    // Advertise rmpd via mDNS so clients can auto-discover it
+    let advertise_port = config.network.port;
+    state.advertise_mdns(advertise_port);
 
     // Clone state for shutdown handler
     let shutdown_state = state.clone();
@@ -55,6 +62,12 @@ pub async fn run(bind_address: String, config: Config) -> Result<()> {
 
     // Create and run server
     let server = MpdServer::with_state(bind_address, state.clone(), shutdown_rx);
+    let server =
+        server.with_unix_socket(config.network.unix_socket.as_ref().map(|p| p.to_string()));
+
+    if let Some(ref sock) = config.network.unix_socket {
+        info!("unix socket: {}", sock);
+    }
 
     // Run server and handle result
     let server_result = server.run().await;
