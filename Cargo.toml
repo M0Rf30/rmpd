@@ -57,7 +57,7 @@ notify-debouncer-full = "0.7"
 camino = "1"
 serde = { version = "1", features = ["derive"] }
 bytes = "1"
-rand = "0.9"
+rand = "0.10"
 dirs = "6"
 sha2 = "0.10"
 

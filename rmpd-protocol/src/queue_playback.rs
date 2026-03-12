@@ -116,7 +116,7 @@ impl QueuePlaybackManager {
         let next_pos = if random {
             // Random mode: pick a random song
             if queue_len > 0 {
-                use rand::Rng;
+                use rand::RngExt;
                 let mut rng = rand::rng();
                 rng.random_range(0..queue_len)
             } else {

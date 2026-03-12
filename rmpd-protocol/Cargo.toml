@@ -25,7 +25,7 @@ thiserror.workspace = true
 bytes.workspace = true
 tracing.workspace = true
 anyhow.workspace = true
-rand = "0.9"
+rand = "0.10"
 mdns-sd.workspace = true
 
 [dev-dependencies]
