@@ -97,10 +97,10 @@ fn read_asx_playlist(playlist_dir: &str, name: &str) -> Result<Vec<String>, Stri
         if let Some(href_pos) = chunk.to_ascii_lowercase().find("href=") {
             let after_href = &chunk[href_pos + 5..];
             let trimmed = after_href.trim_start_matches(|c: char| c.is_ascii_whitespace());
-            let (quote, rest) = if trimmed.starts_with('"') {
-                ('"', &trimmed[1..])
-            } else if trimmed.starts_with('\'') {
-                ('\'', &trimmed[1..])
+            let (quote, rest) = if let Some(s) = trimmed.strip_prefix('"') {
+                ('"', s)
+            } else if let Some(s) = trimmed.strip_prefix('\'') {
+                ('\'', s)
             } else {
                 remaining = &remaining[pos + 5..];
                 continue;
