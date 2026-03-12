@@ -1,9 +1,45 @@
 use anyhow::Result;
 use clap::Parser;
-use daemonize;
 use tracing::info;
 
 mod app;
+
+/// Daemonize the process using double-fork + setsid.
+#[cfg(unix)]
+fn daemonize() -> Result<()> {
+    use nix::unistd::{ForkResult, fork, setsid};
+    use std::os::fd::AsRawFd;
+
+    // First fork — parent exits so the shell thinks the command is done.
+    match unsafe { fork()? } {
+        ForkResult::Parent { .. } => std::process::exit(0),
+        ForkResult::Child => {}
+    }
+
+    // Become session leader, detach from controlling terminal.
+    setsid()?;
+
+    // Second fork — ensures we can never re-acquire a controlling terminal.
+    match unsafe { fork()? } {
+        ForkResult::Parent { .. } => std::process::exit(0),
+        ForkResult::Child => {}
+    }
+
+    // Redirect stdin / stdout / stderr to /dev/null.
+    let devnull = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open("/dev/null")?;
+    let fd = devnull.as_raw_fd();
+    nix::unistd::dup2(fd, 0)?;
+    nix::unistd::dup2(fd, 1)?;
+    nix::unistd::dup2(fd, 2)?;
+
+    // Change to root to avoid holding a mount point.
+    std::env::set_current_dir("/")?;
+
+    Ok(())
+}
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "rmpd - Rust Music Player Daemon", long_about = None)]
@@ -111,9 +147,7 @@ async fn main() -> Result<()> {
     info!("database: {}", config.general.db_file);
 
     if args.daemonize {
-        daemonize::Daemonize::new()
-            .start()
-            .map_err(|e| anyhow::anyhow!("Failed to daemonize: {e}"))?;
+        daemonize()?;
     }
 
     // Start the server
