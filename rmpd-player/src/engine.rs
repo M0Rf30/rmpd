@@ -1,19 +1,37 @@
+use crate::audio_output::AudioOutput;
 use crate::decoder::SymphoniaDecoder;
 use crate::dop::DopEncoder;
 use crate::dop_output::DopOutput;
+use crate::fifo_output::FifoOutput;
 use crate::output::CpalOutput;
+use crate::pipe_output::PipeOutput;
+use crate::recorder_output::RecorderOutput;
 use rmpd_core::error::Result;
 use rmpd_core::event::{Event, EventBus};
 use rmpd_core::song::Song;
 use rmpd_core::state::PlayerState;
 use std::path::Path;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::mpsc;
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration as StdDuration;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
+
+/// Selects which audio output backend to use.
+#[derive(Clone, Debug, Default)]
+pub enum PlayerOutputConfig {
+    /// Use the system audio device via cpal (default).
+    #[default]
+    Cpal,
+    /// Write raw s16le PCM to a named FIFO.
+    Fifo { path: String },
+    /// Write raw s16le PCM to the stdin of an external command.
+    Pipe { command: String },
+    /// Record audio to a WAV file.
+    Recorder { path: String },
+}
 
 const BUFFER_SIZE: usize = 4096;
 
@@ -32,6 +50,7 @@ pub struct PlaybackEngine {
     current_song: Arc<RwLock<Option<Song>>>,
     volume: Arc<AtomicU8>,
     command_tx: Option<mpsc::Sender<PlaybackCommand>>,
+    output_config: PlayerOutputConfig,
 }
 
 impl PlaybackEngine {
@@ -49,7 +68,12 @@ impl PlaybackEngine {
             current_song: Arc::new(RwLock::new(None)),
             volume: Arc::new(AtomicU8::new(100)),
             command_tx: None,
+            output_config: PlayerOutputConfig::Cpal,
         }
+    }
+
+    pub fn set_output_config(&mut self, config: PlayerOutputConfig) {
+        self.output_config = config;
     }
 
     pub async fn seek(&self, position: f64) -> Result<()> {
@@ -88,6 +112,7 @@ impl PlaybackEngine {
         let volume = self.volume.clone();
         let status_clone = self.status.clone();
         let atomic_state_clone = self.atomic_state.clone();
+        let output_config = self.output_config.clone();
 
         let handle = thread::spawn(move || {
             if let Err(e) = Self::playback_thread(
@@ -98,6 +123,7 @@ impl PlaybackEngine {
                 stop_flag,
                 volume,
                 command_rx,
+                output_config,
             ) {
                 error!("playback error: {}", e);
             }
@@ -203,6 +229,7 @@ impl PlaybackEngine {
         stop_flag: Arc<AtomicBool>,
         volume: Arc<AtomicU8>,
         command_rx: mpsc::Receiver<PlaybackCommand>,
+        output_config: PlayerOutputConfig,
     ) -> Result<()> {
         // Open decoder (pass-through mode by default)
         let mut decoder = SymphoniaDecoder::open(path)?;
@@ -294,7 +321,7 @@ impl PlaybackEngine {
         );
 
         // Create output
-        let mut output = CpalOutput::new(format)?;
+        let mut output: Box<dyn AudioOutput> = Self::create_output(format, &output_config)?;
         output.start()?;
 
         // Playback loop
@@ -383,6 +410,20 @@ impl PlaybackEngine {
         output.stop()?;
 
         Ok(())
+    }
+
+    fn create_output(
+        format: rmpd_core::song::AudioFormat,
+        cfg: &PlayerOutputConfig,
+    ) -> Result<Box<dyn AudioOutput>> {
+        match cfg {
+            PlayerOutputConfig::Cpal => Ok(Box::new(CpalOutput::new(format)?)),
+            PlayerOutputConfig::Fifo { path } => Ok(Box::new(FifoOutput::new(path.clone()))),
+            PlayerOutputConfig::Pipe { command } => Ok(Box::new(PipeOutput::new(command.clone()))),
+            PlayerOutputConfig::Recorder { path } => {
+                Ok(Box::new(RecorderOutput::new(path.clone(), format)))
+            }
+        }
     }
 
     /// Try to create DoP output (test if hardware supports it)

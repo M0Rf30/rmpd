@@ -14,6 +14,9 @@ pub async fn run(bind_address: String, config: Config) -> Result<()> {
 
     let mut state = AppState::with_all_paths(db_path.clone(), music_dir.clone(), playlist_dir);
 
+    // Configure password authentication if set in config.
+    state.set_password(config.network.password.clone());
+
     // Load state from file if it exists
     let state_file = StateFile::new(state_file_path.clone());
     if let Ok(Some(saved_state)) = state_file.load() {

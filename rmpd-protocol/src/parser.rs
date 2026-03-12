@@ -153,6 +153,7 @@ pub enum Command {
     },
     UrlHandlers,
     Decoders,
+    StringNormalization,
 
     // Database
     Update {
@@ -869,6 +870,7 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
         }
         "urlhandlers" => Ok(Command::UrlHandlers),
         "decoders" => Ok(Command::Decoders),
+        "stringnormalization" => Ok(Command::StringNormalization),
         "update" => {
             let path = opt(parse_string).parse_next(input)?;
             Ok(Command::Update { path })

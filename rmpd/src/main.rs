@@ -1,5 +1,6 @@
 use anyhow::Result;
 use clap::Parser;
+use daemonize;
 use tracing::info;
 
 mod app;
@@ -22,6 +23,10 @@ struct Args {
     /// Enable verbose logging
     #[arg(short, long)]
     verbose: bool,
+
+    /// Run as a background daemon
+    #[arg(short = 'd', long)]
+    daemonize: bool,
 }
 
 #[tokio::main]
@@ -57,6 +62,12 @@ async fn main() -> Result<()> {
     info!("configuration loaded");
     info!("music directory: {}", config.general.music_directory);
     info!("database: {}", config.general.db_file);
+
+    if args.daemonize {
+        daemonize::Daemonize::new()
+            .start()
+            .map_err(|e| anyhow::anyhow!("Failed to daemonize: {e}"))?;
+    }
 
     // Start the server
     app::run(full_address, config).await?;

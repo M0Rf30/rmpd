@@ -9,7 +9,7 @@ use crate::commands::{
     connection, database, fingerprint, messaging, options, outputs, partition, playback, playlists,
     queue, reflection, stickers, storage,
 };
-use crate::parser::{Command, parse_command};
+use crate::parser::{parse_command, Command};
 use crate::queue_playback::QueuePlaybackManager;
 use crate::response::{Response, ResponseBuilder, Stats};
 use crate::state::AppState;
@@ -138,6 +138,13 @@ async fn handle_client(mut stream: TcpStream, state: AppState) -> Result<()> {
 
     // Per-client connection state
     let mut conn_state = crate::ConnectionState::new();
+    // Grant full permissions immediately when no password is configured;
+    // otherwise the client starts with zero permissions and must `password` in.
+    if state.password.is_none() {
+        conn_state.grant_all_permissions();
+    } else {
+        conn_state.permissions = 0;
+    }
 
     // Command batching state
     let mut batch_mode = false;
@@ -262,7 +269,7 @@ async fn execute_command_list(
                         if let Some(bracket_end) = cmd_response_str.find(']') {
                             // code_part is text between '[' and '@'
                             let code_part = &cmd_response_str[5..at_pos]; // after "ACK ["
-                            // rest starts AFTER ']' (skip the ']' itself)
+                                                                          // rest starts AFTER ']' (skip the ']' itself)
                             let rest = &cmd_response_str[bracket_end + 1..];
                             format!("ACK [{}@{}]{}", code_part, index, rest)
                         } else {
@@ -409,11 +416,298 @@ fn subsystem_to_string(subsystem: rmpd_core::event::Subsystem) -> &'static str {
     }
 }
 
+/// Return the MPD wire name of a command (for ACK error messages).
+fn command_name(cmd: &Command) -> &'static str {
+    match cmd {
+        Command::Ping => "ping",
+        Command::Close => "close",
+        Command::Password { .. } => "password",
+        Command::Commands => "commands",
+        Command::NotCommands => "notcommands",
+        Command::TagTypes { .. } => "tagtypes",
+        Command::UrlHandlers => "urlhandlers",
+        Command::Decoders => "decoders",
+        Command::StringNormalization => "stringnormalization",
+        Command::Protocol { .. } => "protocol",
+        Command::BinaryLimit { .. } => "binarylimit",
+        Command::Status => "status",
+        Command::CurrentSong => "currentsong",
+        Command::Stats => "stats",
+        Command::ClearError => "clearerror",
+        Command::GetVol => "getvol",
+        Command::ReplayGainStatus => "replay_gain_status",
+        Command::ReplayGainMode { .. } => "replay_gain_mode",
+        Command::Update { .. } => "update",
+        Command::Rescan { .. } => "rescan",
+        Command::Find { .. } => "find",
+        Command::Search { .. } => "search",
+        Command::List { .. } => "list",
+        Command::Count { .. } => "count",
+        Command::ListAll { .. } => "listall",
+        Command::ListAllInfo { .. } => "listallinfo",
+        Command::LsInfo { .. } => "lsinfo",
+        Command::PlaylistInfo { .. } => "playlistinfo",
+        Command::Playlist => "playlist",
+        Command::PlChanges { .. } => "plchanges",
+        Command::PlChangesPosId { .. } => "plchangesposid",
+        Command::PlaylistFind { .. } => "playlistfind",
+        Command::PlaylistSearch { .. } => "playlistsearch",
+        Command::Play { .. } => "play",
+        Command::Pause { .. } => "pause",
+        Command::Stop => "stop",
+        Command::Next => "next",
+        Command::Previous => "previous",
+        Command::Seek { .. } => "seek",
+        Command::SeekId { .. } => "seekid",
+        Command::SeekCur { .. } => "seekcur",
+        Command::SetVol { .. } => "setvol",
+        Command::Add { .. } => "add",
+        Command::Clear => "clear",
+        Command::Delete { .. } => "delete",
+        Command::DeleteId { .. } => "deleteid",
+        Command::AddId { .. } => "addid",
+        Command::PlayId { .. } => "playid",
+        Command::MoveId { .. } => "moveid",
+        Command::Swap { .. } => "swap",
+        Command::SwapId { .. } => "swapid",
+        Command::Move { .. } => "move",
+        Command::Shuffle { .. } => "shuffle",
+        Command::PlaylistId { .. } => "playlistid",
+        Command::AlbumArt { .. } => "albumart",
+        Command::ReadPicture { .. } => "readpicture",
+        Command::ReadComments { .. } => "readcomments",
+        Command::Repeat { .. } => "repeat",
+        Command::Random { .. } => "random",
+        Command::Single { .. } => "single",
+        Command::Consume { .. } => "consume",
+        Command::Crossfade { .. } => "crossfade",
+        Command::Volume { .. } => "volume",
+        Command::MixRampDb { .. } => "mixrampdb",
+        Command::MixRampDelay { .. } => "mixrampdelay",
+        Command::Save { .. } => "save",
+        Command::Load { .. } => "load",
+        Command::ListPlaylists => "listplaylists",
+        Command::ListPlaylist { .. } => "listplaylist",
+        Command::ListPlaylistInfo { .. } => "listplaylistinfo",
+        Command::PlaylistAdd { .. } => "playlistadd",
+        Command::PlaylistClear { .. } => "playlistclear",
+        Command::PlaylistDelete { .. } => "playlistdelete",
+        Command::PlaylistMove { .. } => "playlistmove",
+        Command::Rm { .. } => "rm",
+        Command::Rename { .. } => "rename",
+        Command::SearchPlaylist { .. } => "searchplaylist",
+        Command::PlaylistLength { .. } => "playlistlength",
+        Command::Outputs => "outputs",
+        Command::EnableOutput { .. } => "enableoutput",
+        Command::DisableOutput { .. } => "disableoutput",
+        Command::ToggleOutput { .. } => "toggleoutput",
+        Command::OutputSet { .. } => "outputset",
+        Command::SearchAdd { .. } => "searchadd",
+        Command::SearchAddPl { .. } => "searchaddpl",
+        Command::FindAdd { .. } => "findadd",
+        Command::ListFiles { .. } => "listfiles",
+        Command::SearchCount { .. } => "searchcount",
+        Command::GetFingerprint { .. } => "getfingerprint",
+        Command::StickerGet { .. }
+        | Command::StickerSet { .. }
+        | Command::StickerDelete { .. }
+        | Command::StickerList { .. }
+        | Command::StickerFind { .. }
+        | Command::StickerInc { .. }
+        | Command::StickerDec { .. } => "sticker",
+        Command::StickerNames { .. } => "stickernames",
+        Command::StickerTypes => "stickertypes",
+        Command::StickerNamesTypes { .. } => "stickernamestypes",
+        Command::Partition { .. } => "partition",
+        Command::ListPartitions => "listpartitions",
+        Command::NewPartition { .. } => "newpartition",
+        Command::DelPartition { .. } => "delpartition",
+        Command::MoveOutput { .. } => "moveoutput",
+        Command::Mount { .. } => "mount",
+        Command::Unmount { .. } => "unmount",
+        Command::ListMounts => "listmounts",
+        Command::ListNeighbors => "listneighbors",
+        Command::Subscribe { .. } => "subscribe",
+        Command::Unsubscribe { .. } => "unsubscribe",
+        Command::Channels => "channels",
+        Command::ReadMessages => "readmessages",
+        Command::SendMessage { .. } => "sendmessage",
+        Command::Prio { .. } => "prio",
+        Command::PrioId { .. } => "prioid",
+        Command::RangeId { .. } => "rangeid",
+        Command::AddTagId { .. } => "addtagid",
+        Command::ClearTagId { .. } => "cleartagid",
+        Command::Config => "config",
+        Command::Kill => "kill",
+        Command::Idle { .. } => "idle",
+        Command::NoIdle => "noidle",
+        Command::CommandListBegin | Command::CommandListOkBegin | Command::CommandListEnd => {
+            "command_list"
+        }
+        Command::Unknown(_) | Command::UnknownSubcmd(..) | Command::ArgError(..) => "unknown",
+    }
+}
+
+fn command_required_permission(cmd: &Command) -> u8 {
+    use crate::connection::*;
+    match cmd {
+        // PERMISSION_NONE — always available regardless of auth
+        Command::Ping
+        | Command::Close
+        | Command::Commands
+        | Command::NotCommands
+        | Command::TagTypes { .. }
+        | Command::Protocol { .. }
+        | Command::BinaryLimit { .. }
+        | Command::Password { .. }
+        | Command::StringNormalization
+        | Command::CommandListBegin
+        | Command::CommandListOkBegin
+        | Command::CommandListEnd
+        | Command::Idle { .. }
+        | Command::NoIdle
+        | Command::Unknown(_)
+        | Command::UnknownSubcmd(..)
+        | Command::ArgError(..) => PERMISSION_NONE,
+
+        // PERMISSION_READ
+        Command::Status
+        | Command::CurrentSong
+        | Command::Stats
+        | Command::GetVol
+        | Command::ReplayGainStatus
+        | Command::Find { .. }
+        | Command::Search { .. }
+        | Command::List { .. }
+        | Command::ListAll { .. }
+        | Command::ListAllInfo { .. }
+        | Command::LsInfo { .. }
+        | Command::ListFiles { .. }
+        | Command::Count { .. }
+        | Command::SearchCount { .. }
+        | Command::Playlist
+        | Command::PlaylistInfo { .. }
+        | Command::PlaylistId { .. }
+        | Command::PlChanges { .. }
+        | Command::PlChangesPosId { .. }
+        | Command::PlaylistFind { .. }
+        | Command::PlaylistSearch { .. }
+        | Command::SearchPlaylist { .. }
+        | Command::ListPlaylists
+        | Command::ListPlaylist { .. }
+        | Command::ListPlaylistInfo { .. }
+        | Command::PlaylistLength { .. }
+        | Command::AlbumArt { .. }
+        | Command::ReadPicture { .. }
+        | Command::ReadComments { .. }
+        | Command::GetFingerprint { .. }
+        | Command::Decoders
+        | Command::UrlHandlers
+        | Command::Outputs
+        | Command::Channels
+        | Command::ListMounts
+        | Command::ListNeighbors
+        | Command::ListPartitions
+        | Command::StickerNames { .. }
+        | Command::StickerNamesTypes { .. }
+        | Command::StickerTypes => PERMISSION_READ,
+
+        // PERMISSION_ADD
+        Command::Add { .. }
+        | Command::AddId { .. }
+        | Command::FindAdd { .. }
+        | Command::SearchAdd { .. }
+        | Command::SearchAddPl { .. }
+        | Command::Load { .. } => PERMISSION_ADD,
+
+        // PERMISSION_CONTROL
+        Command::Play { .. }
+        | Command::PlayId { .. }
+        | Command::Pause { .. }
+        | Command::Stop
+        | Command::Next
+        | Command::Previous
+        | Command::Seek { .. }
+        | Command::SeekId { .. }
+        | Command::SeekCur { .. }
+        | Command::SetVol { .. }
+        | Command::Volume { .. }
+        | Command::Repeat { .. }
+        | Command::Random { .. }
+        | Command::Single { .. }
+        | Command::Consume { .. }
+        | Command::Crossfade { .. }
+        | Command::MixRampDb { .. }
+        | Command::MixRampDelay { .. }
+        | Command::ReplayGainMode { .. }
+        | Command::Delete { .. }
+        | Command::DeleteId { .. }
+        | Command::Clear
+        | Command::Move { .. }
+        | Command::MoveId { .. }
+        | Command::Swap { .. }
+        | Command::SwapId { .. }
+        | Command::Shuffle { .. }
+        | Command::Prio { .. }
+        | Command::PrioId { .. }
+        | Command::RangeId { .. }
+        | Command::AddTagId { .. }
+        | Command::ClearTagId { .. }
+        | Command::Save { .. }
+        | Command::Rm { .. }
+        | Command::Rename { .. }
+        | Command::PlaylistAdd { .. }
+        | Command::PlaylistClear { .. }
+        | Command::PlaylistDelete { .. }
+        | Command::PlaylistMove { .. }
+        | Command::StickerGet { .. }
+        | Command::StickerSet { .. }
+        | Command::StickerDelete { .. }
+        | Command::StickerList { .. }
+        | Command::StickerFind { .. }
+        | Command::StickerInc { .. }
+        | Command::StickerDec { .. }
+        | Command::Subscribe { .. }
+        | Command::Unsubscribe { .. }
+        | Command::ReadMessages
+        | Command::SendMessage { .. }
+        | Command::Partition { .. }
+        | Command::Update { .. }
+        | Command::Rescan { .. }
+        | Command::ClearError => PERMISSION_CONTROL,
+
+        // PERMISSION_ADMIN
+        Command::Config
+        | Command::Kill
+        | Command::EnableOutput { .. }
+        | Command::DisableOutput { .. }
+        | Command::ToggleOutput { .. }
+        | Command::OutputSet { .. }
+        | Command::Mount { .. }
+        | Command::Unmount { .. }
+        | Command::NewPartition { .. }
+        | Command::DelPartition { .. }
+        | Command::MoveOutput { .. } => PERMISSION_ADMIN,
+    }
+}
+
 async fn handle_command(
     cmd: Command,
     state: &AppState,
     conn_state: &mut crate::ConnectionState,
 ) -> Response {
+    // Enforce permissions. PERMISSION_NONE commands always pass.
+    let required = command_required_permission(&cmd);
+    if !conn_state.has_permission(required) {
+        let name = command_name(&cmd);
+        return Response::Text(ResponseBuilder::error(
+            ACK_ERROR_ARG,
+            0,
+            name,
+            &format!("you don't have permission for \"{}\"", name),
+        ));
+    }
+
     // Special handling for binary commands
     match cmd {
         Command::AlbumArt { uri, offset } => {
@@ -433,13 +727,14 @@ async fn handle_command(
             // but kept so the match is exhaustive.
             unreachable!("Close is handled before dispatch")
         }
-        Command::Commands => reflection::handle_commands_command().await,
-        Command::NotCommands => reflection::handle_notcommands_command().await,
+        Command::Commands => reflection::handle_commands_command(conn_state).await,
+        Command::NotCommands => reflection::handle_notcommands_command(conn_state).await,
         Command::TagTypes { subcommand } => {
             reflection::handle_tagtypes_command(conn_state, subcommand).await
         }
         Command::UrlHandlers => reflection::handle_urlhandlers_command().await,
         Command::Decoders => reflection::handle_decoders_command().await,
+        Command::StringNormalization => reflection::handle_stringnormalization_command().await,
         Command::Status => {
             let status = {
                 let mut guard = state.status.write().await;
@@ -577,10 +872,8 @@ async fn handle_command(
         Command::Move { from, to } => queue::handle_move_command(state, from, to).await,
         Command::Shuffle { range } => queue::handle_shuffle_command(state, range).await,
         Command::PlaylistId { id } => queue::handle_playlistid_command(state, id).await,
-        Command::Password { password: _ } => {
-            // rmpd has no password protection; accept any password (MPD behaviour
-            // when no password is configured).
-            ResponseBuilder::new().ok()
+        Command::Password { password } => {
+            connection::handle_password_command(state, conn_state, &password).await
         }
         Command::AlbumArt { .. } | Command::ReadPicture { .. } => {
             // Already handled at the beginning of the function

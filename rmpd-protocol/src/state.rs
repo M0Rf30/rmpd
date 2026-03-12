@@ -9,7 +9,7 @@ use rmpd_player::PlaybackEngine;
 use std::fmt;
 use std::sync::Arc;
 use std::time::Instant;
-use tokio::sync::{RwLock, broadcast};
+use tokio::sync::{broadcast, RwLock};
 
 /// Output device information
 #[derive(Clone, Debug)]
@@ -40,6 +40,7 @@ pub struct AppState {
     pub partition_manager: Option<Arc<PartitionManager>>,
     pub shutdown_tx: Option<broadcast::Sender<()>>,
     pub disable_actual_mount: bool,
+    pub password: Option<String>,
 }
 
 impl fmt::Debug for AppState {
@@ -108,6 +109,7 @@ impl AppState {
             disable_actual_mount: std::env::var("RMPD_DISABLE_ACTUAL_MOUNT")
                 .map(|v| v == "1" || v.to_lowercase() == "true")
                 .unwrap_or(false),
+            password: None,
         }
     }
 
@@ -126,6 +128,10 @@ impl AppState {
     /// Set the shutdown sender for graceful shutdown support
     pub fn set_shutdown_sender(&mut self, tx: broadcast::Sender<()>) {
         self.shutdown_tx = Some(tx);
+    }
+
+    pub fn set_password(&mut self, password: Option<String>) {
+        self.password = password;
     }
 }
 
