@@ -1,5 +1,5 @@
-use crate::cpal_utils::CpalDeviceConfig;
 use crate::audio_output::AudioOutput;
+use crate::cpal_utils::CpalDeviceConfig;
 use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{Device, SampleFormat, Stream, StreamConfig};
 use rmpd_core::error::{Result, RmpdError};
@@ -261,10 +261,22 @@ impl Drop for CpalOutput {
 }
 
 impl AudioOutput for CpalOutput {
-    fn start(&mut self) -> rmpd_core::error::Result<()> { CpalOutput::start(self) }
-    fn write(&mut self, samples: &[f32]) -> rmpd_core::error::Result<()> { CpalOutput::write(self, samples).map(|_| ()) }
-    fn pause(&mut self) -> rmpd_core::error::Result<()> { CpalOutput::pause(self) }
-    fn resume(&mut self) -> rmpd_core::error::Result<()> { CpalOutput::resume(self) }
-    fn stop(&mut self) -> rmpd_core::error::Result<()> { CpalOutput::stop(self) }
-    fn is_paused(&self) -> bool { CpalOutput::is_paused(self) }
+    fn start(&mut self) -> rmpd_core::error::Result<()> {
+        CpalOutput::start(self)
+    }
+    fn write(&mut self, samples: &[f32]) -> rmpd_core::error::Result<()> {
+        CpalOutput::write(self, samples).map(|_| ())
+    }
+    fn pause(&mut self) -> rmpd_core::error::Result<()> {
+        CpalOutput::pause(self)
+    }
+    fn resume(&mut self) -> rmpd_core::error::Result<()> {
+        CpalOutput::resume(self)
+    }
+    fn stop(&mut self) -> rmpd_core::error::Result<()> {
+        CpalOutput::stop(self)
+    }
+    fn is_paused(&self) -> bool {
+        CpalOutput::is_paused(self)
+    }
 }

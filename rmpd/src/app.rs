@@ -62,7 +62,8 @@ pub async fn run(bind_address: String, config: Config) -> Result<()> {
 
     // Create and run server
     let server = MpdServer::with_state(bind_address, state.clone(), shutdown_rx);
-    let server = server.with_unix_socket(config.network.unix_socket.as_ref().map(|p| p.to_string()));
+    let server =
+        server.with_unix_socket(config.network.unix_socket.as_ref().map(|p| p.to_string()));
 
     if let Some(ref sock) = config.network.unix_socket {
         info!("unix socket: {}", sock);

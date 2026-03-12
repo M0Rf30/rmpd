@@ -9,7 +9,7 @@ use crate::commands::{
     connection, database, fingerprint, messaging, options, outputs, partition, playback, playlists,
     queue, reflection, stickers, storage,
 };
-use crate::parser::{parse_command, Command};
+use crate::parser::{Command, parse_command};
 use crate::queue_playback::QueuePlaybackManager;
 use crate::response::{Response, ResponseBuilder, Stats};
 use crate::state::AppState;
@@ -329,7 +329,7 @@ async fn execute_command_list(
                         if let Some(bracket_end) = cmd_response_str.find(']') {
                             // code_part is text between '[' and '@'
                             let code_part = &cmd_response_str[5..at_pos]; // after "ACK ["
-                                                                          // rest starts AFTER ']' (skip the ']' itself)
+                            // rest starts AFTER ']' (skip the ']' itself)
                             let rest = &cmd_response_str[bracket_end + 1..];
                             format!("ACK [{}@{}]{}", code_part, index, rest)
                         } else {

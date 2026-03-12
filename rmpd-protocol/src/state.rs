@@ -9,7 +9,7 @@ use rmpd_player::PlaybackEngine;
 use std::fmt;
 use std::sync::Arc;
 use std::time::Instant;
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{RwLock, broadcast};
 
 /// Output device information
 #[derive(Clone, Debug)]

@@ -201,8 +201,10 @@ pub async fn handle_listplaylists_command(state: &AppState) -> String {
     for entry in dir.flatten() {
         let path = entry.path();
         let ext = path.extension().and_then(|e| e.to_str());
-        if matches!(ext, Some("m3u") | Some("pls") | Some("xspf") | Some("cue") | Some("asx"))
-            && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
+        if matches!(
+            ext,
+            Some("m3u") | Some("pls") | Some("xspf") | Some("cue") | Some("asx")
+        ) && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
         {
             let mtime = entry
                 .metadata()
