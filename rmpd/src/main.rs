@@ -6,6 +6,7 @@ mod app;
 
 /// Daemonize the process using double-fork + setsid.
 #[cfg(unix)]
+#[allow(clippy::disallowed_methods)] // process::exit is required by the double-fork daemonize pattern
 fn daemonize() -> Result<()> {
     use nix::unistd::{ForkResult, fork, setsid};
     use std::os::fd::AsRawFd;
