@@ -133,6 +133,14 @@ impl AppState {
     pub fn set_password(&mut self, password: Option<String>) {
         self.password = password;
     }
+
+    pub fn advertise_mdns(&self, port: u16) {
+        if let Some(ref discovery) = self.discovery {
+            if let Err(e) = discovery.advertise(port) {
+                tracing::warn!("mDNS advertisement failed: {}", e);
+            }
+        }
+    }
 }
 
 impl Default for AppState {

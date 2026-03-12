@@ -33,4 +33,5 @@ anyhow.workspace = true
 clap.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+tracing-journald = "0.3"
 daemonize = "0.5"

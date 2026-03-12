@@ -1,6 +1,6 @@
 use anyhow::Result;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream, UnixStream};
 use tokio::sync::broadcast;
 use tracing::{debug, error, info};
 
@@ -47,6 +47,7 @@ fn parse_error_to_ack(cmd_line: &str, err: &str, index: i32) -> String {
 #[derive(Debug)]
 pub struct MpdServer {
     bind_address: String,
+    unix_socket: Option<String>,
     state: AppState,
     shutdown_rx: broadcast::Receiver<()>,
 }
@@ -55,6 +56,7 @@ impl MpdServer {
     pub fn new(bind_address: String, shutdown_rx: broadcast::Receiver<()>) -> Self {
         Self {
             bind_address,
+            unix_socket: None,
             state: AppState::new(),
             shutdown_rx,
         }
@@ -67,9 +69,15 @@ impl MpdServer {
     ) -> Self {
         Self {
             bind_address,
+            unix_socket: None,
             state,
             shutdown_rx,
         }
+    }
+
+    pub fn with_unix_socket(mut self, path: Option<String>) -> Self {
+        self.unix_socket = path;
+        self
     }
 
     pub async fn run(self) -> Result<()> {
@@ -87,6 +95,15 @@ impl MpdServer {
         let mut playback_manager = QueuePlaybackManager::new(self.state.clone());
         playback_manager.start();
         info!("queue playback manager started");
+
+        // Optionally bind Unix socket
+        let unix_listener = if let Some(ref path) = self.unix_socket {
+            // Remove stale socket file if present
+            let _ = std::fs::remove_file(path);
+            Some(tokio::net::UnixListener::bind(path)?)
+        } else {
+            None
+        };
 
         loop {
             tokio::select! {
@@ -107,12 +124,38 @@ impl MpdServer {
                         }
                     }
                 }
+                result = async {
+                    if let Some(ref ul) = unix_listener {
+                        ul.accept().await.map(|(s, _)| s)
+                    } else {
+                        std::future::pending::<tokio::io::Result<tokio::net::UnixStream>>().await
+                    }
+                } => {
+                    match result {
+                        Ok(stream) => {
+                            let state = self.state.clone();
+                            tokio::spawn(async move {
+                                if let Err(e) = handle_unix_client(stream, state).await {
+                                    error!("unix client error: {}", e);
+                                }
+                            });
+                        }
+                        Err(e) => {
+                            error!("unix accept error: {}", e);
+                        }
+                    }
+                }
                 // Handle shutdown signal
                 _ = self.shutdown_rx.recv() => {
                     info!("shutdown signal received, stopping server");
                     break;
                 }
             }
+        }
+
+        // Clean up socket file on shutdown
+        if let Some(ref path) = self.unix_socket {
+            let _ = std::fs::remove_file(path);
         }
 
         info!("server shutdown complete");
@@ -129,8 +172,25 @@ async fn handle_client(mut stream: TcpStream, state: AppState) -> Result<()> {
         .write_all(format!("OK MPD {PROTOCOL_VERSION}\n").as_bytes())
         .await?;
 
-    let (reader, mut writer) = stream.into_split();
-    let mut reader = BufReader::new(reader);
+    let (reader, writer) = stream.into_split();
+    handle_client_inner(tokio::io::BufReader::new(reader), writer, state).await
+}
+
+async fn handle_unix_client(mut stream: UnixStream, state: AppState) -> Result<()> {
+    // Send greeting
+    stream
+        .write_all(format!("OK MPD {PROTOCOL_VERSION}\n").as_bytes())
+        .await?;
+
+    let (reader, writer) = stream.into_split();
+    handle_client_inner(tokio::io::BufReader::new(reader), writer, state).await
+}
+
+async fn handle_client_inner(
+    mut reader: tokio::io::BufReader<impl tokio::io::AsyncRead + Unpin>,
+    mut writer: impl tokio::io::AsyncWrite + Unpin,
+    state: AppState,
+) -> Result<()> {
     let mut line = String::new();
 
     // Subscribe to event bus for idle notifications
@@ -306,7 +366,7 @@ async fn execute_command_list(
 }
 
 async fn handle_idle(
-    reader: &mut BufReader<tokio::net::tcp::OwnedReadHalf>,
+    reader: &mut tokio::io::BufReader<impl tokio::io::AsyncRead + Unpin>,
     event_rx: &mut broadcast::Receiver<rmpd_core::event::Event>,
     subsystems: Vec<String>,
 ) -> String {

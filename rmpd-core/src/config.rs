@@ -37,6 +37,7 @@ pub struct GeneralConfig {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct NetworkConfig {
+    /// Bind address for the MPD TCP listener. IPv4 and IPv6 are supported (e.g. "127.0.0.1", "::1", "::").
     #[serde(default = "default_bind_address")]
     pub bind_address: String,
     #[serde(default = "default_port")]
