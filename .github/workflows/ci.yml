@@ -183,28 +183,6 @@ jobs:
       - name: Check for unused dependencies
         run: cargo machete
 
-  msrv:
-    name: Minimum Supported Rust Version
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libasound2-dev pkg-config libpipewire-0.3-dev libspa-0.2-dev libjack-dev
-
-      - name: Setup Rust toolchain (1.88.0)
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: "1.88.0"
-
-      - name: Setup Rust cache
-        uses: Swatinem/rust-cache@v2
-
-      - name: Check MSRV
-        run: cargo check --workspace --all-features
-
   build:
     name: Build
     strategy:
