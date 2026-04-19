@@ -2,6 +2,7 @@
 
 use tracing::{debug, error};
 
+use crate::helpers;
 use crate::response::ResponseBuilder;
 use crate::state::AppState;
 
@@ -43,23 +44,12 @@ pub async fn handle_play_command(state: &AppState, position: Option<u32>) -> Str
 
     match state.engine.write().await.play(playback_song).await {
         Ok(_) => {
-            // Update status immediately (event will also update but that's idempotent)
             let mut status = state.status.write().await;
             status.state = rmpd_core::state::PlayerState::Play;
             status.elapsed = Some(std::time::Duration::ZERO);
             status.duration = song.duration;
             status.bitrate = song.bitrate;
-
-            // Set audio format if available
-            if let (Some(sr), Some(ch), Some(bps)) =
-                (song.sample_rate, song.channels, song.bits_per_sample)
-            {
-                status.audio_format = Some(rmpd_core::song::AudioFormat {
-                    sample_rate: sr,
-                    channels: ch,
-                    bits_per_sample: bps as u8,
-                });
-            }
+            status.audio_format = helpers::extract_audio_format(&song);
 
             if let Some((pos, id)) = actual_position {
                 status.current_song = Some(rmpd_core::state::QueuePosition { position: pos, id });
@@ -69,7 +59,6 @@ pub async fn handle_play_command(state: &AppState, position: Option<u32>) -> Str
             }
             drop(status);
 
-            // Emit events to notify idle clients
             debug!("emitting PlayerStateChanged(Play) and SongChanged events");
             state
                 .event_bus
@@ -116,23 +105,14 @@ pub async fn handle_pause_command(state: &AppState, pause_state: Option<bool>) -
 
     match result {
         Ok(_) => {
-            // Read the actual state from atomic (engine might not have changed it)
             let actual_state = rmpd_core::state::PlayerState::from_atomic(
                 state
                     .atomic_state
                     .load(std::sync::atomic::Ordering::Acquire),
             );
 
-            // Update status to match actual atomic state
-            let mut status = state.status.write().await;
-            status.state = actual_state;
-            drop(status);
-
-            // Emit event to notify idle clients
             debug!("emitting PlayerStateChanged({:?}) event", actual_state);
-            state
-                .event_bus
-                .emit(rmpd_core::event::Event::PlayerStateChanged(actual_state));
+            helpers::update_player_state(state, actual_state).await;
 
             ResponseBuilder::new().ok()
         }
@@ -146,20 +126,12 @@ pub async fn handle_pause_command(state: &AppState, pause_state: Option<bool>) -
 pub async fn handle_stop_command(state: &AppState) -> String {
     match state.engine.write().await.stop().await {
         Ok(_) => {
-            // Update status after engine stops
+            debug!("emitting PlayerStateChanged(Stop) event");
+            helpers::update_player_state(state, rmpd_core::state::PlayerState::Stop).await;
             let mut status = state.status.write().await;
-            status.state = rmpd_core::state::PlayerState::Stop;
             status.current_song = None;
             status.next_song = None;
             drop(status);
-
-            // Emit event to notify idle clients
-            debug!("emitting PlayerStateChanged(Stop) event");
-            state
-                .event_bus
-                .emit(rmpd_core::event::Event::PlayerStateChanged(
-                    rmpd_core::state::PlayerState::Stop,
-                ));
 
             ResponseBuilder::new().ok()
         }

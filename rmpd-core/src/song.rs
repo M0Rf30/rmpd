@@ -178,6 +178,17 @@ impl Song {
         }
     }
 
+    /// Check if a song's tag matches an exact value (checks all values for multi-valued tags).
+    pub fn tag_eq(&self, tag: &str, value: &str) -> bool {
+        self.tag_values(tag).any(|v| v == value)
+    }
+
+    /// Check if a song's tag contains a value (case-insensitive, checks all values for multi-valued tags).
+    pub fn tag_contains(&self, tag: &str, value_lower: &str) -> bool {
+        self.tag_values(tag)
+            .any(|v| v.to_lowercase().contains(value_lower))
+    }
+
     pub fn display_title(&self) -> &str {
         self.tag("title")
             .unwrap_or_else(|| self.path.file_name().unwrap_or("Unknown"))

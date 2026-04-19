@@ -10,79 +10,16 @@ use lofty::probe::Probe;
 use lofty::tag::ItemKey;
 use rmpd_core::error::{Result, RmpdError};
 use rmpd_core::song::Song;
+use rmpd_core::tag::{VORBIS_TAG_MAP, normalize_decimal};
+use rmpd_core::time::system_time_to_unix_secs;
 use std::fs;
 use std::io::BufReader;
 use std::time::SystemTime;
-
-use crate::database::system_time_to_unix_secs;
 
 fn is_bogus_dsf_comment(s: &str) -> bool {
     let trimmed = s.trim();
     trimmed.len() >= 16 && trimmed.chars().all(|c| c.is_ascii_hexdigit() || c == ' ')
 }
-
-/// Normalize a Track or Disc value the same way MPD does (Handler.cxx NormalizeDecimal):
-/// strip leading zeros, strip non-digit suffix, treat all-zero result as empty (skip).
-fn normalize_decimal(s: &str) -> Option<String> {
-    let s = s.trim();
-    // Find first non-zero digit
-    let start = s.chars().position(|c| c != '0').unwrap_or(s.len());
-    // Take only ASCII digits from that position
-    let tail: String = s[start..]
-        .chars()
-        .take_while(|c| c.is_ascii_digit())
-        .collect();
-    if tail.is_empty() {
-        // All digits were zeros (e.g. "0", "00") — preserve as "0"
-        if s.starts_with('0') {
-            Some("0".to_string())
-        } else {
-            None
-        }
-    } else {
-        Some(tail)
-    }
-}
-
-/// MPD-canonical VorbisComment key -> tag name mapping.
-/// Derived from MPD's tag/Names.cxx (tag_item_names) + lib/xiph/XiphTags.cxx.
-/// Only these exact key names (case-insensitive) are recognized for structured tags.
-const VORBIS_TAG_MAP: &[(&str, &str)] = &[
-    ("title", "title"),
-    ("artist", "artist"),
-    ("album", "album"),
-    ("albumartist", "albumartist"),
-    ("albumartistsort", "albumartistsort"),
-    ("artistsort", "artistsort"),
-    ("composer", "composer"),
-    ("composersort", "composersort"),
-    ("performer", "performer"),
-    ("conductor", "conductor"),
-    ("comment", "comment"),
-    ("description", "comment"),
-    ("genre", "genre"),
-    ("mood", "mood"),
-    ("work", "work"),
-    ("movement", "movement"),
-    ("movementnumber", "movementnumber"),
-    ("ensemble", "ensemble"),
-    ("location", "location"),
-    ("grouping", "grouping"),
-    ("track", "track"),
-    ("tracknumber", "track"),
-    ("disc", "disc"),
-    ("discnumber", "disc"),
-    ("date", "date"),
-    ("originaldate", "originaldate"),
-    ("label", "label"),
-    ("musicbrainz_trackid", "musicbrainz_trackid"),
-    ("musicbrainz_albumid", "musicbrainz_albumid"),
-    ("musicbrainz_artistid", "musicbrainz_artistid"),
-    ("musicbrainz_albumartistid", "musicbrainz_albumartistid"),
-    ("musicbrainz_releasegroupid", "musicbrainz_releasegroupid"),
-    ("musicbrainz_releasetrackid", "musicbrainz_releasetrackid"),
-    ("musicbrainz_workid", "musicbrainz_workid"),
-];
 
 const ITEM_KEY_TAG_MAP: &[(ItemKey, &str)] = &[
     (ItemKey::TrackTitle, "title"),

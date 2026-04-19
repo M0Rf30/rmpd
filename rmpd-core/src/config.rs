@@ -270,17 +270,7 @@ impl Config {
     }
 
     fn expand_paths(&mut self) {
-        // Helper function to expand tilde
-        fn expand_tilde(path: &Utf8PathBuf) -> Utf8PathBuf {
-            let path_str = path.as_str();
-            if path_str.starts_with("~/")
-                && let Some(home) = dirs::home_dir()
-                && let Some(home_str) = home.to_str()
-            {
-                return Utf8PathBuf::from(path_str.replacen('~', home_str, 1));
-            }
-            path.clone()
-        }
+        use crate::path::expand_tilde;
 
         self.general.music_directory = expand_tilde(&self.general.music_directory);
         self.general.playlist_directory = expand_tilde(&self.general.playlist_directory);

@@ -1,6 +1,6 @@
 use rmpd_core::queue::Queue;
-use rmpd_core::song::Song;
 use rmpd_core::state::{ConsumeMode, PlayerState, PlayerStatus, QueuePosition, SingleMode};
+pub use rmpd_core::test_utils::make_test_song;
 use std::path::PathBuf;
 use std::time::Duration;
 use tempfile::TempDir;
@@ -165,38 +165,11 @@ impl Default for StatusBuilder {
     }
 }
 
-/// Helper to create test songs
-pub fn create_test_song(path: &str, track: u32) -> Song {
-    Song {
-        id: track as u64,
-        path: path.into(),
-        duration: Some(Duration::from_secs(180)),
-        sample_rate: Some(44100),
-        channels: Some(2),
-        bits_per_sample: Some(16),
-        bitrate: Some(320),
-        replay_gain_track_gain: None,
-        replay_gain_track_peak: None,
-        replay_gain_album_gain: None,
-        replay_gain_album_peak: None,
-        added_at: 0,
-        last_modified: 0,
-        tags: vec![
-            ("title".to_string(), format!("Track {track}")),
-            ("artist".to_string(), "Test Artist".to_string()),
-            ("album".to_string(), "Test Album".to_string()),
-            ("track".to_string(), track.to_string()),
-            ("date".to_string(), "2024".to_string()),
-            ("genre".to_string(), "Rock".to_string()),
-        ],
-    }
-}
-
 /// Helper to create a queue with test songs
 pub fn create_test_queue(num_songs: u32) -> Queue {
     let mut queue = Queue::new();
     for i in 0..num_songs {
-        queue.add(create_test_song(&format!("/music/song{i}.mp3"), i));
+        queue.add(make_test_song(&format!("/music/song{i}.mp3"), i));
     }
     queue
 }

@@ -284,42 +284,12 @@ fn compare_presence(rmpd_present: bool, mpd_present: bool) -> ComparisonResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rmpd_core::song::Song;
+    use rmpd_core::test_utils::make_test_song;
     use std::time::Duration;
-
-    fn create_test_song() -> Song {
-        Song {
-            id: 1,
-            path: "/music/test.mp3".into(),
-            duration: Some(Duration::from_secs(180)),
-            sample_rate: Some(44100),
-            channels: Some(2),
-            bits_per_sample: Some(16),
-            bitrate: Some(320),
-            replay_gain_track_gain: Some(-6.0),
-            replay_gain_track_peak: Some(0.95),
-            replay_gain_album_gain: None,
-            replay_gain_album_peak: None,
-            added_at: 0,
-            last_modified: 0,
-            tags: vec![
-                ("title".to_string(), "Test Song".to_string()),
-                ("artist".to_string(), "Test Artist".to_string()),
-                ("album".to_string(), "Test Album".to_string()),
-                ("track".to_string(), "1".to_string()),
-                ("date".to_string(), "2024".to_string()),
-                ("genre".to_string(), "Rock".to_string()),
-                (
-                    "musicbrainz_trackid".to_string(),
-                    "12345678-1234-1234-1234-123456789012".to_string(),
-                ),
-            ],
-        }
-    }
 
     #[test]
     fn test_exact_match() {
-        let song1 = create_test_song();
+        let song1 = make_test_song("/music/test.mp3", 1);
         let song2 = song1.clone();
 
         let config = ComparisonConfig::default();
@@ -332,8 +302,8 @@ mod tests {
 
     #[test]
     fn test_duration_tolerance() {
-        let mut song1 = create_test_song();
-        let mut song2 = create_test_song();
+        let mut song1 = make_test_song("/music/test.mp3", 1);
+        let mut song2 = make_test_song("/music/test.mp3", 1);
 
         song1.duration = Some(Duration::from_millis(180_500)); // 180.5s
         song2.duration = Some(Duration::from_millis(181_200)); // 181.2s

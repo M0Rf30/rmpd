@@ -9,6 +9,7 @@
 ///            | TAG OPERATOR VALUE
 /// OPERATOR := == | != | =~ | !~ | < | > | <= | >=
 use crate::error::{Result, RmpdError};
+use crate::tag::tag_fallback_chain;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum FilterExpression {
@@ -126,40 +127,6 @@ fn op_to_sql(op: &CompareOp, value: &str) -> (&'static str, String) {
         CompareOp::GreaterEqual => (">=", value.to_string()),
         CompareOp::Contains => ("LIKE", format!("%{value}%")),
         CompareOp::StartsWith => ("LIKE", format!("{value}%")),
-    }
-}
-
-/// Return the fallback chain for a tag (MPD's Fallback.hxx).
-/// For most tags, returns a single-element vec.
-fn tag_fallback_chain(tag: &str) -> Vec<&str> {
-    match tag {
-        "albumartist" => vec!["albumartist", "artist"],
-        "artistsort" => vec!["artistsort", "artist"],
-        "albumartistsort" => vec!["albumartistsort", "albumartist", "artistsort", "artist"],
-        "albumsort" => vec!["albumsort", "album"],
-        "titlesort" => vec!["titlesort", "title"],
-        "composersort" => vec!["composersort", "composer"],
-        "artist" => vec!["artist"],
-        "album" => vec!["album"],
-        "title" => vec!["title"],
-        "track" => vec!["track"],
-        "date" => vec!["date"],
-        "originaldate" => vec!["originaldate"],
-        "genre" => vec!["genre"],
-        "composer" => vec!["composer"],
-        "performer" => vec!["performer"],
-        "disc" => vec!["disc"],
-        "comment" => vec!["comment"],
-        "grouping" => vec!["grouping"],
-        "label" => vec!["label"],
-        "musicbrainz_artistid" => vec!["musicbrainz_artistid"],
-        "musicbrainz_albumid" => vec!["musicbrainz_albumid"],
-        "musicbrainz_albumartistid" => vec!["musicbrainz_albumartistid"],
-        "musicbrainz_trackid" => vec!["musicbrainz_trackid"],
-        "musicbrainz_releasetrackid" => vec!["musicbrainz_releasetrackid"],
-        "musicbrainz_releasegroupid" => vec!["musicbrainz_releasegroupid"],
-        "musicbrainz_workid" => vec!["musicbrainz_workid"],
-        _ => vec![tag], // unknown tags: search as-is
     }
 }
 

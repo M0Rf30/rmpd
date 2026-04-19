@@ -207,35 +207,10 @@ pub struct SavedState {
 mod tests {
     use super::*;
     use rmpd_core::queue::Queue;
-    use rmpd_core::song::Song;
     use rmpd_core::state::{ConsumeMode, PlayerState, PlayerStatus, QueuePosition, SingleMode};
+    use rmpd_core::test_utils::make_test_song;
     use std::time::Duration;
     use tempfile::TempDir;
-
-    fn create_test_song(path: &str, position: u32) -> Song {
-        Song {
-            id: position as u64,
-            path: path.into(),
-            duration: Some(Duration::from_secs(180)),
-            sample_rate: Some(44100),
-            channels: Some(2),
-            bits_per_sample: Some(16),
-            bitrate: Some(320),
-            replay_gain_track_gain: None,
-            replay_gain_track_peak: None,
-            replay_gain_album_gain: None,
-            replay_gain_album_peak: None,
-            added_at: 0,
-            last_modified: 0,
-            tags: vec![
-                ("title".to_string(), format!("Song {position}")),
-                ("artist".to_string(), "Test Artist".to_string()),
-                ("album".to_string(), "Test Album".to_string()),
-                ("track".to_string(), position.to_string()),
-                ("genre".to_string(), "Rock".to_string()),
-            ],
-        }
-    }
 
     #[tokio::test]
     async fn test_save_and_load_basic() {
@@ -244,8 +219,8 @@ mod tests {
         let statefile = StateFile::new(state_path);
 
         let mut queue = Queue::new();
-        queue.add(create_test_song("/music/song1.mp3", 0));
-        queue.add(create_test_song("/music/song2.mp3", 1));
+        queue.add(make_test_song("/music/song1.mp3", 0));
+        queue.add(make_test_song("/music/song2.mp3", 1));
 
         let status = PlayerStatus {
             volume: 75,
@@ -483,7 +458,7 @@ mod tests {
 
         let mut queue = Queue::new();
         for i in 0..1000 {
-            queue.add(create_test_song(&format!("/music/song{i}.mp3"), i));
+            queue.add(make_test_song(&format!("/music/song{i}.mp3"), i));
         }
 
         let status = PlayerStatus {

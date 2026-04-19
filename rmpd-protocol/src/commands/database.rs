@@ -2,6 +2,7 @@
 
 use tracing::{error, info};
 
+use crate::helpers;
 use crate::response::{Response, ResponseBuilder};
 use crate::state::AppState;
 
@@ -27,8 +28,8 @@ fn strip_music_dir_prefix<'a>(path: &'a str, music_dir: Option<&str>) -> &'a str
 }
 
 use super::utils::{
-    ACK_ERROR_ARG, ACK_ERROR_SYSTEM, apply_range, build_and_filter, build_search_filter,
-    format_iso8601_timestamp, open_db,
+    ACK_ERROR_ARG, ACK_ERROR_SYSTEM, apply_range, build_and_filter, format_iso8601_timestamp,
+    open_db,
 };
 
 /// Helper function to get tag value with MPD-style fallback.
@@ -49,60 +50,9 @@ pub async fn handle_find_command(
         Err(e) => return e,
     };
 
-    if filters.is_empty() {
-        return ResponseBuilder::error(ACK_ERROR_ARG, 0, "find", "missing arguments");
-    }
-
-    // Check if this is a filter expression (starts with '(')
-    let mut songs = if filters[0].0.starts_with('(') {
-        // Parse as filter expression
-        match rmpd_core::filter::FilterExpression::parse(&filters[0].0) {
-            Ok(filter) => match db.find_songs_filter(&filter) {
-                Ok(s) => s,
-                Err(e) => {
-                    return ResponseBuilder::error(
-                        ACK_ERROR_SYSTEM,
-                        0,
-                        "find",
-                        &format!("query error: {e}"),
-                    );
-                }
-            },
-            Err(e) => {
-                return ResponseBuilder::error(
-                    ACK_ERROR_ARG,
-                    0,
-                    "find",
-                    &format!("filter parse error: {e}"),
-                );
-            }
-        }
-    } else if filters.len() == 1 {
-        // Simple single tag/value search
-        match db.find_songs(&filters[0].0, &filters[0].1) {
-            Ok(s) => s,
-            Err(e) => {
-                return ResponseBuilder::error(
-                    ACK_ERROR_SYSTEM,
-                    0,
-                    "find",
-                    &format!("query error: {e}"),
-                );
-            }
-        }
-    } else {
-        let expr = build_and_filter(filters);
-        match db.find_songs_filter(&expr) {
-            Ok(s) => s,
-            Err(e) => {
-                return ResponseBuilder::error(
-                    ACK_ERROR_SYSTEM,
-                    0,
-                    "find",
-                    &format!("query error: {e}"),
-                );
-            }
-        }
+    let mut songs = match helpers::resolve_filters(&db, filters, "find", true) {
+        Ok(s) => s,
+        Err(e) => return e,
     };
 
     // Apply sorting if requested
@@ -134,78 +84,9 @@ pub async fn handle_search_command(
         Err(e) => return e,
     };
 
-    if filters.is_empty() {
-        return ResponseBuilder::error(ACK_ERROR_ARG, 0, "search", "missing arguments");
-    }
-
-    // Check if this is a filter expression (starts with '(')
-    let mut songs = if filters[0].0.starts_with('(') {
-        // Parse as filter expression
-        match rmpd_core::filter::FilterExpression::parse(&filters[0].0) {
-            Ok(filter) => match db.find_songs_filter(&filter) {
-                Ok(s) => s,
-                Err(e) => {
-                    return ResponseBuilder::error(
-                        ACK_ERROR_SYSTEM,
-                        0,
-                        "search",
-                        &format!("query error: {e}"),
-                    );
-                }
-            },
-            Err(e) => {
-                return ResponseBuilder::error(
-                    ACK_ERROR_ARG,
-                    0,
-                    "search",
-                    &format!("filter parse error: {e}"),
-                );
-            }
-        }
-    } else if filters.len() == 1 {
-        let tag = &filters[0].0;
-        let value = &filters[0].1;
-
-        if tag.eq_ignore_ascii_case("any") {
-            // Use FTS for "any" tag
-            match db.search_songs(value) {
-                Ok(s) => s,
-                Err(e) => {
-                    return ResponseBuilder::error(
-                        ACK_ERROR_SYSTEM,
-                        0,
-                        "search",
-                        &format!("search error: {e}"),
-                    );
-                }
-            }
-        } else {
-            // Partial/case-insensitive match using LIKE (search semantics)
-            match db.search_songs_by_tag(tag, value) {
-                Ok(s) => s,
-                Err(e) => {
-                    return ResponseBuilder::error(
-                        ACK_ERROR_SYSTEM,
-                        0,
-                        "search",
-                        &format!("query error: {e}"),
-                    );
-                }
-            }
-        }
-    } else {
-        let expr = build_search_filter(filters);
-        match db.find_songs_filter(&expr) {
-            Ok(s) => s,
-            Err(e) => {
-                return ResponseBuilder::error(
-                    ACK_ERROR_SYSTEM,
-                    0,
-                    "search",
-                    &format!("query error: {e}"),
-                );
-            }
-        }
+    let mut songs = match helpers::resolve_filters(&db, filters, "search", false) {
+        Ok(s) => s,
+        Err(e) => return e,
     };
 
     // Apply sorting if requested
@@ -942,16 +823,11 @@ pub async fn handle_searchadd_command(state: &AppState, tag: &str, value: &str) 
         }
     };
 
-    // Add all found songs to queue
     for song in songs {
         state.queue.write().await.add(song);
     }
 
-    // Update status
-    let mut status = state.status.write().await;
-    status.playlist_version += 1;
-    status.playlist_length = state.queue.read().await.len() as u32;
-
+    helpers::update_playlist_version(state).await;
     ResponseBuilder::new().ok()
 }
 
@@ -988,16 +864,11 @@ pub async fn handle_findadd_command(state: &AppState, tag: &str, value: &str) ->
         }
     };
 
-    // Add all found songs to queue
     for song in songs {
         state.queue.write().await.add(song);
     }
 
-    // Update status
-    let mut status = state.status.write().await;
-    status.playlist_version += 1;
-    status.playlist_length = state.queue.read().await.len() as u32;
-
+    helpers::update_playlist_version(state).await;
     ResponseBuilder::new().ok()
 }
 

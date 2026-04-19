@@ -1,6 +1,7 @@
 //! Pipe (external-command) audio output — writes raw s16le PCM to stdin.
 
-use crate::audio_output::AudioOutput;
+use crate::audio_output::{AudioOutput, PauseState};
+use crate::conversion;
 use rmpd_core::error::{Result, RmpdError};
 use std::io::{BufWriter, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
@@ -10,7 +11,7 @@ pub struct PipeOutput {
     command: String,
     child: Option<Child>,
     stdin: Option<BufWriter<ChildStdin>>,
-    is_paused: bool,
+    pause_state: PauseState,
 }
 
 impl PipeOutput {
@@ -19,17 +20,8 @@ impl PipeOutput {
             command: command.into(),
             child: None,
             stdin: None,
-            is_paused: false,
+            pause_state: PauseState::new(),
         }
-    }
-
-    fn samples_to_s16le(samples: &[f32]) -> Vec<u8> {
-        let mut buf = Vec::with_capacity(samples.len() * 2);
-        for &s in samples {
-            let v = (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
-            buf.extend_from_slice(&v.to_le_bytes());
-        }
-        buf
     }
 }
 
@@ -52,29 +44,20 @@ impl AudioOutput for PipeOutput {
             .ok_or_else(|| RmpdError::Player("pipe has no stdin".to_owned()))?;
         self.stdin = Some(BufWriter::new(stdin));
         self.child = Some(child);
-        self.is_paused = false;
+        self.pause_state.set_paused(false);
         info!("pipe output started: {}", self.command);
         Ok(())
     }
 
     fn write(&mut self, samples: &[f32]) -> Result<()> {
-        if self.is_paused {
+        if self.is_paused() {
             return Ok(());
         }
         if let Some(w) = &mut self.stdin {
-            let bytes = Self::samples_to_s16le(samples);
+            let bytes = conversion::samples_to_s16le(samples);
             w.write_all(&bytes)
                 .map_err(|e| RmpdError::Player(format!("pipe write error: {e}")))?;
         }
-        Ok(())
-    }
-
-    fn pause(&mut self) -> Result<()> {
-        self.is_paused = true;
-        Ok(())
-    }
-    fn resume(&mut self) -> Result<()> {
-        self.is_paused = false;
         Ok(())
     }
 
@@ -87,7 +70,10 @@ impl AudioOutput for PipeOutput {
         Ok(())
     }
 
-    fn is_paused(&self) -> bool {
-        self.is_paused
+    fn pause_state(&self) -> &PauseState {
+        &self.pause_state
+    }
+    fn pause_state_mut(&mut self) -> &mut PauseState {
+        &mut self.pause_state
     }
 }

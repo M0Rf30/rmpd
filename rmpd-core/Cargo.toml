@@ -21,9 +21,15 @@ dirs = "6"
 rusqlite = { workspace = true, optional = true }
 symphonia = { workspace = true, optional = true }
 cpal = { workspace = true, optional = true }
+lofty = { workspace = true, optional = true }
+tantivy = { workspace = true, optional = true }
+notify = { workspace = true, optional = true }
+mdns-sd = { workspace = true, optional = true }
 
 [features]
 default = []
 database-errors = ["rusqlite"]
 player-errors = ["symphonia", "cpal"]
+library-errors = ["lofty", "tantivy", "notify"]
+protocol-errors = ["mdns-sd"]
 test-utils = []

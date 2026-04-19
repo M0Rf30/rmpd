@@ -66,3 +66,31 @@ impl From<cpal::PlayStreamError> for RmpdError {
         RmpdError::Player(format!("Stream playback error: {err}"))
     }
 }
+
+#[cfg(feature = "library-errors")]
+impl From<lofty::error::LoftyError> for RmpdError {
+    fn from(err: lofty::error::LoftyError) -> Self {
+        RmpdError::Library(err.to_string())
+    }
+}
+
+#[cfg(feature = "library-errors")]
+impl From<tantivy::TantivyError> for RmpdError {
+    fn from(err: tantivy::TantivyError) -> Self {
+        RmpdError::Library(err.to_string())
+    }
+}
+
+#[cfg(feature = "library-errors")]
+impl From<notify::Error> for RmpdError {
+    fn from(err: notify::Error) -> Self {
+        RmpdError::Library(err.to_string())
+    }
+}
+
+#[cfg(feature = "protocol-errors")]
+impl From<mdns_sd::Error> for RmpdError {
+    fn from(err: mdns_sd::Error) -> Self {
+        RmpdError::Protocol(err.to_string())
+    }
+}

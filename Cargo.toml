@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "rmpd",
     "rmpd-core",
+    "rmpd-macros",
     "rmpd-protocol",
     "rmpd-player",
     "rmpd-library",
@@ -69,6 +70,7 @@ nix = { version = "0.29", features = ["mount", "process", "fs"] }  # Linux mount
 
 # Shared workspace crates
 rmpd-core = { path = "rmpd-core" }
+rmpd-macros = { path = "rmpd-macros" }
 rmpd-protocol = { path = "rmpd-protocol" }
 rmpd-player = { path = "rmpd-player" }
 rmpd-library = { path = "rmpd-library" }

@@ -2760,10 +2760,14 @@ dependencies = [
  "camino",
  "cpal",
  "dirs",
+ "lofty",
+ "mdns-sd",
+ "notify",
  "rand 0.10.1",
  "rusqlite",
  "serde",
  "symphonia",
+ "tantivy",
  "thiserror 2.0.18",
  "tokio",
  "toml 0.9.12+spec-1.1.0",
@@ -2794,6 +2798,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "rmpd-macros"
+version = "0.2.0"
+dependencies = [
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
 name = "rmpd-player"
 version = "0.2.0"
 dependencies = [
@@ -2821,13 +2833,13 @@ dependencies = [
 name = "rmpd-protocol"
 version = "0.2.0"
 dependencies = [
- "anyhow",
  "bytes",
  "camino",
  "mdns-sd",
  "rand 0.10.1",
  "rmpd-core",
  "rmpd-library",
+ "rmpd-macros",
  "rmpd-player",
  "tempfile",
  "thiserror 2.0.18",

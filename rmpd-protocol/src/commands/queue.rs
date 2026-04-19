@@ -3,12 +3,13 @@
 use tracing::debug;
 
 use crate::commands::playback;
+use crate::helpers;
 use crate::response::ResponseBuilder;
 use crate::state::AppState;
 
 use super::utils::{
     ACK_ERROR_ARG, ACK_ERROR_NO_EXIST, ACK_ERROR_SYSTEM, add_queue_item_metadata, apply_range,
-    open_db, prepare_song_for_playback, song_tag_contains, song_tag_eq, update_next_song,
+    open_db, prepare_song_for_playback, update_next_song,
 };
 
 pub async fn handle_add_command(state: &AppState, uri: &str, position: Option<u32>) -> String {
@@ -16,63 +17,13 @@ pub async fn handle_add_command(state: &AppState, uri: &str, position: Option<u3
     // Handle URI schemes
     if let Some(scheme_end) = uri.find("://") {
         let scheme = &uri[..scheme_end];
-        // Known streaming/network schemes that MPD supports: add as stream entry
-        let is_known_scheme = matches!(
-            scheme,
-            "http"
-                | "https"
-                | "ftp"
-                | "ftps"
-                | "rtsp"
-                | "rtsps"
-                | "rtmp"
-                | "rtmpe"
-                | "rtmps"
-                | "rtmpt"
-                | "rtmpte"
-                | "rtmpts"
-                | "rtp"
-                | "mms"
-                | "mmsh"
-                | "mmst"
-                | "mmsu"
-                | "hls+http"
-                | "hls+https"
-                | "nfs"
-                | "smb"
-                | "scp"
-                | "sftp"
-                | "srtp"
-                | "gopher"
-                | "alsa"
-                | "cdda"
-                | "file"
-        );
-        if !is_known_scheme {
+        if !helpers::is_known_uri_scheme(scheme) {
             return ResponseBuilder::error(ACK_ERROR_ARG, 0, "add", "Unsupported URI scheme");
         }
         if scheme != "file" {
-            // Stream URL: create a minimal song entry and add to queue
-            let stream_song = rmpd_core::song::Song {
-                id: 0,
-                path: camino::Utf8PathBuf::from(uri),
-                duration: None,
-                sample_rate: None,
-                channels: None,
-                bits_per_sample: None,
-                bitrate: None,
-                replay_gain_track_gain: None,
-                replay_gain_track_peak: None,
-                replay_gain_album_gain: None,
-                replay_gain_album_peak: None,
-                added_at: 0,
-                last_modified: 0,
-                tags: vec![],
-            };
+            let stream_song = helpers::create_stream_song(uri);
             let id = state.queue.write().await.add_at(stream_song, position);
-            let mut status = state.status.write().await;
-            status.playlist_version += 1;
-            status.playlist_length = state.queue.read().await.len() as u32;
+            helpers::update_playlist_version(state).await;
             let mut resp = ResponseBuilder::new();
             resp.field("Id", id);
             return resp.ok();
@@ -99,15 +50,8 @@ pub async fn handle_add_command(state: &AppState, uri: &str, position: Option<u3
         }
     };
 
-    // Add to queue at specified position or at end
     let id = state.queue.write().await.add_at(song, position);
-
-    // Update status to reflect playlist changes
-    {
-        let mut status = state.status.write().await;
-        status.playlist_version += 1;
-        status.playlist_length = state.queue.read().await.len() as u32;
-    }
+    helpers::update_playlist_version(state).await;
 
     let mut resp = ResponseBuilder::new();
     resp.field("Id", id);
@@ -117,10 +61,9 @@ pub async fn handle_add_command(state: &AppState, uri: &str, position: Option<u3
 pub async fn handle_clear_command(state: &AppState) -> String {
     state.queue.write().await.clear();
     state.engine.write().await.stop().await.ok();
+    helpers::update_playlist_version(state).await;
 
     let mut status = state.status.write().await;
-    status.playlist_version += 1;
-    status.playlist_length = 0;
     status.current_song = None;
     status.next_song = None;
 
@@ -142,9 +85,8 @@ pub async fn handle_delete_command(
                 return ResponseBuilder::error(ACK_ERROR_ARG, 0, "delete", "Bad song index");
             }
             if queue.delete(position).is_some() {
-                let mut status = state.status.write().await;
-                status.playlist_version += 1;
-                status.playlist_length = queue.len() as u32;
+                drop(queue);
+                helpers::update_playlist_version(state).await;
                 ResponseBuilder::new().ok()
             } else {
                 ResponseBuilder::error(ACK_ERROR_ARG, 0, "delete", "Bad song index")
@@ -167,9 +109,8 @@ pub async fn handle_delete_command(
             for pos in (start..end).rev() {
                 queue.delete(pos);
             }
-            let mut status = state.status.write().await;
-            status.playlist_version += 1;
-            status.playlist_length = queue.len() as u32;
+            drop(queue);
+            helpers::update_playlist_version(state).await;
             ResponseBuilder::new().ok()
         }
     }
@@ -183,58 +124,11 @@ pub async fn handle_addid_command(state: &AppState, uri: &str, position: Option<
     // Handle URI schemes
     if let Some(scheme_end) = uri.find("://") {
         let scheme = &uri[..scheme_end];
-        let is_known_scheme = matches!(
-            scheme,
-            "http"
-                | "https"
-                | "ftp"
-                | "ftps"
-                | "rtsp"
-                | "rtsps"
-                | "rtmp"
-                | "rtmpe"
-                | "rtmps"
-                | "rtmpt"
-                | "rtmpte"
-                | "rtmpts"
-                | "rtp"
-                | "mms"
-                | "mmsh"
-                | "mmst"
-                | "mmsu"
-                | "hls+http"
-                | "hls+https"
-                | "nfs"
-                | "smb"
-                | "scp"
-                | "sftp"
-                | "srtp"
-                | "gopher"
-                | "alsa"
-                | "cdda"
-                | "file"
-        );
-        if !is_known_scheme {
+        if !helpers::is_known_uri_scheme(scheme) {
             return ResponseBuilder::error(ACK_ERROR_ARG, 0, "addid", "Unsupported URI scheme");
         }
         if scheme != "file" {
-            // Stream URL: create a minimal song entry and add to queue
-            let stream_song = rmpd_core::song::Song {
-                id: 0,
-                path: camino::Utf8PathBuf::from(uri),
-                duration: None,
-                sample_rate: None,
-                channels: None,
-                bits_per_sample: None,
-                bitrate: None,
-                replay_gain_track_gain: None,
-                replay_gain_track_peak: None,
-                replay_gain_album_gain: None,
-                replay_gain_album_peak: None,
-                added_at: 0,
-                last_modified: 0,
-                tags: vec![],
-            };
+            let stream_song = helpers::create_stream_song(uri);
             let id = state.queue.write().await.add_at(stream_song, position);
             let mut resp = ResponseBuilder::new();
             resp.field("Id", id);
@@ -271,9 +165,7 @@ pub async fn handle_addid_command(state: &AppState, uri: &str, position: Option<
 
 pub async fn handle_deleteid_command(state: &AppState, id: u32) -> String {
     if state.queue.write().await.delete_id(id).is_some() {
-        let mut status = state.status.write().await;
-        status.playlist_version += 1;
-        status.playlist_length = state.queue.read().await.len() as u32;
+        helpers::update_playlist_version(state).await;
         ResponseBuilder::new().ok()
     } else {
         ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "deleteid", "No such song")
@@ -282,8 +174,7 @@ pub async fn handle_deleteid_command(state: &AppState, id: u32) -> String {
 
 pub async fn handle_moveid_command(state: &AppState, id: u32, to: u32) -> String {
     if state.queue.write().await.move_by_id(id, to) {
-        let mut status = state.status.write().await;
-        status.playlist_version += 1;
+        helpers::update_playlist_version(state).await;
         ResponseBuilder::new().ok()
     } else {
         ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "moveid", "No such song")
@@ -312,8 +203,7 @@ pub async fn handle_move_command(
                 );
             }
             if state.queue.write().await.move_item(from_pos, to) {
-                let mut status = state.status.write().await;
-                status.playlist_version += 1;
+                helpers::update_playlist_version(state).await;
                 ResponseBuilder::new().ok()
             } else {
                 ResponseBuilder::error(ACK_ERROR_ARG, 0, "move", "Bad song index")
@@ -361,8 +251,8 @@ pub async fn handle_move_command(
                 }
             }
 
-            let mut status = state.status.write().await;
-            status.playlist_version += 1;
+            drop(queue);
+            helpers::update_playlist_version(state).await;
             ResponseBuilder::new().ok()
         }
     }
@@ -370,8 +260,7 @@ pub async fn handle_move_command(
 
 pub async fn handle_swap_command(state: &AppState, pos1: u32, pos2: u32) -> String {
     if state.queue.write().await.swap(pos1, pos2) {
-        let mut status = state.status.write().await;
-        status.playlist_version += 1;
+        helpers::update_playlist_version(state).await;
         ResponseBuilder::new().ok()
     } else {
         ResponseBuilder::error(ACK_ERROR_ARG, 0, "swap", "Bad song index")
@@ -380,8 +269,7 @@ pub async fn handle_swap_command(state: &AppState, pos1: u32, pos2: u32) -> Stri
 
 pub async fn handle_swapid_command(state: &AppState, id1: u32, id2: u32) -> String {
     if state.queue.write().await.swap_by_id(id1, id2) {
-        let mut status = state.status.write().await;
-        status.playlist_version += 1;
+        helpers::update_playlist_version(state).await;
         ResponseBuilder::new().ok()
     } else {
         ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "swapid", "No such song")
@@ -394,8 +282,7 @@ pub async fn handle_shuffle_command(state: &AppState, range: Option<(u32, u32)>)
     } else {
         state.queue.write().await.shuffle();
     }
-    let mut status = state.status.write().await;
-    status.playlist_version += 1;
+    helpers::update_playlist_version(state).await;
     ResponseBuilder::new().ok()
 }
 
@@ -530,8 +417,7 @@ pub async fn handle_rangeid_command(state: &AppState, id: u32, range: (f64, f64)
     };
 
     if found {
-        let mut status = state.status.write().await;
-        status.playlist_version += 1;
+        helpers::update_playlist_version(state).await;
         ResponseBuilder::new().ok()
     } else {
         ResponseBuilder::error(ACK_ERROR_NO_EXIST, 0, "rangeid", "No such song")
@@ -649,7 +535,7 @@ pub async fn handle_playlistfind_command(state: &AppState, tag: &str, value: &st
     let tag_lower = tag.to_lowercase();
 
     for item in queue.items() {
-        if song_tag_eq(&item.song, &tag_lower, value) {
+        if item.song.tag_eq(&tag_lower, value) {
             resp.song(&item.song, Some(item.position), Some(item.id));
             add_queue_item_metadata(&mut resp, item);
         }
@@ -665,7 +551,7 @@ pub async fn handle_playlistsearch_command(state: &AppState, tag: &str, value: &
     let tag_lower = tag.to_lowercase();
 
     for item in queue.items() {
-        if song_tag_contains(&item.song, &tag_lower, &value_lower) {
+        if item.song.tag_contains(&tag_lower, &value_lower) {
             resp.song(&item.song, Some(item.position), Some(item.id));
             add_queue_item_metadata(&mut resp, item);
         }

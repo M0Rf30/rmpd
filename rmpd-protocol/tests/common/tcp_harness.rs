@@ -3,10 +3,9 @@
 //! Provides `MpdTestServer` (binds to port 0, spawns the real server) and
 //! `MpdTestClient` (connects via TCP, sends commands, validates responses).
 
-use rmpd_core::song::Song;
+use rmpd_core::test_utils::make_test_song;
 use rmpd_protocol::MpdServer;
 use rmpd_protocol::state::AppState;
-use std::time::Duration as StdDuration;
 use tempfile::TempDir;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
@@ -183,33 +182,6 @@ pub async fn setup_with_state(state: AppState) -> (MpdTestServer, MpdTestClient)
     let server = MpdTestServer::start_with_state(state).await;
     let client = MpdTestClient::connect(server.port()).await;
     (server, client)
-}
-
-/// Create a test song with the given path and track number.
-pub fn make_test_song(path: &str, track: u32) -> Song {
-    Song {
-        id: track as u64,
-        path: path.into(),
-        duration: Some(StdDuration::from_secs(180)),
-        sample_rate: Some(44100),
-        channels: Some(2),
-        bits_per_sample: Some(16),
-        bitrate: Some(320),
-        replay_gain_track_gain: None,
-        replay_gain_track_peak: None,
-        replay_gain_album_gain: None,
-        replay_gain_album_peak: None,
-        added_at: 0,
-        last_modified: 0,
-        tags: vec![
-            ("title".to_string(), format!("Track {track}")),
-            ("artist".to_string(), "Test Artist".to_string()),
-            ("album".to_string(), "Test Album".to_string()),
-            ("track".to_string(), track.to_string()),
-            ("date".to_string(), "2024".to_string()),
-            ("genre".to_string(), "Rock".to_string()),
-        ],
-    }
 }
 
 /// Create a server backed by a temporary SQLite database pre-populated with

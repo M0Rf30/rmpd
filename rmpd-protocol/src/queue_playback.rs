@@ -1,6 +1,6 @@
+use crate::helpers;
 use crate::state::AppState;
 use rmpd_core::event::Event;
-use rmpd_core::song::AudioFormat;
 use rmpd_core::state::{PlayerState, QueuePosition};
 use std::time::Duration;
 use tokio::task::JoinHandle;
@@ -93,7 +93,7 @@ impl QueuePlaybackManager {
     }
 
     /// Handle song finished event - advance to next song
-    async fn handle_song_finished(state: &AppState) -> anyhow::Result<()> {
+    async fn handle_song_finished(state: &AppState) -> rmpd_core::error::Result<()> {
         let status = state.status.read().await;
         let queue = state.queue.read().await;
 
@@ -136,15 +136,8 @@ impl QueuePlaybackManager {
                     debug!("end of queue reached, stopping playback");
                     drop(queue);
                     state.engine.write().await.stop().await?;
-                    // Update status immediately (event will also update but that's idempotent)
-                    let mut status = state.status.write().await;
-                    status.state = PlayerState::Stop;
-                    status.current_song = None;
-                    drop(status);
-                    // Emit event to notify idle clients
-                    state
-                        .event_bus
-                        .emit(Event::PlayerStateChanged(PlayerState::Stop));
+                    helpers::update_player_state(state, PlayerState::Stop).await;
+                    state.status.write().await.current_song = None;
                     return Ok(());
                 }
             } else {
@@ -169,23 +162,11 @@ impl QueuePlaybackManager {
             match state.engine.write().await.play(song.clone()).await {
                 Ok(_) => {
                     let mut status = state.status.write().await;
-
-                    // Update playback info immediately (event will also update but that's idempotent)
                     status.state = PlayerState::Play;
                     status.elapsed = Some(Duration::ZERO);
                     status.duration = song.duration;
                     status.bitrate = song.bitrate;
-
-                    // Set audio format if available
-                    if let (Some(sr), Some(ch), Some(bps)) =
-                        (song.sample_rate, song.channels, song.bits_per_sample)
-                    {
-                        status.audio_format = Some(AudioFormat {
-                            sample_rate: sr,
-                            channels: ch,
-                            bits_per_sample: bps as u8,
-                        });
-                    }
+                    status.audio_format = helpers::extract_audio_format(&song);
 
                     status.current_song = Some(QueuePosition {
                         position: if consume.is_on() && next_pos > current_pos {
@@ -212,22 +193,14 @@ impl QueuePlaybackManager {
 
                     drop(status);
 
-                    // Emit events to notify idle clients
                     state
                         .event_bus
                         .emit(Event::PlayerStateChanged(PlayerState::Play));
                     state.event_bus.emit(Event::SongChanged(Some(song)));
 
-                    // Stop after playing if single mode is on
                     if should_stop_after {
                         state.engine.write().await.stop().await?;
-                        let mut status = state.status.write().await;
-                        status.state = PlayerState::Stop;
-                        drop(status);
-                        // Emit event to notify idle clients
-                        state
-                            .event_bus
-                            .emit(Event::PlayerStateChanged(PlayerState::Stop));
+                        helpers::update_player_state(state, PlayerState::Stop).await;
                     }
                 }
                 Err(e) => {

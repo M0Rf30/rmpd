@@ -5,8 +5,9 @@ use std::fs;
 use std::path::Path;
 use tracing::{debug, info, warn};
 
-use crate::database::{Database, system_time_to_unix_secs};
+use crate::database::Database;
 use crate::metadata::MetadataExtractor;
+use rmpd_core::time::system_time_to_unix_secs;
 
 #[derive(Debug)]
 pub struct Scanner {

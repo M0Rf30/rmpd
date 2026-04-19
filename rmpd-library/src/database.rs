@@ -2,9 +2,11 @@ use camino::Utf8PathBuf;
 use icu_collator::{CollatorBorrowed, CollatorPreferences};
 use rmpd_core::error::{Result, RmpdError};
 use rmpd_core::song::Song;
+use rmpd_core::tag::tag_fallback_chain;
+use rmpd_core::time::system_time_to_unix_secs;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use std::cmp::Ordering;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime};
 
 /// Compare two optional strings using ICU root-locale collation: None sorts before Some.
 /// Matches MPD's compare_utf8_string() + IcuCollate() behaviour.
@@ -57,29 +59,6 @@ fn song_from_row(row: &Row<'_>) -> rusqlite::Result<Song> {
         last_modified: row.get(12)?,
         tags: Vec::new(),
     })
-}
-
-/// Convert a SystemTime to Unix timestamp (seconds since epoch).
-pub(crate) fn system_time_to_unix_secs(time: SystemTime) -> i64 {
-    time.duration_since(UNIX_EPOCH)
-        .unwrap_or_else(|_| {
-            tracing::warn!("system time before UNIX_EPOCH, using 0");
-            Duration::ZERO
-        })
-        .as_secs() as i64
-}
-
-/// Return the tag fallback chain for a given tag (MPD's Fallback.hxx).
-fn tag_fallback_chain(tag: &str) -> Vec<&str> {
-    match tag {
-        "albumartist" => vec!["albumartist", "artist"],
-        "artistsort" => vec!["artistsort", "artist"],
-        "albumartistsort" => vec!["albumartistsort", "albumartist", "artistsort", "artist"],
-        "albumsort" => vec!["albumsort", "album"],
-        "titlesort" => vec!["titlesort", "title"],
-        "composersort" => vec!["composersort", "composer"],
-        _ => vec![tag],
-    }
 }
 
 /// Look up a playlist by name and return its ID.

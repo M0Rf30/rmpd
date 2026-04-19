@@ -15,7 +15,8 @@ categories.workspace = true
 ignored = ["bytes", "thiserror"]
 
 [dependencies]
-rmpd-core.workspace = true
+rmpd-core = { workspace = true, features = ["protocol-errors"] }
+rmpd-macros.workspace = true
 camino.workspace = true
 rmpd-library.workspace = true
 rmpd-player.workspace = true
@@ -24,10 +25,10 @@ winnow.workspace = true
 thiserror.workspace = true
 bytes.workspace = true
 tracing.workspace = true
-anyhow.workspace = true
 rand = "0.10"
 mdns-sd.workspace = true
 
 [dev-dependencies]
+rmpd-core = { workspace = true, features = ["test-utils"] }
 tempfile = "3"
 tokio = { workspace = true }

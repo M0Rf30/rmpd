@@ -22,7 +22,7 @@ pub struct DiscoveryService {
 
 impl DiscoveryService {
     /// Create a new discovery service
-    pub fn new() -> Result<Arc<Self>, anyhow::Error> {
+    pub fn new() -> rmpd_core::error::Result<Arc<Self>> {
         let cache = Arc::new(RwLock::new(DiscoveryCache::new(Duration::from_secs(300))));
         let mdns = ServiceDaemon::new()?;
 
@@ -30,7 +30,7 @@ impl DiscoveryService {
     }
 
     /// Scan for network services and return discovered neighbors
-    pub async fn scan_services(&self) -> Result<Vec<NetworkNeighbor>, anyhow::Error> {
+    pub async fn scan_services(&self) -> rmpd_core::error::Result<Vec<NetworkNeighbor>> {
         // Check if cache is still valid
         {
             let cache = self.cache.read().await;
@@ -73,7 +73,7 @@ impl DiscoveryService {
     async fn browse_service(
         &self,
         service_type: &str,
-    ) -> Result<Vec<NetworkNeighbor>, anyhow::Error> {
+    ) -> rmpd_core::error::Result<Vec<NetworkNeighbor>> {
         let receiver = self.mdns.browse(service_type)?;
         let mut neighbors = Vec::new();
 
@@ -135,7 +135,7 @@ impl DiscoveryService {
     /// Advertise this rmpd instance on the local network via mDNS.
     ///
     /// Registers a `_mpd._tcp.local.` service so MPD clients can auto-discover this server.
-    pub fn advertise(&self, port: u16) -> Result<(), anyhow::Error> {
+    pub fn advertise(&self, port: u16) -> rmpd_core::error::Result<()> {
         use mdns_sd::ServiceInfo;
 
         let hostname = std::fs::read_to_string("/etc/hostname")
@@ -193,7 +193,7 @@ impl DiscoveryService {
     }
 
     /// Manually refresh the cache
-    pub async fn refresh(&self) -> Result<(), anyhow::Error> {
+    pub async fn refresh(&self) -> rmpd_core::error::Result<()> {
         let mut cache = self.cache.write().await;
         cache.clear();
         Ok(())

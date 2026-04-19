@@ -1,4 +1,5 @@
-use crate::audio_output::AudioOutput;
+use crate::audio_output::{AudioOutput, PauseState};
+use crate::conversion::{self, SampleBuffer};
 use crate::cpal_utils::CpalDeviceConfig;
 use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{Device, SampleFormat, Stream, StreamConfig};
@@ -7,13 +8,12 @@ use rmpd_core::song::AudioFormat;
 use std::sync::mpsc::{SyncSender, sync_channel};
 use std::sync::{Arc, Mutex};
 
-/// cpal-based audio output
 pub struct CpalOutput {
     device: Device,
     stream: Option<Stream>,
     sample_sender: Option<SyncSender<Vec<f32>>>,
     config: StreamConfig,
-    is_paused: bool,
+    pause_state: PauseState,
 }
 
 impl CpalOutput {
@@ -25,11 +25,10 @@ impl CpalOutput {
             stream: None,
             sample_sender: None,
             config: device_config.config,
-            is_paused: false,
+            pause_state: PauseState::new(),
         })
     }
 
-    /// Create a CpalOutput using the JACK audio host.
     #[cfg(feature = "jack")]
     pub fn new_jack(format: AudioFormat) -> Result<Self> {
         let device_config = CpalDeviceConfig::new_jack(format.sample_rate, format.channels as u16)?;
@@ -38,11 +37,10 @@ impl CpalOutput {
             stream: None,
             sample_sender: None,
             config: device_config.config,
-            is_paused: false,
+            pause_state: PauseState::new(),
         })
     }
 
-    /// Create a CpalOutput using the ASIO host (Windows pro audio).
     #[cfg(all(feature = "asio", target_os = "windows"))]
     pub fn new_asio(format: AudioFormat) -> Result<Self> {
         let device_config = CpalDeviceConfig::new_asio(format.sample_rate, format.channels as u16)?;
@@ -51,16 +49,15 @@ impl CpalOutput {
             stream: None,
             sample_sender: None,
             config: device_config.config,
-            is_paused: false,
+            pause_state: PauseState::new(),
         })
     }
 
     pub fn start(&mut self) -> Result<()> {
         if self.stream.is_some() {
-            return Ok(()); // Already started
+            return Ok(());
         }
 
-        // Find suitable PCM format using utility
         let mut device_config = CpalDeviceConfig {
             device: self.device.clone(),
             config: self.config,
@@ -68,41 +65,18 @@ impl CpalOutput {
         };
         let sample_format = device_config.find_pcm_format()?;
 
-        // Use bounded channel to block when buffer is full (prevents decoding faster than playback)
-        // Buffer size: allow ~5 chunks to be queued (at 4096 samples/chunk, ~0.1s per chunk @ 44.1kHz)
         let (tx, rx) = sync_channel::<Vec<f32>>(5);
         let rx = Arc::new(Mutex::new(rx));
-        let mut sample_buffer: Vec<f32> = Vec::new();
-        let mut buffer_pos = 0;
 
-        let rx_clone = rx.clone();
-
-        // Build output stream based on detected format
         let stream = match sample_format {
             SampleFormat::F32 => {
+                let mut buf = SampleBuffer::new(rx.clone());
                 self.device
                     .build_output_stream(
                         self.config,
                         move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-                            // Fill output buffer
                             for sample in data.iter_mut() {
-                                // Refill internal buffer if needed
-                                if buffer_pos >= sample_buffer.len()
-                                    && let Ok(rx) = rx_clone.lock()
-                                    && let Ok(new_samples) = rx.try_recv()
-                                {
-                                    sample_buffer = new_samples;
-                                    buffer_pos = 0;
-                                }
-
-                                // Output sample or silence
-                                *sample = if buffer_pos < sample_buffer.len() {
-                                    let val = sample_buffer[buffer_pos];
-                                    buffer_pos += 1;
-                                    val
-                                } else {
-                                    0.0
-                                };
+                                *sample = buf.next_sample();
                             }
                         },
                         |err| {
@@ -113,30 +87,13 @@ impl CpalOutput {
                     .map_err(|e| RmpdError::Player(format!("Failed to build F32 stream: {e}")))?
             }
             SampleFormat::I16 => {
+                let mut buf = SampleBuffer::new(rx.clone());
                 self.device
                     .build_output_stream(
                         self.config,
                         move |data: &mut [i16], _: &cpal::OutputCallbackInfo| {
-                            // Fill output buffer with converted samples
                             for sample in data.iter_mut() {
-                                // Refill internal buffer if needed
-                                if buffer_pos >= sample_buffer.len()
-                                    && let Ok(rx) = rx_clone.lock()
-                                    && let Ok(new_samples) = rx.try_recv()
-                                {
-                                    sample_buffer = new_samples;
-                                    buffer_pos = 0;
-                                }
-
-                                // Output sample or silence (convert f32 to i16)
-                                *sample = if buffer_pos < sample_buffer.len() {
-                                    let val = sample_buffer[buffer_pos];
-                                    buffer_pos += 1;
-                                    // Convert F32 [-1.0, 1.0] to I16 [-32768, 32767]
-                                    (val.clamp(-1.0, 1.0) * 32767.0) as i16
-                                } else {
-                                    0
-                                };
+                                *sample = conversion::f32_to_i16(buf.next_sample());
                             }
                         },
                         |err| {
@@ -147,30 +104,13 @@ impl CpalOutput {
                     .map_err(|e| RmpdError::Player(format!("Failed to build I16 stream: {e}")))?
             }
             SampleFormat::I32 => {
+                let mut buf = SampleBuffer::new(rx.clone());
                 self.device
                     .build_output_stream(
                         self.config,
                         move |data: &mut [i32], _: &cpal::OutputCallbackInfo| {
-                            // Fill output buffer with converted samples
                             for sample in data.iter_mut() {
-                                // Refill internal buffer if needed
-                                if buffer_pos >= sample_buffer.len()
-                                    && let Ok(rx) = rx_clone.lock()
-                                    && let Ok(new_samples) = rx.try_recv()
-                                {
-                                    sample_buffer = new_samples;
-                                    buffer_pos = 0;
-                                }
-
-                                // Output sample or silence (convert f32 to i32)
-                                *sample = if buffer_pos < sample_buffer.len() {
-                                    let val = sample_buffer[buffer_pos];
-                                    buffer_pos += 1;
-                                    // Convert F32 [-1.0, 1.0] to I32 [-2147483648, 2147483647]
-                                    (val.clamp(-1.0, 1.0) * 2147483647.0) as i32
-                                } else {
-                                    0
-                                };
+                                *sample = conversion::f32_to_i32(buf.next_sample());
                             }
                         },
                         |err| {
@@ -193,7 +133,7 @@ impl CpalOutput {
 
         self.stream = Some(stream);
         self.sample_sender = Some(tx);
-        self.is_paused = false;
+        self.pause_state.set_paused(false);
 
         tracing::info!(
             "pcm output started: {:?} format, {} Hz, {} channels",
@@ -206,7 +146,7 @@ impl CpalOutput {
     }
 
     pub fn write(&mut self, samples: &[f32]) -> Result<usize> {
-        if self.is_paused {
+        if self.pause_state.is_paused() {
             return Ok(0);
         }
 
@@ -225,7 +165,7 @@ impl CpalOutput {
             stream
                 .pause()
                 .map_err(|e| RmpdError::Player(format!("Failed to pause: {e}")))?;
-            self.is_paused = true;
+            self.pause_state.set_paused(true);
         }
         Ok(())
     }
@@ -235,7 +175,7 @@ impl CpalOutput {
             stream
                 .play()
                 .map_err(|e| RmpdError::Player(format!("Failed to resume: {e}")))?;
-            self.is_paused = false;
+            self.pause_state.set_paused(false);
         }
         Ok(())
     }
@@ -245,12 +185,12 @@ impl CpalOutput {
             drop(stream);
         }
         self.sample_sender = None;
-        self.is_paused = false;
+        self.pause_state.set_paused(false);
         Ok(())
     }
 
     pub fn is_paused(&self) -> bool {
-        self.is_paused
+        self.pause_state.is_paused()
     }
 }
 
@@ -267,14 +207,20 @@ impl AudioOutput for CpalOutput {
     fn write(&mut self, samples: &[f32]) -> rmpd_core::error::Result<()> {
         CpalOutput::write(self, samples).map(|_| ())
     }
+    fn stop(&mut self) -> rmpd_core::error::Result<()> {
+        CpalOutput::stop(self)
+    }
+    fn pause_state(&self) -> &PauseState {
+        &self.pause_state
+    }
+    fn pause_state_mut(&mut self) -> &mut PauseState {
+        &mut self.pause_state
+    }
     fn pause(&mut self) -> rmpd_core::error::Result<()> {
         CpalOutput::pause(self)
     }
     fn resume(&mut self) -> rmpd_core::error::Result<()> {
         CpalOutput::resume(self)
-    }
-    fn stop(&mut self) -> rmpd_core::error::Result<()> {
-        CpalOutput::stop(self)
     }
     fn is_paused(&self) -> bool {
         CpalOutput::is_paused(self)

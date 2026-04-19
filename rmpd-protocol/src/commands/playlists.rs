@@ -5,7 +5,6 @@ use crate::state::AppState;
 
 use super::utils::{
     ACK_ERROR_ARG, ACK_ERROR_EXIST, ACK_ERROR_SYSTEM, format_iso8601_timestamp, open_db,
-    song_tag_contains,
 };
 use std::path::Path;
 
@@ -812,7 +811,7 @@ pub async fn handle_searchplaylist_command(
     let tag_lower = tag.to_lowercase();
     for path in &paths {
         if let Ok(Some(song)) = db.get_song_by_path(path)
-            && song_tag_contains(&song, &tag_lower, &value_lower)
+            && song.tag_contains(&tag_lower, &value_lower)
         {
             resp.song(&song, None, None);
         }

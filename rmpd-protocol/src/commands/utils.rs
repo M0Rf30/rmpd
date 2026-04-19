@@ -41,61 +41,7 @@ pub fn open_db(
     })
 }
 
-/// Convert Unix timestamp to ISO 8601 format (RFC 3339)
-pub fn format_iso8601_timestamp(timestamp: i64) -> String {
-    const SECONDS_PER_MINUTE: i64 = 60;
-    const SECONDS_PER_HOUR: i64 = 3600;
-    const SECONDS_PER_DAY: i64 = 86400;
-
-    let mut days = timestamp / SECONDS_PER_DAY;
-    let remaining = timestamp % SECONDS_PER_DAY;
-    let hours = remaining / SECONDS_PER_HOUR;
-    let minutes = (remaining % SECONDS_PER_HOUR) / SECONDS_PER_MINUTE;
-    let seconds = remaining % SECONDS_PER_MINUTE;
-
-    // Calculate year starting from 1970
-    let mut year = 1970;
-    loop {
-        let leap_year = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
-        let days_in_year = if leap_year { 366 } else { 365 };
-        if days < days_in_year {
-            break;
-        }
-        days -= days_in_year;
-        year += 1;
-    }
-
-    // Calculate month and day
-    let leap_year = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
-    let days_in_month = if leap_year {
-        [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-    } else {
-        [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-    };
-
-    let mut month = 1;
-    for &dim in &days_in_month {
-        if days < dim {
-            break;
-        }
-        days -= dim;
-        month += 1;
-    }
-    let day = days + 1;
-
-    format!("{year:04}-{month:02}-{day:02}T{hours:02}:{minutes:02}:{seconds:02}Z")
-}
-
-/// Check if a song's tag matches an exact value (checks all values for multi-valued tags).
-pub fn song_tag_eq(song: &rmpd_core::song::Song, tag: &str, value: &str) -> bool {
-    song.tag_values(tag).any(|v| v == value)
-}
-
-/// Check if a song's tag contains a value (case-insensitive, checks all values for multi-valued tags).
-pub fn song_tag_contains(song: &rmpd_core::song::Song, tag: &str, value_lower: &str) -> bool {
-    song.tag_values(tag)
-        .any(|v| v.to_lowercase().contains(value_lower))
-}
+pub use rmpd_core::time::format_iso8601 as format_iso8601_timestamp;
 
 /// Build a FilterExpression from multiple tag/value pairs joined with AND.
 /// Panics if `filters` is empty.
@@ -197,17 +143,4 @@ pub fn prepare_song_for_playback(
     playback_song
 }
 
-/// Resolve a relative path to an absolute path using the music directory.
-/// If the path is already absolute, returns it as-is.
-pub fn resolve_path(rel_path: &str, music_dir: Option<&str>) -> String {
-    if rel_path.starts_with('/') {
-        return rel_path.to_string();
-    }
-
-    if let Some(music_dir) = music_dir {
-        let music_dir = music_dir.trim_end_matches('/');
-        format!("{music_dir}/{rel_path}")
-    } else {
-        rel_path.to_string()
-    }
-}
+pub use rmpd_core::path::resolve_path;

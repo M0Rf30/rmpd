@@ -1,6 +1,7 @@
 //! Recorder audio output — writes a WAV file.
 
-use crate::audio_output::AudioOutput;
+use crate::audio_output::{AudioOutput, PauseState};
+use crate::conversion;
 use rmpd_core::error::{Result, RmpdError};
 use rmpd_core::song::AudioFormat;
 use std::fs::File;
@@ -12,7 +13,7 @@ pub struct RecorderOutput {
     format: AudioFormat,
     writer: Option<BufWriter<File>>,
     frames_written: u32,
-    is_paused: bool,
+    pause_state: PauseState,
 }
 
 impl RecorderOutput {
@@ -22,7 +23,7 @@ impl RecorderOutput {
             format,
             writer: None,
             frames_written: 0,
-            is_paused: false,
+            pause_state: PauseState::new(),
         }
     }
 
@@ -32,22 +33,19 @@ impl RecorderOutput {
         let block_align = channels as u16 * bps / 8;
 
         let e = |e: std::io::Error| RmpdError::Player(e.to_string());
-        // RIFF
         w.write_all(b"RIFF").map_err(e)?;
-        w.write_all(&0u32.to_le_bytes()).map_err(e)?; // placeholder
+        w.write_all(&0u32.to_le_bytes()).map_err(e)?;
         w.write_all(b"WAVE").map_err(e)?;
-        // fmt
         w.write_all(b"fmt ").map_err(e)?;
         w.write_all(&16u32.to_le_bytes()).map_err(e)?;
-        w.write_all(&1u16.to_le_bytes()).map_err(e)?; // PCM
+        w.write_all(&1u16.to_le_bytes()).map_err(e)?;
         w.write_all(&(channels as u16).to_le_bytes()).map_err(e)?;
         w.write_all(&sample_rate.to_le_bytes()).map_err(e)?;
         w.write_all(&byte_rate.to_le_bytes()).map_err(e)?;
         w.write_all(&block_align.to_le_bytes()).map_err(e)?;
         w.write_all(&bps.to_le_bytes()).map_err(e)?;
-        // data
         w.write_all(b"data").map_err(e)?;
-        w.write_all(&0u32.to_le_bytes()).map_err(e)?; // placeholder
+        w.write_all(&0u32.to_le_bytes()).map_err(e)?;
         Ok(())
     }
 
@@ -73,32 +71,23 @@ impl AudioOutput for RecorderOutput {
         Self::write_wav_header(&mut w, self.format.sample_rate, self.format.channels)?;
         self.writer = Some(w);
         self.frames_written = 0;
-        self.is_paused = false;
+        self.pause_state.set_paused(false);
         info!("recorder output started: {}", self.path);
         Ok(())
     }
 
     fn write(&mut self, samples: &[f32]) -> Result<()> {
-        if self.is_paused {
+        if self.is_paused() {
             return Ok(());
         }
         if let Some(w) = &mut self.writer {
             for &s in samples {
-                let v = (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
+                let v = conversion::f32_to_i16(s);
                 w.write_all(&v.to_le_bytes())
                     .map_err(|e| RmpdError::Player(format!("recorder write: {e}")))?;
             }
             self.frames_written += samples.len() as u32 / self.format.channels as u32;
         }
-        Ok(())
-    }
-
-    fn pause(&mut self) -> Result<()> {
-        self.is_paused = true;
-        Ok(())
-    }
-    fn resume(&mut self) -> Result<()> {
-        self.is_paused = false;
         Ok(())
     }
 
@@ -111,7 +100,10 @@ impl AudioOutput for RecorderOutput {
         Ok(())
     }
 
-    fn is_paused(&self) -> bool {
-        self.is_paused
+    fn pause_state(&self) -> &PauseState {
+        &self.pause_state
+    }
+    fn pause_state_mut(&mut self) -> &mut PauseState {
+        &mut self.pause_state
     }
 }

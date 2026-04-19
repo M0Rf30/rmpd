@@ -135,34 +135,7 @@ impl Default for RmpdTestHarness {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rmpd_core::song::Song;
-    use std::time::Duration;
-
-    fn create_test_song() -> Song {
-        Song {
-            id: 0,
-            path: "/music/test.mp3".into(),
-            duration: Some(Duration::from_secs(180)),
-            sample_rate: Some(44100),
-            channels: Some(2),
-            bits_per_sample: Some(16),
-            bitrate: Some(320),
-            replay_gain_track_gain: None,
-            replay_gain_track_peak: None,
-            replay_gain_album_gain: None,
-            replay_gain_album_peak: None,
-            added_at: 0,
-            last_modified: 0,
-            tags: vec![
-                ("title".to_string(), "Test Song".to_string()),
-                ("artist".to_string(), "Test Artist".to_string()),
-                ("album".to_string(), "Test Album".to_string()),
-                ("track".to_string(), "1".to_string()),
-                ("date".to_string(), "2024".to_string()),
-                ("genre".to_string(), "Rock".to_string()),
-            ],
-        }
-    }
+    use rmpd_core::test_utils::make_test_song;
 
     #[test]
     fn test_harness_creation() {
@@ -173,7 +146,7 @@ mod tests {
     #[test]
     fn test_add_and_retrieve_song() {
         let harness = RmpdTestHarness::new().unwrap();
-        let song = create_test_song();
+        let song = make_test_song("/music/test.mp3", 0);
 
         let id = harness.add_song(&song).unwrap();
         assert!(id > 0);
@@ -187,16 +160,14 @@ mod tests {
     fn test_list_artists() {
         let harness = RmpdTestHarness::new().unwrap();
 
-        let mut song1 = create_test_song();
-        song1.path = "/music/song1.mp3".into();
+        let mut song1 = make_test_song("/music/song1.mp3", 0);
         song1.tags.retain(|(k, _)| k != "artist");
         song1
             .tags
             .push(("artist".to_string(), "Artist A".to_string()));
         harness.add_song(&song1).unwrap();
 
-        let mut song2 = create_test_song();
-        song2.path = "/music/song2.mp3".into();
+        let mut song2 = make_test_song("/music/song2.mp3", 1);
         song2.tags.retain(|(k, _)| k != "artist");
         song2
             .tags
@@ -213,7 +184,7 @@ mod tests {
     fn test_find_by_artist() {
         let harness = RmpdTestHarness::new().unwrap();
 
-        let mut song = create_test_song();
+        let mut song = make_test_song("/music/test.mp3", 0);
         song.tags.retain(|(k, _)| k != "artist");
         song.tags
             .push(("artist".to_string(), "Target Artist".to_string()));
@@ -228,12 +199,10 @@ mod tests {
     fn test_count_operations() {
         let harness = RmpdTestHarness::new().unwrap();
 
-        let mut song1 = create_test_song();
-        song1.path = "/music/song1.mp3".into();
+        let song1 = make_test_song("/music/song1.mp3", 0);
         harness.add_song(&song1).unwrap();
 
-        let mut song2 = create_test_song();
-        song2.path = "/music/song2.mp3".into();
+        let song2 = make_test_song("/music/song2.mp3", 1);
         harness.add_song(&song2).unwrap();
 
         assert_eq!(harness.count_songs().unwrap(), 2);

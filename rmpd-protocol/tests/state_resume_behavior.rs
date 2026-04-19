@@ -8,7 +8,7 @@ use rmpd_protocol::statefile::{SavedState, StateFile};
 
 #[path = "common/state_helpers.rs"]
 mod state_helpers;
-use state_helpers::{StatusBuilder, TempStateFile, create_test_queue, create_test_song};
+use state_helpers::{StatusBuilder, TempStateFile, create_test_queue, make_test_song};
 
 /// Simulates a full restart cycle: save state, "restart", restore state
 async fn simulate_restart(
@@ -55,9 +55,9 @@ async fn test_restore_with_missing_songs() {
     // Simulate a scenario where the queue has songs, but after restart
     // some songs might not be available in the database
     let mut queue = Queue::new();
-    queue.add(create_test_song("/music/song1.mp3", 1));
-    queue.add(create_test_song("/music/deleted.mp3", 2));
-    queue.add(create_test_song("/music/song3.mp3", 3));
+    queue.add(make_test_song("/music/song1.mp3", 1));
+    queue.add(make_test_song("/music/deleted.mp3", 2));
+    queue.add(make_test_song("/music/song3.mp3", 3));
 
     let status = StatusBuilder::new()
         .volume(100)
@@ -204,7 +204,7 @@ async fn test_multiple_restart_cycles() {
 
     // Modify and save again
     status.volume = 60;
-    queue.add(create_test_song("/music/new.mp3", 3));
+    queue.add(make_test_song("/music/new.mp3", 3));
     let statefile3 = StateFile::new(path.clone());
     statefile3.save(&status, &queue).await.unwrap();
 
@@ -218,9 +218,9 @@ async fn test_multiple_restart_cycles() {
 #[tokio::test]
 async fn test_restore_with_unicode_paths() {
     let mut queue = Queue::new();
-    queue.add(create_test_song("/music/日本語/song.mp3", 0));
-    queue.add(create_test_song("/music/Ελληνικά/τραγούδι.mp3", 1));
-    queue.add(create_test_song("/music/العربية/أغنية.mp3", 2));
+    queue.add(make_test_song("/music/日本語/song.mp3", 0));
+    queue.add(make_test_song("/music/Ελληνικά/τραγούδι.mp3", 1));
+    queue.add(make_test_song("/music/العربية/أغنية.mp3", 2));
 
     let status = StatusBuilder::new()
         .volume(100)

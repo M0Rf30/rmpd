@@ -1,5 +1,5 @@
-use anyhow::Result;
 use rmpd_core::config::Config;
+use rmpd_core::error::Result;
 use rmpd_core::state::PlayerState;
 use rmpd_protocol::{AppState, MpdServer, StateFile};
 use tokio::signal;
