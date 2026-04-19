@@ -2738,7 +2738,7 @@ dependencies = [
 
 [[package]]
 name = "rmpd"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -2755,7 +2755,7 @@ dependencies = [
 
 [[package]]
 name = "rmpd-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "camino",
  "cpal",
@@ -2776,7 +2776,7 @@ dependencies = [
 
 [[package]]
 name = "rmpd-library"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "base64",
  "camino",
@@ -2799,7 +2799,7 @@ dependencies = [
 
 [[package]]
 name = "rmpd-macros"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "quote",
  "syn 2.0.117",
@@ -2807,7 +2807,7 @@ dependencies = [
 
 [[package]]
 name = "rmpd-player"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "approx",
  "cpal",
@@ -2822,7 +2822,7 @@ dependencies = [
 
 [[package]]
 name = "rmpd-plugin"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "abi_stable",
  "libloading 0.9.0",
@@ -2831,7 +2831,7 @@ dependencies = [
 
 [[package]]
 name = "rmpd-protocol"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "bytes",
  "camino",
@@ -2850,7 +2850,7 @@ dependencies = [
 
 [[package]]
 name = "rmpd-stream"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "reqwest",
  "rmpd-core",
