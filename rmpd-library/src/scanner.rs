@@ -132,10 +132,7 @@ impl Scanner {
             if let Some(song) = extracted_meta.song {
                 match db.add_song(&song) {
                     Ok(_) => {
-                        let is_update = extracted_meta
-                            .file_info
-                            .existing_song
-                            .is_some();
+                        let is_update = extracted_meta.file_info.existing_song.is_some();
                         if is_update {
                             debug!("updated: {}", song.path);
                             updated += 1;

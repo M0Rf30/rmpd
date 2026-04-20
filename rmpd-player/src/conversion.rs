@@ -96,13 +96,13 @@ mod tests {
     fn samples_to_s16le_into_reusable() {
         let samples = [0.0_f32, 1.0, -1.0, 1.5, -1.5];
         let mut buf = Vec::new();
-        
+
         // First call
         samples_to_s16le_into(&samples, &mut buf);
         assert_eq!(buf.len(), 10);
         assert_eq!(i16::from_le_bytes([buf[0], buf[1]]), 0);
         assert_eq!(i16::from_le_bytes([buf[2], buf[3]]), i16::MAX);
-        
+
         // Second call should reuse and clear the buffer
         let samples2 = [0.5_f32, -0.5];
         samples_to_s16le_into(&samples2, &mut buf);

@@ -1,6 +1,6 @@
+use crate::commands::utils::prepare_song_for_playback;
 use crate::helpers;
 use crate::state::AppState;
-use crate::commands::utils::prepare_song_for_playback;
 use rmpd_core::event::Event;
 use rmpd_core::state::{PlayerState, QueuePosition};
 use std::time::Duration;

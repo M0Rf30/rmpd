@@ -63,7 +63,10 @@ impl StateFile {
         content.push_str(&format!("crossfade: {}\n", status.crossfade));
         content.push_str(&format!("mixrampdb: {:.6}\n", status.mixramp_db));
         content.push_str(&format!("mixrampdelay: {:.6}\n", status.mixramp_delay));
-        content.push_str(&format!("replay_gain_mode: {}\n", status.replay_gain_mode.as_str()));
+        content.push_str(&format!(
+            "replay_gain_mode: {}\n",
+            status.replay_gain_mode.as_str()
+        ));
 
         // Playlist
         content.push_str("playlist_begin\n");

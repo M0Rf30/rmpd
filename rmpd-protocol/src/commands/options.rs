@@ -99,7 +99,8 @@ pub async fn handle_mixrampdelay_command(state: &AppState, seconds: f32) -> Stri
 pub async fn handle_replaygain_mode_command(state: &AppState, mode: &str) -> String {
     match mode {
         "off" | "track" | "album" | "auto" => {
-            state.status.write().await.replay_gain_mode = rmpd_core::state::ReplayGainMode::from_str(mode);
+            state.status.write().await.replay_gain_mode =
+                rmpd_core::state::ReplayGainMode::from_str(mode);
             ResponseBuilder::new().ok()
         }
         _ => ResponseBuilder::error(

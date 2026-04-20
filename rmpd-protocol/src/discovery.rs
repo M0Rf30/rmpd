@@ -180,7 +180,8 @@ impl DiscoveryService {
                 .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>),
             Err(_) => {
                 tracing::warn!("discovery operation timed out after 30s");
-                Err(Box::new(std::sync::mpsc::RecvError) as Box<dyn std::error::Error + Send + Sync>)
+                Err(Box::new(std::sync::mpsc::RecvError)
+                    as Box<dyn std::error::Error + Send + Sync>)
             }
         }
     }

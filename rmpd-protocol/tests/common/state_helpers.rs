@@ -1,5 +1,7 @@
 use rmpd_core::queue::Queue;
-use rmpd_core::state::{ConsumeMode, PlayerState, PlayerStatus, QueuePosition, SingleMode, ReplayGainMode};
+use rmpd_core::state::{
+    ConsumeMode, PlayerState, PlayerStatus, QueuePosition, ReplayGainMode, SingleMode,
+};
 pub use rmpd_core::test_utils::make_test_song;
 use std::path::PathBuf;
 use std::time::Duration;

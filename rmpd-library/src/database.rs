@@ -303,7 +303,10 @@ impl Database {
     }
 
     /// Load tags for a single song by id.
-    fn load_tags_for_song(&self, song_id: u64) -> Result<Vec<(std::borrow::Cow<'static, str>, String)>> {
+    fn load_tags_for_song(
+        &self,
+        song_id: u64,
+    ) -> Result<Vec<(std::borrow::Cow<'static, str>, String)>> {
         let mut stmt = self
             .conn
             .prepare("SELECT tag, value FROM song_tags WHERE song_id = ?1 ORDER BY rowid")?;
@@ -354,18 +357,18 @@ impl Database {
         let mut stmt = self.conn.prepare_cached(
             "SELECT tag, value FROM song_tags WHERE song_id = ?1 AND tag IN ('title', 'artist', 'album', 'albumartist', 'genre', 'composer')"
         )?;
-        
+
         let mut title = String::new();
         let mut artist = String::new();
         let mut album = String::new();
         let mut album_artist = String::new();
         let mut genre = String::new();
         let mut composer = String::new();
-        
+
         let rows = stmt.query_map(params![song_id as i64], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })?;
-        
+
         for row in rows {
             let (tag, value) = row?;
             match tag.as_str() {
@@ -378,7 +381,7 @@ impl Database {
                 _ => {}
             }
         }
-        
+
         // Delete old FTS entry if it exists, then insert new one
         self.conn.execute(
             "INSERT INTO songs_fts(songs_fts, rowid, title, artist, album, album_artist, genre, composer)

@@ -319,10 +319,14 @@ impl SymphoniaDecoder {
             let n_samples = duration as usize * spec.channels.count();
             if let Some(ref buf) = self.reusable_sample_buf {
                 if buf.capacity() < n_samples {
-                    self.reusable_sample_buf = Some(symphonia::core::audio::SampleBuffer::<f32>::new(duration, spec));
+                    self.reusable_sample_buf = Some(
+                        symphonia::core::audio::SampleBuffer::<f32>::new(duration, spec),
+                    );
                 }
             } else {
-                self.reusable_sample_buf = Some(symphonia::core::audio::SampleBuffer::<f32>::new(duration, spec));
+                self.reusable_sample_buf = Some(symphonia::core::audio::SampleBuffer::<f32>::new(
+                    duration, spec,
+                ));
             }
 
             if let Some(ref mut buf) = self.reusable_sample_buf {

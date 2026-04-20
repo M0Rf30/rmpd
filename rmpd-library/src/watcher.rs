@@ -5,8 +5,8 @@ use rmpd_core::event::{Event as RmpdEvent, EventBus};
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tokio::sync::Mutex;
 use std::time::Duration;
+use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 

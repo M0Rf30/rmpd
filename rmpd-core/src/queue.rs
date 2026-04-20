@@ -132,7 +132,11 @@ impl<'de> Deserialize<'de> for QueueItem {
             }
         }
 
-        deserializer.deserialize_struct("QueueItem", &["id", "position", "song", "priority", "range", "tags"], QueueItemVisitor)
+        deserializer.deserialize_struct(
+            "QueueItem",
+            &["id", "position", "song", "priority", "range", "tags"],
+            QueueItemVisitor,
+        )
     }
 }
 

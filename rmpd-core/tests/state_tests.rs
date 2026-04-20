@@ -1,4 +1,4 @@
-use rmpd_core::state::{PlayerState, PlayerStatus, ReplayGainMode, SingleMode, ConsumeMode};
+use rmpd_core::state::{ConsumeMode, PlayerState, PlayerStatus, ReplayGainMode, SingleMode};
 use std::time::Duration;
 
 #[test]
@@ -62,7 +62,7 @@ fn test_replay_gain_mode_round_trip() {
         ReplayGainMode::Album,
         ReplayGainMode::Auto,
     ];
-    
+
     for mode in modes {
         let as_str = mode.as_str();
         let from_str = ReplayGainMode::from_str(as_str);
@@ -81,7 +81,7 @@ fn test_replay_gain_mode_display() {
 #[test]
 fn test_player_status_default() {
     let status = PlayerStatus::default();
-    
+
     assert_eq!(status.state, PlayerState::Stop);
     assert_eq!(status.volume, 100);
     assert_eq!(status.repeat, false);
@@ -107,15 +107,15 @@ fn test_player_status_default() {
 #[test]
 fn test_player_status_sensible_defaults() {
     let status = PlayerStatus::default();
-    
+
     // Volume should be at a reasonable level
     assert!(status.volume <= 100);
     assert!(status.volume > 0);
-    
+
     // Flags should be off by default
     assert!(!status.repeat);
     assert!(!status.random);
-    
+
     // Replay gain should be off by default
     assert_eq!(status.replay_gain_mode, ReplayGainMode::Off);
 }
@@ -128,7 +128,7 @@ fn test_player_status_with_custom_values() {
     status.repeat = true;
     status.random = true;
     status.replay_gain_mode = ReplayGainMode::Album;
-    
+
     assert_eq!(status.state, PlayerState::Play);
     assert_eq!(status.volume, 75);
     assert_eq!(status.repeat, true);
@@ -144,9 +144,9 @@ fn test_player_status_display() {
     status.repeat = true;
     status.random = false;
     status.playlist_length = 42;
-    
+
     let display = status.to_string();
-    
+
     assert!(display.contains("play"));
     assert!(display.contains("80"));
     assert!(display.contains("on")); // repeat is on
@@ -191,7 +191,7 @@ fn test_player_status_with_durations() {
     let mut status = PlayerStatus::default();
     status.elapsed = Some(Duration::from_secs(30));
     status.duration = Some(Duration::from_secs(180));
-    
+
     assert_eq!(status.elapsed, Some(Duration::from_secs(30)));
     assert_eq!(status.duration, Some(Duration::from_secs(180)));
 }
@@ -200,6 +200,6 @@ fn test_player_status_with_durations() {
 fn test_player_status_with_error() {
     let mut status = PlayerStatus::default();
     status.error = Some("Playback error".to_string());
-    
+
     assert_eq!(status.error, Some("Playback error".to_string()));
 }

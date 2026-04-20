@@ -1,0 +1,223 @@
+{
+  "version": "1.0.0",
+  "lastScanned": 1774611465621,
+  "projectRoot": "/home/gianluca/M0Rf30/rmpd",
+  "techStack": {
+    "languages": [
+      {
+        "name": "Rust",
+        "version": null,
+        "confidence": "high",
+        "markers": [
+          "Cargo.toml"
+        ]
+      }
+    ],
+    "frameworks": [],
+    "packageManager": "cargo",
+    "runtime": null
+  },
+  "build": {
+    "buildCommand": "cargo build",
+    "testCommand": "cargo test",
+    "lintCommand": "cargo clippy",
+    "devCommand": "cargo run",
+    "scripts": {}
+  },
+  "conventions": {
+    "namingStyle": null,
+    "importStyle": null,
+    "testPattern": null,
+    "fileOrganization": null
+  },
+  "structure": {
+    "isMonorepo": false,
+    "workspaces": [],
+    "mainDirectories": [],
+    "gitBranches": {
+      "defaultBranch": "main",
+      "branchingStrategy": null
+    }
+  },
+  "customNotes": [],
+  "directoryMap": {
+    "rmpd": {
+      "path": "rmpd",
+      "purpose": null,
+      "fileCount": 1,
+      "lastAccessed": 1774611465618,
+      "keyFiles": [
+        "Cargo.toml"
+      ]
+    },
+    "rmpd-core": {
+      "path": "rmpd-core",
+      "purpose": null,
+      "fileCount": 1,
+      "lastAccessed": 1774611465618,
+      "keyFiles": [
+        "Cargo.toml"
+      ]
+    },
+    "rmpd-library": {
+      "path": "rmpd-library",
+      "purpose": null,
+      "fileCount": 1,
+      "lastAccessed": 1774611465618,
+      "keyFiles": [
+        "Cargo.toml"
+      ]
+    },
+    "rmpd-player": {
+      "path": "rmpd-player",
+      "purpose": null,
+      "fileCount": 1,
+      "lastAccessed": 1774611465619,
+      "keyFiles": [
+        "Cargo.toml"
+      ]
+    },
+    "rmpd-plugin": {
+      "path": "rmpd-plugin",
+      "purpose": null,
+      "fileCount": 1,
+      "lastAccessed": 1774611465619,
+      "keyFiles": [
+        "Cargo.toml"
+      ]
+    },
+    "rmpd-protocol": {
+      "path": "rmpd-protocol",
+      "purpose": null,
+      "fileCount": 1,
+      "lastAccessed": 1774611465619,
+      "keyFiles": [
+        "Cargo.toml"
+      ]
+    },
+    "rmpd-stream": {
+      "path": "rmpd-stream",
+      "purpose": null,
+      "fileCount": 1,
+      "lastAccessed": 1774611465619,
+      "keyFiles": [
+        "Cargo.toml"
+      ]
+    },
+    "rmpd/src": {
+      "path": "rmpd/src",
+      "purpose": "Source code",
+      "fileCount": 2,
+      "lastAccessed": 1774611465620,
+      "keyFiles": [
+        "app.rs",
+        "main.rs"
+      ]
+    },
+    "rmpd-core/src": {
+      "path": "rmpd-core/src",
+      "purpose": "Source code",
+      "fileCount": 13,
+      "lastAccessed": 1774611465620,
+      "keyFiles": [
+        "config.rs",
+        "discovery.rs",
+        "error.rs"
+      ]
+    },
+    "rmpd-library/examples": {
+      "path": "rmpd-library/examples",
+      "purpose": "Example code",
+      "fileCount": 2,
+      "lastAccessed": 1774611465620,
+      "keyFiles": [
+        "test_extract.rs",
+        "test_m4a_artwork.rs"
+      ]
+    },
+    "rmpd-library/src": {
+      "path": "rmpd-library/src",
+      "purpose": "Source code",
+      "fileCount": 7,
+      "lastAccessed": 1774611465620,
+      "keyFiles": [
+        "artwork.rs",
+        "database.rs",
+        "fingerprint.rs"
+      ]
+    },
+    "rmpd-library/tests": {
+      "path": "rmpd-library/tests",
+      "purpose": "Test files",
+      "fileCount": 1,
+      "lastAccessed": 1774611465620,
+      "keyFiles": [
+        "compatibility_suite.rs"
+      ]
+    },
+    "rmpd-player/src": {
+      "path": "rmpd-player/src",
+      "purpose": "Source code",
+      "fileCount": 11,
+      "lastAccessed": 1774611465620,
+      "keyFiles": [
+        "audio_output.rs",
+        "cpal_utils.rs",
+        "decoder.rs"
+      ]
+    },
+    "rmpd-player/tests": {
+      "path": "rmpd-player/tests",
+      "purpose": "Test files",
+      "fileCount": 3,
+      "lastAccessed": 1774611465620,
+      "keyFiles": [
+        "decoder_tests.rs",
+        "edge_cases.rs",
+        "format_specific_tests.rs"
+      ]
+    },
+    "rmpd-plugin/src": {
+      "path": "rmpd-plugin/src",
+      "purpose": "Source code",
+      "fileCount": 1,
+      "lastAccessed": 1774611465621,
+      "keyFiles": [
+        "lib.rs"
+      ]
+    },
+    "rmpd-protocol/src": {
+      "path": "rmpd-protocol/src",
+      "purpose": "Source code",
+      "fileCount": 9,
+      "lastAccessed": 1774611465621,
+      "keyFiles": [
+        "connection.rs",
+        "discovery.rs",
+        "lib.rs"
+      ]
+    },
+    "rmpd-protocol/tests": {
+      "path": "rmpd-protocol/tests",
+      "purpose": "Test files",
+      "fileCount": 15,
+      "lastAccessed": 1774611465621,
+      "keyFiles": [
+        "advanced_commands.rs",
+        "basic_commands.rs",
+        "conformance_suite.rs"
+      ]
+    },
+    "rmpd-stream/src": {
+      "path": "rmpd-stream/src",
+      "purpose": "Source code",
+      "fileCount": 1,
+      "lastAccessed": 1774611465621,
+      "keyFiles": [
+        "lib.rs"
+      ]
+    }
+  },
+  "hotPaths": [],
+  "userDirectives": []
+}

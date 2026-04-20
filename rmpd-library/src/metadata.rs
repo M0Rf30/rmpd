@@ -10,7 +10,7 @@ use lofty::probe::Probe;
 use lofty::tag::ItemKey;
 use rmpd_core::error::{Result, RmpdError};
 use rmpd_core::song::{Song, intern_tag_key};
-use rmpd_core::tag::{vorbis_tag_map_get, normalize_decimal};
+use rmpd_core::tag::{normalize_decimal, vorbis_tag_map_get};
 use rmpd_core::time::system_time_to_unix_secs;
 use std::fs;
 use std::io::BufReader;

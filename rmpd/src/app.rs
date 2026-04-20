@@ -180,13 +180,8 @@ async fn restore_state(
                         // Small delay to ensure server is listening
                         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
-                        if let Err(e) = resume_playback(
-                            &state_clone,
-                            playback_song,
-                            play_state,
-                            elapsed,
-                        )
-                        .await
+                        if let Err(e) =
+                            resume_playback(&state_clone, playback_song, play_state, elapsed).await
                         {
                             error!("failed to resume playback: {}", e);
                         }
