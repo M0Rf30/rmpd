@@ -269,7 +269,9 @@ impl Scanner {
                 );
 
                 // Skip if file hasn't been modified
-                if let Some(ref existing) = existing_song && existing.last_modified >= mtime {
+                if let Some(ref existing) = existing_song
+                    && existing.last_modified >= mtime
+                {
                     continue;
                 }
 

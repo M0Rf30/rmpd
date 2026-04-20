@@ -3,7 +3,6 @@ use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::time::Duration;
 
-
 /// Well-known MPD tag names. Using static references avoids per-song String allocation.
 pub fn intern_tag_key(key: &str) -> Cow<'static, str> {
     match key.to_lowercase().as_str() {

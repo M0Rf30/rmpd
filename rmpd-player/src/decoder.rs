@@ -182,7 +182,9 @@ impl SymphoniaDecoder {
 
         while samples_written < buffer.len() {
             // If we have samples in the reusable buffer, copy them
-            if self.has_buffered_data && let Some(ref sample_buf) = self.reusable_sample_buf {
+            if self.has_buffered_data
+                && let Some(ref sample_buf) = self.reusable_sample_buf
+            {
                 // sample_buf.samples() returns interleaved samples
                 // sample_buf.len() returns number of frames
                 // For stereo, samples().len() == len() * 2

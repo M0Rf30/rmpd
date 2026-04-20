@@ -59,7 +59,9 @@ impl<T: Default + Copy> SampleBuffer<T> {
     /// chunk is exhausted.  Returns `T::default()` (silence) on underrun.
     #[inline]
     pub fn next_sample(&mut self) -> T {
-        if self.pos >= self.buffer.len() && let Ok(new_samples) = self.rx.try_recv() {
+        if self.pos >= self.buffer.len()
+            && let Ok(new_samples) = self.rx.try_recv()
+        {
             self.buffer = new_samples;
             self.pos = 0;
         }
