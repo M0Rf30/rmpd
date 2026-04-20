@@ -182,34 +182,32 @@ impl SymphoniaDecoder {
 
         while samples_written < buffer.len() {
             // If we have samples in the reusable buffer, copy them
-            if self.has_buffered_data {
-                if let Some(ref sample_buf) = self.reusable_sample_buf {
-                    // sample_buf.samples() returns interleaved samples
-                    // sample_buf.len() returns number of frames
-                    // For stereo, samples().len() == len() * 2
-                    let total_samples = sample_buf.samples().len();
-                    let samples_available = total_samples - (self.current_frame as usize);
-                    let samples_to_copy = (buffer.len() - samples_written).min(samples_available);
+            if self.has_buffered_data && let Some(ref sample_buf) = self.reusable_sample_buf {
+                // sample_buf.samples() returns interleaved samples
+                // sample_buf.len() returns number of frames
+                // For stereo, samples().len() == len() * 2
+                let total_samples = sample_buf.samples().len();
+                let samples_available = total_samples - (self.current_frame as usize);
+                let samples_to_copy = (buffer.len() - samples_written).min(samples_available);
 
-                    if samples_to_copy > 0 {
-                        let src_offset = self.current_frame as usize;
-                        buffer[samples_written..samples_written + samples_to_copy].copy_from_slice(
-                            &sample_buf.samples()[src_offset..src_offset + samples_to_copy],
-                        );
+                if samples_to_copy > 0 {
+                    let src_offset = self.current_frame as usize;
+                    buffer[samples_written..samples_written + samples_to_copy].copy_from_slice(
+                        &sample_buf.samples()[src_offset..src_offset + samples_to_copy],
+                    );
 
-                        samples_written += samples_to_copy;
-                        self.current_frame += samples_to_copy as u64;
-                    }
+                    samples_written += samples_to_copy;
+                    self.current_frame += samples_to_copy as u64;
+                }
 
-                    // If buffer is exhausted, clear it
-                    if self.current_frame >= total_samples as u64 {
-                        self.has_buffered_data = false;
-                        self.current_frame = 0;
-                    }
+                // If buffer is exhausted, clear it
+                if self.current_frame >= total_samples as u64 {
+                    self.has_buffered_data = false;
+                    self.current_frame = 0;
+                }
 
-                    if samples_written >= buffer.len() {
-                        break;
-                    }
+                if samples_written >= buffer.len() {
+                    break;
                 }
             }
 

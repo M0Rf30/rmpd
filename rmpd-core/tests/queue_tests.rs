@@ -53,9 +53,9 @@ fn test_delete_by_id() {
 
     assert!(deleted.is_some());
     assert_eq!(queue.len(), 2);
-    assert_eq!(queue.get_by_id(id1).is_some(), true);
-    assert_eq!(queue.get_by_id(id2).is_none(), true);
-    assert_eq!(queue.get_by_id(id3).is_some(), true);
+    assert!(queue.get_by_id(id1).is_some());
+    assert!(queue.get_by_id(id2).is_none());
+    assert!(queue.get_by_id(id3).is_some());
 }
 
 #[test]

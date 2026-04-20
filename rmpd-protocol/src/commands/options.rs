@@ -100,7 +100,7 @@ pub async fn handle_replaygain_mode_command(state: &AppState, mode: &str) -> Str
     match mode {
         "off" | "track" | "album" | "auto" => {
             state.status.write().await.replay_gain_mode =
-                rmpd_core::state::ReplayGainMode::from_str(mode);
+                rmpd_core::state::ReplayGainMode::parse_mode(mode);
             ResponseBuilder::new().ok()
         }
         _ => ResponseBuilder::error(

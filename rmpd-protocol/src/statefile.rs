@@ -174,7 +174,7 @@ impl StateFile {
                             state.mixramp_delay = value.parse().unwrap_or(-1.0);
                         }
                         "replay_gain_mode" => {
-                            state.replay_gain_mode = ReplayGainMode::from_str(value);
+                            state.replay_gain_mode = ReplayGainMode::parse_mode(value);
                         }
                         _ => {} // Ignore unknown keys
                     }

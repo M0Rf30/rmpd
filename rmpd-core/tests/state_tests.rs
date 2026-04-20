@@ -42,16 +42,16 @@ fn test_replay_gain_mode_as_str() {
 
 #[test]
 fn test_replay_gain_mode_from_str() {
-    assert_eq!(ReplayGainMode::from_str("off"), ReplayGainMode::Off);
-    assert_eq!(ReplayGainMode::from_str("track"), ReplayGainMode::Track);
-    assert_eq!(ReplayGainMode::from_str("album"), ReplayGainMode::Album);
-    assert_eq!(ReplayGainMode::from_str("auto"), ReplayGainMode::Auto);
+    assert_eq!(ReplayGainMode::parse_mode("off"), ReplayGainMode::Off);
+    assert_eq!(ReplayGainMode::parse_mode("track"), ReplayGainMode::Track);
+    assert_eq!(ReplayGainMode::parse_mode("album"), ReplayGainMode::Album);
+    assert_eq!(ReplayGainMode::parse_mode("auto"), ReplayGainMode::Auto);
 }
 
 #[test]
 fn test_replay_gain_mode_from_str_invalid() {
-    assert_eq!(ReplayGainMode::from_str("invalid"), ReplayGainMode::Off);
-    assert_eq!(ReplayGainMode::from_str(""), ReplayGainMode::Off);
+    assert_eq!(ReplayGainMode::parse_mode("invalid"), ReplayGainMode::Off);
+    assert_eq!(ReplayGainMode::parse_mode(""), ReplayGainMode::Off);
 }
 
 #[test]
@@ -65,7 +65,7 @@ fn test_replay_gain_mode_round_trip() {
 
     for mode in modes {
         let as_str = mode.as_str();
-        let from_str = ReplayGainMode::from_str(as_str);
+        let from_str = ReplayGainMode::parse_mode(as_str);
         assert_eq!(mode, from_str);
     }
 }
@@ -84,8 +84,8 @@ fn test_player_status_default() {
 
     assert_eq!(status.state, PlayerState::Stop);
     assert_eq!(status.volume, 100);
-    assert_eq!(status.repeat, false);
-    assert_eq!(status.random, false);
+    assert!(!status.repeat);
+    assert!(!status.random);
     assert_eq!(status.single, SingleMode::Off);
     assert_eq!(status.consume, ConsumeMode::Off);
     assert!(status.current_song.is_none());
@@ -122,28 +122,32 @@ fn test_player_status_sensible_defaults() {
 
 #[test]
 fn test_player_status_with_custom_values() {
-    let mut status = PlayerStatus::default();
-    status.state = PlayerState::Play;
-    status.volume = 75;
-    status.repeat = true;
-    status.random = true;
-    status.replay_gain_mode = ReplayGainMode::Album;
+    let status = PlayerStatus {
+        state: PlayerState::Play,
+        volume: 75,
+        repeat: true,
+        random: true,
+        replay_gain_mode: ReplayGainMode::Album,
+        ..Default::default()
+    };
 
     assert_eq!(status.state, PlayerState::Play);
     assert_eq!(status.volume, 75);
-    assert_eq!(status.repeat, true);
-    assert_eq!(status.random, true);
+    assert!(status.repeat);
+    assert!(status.random);
     assert_eq!(status.replay_gain_mode, ReplayGainMode::Album);
 }
 
 #[test]
 fn test_player_status_display() {
-    let mut status = PlayerStatus::default();
-    status.state = PlayerState::Play;
-    status.volume = 80;
-    status.repeat = true;
-    status.random = false;
-    status.playlist_length = 42;
+    let status = PlayerStatus {
+        state: PlayerState::Play,
+        volume: 80,
+        repeat: true,
+        random: false,
+        playlist_length: 42,
+        ..Default::default()
+    };
 
     let display = status.to_string();
 
@@ -188,9 +192,11 @@ fn test_replay_gain_mode_equality() {
 
 #[test]
 fn test_player_status_with_durations() {
-    let mut status = PlayerStatus::default();
-    status.elapsed = Some(Duration::from_secs(30));
-    status.duration = Some(Duration::from_secs(180));
+    let status = PlayerStatus {
+        elapsed: Some(Duration::from_secs(30)),
+        duration: Some(Duration::from_secs(180)),
+        ..Default::default()
+    };
 
     assert_eq!(status.elapsed, Some(Duration::from_secs(30)));
     assert_eq!(status.duration, Some(Duration::from_secs(180)));
@@ -198,8 +204,10 @@ fn test_player_status_with_durations() {
 
 #[test]
 fn test_player_status_with_error() {
-    let mut status = PlayerStatus::default();
-    status.error = Some("Playback error".to_string());
+    let status = PlayerStatus {
+        error: Some("Playback error".to_string()),
+        ..Default::default()
+    };
 
     assert_eq!(status.error, Some("Playback error".to_string()));
 }

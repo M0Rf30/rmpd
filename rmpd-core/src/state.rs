@@ -30,7 +30,7 @@ impl ReplayGainMode {
         }
     }
 
-    pub fn from_str(s: &str) -> Self {
+    pub fn parse_mode(s: &str) -> Self {
         match s {
             "track" => Self::Track,
             "album" => Self::Album,
