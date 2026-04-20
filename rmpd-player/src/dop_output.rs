@@ -6,7 +6,6 @@ use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{Device, SampleFormat, Stream, StreamConfig};
 use rmpd_core::error::{Result, RmpdError};
 use std::sync::mpsc::{SyncSender, sync_channel};
-use std::sync::{Arc, Mutex};
 
 pub struct DopOutput {
     device: Device,
@@ -49,11 +48,10 @@ impl DopOutput {
         tracing::info!("requested channels: {}", self.config.channels);
 
         let (tx, rx) = sync_channel::<Vec<i32>>(32);
-        let rx = Arc::new(Mutex::new(rx));
 
         let stream = match sample_format {
             SampleFormat::I32 | SampleFormat::I24 => {
-                let mut buf = SampleBuffer::new(rx.clone());
+                let mut buf = SampleBuffer::new(rx);
                 self.device
                     .build_output_stream(
                         self.config,
@@ -71,7 +69,7 @@ impl DopOutput {
             }
             _ => {
                 tracing::warn!("no I32 format available, using fallback conversion");
-                let mut buf = SampleBuffer::new(rx.clone());
+                let mut buf = SampleBuffer::new(rx);
                 self.device
                     .build_output_stream(
                         self.config,

@@ -21,7 +21,8 @@ pub struct SymphoniaDecoder {
     channels: Option<u8>,
     total_duration: Option<f64>,
     current_frame: u64,
-    sample_buf: Option<symphonia::core::audio::SampleBuffer<f32>>,
+    reusable_sample_buf: Option<symphonia::core::audio::SampleBuffer<f32>>,
+    has_buffered_data: bool,
     current_bitrate: Option<u32>,
     time_base: Option<TimeBase>,
     channel_data_layout: Option<ChannelDataLayout>,
@@ -107,7 +108,8 @@ impl SymphoniaDecoder {
             channels,
             total_duration,
             current_frame: 0,
-            sample_buf: None,
+            reusable_sample_buf: None,
+            has_buffered_data: false,
             current_bitrate: None,
             time_base,
             channel_data_layout,
@@ -179,8 +181,10 @@ impl SymphoniaDecoder {
         let mut samples_written = 0;
 
         while samples_written < buffer.len() {
-            // If we have samples in the buffer, copy them
-            if let Some(ref sample_buf) = self.sample_buf {
+            // If we have samples in the reusable buffer, copy them
+            if self.has_buffered_data
+                && let Some(ref sample_buf) = self.reusable_sample_buf
+            {
                 // sample_buf.samples() returns interleaved samples
                 // sample_buf.len() returns number of frames
                 // For stereo, samples().len() == len() * 2
@@ -200,7 +204,7 @@ impl SymphoniaDecoder {
 
                 // If buffer is exhausted, clear it
                 if self.current_frame >= total_samples as u64 {
-                    self.sample_buf = None;
+                    self.has_buffered_data = false;
                     self.current_frame = 0;
                 }
 
@@ -310,11 +314,27 @@ impl SymphoniaDecoder {
                 self.channels = Some(spec.channels.count() as u8);
             }
 
-            let mut new_sample_buf =
-                symphonia::core::audio::SampleBuffer::<f32>::new(duration, spec);
-            new_sample_buf.copy_interleaved_ref(decoded);
+            // Reuse the pre-allocated buffer, resizing if needed for larger packets.
+            // capacity() is in total samples (frames * channels), so compare accordingly.
+            let n_samples = duration as usize * spec.channels.count();
+            if let Some(ref buf) = self.reusable_sample_buf {
+                if buf.capacity() < n_samples {
+                    self.reusable_sample_buf = Some(
+                        symphonia::core::audio::SampleBuffer::<f32>::new(duration, spec),
+                    );
+                }
+            } else {
+                self.reusable_sample_buf = Some(symphonia::core::audio::SampleBuffer::<f32>::new(
+                    duration, spec,
+                ));
+            }
 
-            self.sample_buf = Some(new_sample_buf);
+            if let Some(ref mut buf) = self.reusable_sample_buf {
+                buf.copy_interleaved_ref(decoded);
+            }
+
+            // Mark that we have data in the reusable buffer
+            self.has_buffered_data = true;
             self.current_frame = 0;
         }
 
@@ -345,7 +365,7 @@ impl SymphoniaDecoder {
             .map_err(|e| RmpdError::Player(format!("Seek failed: {e}")))?;
 
         self.decoder.reset();
-        self.sample_buf = None;
+        self.has_buffered_data = false;
         self.current_frame = 0;
 
         Ok(())

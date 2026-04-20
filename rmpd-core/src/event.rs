@@ -101,13 +101,14 @@ pub struct EventBus {
 
 impl EventBus {
     pub fn new() -> Self {
-        let (sender, _) = broadcast::channel(1024);
+        let (sender, _) = broadcast::channel(4096);
         Self { sender }
     }
 
     pub fn emit(&self, event: Event) {
-        // Ignore errors - means no subscribers
-        let _ = self.sender.send(event);
+        if let Err(e) = self.sender.send(event) {
+            tracing::debug!("event dropped (no active subscribers): {}", e);
+        }
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<Event> {

@@ -54,16 +54,9 @@ impl From<symphonia::core::errors::Error> for RmpdError {
 }
 
 #[cfg(feature = "player-errors")]
-impl From<cpal::BuildStreamError> for RmpdError {
-    fn from(err: cpal::BuildStreamError) -> Self {
-        RmpdError::Player(format!("Failed to build stream: {err}"))
-    }
-}
-
-#[cfg(feature = "player-errors")]
-impl From<cpal::PlayStreamError> for RmpdError {
-    fn from(err: cpal::PlayStreamError) -> Self {
-        RmpdError::Player(format!("Stream playback error: {err}"))
+impl From<cpal::Error> for RmpdError {
+    fn from(err: cpal::Error) -> Self {
+        RmpdError::Player(format!("CPAL error: {err}"))
     }
 }
 

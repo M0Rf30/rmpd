@@ -4,8 +4,9 @@ use rmpd_core::error::{Result, RmpdError};
 use rmpd_core::event::{Event as RmpdEvent, EventBus};
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
@@ -168,13 +169,7 @@ async fn handle_fs_event(
                 match MetadataExtractor::extract_from_file(&path_buf) {
                     Ok(song) => {
                         // Database operations need to be done with lock
-                        let db_guard = match db.lock() {
-                            Ok(guard) => guard,
-                            Err(poisoned) => {
-                                tracing::warn!("database mutex poisoned, recovering: {}", poisoned);
-                                poisoned.into_inner()
-                            }
-                        };
+                        let db_guard = db.lock().await;
 
                         // Check if song already exists
                         let exists = db_guard.get_song_by_path(&path_str)?.is_some();
@@ -215,13 +210,7 @@ async fn handle_fs_event(
                 debug!("file removed: {}", path_str);
 
                 // Remove from database
-                let db_guard = match db.lock() {
-                    Ok(guard) => guard,
-                    Err(poisoned) => {
-                        tracing::warn!("database mutex poisoned, recovering: {}", poisoned);
-                        poisoned.into_inner()
-                    }
-                };
+                let db_guard = db.lock().await;
                 db_guard.delete_song_by_path(&path_str)?;
                 drop(db_guard);
 

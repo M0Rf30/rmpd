@@ -3,7 +3,7 @@
 /// This harness provides a convenient interface for testing the Scanner,
 /// Database, and MetadataExtractor in isolation.
 use rmpd_core::error::Result;
-use rmpd_core::song::Song;
+use rmpd_core::song::{Song, intern_tag_key};
 use rmpd_library::database::Database;
 use rmpd_library::metadata::{Artwork, MetadataExtractor};
 use std::path::PathBuf;
@@ -161,17 +161,17 @@ mod tests {
         let harness = RmpdTestHarness::new().unwrap();
 
         let mut song1 = make_test_song("/music/song1.mp3", 0);
-        song1.tags.retain(|(k, _)| k != "artist");
+        song1.tags.retain(|(k, _)| k.as_ref() != "artist");
         song1
             .tags
-            .push(("artist".to_string(), "Artist A".to_string()));
+            .push((intern_tag_key("artist"), "Artist A".to_string()));
         harness.add_song(&song1).unwrap();
 
         let mut song2 = make_test_song("/music/song2.mp3", 1);
-        song2.tags.retain(|(k, _)| k != "artist");
+        song2.tags.retain(|(k, _)| k.as_ref() != "artist");
         song2
             .tags
-            .push(("artist".to_string(), "Artist B".to_string()));
+            .push((intern_tag_key("artist"), "Artist B".to_string()));
         harness.add_song(&song2).unwrap();
 
         let artists = harness.list_artists().unwrap();
@@ -185,9 +185,9 @@ mod tests {
         let harness = RmpdTestHarness::new().unwrap();
 
         let mut song = make_test_song("/music/test.mp3", 0);
-        song.tags.retain(|(k, _)| k != "artist");
+        song.tags.retain(|(k, _)| k.as_ref() != "artist");
         song.tags
-            .push(("artist".to_string(), "Target Artist".to_string()));
+            .push((intern_tag_key("artist"), "Target Artist".to_string()));
         harness.add_song(&song).unwrap();
 
         let found = harness.find_by_artist("Target Artist").unwrap();

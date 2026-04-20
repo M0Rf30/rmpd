@@ -33,3 +33,19 @@ player-errors = ["symphonia", "cpal"]
 library-errors = ["lofty", "tantivy", "notify"]
 protocol-errors = ["mdns-sd"]
 test-utils = []
+
+[[test]]
+name = "queue_tests"
+required-features = ["test-utils"]
+
+[[test]]
+name = "filter_tests"
+required-features = ["test-utils"]
+
+[[test]]
+name = "state_tests"
+required-features = ["test-utils"]
+
+[[test]]
+name = "song_tests"
+required-features = ["test-utils"]

@@ -14,6 +14,8 @@ use crate::queue_playback::QueuePlaybackManager;
 use crate::response::{Response, ResponseBuilder, Stats};
 use crate::state::AppState;
 
+/// MPD protocol version we implement. This is the MPD protocol spec version,
+/// not the rmpd software version.
 const PROTOCOL_VERSION: &str = "0.24.0";
 
 /// Convert a `parse_command` error into the correct ACK response string.

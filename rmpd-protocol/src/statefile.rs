@@ -1,6 +1,6 @@
 use rmpd_core::error::Result;
 use rmpd_core::queue::Queue;
-use rmpd_core::state::{PlayerState, PlayerStatus};
+use rmpd_core::state::{PlayerState, PlayerStatus, ReplayGainMode};
 use std::fs;
 use std::path::Path;
 use tracing::{debug, info};
@@ -63,7 +63,10 @@ impl StateFile {
         content.push_str(&format!("crossfade: {}\n", status.crossfade));
         content.push_str(&format!("mixrampdb: {:.6}\n", status.mixramp_db));
         content.push_str(&format!("mixrampdelay: {:.6}\n", status.mixramp_delay));
-        content.push_str(&format!("replay_gain_mode: {}\n", status.replay_gain_mode));
+        content.push_str(&format!(
+            "replay_gain_mode: {}\n",
+            status.replay_gain_mode.as_str()
+        ));
 
         // Playlist
         content.push_str("playlist_begin\n");
@@ -92,7 +95,7 @@ impl StateFile {
         let content = fs::read_to_string(path)?;
 
         let mut state = SavedState {
-            replay_gain_mode: "off".to_string(),
+            replay_gain_mode: ReplayGainMode::Off,
             ..Default::default()
         };
         let mut in_playlist = false;
@@ -171,7 +174,7 @@ impl StateFile {
                             state.mixramp_delay = value.parse().unwrap_or(-1.0);
                         }
                         "replay_gain_mode" => {
-                            state.replay_gain_mode = value.to_string();
+                            state.replay_gain_mode = ReplayGainMode::parse_mode(value);
                         }
                         _ => {} // Ignore unknown keys
                     }
@@ -199,7 +202,7 @@ pub struct SavedState {
     pub crossfade: u32,
     pub mixramp_db: f32,
     pub mixramp_delay: f32,
-    pub replay_gain_mode: String,
+    pub replay_gain_mode: ReplayGainMode,
     pub playlist_paths: Vec<String>,
 }
 
@@ -246,7 +249,7 @@ mod tests {
             playlist_length: 2,
             updating_db: None,
             error: None,
-            replay_gain_mode: "off".to_string(),
+            replay_gain_mode: ReplayGainMode::Off,
         };
 
         statefile.save(&status, &queue).await.unwrap();
@@ -292,7 +295,7 @@ mod tests {
             playlist_length: 0,
             updating_db: None,
             error: None,
-            replay_gain_mode: "off".to_string(),
+            replay_gain_mode: ReplayGainMode::Off,
         };
 
         statefile.save(&status, &queue).await.unwrap();
@@ -346,7 +349,7 @@ mod tests {
             playlist_length: 0,
             updating_db: None,
             error: None,
-            replay_gain_mode: "off".to_string(),
+            replay_gain_mode: ReplayGainMode::Off,
         };
 
         // Test SingleMode::Off
@@ -394,7 +397,7 @@ mod tests {
             playlist_length: 0,
             updating_db: None,
             error: None,
-            replay_gain_mode: "off".to_string(),
+            replay_gain_mode: ReplayGainMode::Off,
         };
 
         // Test ConsumeMode::Off
@@ -442,7 +445,7 @@ mod tests {
             playlist_length: 0,
             updating_db: None,
             error: None,
-            replay_gain_mode: "off".to_string(),
+            replay_gain_mode: ReplayGainMode::Off,
         };
 
         statefile.save(&status, &queue).await.unwrap();
@@ -481,7 +484,7 @@ mod tests {
             playlist_length: 1000,
             updating_db: None,
             error: None,
-            replay_gain_mode: "off".to_string(),
+            replay_gain_mode: ReplayGainMode::Off,
         };
 
         statefile.save(&status, &queue).await.unwrap();
@@ -518,7 +521,7 @@ mod tests {
             playlist_length: 0,
             updating_db: None,
             error: None,
-            replay_gain_mode: "off".to_string(),
+            replay_gain_mode: ReplayGainMode::Off,
         };
 
         statefile.save(&status, &queue).await.unwrap();
@@ -639,7 +642,7 @@ mod tests {
             playlist_length: 0,
             updating_db: None,
             error: None,
-            replay_gain_mode: "off".to_string(),
+            replay_gain_mode: ReplayGainMode::Off,
         };
 
         statefile.save(&status, &queue).await.unwrap();

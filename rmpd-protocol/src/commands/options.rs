@@ -99,7 +99,8 @@ pub async fn handle_mixrampdelay_command(state: &AppState, seconds: f32) -> Stri
 pub async fn handle_replaygain_mode_command(state: &AppState, mode: &str) -> String {
     match mode {
         "off" | "track" | "album" | "auto" => {
-            state.status.write().await.replay_gain_mode = mode.to_string();
+            state.status.write().await.replay_gain_mode =
+                rmpd_core::state::ReplayGainMode::parse_mode(mode);
             ResponseBuilder::new().ok()
         }
         _ => ResponseBuilder::error(
@@ -112,7 +113,7 @@ pub async fn handle_replaygain_mode_command(state: &AppState, mode: &str) -> Str
 }
 
 pub async fn handle_replaygain_status_command(state: &AppState) -> String {
-    let mode = state.status.read().await.replay_gain_mode.clone();
+    let mode = state.status.read().await.replay_gain_mode.to_string();
     let mut resp = ResponseBuilder::new();
     resp.field("replay_gain_mode", &mode);
     resp.ok()

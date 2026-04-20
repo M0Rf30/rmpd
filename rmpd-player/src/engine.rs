@@ -95,14 +95,14 @@ impl PlaybackEngine {
         }
     }
 
-    pub async fn play(&mut self, song: Song) -> Result<()> {
-        info!("starting playback: {}", song.path);
+    pub async fn play(&mut self, playback_song: rmpd_core::playback::PlaybackSong) -> Result<()> {
+        info!("starting playback: {}", playback_song.resolved_path);
 
         // Stop current playback if any (internal stop, no events - caller will emit)
         self.stop_internal().await?;
 
-        // Update current song
-        *self.current_song.write().await = Some(song.clone());
+        // Update current song - clone the song from Arc
+        *self.current_song.write().await = Some((*playback_song.song).clone());
 
         // Reset stop flag
         self.stop_flag.store(false, Ordering::Release);
@@ -112,7 +112,7 @@ impl PlaybackEngine {
         self.command_tx = Some(command_tx);
 
         // Spawn playback thread
-        let song_path = song.path.clone();
+        let song_path = playback_song.resolved_path.clone();
         let event_bus = self.event_bus.clone();
         let stop_flag = self.stop_flag.clone();
         let volume = self.volume.clone();

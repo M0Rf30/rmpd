@@ -8,6 +8,7 @@ pub mod filter;
 pub mod messaging;
 pub mod partition;
 pub mod path;
+pub mod playback;
 pub mod queue;
 pub mod song;
 pub mod state;

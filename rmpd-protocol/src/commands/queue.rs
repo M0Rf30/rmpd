@@ -331,7 +331,7 @@ pub async fn handle_playid_command(state: &AppState, id: Option<u32>) -> String 
         // Play specific song by ID
         let queue = state.queue.read().await;
         if let Some(item) = queue.get_by_id(song_id) {
-            let song = item.song.clone();
+            let song = (*item.song).clone();
             let position = item.position;
             drop(queue);
 

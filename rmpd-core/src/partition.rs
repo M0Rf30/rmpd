@@ -160,16 +160,22 @@ impl PartitionManager {
         from_partition: &str,
         to_partition: &str,
     ) -> Result<(), String> {
-        // Get both partitions
-        let partitions = self.partitions.read().await;
+        // Get both partitions and extract Arc references
+        let (from, to) = {
+            let partitions = self.partitions.read().await;
 
-        let from = partitions
-            .get(from_partition)
-            .ok_or_else(|| format!("Source partition not found: {}", from_partition))?;
+            let from = partitions
+                .get(from_partition)
+                .ok_or_else(|| format!("Source partition not found: {}", from_partition))?
+                .clone();
 
-        let to = partitions
-            .get(to_partition)
-            .ok_or_else(|| format!("Target partition not found: {}", to_partition))?;
+            let to = partitions
+                .get(to_partition)
+                .ok_or_else(|| format!("Target partition not found: {}", to_partition))?
+                .clone();
+
+            (from, to)
+        }; // Drop read lock here
 
         // Remove from source
         from.remove_output(output_id).await;

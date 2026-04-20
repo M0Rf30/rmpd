@@ -169,10 +169,21 @@ impl DiscoveryService {
     async fn recv_async(
         receiver: mdns_sd::Receiver<ServiceEvent>,
     ) -> Result<ServiceEvent, Box<dyn std::error::Error + Send + Sync>> {
-        tokio::task::spawn_blocking(move || receiver.recv())
-            .await
-            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?
-            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            tokio::task::spawn_blocking(move || receiver.recv()),
+        )
+        .await
+        {
+            Ok(result) => result
+                .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?
+                .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>),
+            Err(_) => {
+                tracing::warn!("discovery operation timed out after 30s");
+                Err(Box::new(std::sync::mpsc::RecvError)
+                    as Box<dyn std::error::Error + Send + Sync>)
+            }
+        }
     }
 
     /// Extract protocol name from mDNS service type

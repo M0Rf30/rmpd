@@ -1012,7 +1012,7 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
                     .parse_next(input)?
                     .filter(|s| !s.is_empty());
                 (None, None, group_type)
-            } else if let Some(ref ft) = next_token {
+            } else if let Some(ft) = next_token.clone() {
                 if ft.starts_with('(') {
                     // Filter expression: list TAG "(expr)" [group GROUPTYPE]
                     let _ = space0.parse_next(input)?;
@@ -1033,7 +1033,7 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
                         None
                     };
 
-                    (Some(next_token.unwrap()), None, group_type)
+                    (Some(ft), None, group_type)
                 } else {
                     // Traditional: list TAG FILTER_TAG FILTER_VALUE [t2 v2 ...] [group GROUPTYPE]
                     let _ = space0.parse_next(input)?;
@@ -1089,11 +1089,10 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
 
                     // If we have extra pairs, build a combined expression string
                     let (ft_out, fv_out) = if extra_pairs.is_empty() {
-                        (Some(next_token.unwrap()), Some(fv))
+                        (Some(ft.clone()), Some(fv))
                     } else {
                         // Build AND filter expression from all pairs
-                        let first_tag = next_token.unwrap();
-                        let mut expr = format!("({} == {:?})", first_tag, fv);
+                        let mut expr = format!("({} == {:?})", ft, fv);
                         for (et, ev) in &extra_pairs {
                             expr.push_str(&format!(" AND ({} == {:?})", et, ev));
                         }
