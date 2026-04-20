@@ -46,7 +46,7 @@ pub async fn run(bind_address: String, config: Config) -> Result<()> {
     let shutdown_state_file_path = state_file_path.clone();
 
     // Spawn task to handle shutdown signals
-    tokio::spawn(async move {
+    let _shutdown_handler = tokio::spawn(async move {
         match signal::ctrl_c().await {
             Ok(()) => {
                 info!("received SIGINT, saving state");
@@ -98,7 +98,7 @@ async fn restore_state(
         status.crossfade = saved_state.crossfade;
         status.mixramp_db = saved_state.mixramp_db;
         status.mixramp_delay = saved_state.mixramp_delay;
-        status.replay_gain_mode = saved_state.replay_gain_mode.clone();
+        status.replay_gain_mode = saved_state.replay_gain_mode;
     }
 
     // Restore playlist
@@ -133,7 +133,7 @@ async fn restore_state(
     if let Some(position) = saved_state.current_position {
         let queue = state.queue.read().await;
         if let Some(item) = queue.get(position) {
-            let song = item.song.clone();
+            let song = (*item.song).clone();
             let song_id = item.id;
             drop(queue);
 
@@ -180,40 +180,15 @@ async fn restore_state(
                         // Small delay to ensure server is listening
                         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
-                        // Start playback
-                        if state_clone
-                            .engine
-                            .write()
-                            .await
-                            .play(playback_song)
-                            .await
-                            .is_ok()
+                        if let Err(e) = resume_playback(
+                            &state_clone,
+                            playback_song,
+                            play_state,
+                            elapsed,
+                        )
+                        .await
                         {
-                            // Update state immediately
-                            {
-                                let mut status = state_clone.status.write().await;
-                                status.state = if play_state == PlayerState::Pause {
-                                    PlayerState::Pause
-                                } else {
-                                    PlayerState::Play
-                                };
-                            }
-
-                            // Seek to saved position if available
-                            if let Some(elapsed_time) = elapsed
-                                && elapsed_time > 0.0
-                                && let Err(e) =
-                                    state_clone.engine.write().await.seek(elapsed_time).await
-                            {
-                                error!("failed to seek: {}", e);
-                            }
-
-                            // If was paused, pause the engine
-                            if play_state == PlayerState::Pause
-                                && let Err(e) = state_clone.engine.write().await.pause().await
-                            {
-                                error!("failed to pause: {}", e);
-                            }
+                            error!("failed to resume playback: {}", e);
                         }
                     });
                 }
@@ -239,4 +214,34 @@ async fn save_state_on_shutdown(state: &AppState, state_file_path: &str) {
     if let Err(e) = state_file.save(&status, &queue).await {
         error!("failed to save state: {}", e);
     }
+}
+
+async fn resume_playback(
+    state: &AppState,
+    playback_song: rmpd_core::playback::PlaybackSong,
+    target_state: PlayerState,
+    elapsed: Option<f64>,
+) -> Result<()> {
+    state.engine.write().await.play(playback_song).await?;
+
+    {
+        let mut status = state.status.write().await;
+        status.state = if target_state == PlayerState::Pause {
+            PlayerState::Pause
+        } else {
+            PlayerState::Play
+        };
+    }
+
+    if let Some(elapsed_time) = elapsed
+        && elapsed_time > 0.0
+    {
+        state.engine.write().await.seek(elapsed_time).await?;
+    }
+
+    if target_state == PlayerState::Pause {
+        state.engine.write().await.pause().await?;
+    }
+
+    Ok(())
 }

@@ -1,10 +1,11 @@
 use camino::Utf8PathBuf;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::time::Duration;
 
 /// MPD tag type canonical order (matching `Names.cxx` TagType enum).
 /// Used for output ordering: songs emit tags in this exact order.
-pub const TAG_ORDER: &[&str] = &[
+pub(crate) const TAG_ORDER: &[&str] = &[
     "artist",
     "artistsort",
     "album",
@@ -40,6 +41,47 @@ pub const TAG_ORDER: &[&str] = &[
     "musicbrainz_releasegroupid",
     "musicbrainz_workid",
 ];
+
+/// Well-known MPD tag names. Using static references avoids per-song String allocation.
+pub fn intern_tag_key(key: &str) -> Cow<'static, str> {
+    match key.to_lowercase().as_str() {
+        "artist" => Cow::Borrowed("artist"),
+        "album" => Cow::Borrowed("album"),
+        "title" => Cow::Borrowed("title"),
+        "track" => Cow::Borrowed("track"),
+        "name" => Cow::Borrowed("name"),
+        "genre" => Cow::Borrowed("genre"),
+        "date" => Cow::Borrowed("date"),
+        "composer" => Cow::Borrowed("composer"),
+        "performer" => Cow::Borrowed("performer"),
+        "comment" => Cow::Borrowed("comment"),
+        "disc" => Cow::Borrowed("disc"),
+        "label" => Cow::Borrowed("label"),
+        "albumartist" => Cow::Borrowed("albumartist"),
+        "musicbrainz_artistid" => Cow::Borrowed("musicbrainz_artistid"),
+        "musicbrainz_albumid" => Cow::Borrowed("musicbrainz_albumid"),
+        "musicbrainz_albumartistid" => Cow::Borrowed("musicbrainz_albumartistid"),
+        "musicbrainz_trackid" => Cow::Borrowed("musicbrainz_trackid"),
+        "musicbrainz_releasetrackid" => Cow::Borrowed("musicbrainz_releasetrackid"),
+        "musicbrainz_workid" => Cow::Borrowed("musicbrainz_workid"),
+        "originaldate" => Cow::Borrowed("originaldate"),
+        "albumsort" => Cow::Borrowed("albumsort"),
+        "artistsort" => Cow::Borrowed("artistsort"),
+        "albumartistsort" => Cow::Borrowed("albumartistsort"),
+        "titlesort" => Cow::Borrowed("titlesort"),
+        "work" => Cow::Borrowed("work"),
+        "grouping" => Cow::Borrowed("grouping"),
+        "conductor" => Cow::Borrowed("conductor"),
+        "ensemble" => Cow::Borrowed("ensemble"),
+        "movement" => Cow::Borrowed("movement"),
+        "movementnumber" => Cow::Borrowed("movementnumber"),
+        "location" => Cow::Borrowed("location"),
+        "mood" => Cow::Borrowed("mood"),
+        "composersort" => Cow::Borrowed("composersort"),
+        "musicbrainz_releasegroupid" => Cow::Borrowed("musicbrainz_releasegroupid"),
+        _ => Cow::Owned(key.to_lowercase()),
+    }
+}
 
 /// Map lowercase tag name to canonical MPD display name.
 pub fn canonical_tag_name(tag: &str) -> &'static str {
@@ -107,7 +149,8 @@ pub struct Song {
     /// All tags as (lowercase_tag_name, value) pairs.
     /// The same tag name may appear multiple times for multi-valued tags.
     /// Tags are stored in file insertion order; output preserves this order to match MPD.
-    pub tags: Vec<(String, String)>,
+    /// Tag keys are interned using Cow<'static, str> to reduce memory usage.
+    pub tags: Vec<(Cow<'static, str>, String)>,
 }
 
 impl Song {
@@ -116,7 +159,7 @@ impl Song {
         let name_lower = name.to_lowercase();
         self.tags
             .iter()
-            .find(|(k, _)| k == &name_lower)
+            .find(|(k, _)| k.as_ref() == name_lower.as_str())
             .map(|(_, v)| v.as_str())
     }
 
@@ -125,7 +168,7 @@ impl Song {
         let name_lower = name.to_lowercase();
         self.tags
             .iter()
-            .filter(move |(k, _)| *k == name_lower)
+            .filter(move |(k, _)| k.as_ref() == name_lower.as_str())
             .map(|(_, v)| v.as_str())
     }
 

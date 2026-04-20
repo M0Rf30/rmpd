@@ -18,7 +18,7 @@ pub async fn handle_play_command(state: &AppState, position: Option<u32>) -> Str
     let (song, actual_position) = if let Some(pos) = position {
         // Play specific position
         if let Some(item) = queue.get(pos) {
-            (item.song.clone(), Some((pos, item.id)))
+            ((*item.song).clone(), Some((pos, item.id)))
         } else {
             return ResponseBuilder::error(ACK_ERROR_ARG, 0, "play", "Bad song index");
         }
@@ -31,7 +31,7 @@ pub async fn handle_play_command(state: &AppState, position: Option<u32>) -> Str
             (song, pos.map(|p| (p.position, p.id)))
         } else if let Some(item) = queue.get(0) {
             // Play first song
-            (item.song.clone(), Some((0, item.id)))
+            ((*item.song).clone(), Some((0, item.id)))
         } else {
             // Empty queue: MPD silently returns OK
             return ResponseBuilder::new().ok();
@@ -152,7 +152,7 @@ pub async fn handle_next_command(state: &AppState) -> String {
     let next_pos = current.position + 1;
 
     if let Some(item) = queue.get(next_pos) {
-        let song = item.song.clone();
+        let song = (*item.song).clone();
         let item_id = item.id;
         drop(queue);
         drop(status);
@@ -200,7 +200,7 @@ pub async fn handle_previous_command(state: &AppState) -> String {
     };
 
     if let Some(item) = queue.get(prev_pos) {
-        let song = item.song.clone();
+        let song = (*item.song).clone();
         let item_id = item.id;
         drop(queue);
         drop(status);

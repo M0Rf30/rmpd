@@ -1,4 +1,5 @@
 use camino::Utf8PathBuf;
+use rayon::prelude::*;
 use rmpd_core::error::{Result, RmpdError};
 use rmpd_core::event::{Event, EventBus};
 use std::fs;
@@ -8,6 +9,24 @@ use tracing::{debug, info, warn};
 use crate::database::Database;
 use crate::metadata::MetadataExtractor;
 use rmpd_core::time::system_time_to_unix_secs;
+
+/// Information about a file to be processed
+#[derive(Debug, Clone)]
+struct FileInfo {
+    absolute_path: Utf8PathBuf,
+    relative_path: Utf8PathBuf,
+    #[allow(dead_code)] // Used by directory mtime comparison during incremental scans
+    mtime: i64,
+    existing_song: Option<rmpd_core::song::Song>,
+}
+
+/// Result of metadata extraction for a file
+#[derive(Debug)]
+struct ExtractedMetadata {
+    file_info: FileInfo,
+    song: Option<rmpd_core::song::Song>,
+    error: Option<String>,
+}
 
 #[derive(Debug)]
 pub struct Scanner {
@@ -65,6 +84,89 @@ impl Scanner {
     }
 
     fn scan_recursive(&self, db: &Database, path: &Path, stats: &mut ScanStats) -> Result<()> {
+        // Step 1: Collect all audio files and their metadata (sequential directory walk)
+        let mut files_to_process = Vec::new();
+        self.collect_audio_files(db, path, &mut files_to_process, stats)?;
+
+        // Step 2: Extract metadata in parallel
+        let extracted: Vec<ExtractedMetadata> = files_to_process
+            .into_par_iter()
+            .map(|file_info| {
+                match MetadataExtractor::extract_from_file(&file_info.absolute_path) {
+                    Ok(mut song) => {
+                        // Replace absolute path with relative path for storage
+                        song.path = file_info.relative_path.clone();
+                        ExtractedMetadata {
+                            file_info,
+                            song: Some(song),
+                            error: None,
+                        }
+                    }
+                    Err(e) => {
+                        let error_msg = format!("{}", e);
+                        ExtractedMetadata {
+                            file_info,
+                            song: None,
+                            error: Some(error_msg),
+                        }
+                    }
+                }
+            })
+            .collect();
+
+        // Step 3: Batch insert into database (sequential, single connection)
+        let mut added = 0u32;
+        let mut updated = 0u32;
+        let mut errors = 0u32;
+
+        for extracted_meta in extracted {
+            if let Some(error) = extracted_meta.error {
+                warn!(
+                    "failed to extract metadata from {}: {}",
+                    extracted_meta.file_info.relative_path, error
+                );
+                errors += 1;
+                continue;
+            }
+
+            if let Some(song) = extracted_meta.song {
+                match db.add_song(&song) {
+                    Ok(_) => {
+                        let is_update = extracted_meta
+                            .file_info
+                            .existing_song
+                            .is_some();
+                        if is_update {
+                            debug!("updated: {}", song.path);
+                            updated += 1;
+                        } else {
+                            debug!("added: {}", song.path);
+                            added += 1;
+                        }
+                    }
+                    Err(e) => {
+                        warn!("failed to add {} to database: {}", song.path, e);
+                        errors += 1;
+                    }
+                }
+            }
+        }
+
+        stats.added += added;
+        stats.updated += updated;
+        stats.errors += errors;
+
+        Ok(())
+    }
+
+    /// Collect all audio files from the directory tree (sequential walk)
+    fn collect_audio_files(
+        &self,
+        db: &Database,
+        path: &Path,
+        files: &mut Vec<FileInfo>,
+        stats: &mut ScanStats,
+    ) -> Result<()> {
         let entries = fs::read_dir(path)
             .map_err(|e| RmpdError::Library(format!("Failed to read directory: {e}")))?;
 
@@ -113,7 +215,7 @@ impl Scanner {
                     }
                 }
                 // Recurse into subdirectory
-                if let Err(e) = self.scan_recursive(db, &entry_path, stats) {
+                if let Err(e) = self.collect_audio_files(db, &entry_path, files, stats) {
                     warn!("failed to scan directory {:?}: {}", entry_path, e);
                     stats.errors += 1;
                 }
@@ -154,7 +256,7 @@ impl Scanner {
                 };
 
                 // Check if file already exists in database (using relative path)
-                let existing = match db.get_song_by_path(relative_path.as_str()) {
+                let existing_song = match db.get_song_by_path(relative_path.as_str()) {
                     Ok(s) => s,
                     Err(e) => {
                         warn!("database error checking {}: {}", relative_path, e);
@@ -170,42 +272,19 @@ impl Scanner {
                 );
 
                 // Skip if file hasn't been modified
-                let is_update = if let Some(ref existing_song) = existing {
-                    if existing_song.last_modified >= mtime {
+                if let Some(ref existing) = existing_song {
+                    if existing.last_modified >= mtime {
                         continue;
                     }
-                    true
-                } else {
-                    false
-                };
-
-                // Extract metadata using absolute path for reading, but store relative path
-                match MetadataExtractor::extract_from_file(&utf8_path) {
-                    Ok(mut song) => {
-                        // Replace absolute path with relative path for storage
-                        song.path = relative_path.clone();
-
-                        match db.add_song(&song) {
-                            Ok(_) => {
-                                if is_update {
-                                    debug!("updated: {}", relative_path);
-                                    stats.updated += 1;
-                                } else {
-                                    debug!("added: {}", relative_path);
-                                    stats.added += 1;
-                                }
-                            }
-                            Err(e) => {
-                                warn!("failed to add {} to database: {}", relative_path, e);
-                                stats.errors += 1;
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        warn!("failed to extract metadata from {}: {}", relative_path, e);
-                        stats.errors += 1;
-                    }
                 }
+
+                // Add to files to process
+                files.push(FileInfo {
+                    absolute_path: utf8_path,
+                    relative_path,
+                    mtime,
+                    existing_song,
+                });
             }
         }
 

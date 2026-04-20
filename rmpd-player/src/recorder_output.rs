@@ -14,6 +14,7 @@ pub struct RecorderOutput {
     writer: Option<BufWriter<File>>,
     frames_written: u32,
     pause_state: PauseState,
+    conversion_buf: Vec<u8>,
 }
 
 impl RecorderOutput {
@@ -24,6 +25,7 @@ impl RecorderOutput {
             writer: None,
             frames_written: 0,
             pause_state: PauseState::new(),
+            conversion_buf: Vec::new(),
         }
     }
 
@@ -81,11 +83,9 @@ impl AudioOutput for RecorderOutput {
             return Ok(());
         }
         if let Some(w) = &mut self.writer {
-            for &s in samples {
-                let v = conversion::f32_to_i16(s);
-                w.write_all(&v.to_le_bytes())
-                    .map_err(|e| RmpdError::Player(format!("recorder write: {e}")))?;
-            }
+            conversion::samples_to_s16le_into(samples, &mut self.conversion_buf);
+            w.write_all(&self.conversion_buf)
+                .map_err(|e| RmpdError::Player(format!("recorder write: {e}")))?;
             self.frames_written += samples.len() as u32 / self.format.channels as u32;
         }
         Ok(())

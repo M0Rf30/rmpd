@@ -80,19 +80,16 @@ impl FilterExpression {
                     );
                     (sql, vec![value_param])
                 } else {
-                    // Multiple fallback tags: EXISTS for first tag OR (NOT EXISTS first AND EXISTS second) etc.
-                    // Simplified: just OR the EXISTS clauses (matches MPD behavior for filter matching)
-                    let clauses: Vec<String> = fallback_tags
+                    // Multiple fallback tags: use single EXISTS with IN clause for O(1) performance
+                    let tag_list = fallback_tags
                         .iter()
-                        .map(|t| {
-                            format!(
-                                "EXISTS (SELECT 1 FROM song_tags st WHERE st.song_id = songs.id AND st.tag = '{t}' AND st.value {sql_op} ?)"
-                            )
-                        })
-                        .collect();
-                    let sql = format!("({})", clauses.join(" OR "));
-                    let params = vec![value_param; fallback_tags.len()];
-                    (sql, params)
+                        .map(|t| format!("'{t}'"))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let sql = format!(
+                        "EXISTS (SELECT 1 FROM song_tags st WHERE st.song_id = songs.id AND st.tag IN ({tag_list}) AND st.value {sql_op} ?)"
+                    );
+                    (sql, vec![value_param])
                 }
             }
             FilterExpression::And(left, right) => {
@@ -393,7 +390,8 @@ mod tests {
         let (sql, params) = expr.to_sql();
         assert!(sql.contains("albumartist"));
         assert!(sql.contains("artist"));
-        assert_eq!(params.len(), 2);
+        assert!(sql.contains("IN"));
+        assert_eq!(params.len(), 1);
     }
 
     #[test]

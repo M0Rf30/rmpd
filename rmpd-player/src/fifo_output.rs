@@ -13,6 +13,7 @@ pub struct FifoOutput {
     path: String,
     writer: Option<BufWriter<std::fs::File>>,
     pause_state: PauseState,
+    conversion_buf: Vec<u8>,
 }
 
 impl FifoOutput {
@@ -21,6 +22,7 @@ impl FifoOutput {
             path: path.into(),
             writer: None,
             pause_state: PauseState::new(),
+            conversion_buf: Vec::new(),
         }
     }
 }
@@ -52,8 +54,8 @@ impl AudioOutput for FifoOutput {
             return Ok(());
         }
         if let Some(w) = &mut self.writer {
-            let bytes = conversion::samples_to_s16le(samples);
-            w.write_all(&bytes)
+            conversion::samples_to_s16le_into(samples, &mut self.conversion_buf);
+            w.write_all(&self.conversion_buf)
                 .map_err(|e| RmpdError::Player(format!("FIFO write error: {e}")))?;
             w.flush()
                 .map_err(|e| RmpdError::Player(format!("FIFO flush error: {e}")))?;

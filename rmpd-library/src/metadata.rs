@@ -9,8 +9,8 @@ use lofty::prelude::*;
 use lofty::probe::Probe;
 use lofty::tag::ItemKey;
 use rmpd_core::error::{Result, RmpdError};
-use rmpd_core::song::Song;
-use rmpd_core::tag::{VORBIS_TAG_MAP, normalize_decimal};
+use rmpd_core::song::{Song, intern_tag_key};
+use rmpd_core::tag::{vorbis_tag_map_get, normalize_decimal};
 use rmpd_core::time::system_time_to_unix_secs;
 use std::fs;
 use std::io::BufReader;
@@ -87,7 +87,7 @@ impl MetadataExtractor {
             .or_else(|| tagged_file.first_tag());
 
         tracing::debug!("extracting metadata from: {}", path);
-        let mut tags: Vec<(String, String)> = Vec::new();
+        let mut tags: Vec<(std::borrow::Cow<'static, str>, String)> = Vec::new();
 
         // For VorbisComment-based formats (FLAC/OGG/Opus), use raw key extraction
         // with MPD's canonical key mapping to avoid lofty mapping non-standard key
@@ -156,11 +156,7 @@ impl MetadataExtractor {
                     continue;
                 }
                 let key_lower = raw_key.to_lowercase();
-                if let Some(&tag_name) = VORBIS_TAG_MAP
-                    .iter()
-                    .find(|(k, _)| *k == key_lower)
-                    .map(|(_, v)| v)
-                {
+                if let Some(tag_name) = vorbis_tag_map_get(&key_lower) {
                     // Normalize Track/Disc: strip leading zeros, preserve zero values
                     let effective_val = if tag_name == "track" || tag_name == "disc" {
                         match normalize_decimal(&val) {
@@ -170,7 +166,7 @@ impl MetadataExtractor {
                     } else {
                         val
                     };
-                    tags.push((tag_name.to_string(), effective_val));
+                    tags.push((intern_tag_key(tag_name), effective_val));
                 }
             }
         } else if let Some(tag) = tag {
@@ -192,10 +188,10 @@ impl MetadataExtractor {
                         // Normalize Track/Disc: strip leading zeros, preserve zero values
                         if *tag_name == "track" || *tag_name == "disc" {
                             if let Some(normalized) = normalize_decimal(val) {
-                                tags.push((tag_name.to_string(), normalized));
+                                tags.push((intern_tag_key(tag_name), normalized));
                             }
                         } else {
-                            tags.push((tag_name.to_string(), val.clone()));
+                            tags.push((intern_tag_key(tag_name), val.clone()));
                         }
                     }
                 }
@@ -205,7 +201,7 @@ impl MetadataExtractor {
             let mut has_date = false;
             for (key, val) in &seen_tags {
                 if *key == ItemKey::RecordingDate {
-                    tags.push(("date".to_string(), val.clone()));
+                    tags.push((intern_tag_key("date"), val.clone()));
                     has_date = true;
                     break;
                 }
@@ -213,7 +209,7 @@ impl MetadataExtractor {
             if !has_date {
                 for (key, val) in &seen_tags {
                     if *key == ItemKey::Year {
-                        tags.push(("date".to_string(), val.clone()));
+                        tags.push((intern_tag_key("date"), val.clone()));
                         break;
                     }
                 }
@@ -231,22 +227,22 @@ impl MetadataExtractor {
                 }
             }
             if let Some(od) = best_original_date {
-                tags.push(("originaldate".to_string(), od));
+                tags.push((intern_tag_key("originaldate"), od));
             }
 
             // TrackNumber and DiscNumber from tag convenience methods (handles "3/12" format)
             // Only add if not already present from items iteration
-            if !tags.iter().any(|(k, _)| k == "track")
+            if !tags.iter().any(|(k, _)| k.as_ref() == "track")
                 && let Some(track) = tag.track()
                 && let Some(norm) = normalize_decimal(&track.to_string())
             {
-                tags.push(("track".to_string(), norm));
+                tags.push((intern_tag_key("track"), norm));
             }
-            if !tags.iter().any(|(k, _)| k == "disc")
+            if !tags.iter().any(|(k, _)| k.as_ref() == "disc")
                 && let Some(disc) = tag.disk()
                 && let Some(norm) = normalize_decimal(&disc.to_string())
             {
-                tags.push(("disc".to_string(), norm));
+                tags.push((intern_tag_key("disc"), norm));
             }
         }
 

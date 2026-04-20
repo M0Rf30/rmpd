@@ -1,7 +1,7 @@
 use camino::Utf8PathBuf;
 use icu_collator::{CollatorBorrowed, CollatorPreferences};
 use rmpd_core::error::{Result, RmpdError};
-use rmpd_core::song::Song;
+use rmpd_core::song::{Song, intern_tag_key};
 use rmpd_core::tag::tag_fallback_chain;
 use rmpd_core::time::system_time_to_unix_secs;
 use rusqlite::{Connection, OptionalExtension, Row, params};
@@ -303,13 +303,15 @@ impl Database {
     }
 
     /// Load tags for a single song by id.
-    fn load_tags_for_song(&self, song_id: u64) -> Result<Vec<(String, String)>> {
+    fn load_tags_for_song(&self, song_id: u64) -> Result<Vec<(std::borrow::Cow<'static, str>, String)>> {
         let mut stmt = self
             .conn
             .prepare("SELECT tag, value FROM song_tags WHERE song_id = ?1 ORDER BY rowid")?;
         let tags = stmt
             .query_map(params![song_id as i64], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                let tag: String = row.get(0)?;
+                let value: String = row.get(1)?;
+                Ok((intern_tag_key(&tag), value))
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(tags)
@@ -320,34 +322,27 @@ impl Database {
         if songs.is_empty() {
             return Ok(());
         }
-        // For small batches, query per song. For large batches, use a single query.
-        if songs.len() <= 10 {
-            for song in songs.iter_mut() {
-                song.tags = self.load_tags_for_song(song.id)?;
-            }
-        } else {
-            // Build id list and query all tags at once
-            let ids: Vec<String> = songs.iter().map(|s| s.id.to_string()).collect();
-            let id_list = ids.join(",");
-            let sql = format!(
-                "SELECT song_id, tag, value FROM song_tags WHERE song_id IN ({id_list}) ORDER BY song_id, rowid"
-            );
-            let mut stmt = self.conn.prepare(&sql)?;
-            let rows: Vec<(i64, String, String)> = stmt
-                .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
-                .collect::<std::result::Result<Vec<_>, _>>()?;
+        // Build id list and query all tags at once using IN clause
+        let ids: Vec<String> = songs.iter().map(|s| s.id.to_string()).collect();
+        let id_list = ids.join(",");
+        let sql = format!(
+            "SELECT song_id, tag, value FROM song_tags WHERE song_id IN ({id_list}) ORDER BY song_id, rowid"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows: Vec<(i64, String, String)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
 
-            // Build a map of song_id -> index in songs slice
-            let mut id_to_idx: Vec<(u64, usize)> =
-                songs.iter().enumerate().map(|(i, s)| (s.id, i)).collect();
-            id_to_idx.sort_by_key(|(id, _)| *id);
+        // Build a map of song_id -> index in songs slice
+        let mut id_to_idx: Vec<(u64, usize)> =
+            songs.iter().enumerate().map(|(i, s)| (s.id, i)).collect();
+        id_to_idx.sort_by_key(|(id, _)| *id);
 
-            for (song_id, tag, value) in rows {
-                let sid = song_id as u64;
-                if let Ok(pos) = id_to_idx.binary_search_by_key(&sid, |(id, _)| *id) {
-                    let idx = id_to_idx[pos].1;
-                    songs[idx].tags.push((tag, value));
-                }
+        for (song_id, tag, value) in rows {
+            let sid = song_id as u64;
+            if let Ok(pos) = id_to_idx.binary_search_by_key(&sid, |(id, _)| *id) {
+                let idx = id_to_idx[pos].1;
+                songs[idx].tags.push((intern_tag_key(&tag), value));
             }
         }
         Ok(())
@@ -355,55 +350,35 @@ impl Database {
 
     /// Update the FTS index for a song by reading its tags from song_tags.
     fn update_fts_for_song(&self, song_id: u64) -> Result<()> {
-        let title: String = self
-            .conn
-            .query_row(
-                "SELECT COALESCE(value, '') FROM song_tags WHERE song_id = ?1 AND tag = 'title' LIMIT 1",
-                params![song_id as i64],
-                |row| row.get(0),
-            )
-            .unwrap_or_default();
-        let artist: String = self
-            .conn
-            .query_row(
-                "SELECT COALESCE(value, '') FROM song_tags WHERE song_id = ?1 AND tag = 'artist' LIMIT 1",
-                params![song_id as i64],
-                |row| row.get(0),
-            )
-            .unwrap_or_default();
-        let album: String = self
-            .conn
-            .query_row(
-                "SELECT COALESCE(value, '') FROM song_tags WHERE song_id = ?1 AND tag = 'album' LIMIT 1",
-                params![song_id as i64],
-                |row| row.get(0),
-            )
-            .unwrap_or_default();
-        let album_artist: String = self
-            .conn
-            .query_row(
-                "SELECT COALESCE(value, '') FROM song_tags WHERE song_id = ?1 AND tag = 'albumartist' LIMIT 1",
-                params![song_id as i64],
-                |row| row.get(0),
-            )
-            .unwrap_or_default();
-        let genre: String = self
-            .conn
-            .query_row(
-                "SELECT COALESCE(value, '') FROM song_tags WHERE song_id = ?1 AND tag = 'genre' LIMIT 1",
-                params![song_id as i64],
-                |row| row.get(0),
-            )
-            .unwrap_or_default();
-        let composer: String = self
-            .conn
-            .query_row(
-                "SELECT COALESCE(value, '') FROM song_tags WHERE song_id = ?1 AND tag = 'composer' LIMIT 1",
-                params![song_id as i64],
-                |row| row.get(0),
-            )
-            .unwrap_or_default();
-
+        // Single query to get all needed tags at once
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT tag, value FROM song_tags WHERE song_id = ?1 AND tag IN ('title', 'artist', 'album', 'albumartist', 'genre', 'composer')"
+        )?;
+        
+        let mut title = String::new();
+        let mut artist = String::new();
+        let mut album = String::new();
+        let mut album_artist = String::new();
+        let mut genre = String::new();
+        let mut composer = String::new();
+        
+        let rows = stmt.query_map(params![song_id as i64], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        
+        for row in rows {
+            let (tag, value) = row?;
+            match tag.as_str() {
+                "title" => title = value,
+                "artist" => artist = value,
+                "album" => album = value,
+                "albumartist" => album_artist = value,
+                "genre" => genre = value,
+                "composer" => composer = value,
+                _ => {}
+            }
+        }
+        
         // Delete old FTS entry if it exists, then insert new one
         self.conn.execute(
             "INSERT INTO songs_fts(songs_fts, rowid, title, artist, album, album_artist, genre, composer)
@@ -1036,7 +1011,7 @@ impl Database {
 
         // Sort to match MPD's song_cmp: Album (ICU) -> Disc -> Track -> Filename (ICU)
         let col = CollatorBorrowed::try_new(CollatorPreferences::default(), Default::default())
-            .unwrap_or_else(|_| panic!("ICU collator unavailable"));
+            .map_err(|e| RmpdError::Library(format!("ICU collator unavailable: {e}")))?;
         songs.sort_by(|a, b| {
             let album_ord = icu_cmp_opt(&col, a.tag("album"), b.tag("album"));
             if album_ord != Ordering::Equal {
@@ -1154,7 +1129,7 @@ impl Database {
 
         // Sort to match MPD's song_cmp: (album NULL-first, disc, track, filename)
         let col = CollatorBorrowed::try_new(CollatorPreferences::default(), Default::default())
-            .unwrap_or_else(|_| panic!("ICU collator unavailable"));
+            .map_err(|e| RmpdError::Library(format!("ICU collator unavailable: {e}")))?;
         songs.sort_by(|a, b| {
             let album_ord = icu_cmp_opt(&col, a.tag("album"), b.tag("album"));
             if album_ord != Ordering::Equal {

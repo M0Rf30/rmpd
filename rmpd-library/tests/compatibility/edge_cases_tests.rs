@@ -8,6 +8,7 @@
 /// - Boundary conditions
 use crate::common::rmpd_harness::RmpdTestHarness;
 use crate::fixtures::{AudioFormat, FixtureGenerator, TestMetadata};
+use rmpd_core::song::intern_tag_key;
 
 /// Helper to check if FFmpeg is available
 macro_rules! require_ffmpeg {
@@ -257,10 +258,10 @@ fn test_duplicate_paths_update() {
     harness.add_song(&song1).unwrap();
 
     // Simulate updating metadata for same file
-    song1.tags.retain(|(k, _)| k != "title");
+    song1.tags.retain(|(k, _)| k.as_ref() != "title");
     song1
         .tags
-        .push(("title".to_string(), "Updated Title".to_string()));
+        .push((intern_tag_key("title"), "Updated Title".to_string()));
     harness.add_song(&song1).unwrap();
 
     // Should have updated, not duplicated

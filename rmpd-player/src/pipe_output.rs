@@ -12,6 +12,7 @@ pub struct PipeOutput {
     child: Option<Child>,
     stdin: Option<BufWriter<ChildStdin>>,
     pause_state: PauseState,
+    conversion_buf: Vec<u8>,
 }
 
 impl PipeOutput {
@@ -21,6 +22,7 @@ impl PipeOutput {
             child: None,
             stdin: None,
             pause_state: PauseState::new(),
+            conversion_buf: Vec::new(),
         }
     }
 }
@@ -54,8 +56,8 @@ impl AudioOutput for PipeOutput {
             return Ok(());
         }
         if let Some(w) = &mut self.stdin {
-            let bytes = conversion::samples_to_s16le(samples);
-            w.write_all(&bytes)
+            conversion::samples_to_s16le_into(samples, &mut self.conversion_buf);
+            w.write_all(&self.conversion_buf)
                 .map_err(|e| RmpdError::Player(format!("pipe write error: {e}")))?;
         }
         Ok(())

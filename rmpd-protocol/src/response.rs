@@ -50,9 +50,16 @@ pub struct ResponseBuilder {
 impl ResponseBuilder {
     pub fn new() -> Self {
         Self {
-            buffer: String::new(),
+            buffer: String::with_capacity(4096),
             binary_data: None,
         }
+    }
+
+    /// Clear the buffer for reuse without deallocating.
+    /// Useful for reusing the builder across multiple responses.
+    pub fn clear(&mut self) {
+        self.buffer.clear();
+        self.binary_data = None;
     }
 
     pub fn ok(mut self) -> String {

@@ -1,19 +1,139 @@
 use crate::song::Song;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::Arc;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct QueueItem {
     pub id: u32,
     pub position: u32,
-    pub song: Song,
+    pub song: Arc<Song>,
     /// Priority (0-255, default 0). Higher values have higher priority.
     pub priority: u8,
     /// Optional playback range (start, end) in seconds
     pub range: Option<(f64, f64)>,
     /// Custom tags attached to this queue item
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tags: Option<HashMap<String, String>>,
+}
+
+impl Serialize for QueueItem {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut state = serializer.serialize_struct("QueueItem", 6)?;
+        state.serialize_field("id", &self.id)?;
+        state.serialize_field("position", &self.position)?;
+        state.serialize_field("song", self.song.as_ref())?;
+        state.serialize_field("priority", &self.priority)?;
+        state.serialize_field("range", &self.range)?;
+        state.serialize_field("tags", &self.tags)?;
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for QueueItem {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::{self, MapAccess, Visitor};
+        use std::fmt;
+
+        #[derive(Deserialize)]
+        #[serde(field_identifier, rename_all = "lowercase")]
+        enum Field {
+            Id,
+            Position,
+            Song,
+            Priority,
+            Range,
+            Tags,
+        }
+
+        struct QueueItemVisitor;
+
+        impl<'de> Visitor<'de> for QueueItemVisitor {
+            type Value = QueueItem;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("struct QueueItem")
+            }
+
+            fn visit_map<V>(self, mut map: V) -> Result<QueueItem, V::Error>
+            where
+                V: MapAccess<'de>,
+            {
+                let mut id = None;
+                let mut position = None;
+                let mut song = None;
+                let mut priority = None;
+                let mut range = None;
+                let mut tags = None;
+
+                while let Some(key) = map.next_key()? {
+                    match key {
+                        Field::Id => {
+                            if id.is_some() {
+                                return Err(de::Error::duplicate_field("id"));
+                            }
+                            id = Some(map.next_value()?);
+                        }
+                        Field::Position => {
+                            if position.is_some() {
+                                return Err(de::Error::duplicate_field("position"));
+                            }
+                            position = Some(map.next_value()?);
+                        }
+                        Field::Song => {
+                            if song.is_some() {
+                                return Err(de::Error::duplicate_field("song"));
+                            }
+                            let s: Song = map.next_value()?;
+                            song = Some(Arc::new(s));
+                        }
+                        Field::Priority => {
+                            if priority.is_some() {
+                                return Err(de::Error::duplicate_field("priority"));
+                            }
+                            priority = Some(map.next_value()?);
+                        }
+                        Field::Range => {
+                            if range.is_some() {
+                                return Err(de::Error::duplicate_field("range"));
+                            }
+                            range = Some(map.next_value()?);
+                        }
+                        Field::Tags => {
+                            if tags.is_some() {
+                                return Err(de::Error::duplicate_field("tags"));
+                            }
+                            tags = Some(map.next_value()?);
+                        }
+                    }
+                }
+
+                let id = id.ok_or_else(|| de::Error::missing_field("id"))?;
+                let position = position.ok_or_else(|| de::Error::missing_field("position"))?;
+                let song = song.ok_or_else(|| de::Error::missing_field("song"))?;
+                let priority = priority.unwrap_or(0);
+                let range = range;
+                let tags = tags;
+
+                Ok(QueueItem {
+                    id,
+                    position,
+                    song,
+                    priority,
+                    range,
+                    tags,
+                })
+            }
+        }
+
+        deserializer.deserialize_struct("QueueItem", &["id", "position", "song", "priority", "range", "tags"], QueueItemVisitor)
+    }
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -36,7 +156,7 @@ impl Queue {
         self.items.push(QueueItem {
             id,
             position,
-            song,
+            song: Arc::new(song),
             priority: 0, // Default priority
             range: None, // No range restriction by default
             tags: None,  // No custom tags by default
@@ -179,7 +299,7 @@ impl Queue {
         let item = QueueItem {
             id,
             position: pos,
-            song,
+            song: Arc::new(song),
             priority: 0, // Default priority
             range: None, // No range restriction by default
             tags: None,  // No custom tags by default

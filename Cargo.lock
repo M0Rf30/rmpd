@@ -2785,6 +2785,7 @@ dependencies = [
  "lofty",
  "notify",
  "notify-debouncer-full",
+ "rayon",
  "rmpd-core",
  "rmpd-player",
  "rusqlite",

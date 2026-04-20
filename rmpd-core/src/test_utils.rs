@@ -4,7 +4,7 @@
 //! multiple test suites in the workspace. Only available when the
 //! "test-utils" feature is enabled.
 
-use crate::song::Song;
+use crate::song::{Song, intern_tag_key};
 use camino::Utf8PathBuf;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -36,7 +36,7 @@ pub fn create_test_song(id: u64, name: &str) -> Song {
         replay_gain_album_peak: None,
         added_at: 0,
         last_modified: 0,
-        tags: vec![("title".to_string(), format!("Song {}", name))],
+        tags: vec![(intern_tag_key("title"), format!("Song {}", name))],
     }
 }
 
@@ -65,13 +65,13 @@ pub fn create_test_song_with_metadata(
 ) -> Song {
     let mut tags = Vec::new();
     if let Some(v) = title {
-        tags.push(("title".to_string(), v.to_string()));
+        tags.push((intern_tag_key("title"), v.to_string()));
     }
     if let Some(v) = artist {
-        tags.push(("artist".to_string(), v.to_string()));
+        tags.push((intern_tag_key("artist"), v.to_string()));
     }
     if let Some(v) = album {
-        tags.push(("album".to_string(), v.to_string()));
+        tags.push((intern_tag_key("album"), v.to_string()));
     }
     Song {
         id,
@@ -112,12 +112,12 @@ pub fn make_test_song(path: &str, track: u32) -> Song {
         added_at: 0,
         last_modified: 0,
         tags: vec![
-            ("title".to_string(), format!("Track {track}")),
-            ("artist".to_string(), "Test Artist".to_string()),
-            ("album".to_string(), "Test Album".to_string()),
-            ("track".to_string(), track.to_string()),
-            ("date".to_string(), "2024".to_string()),
-            ("genre".to_string(), "Rock".to_string()),
+            (intern_tag_key("title"), format!("Track {track}")),
+            (intern_tag_key("artist"), "Test Artist".to_string()),
+            (intern_tag_key("album"), "Test Album".to_string()),
+            (intern_tag_key("track"), track.to_string()),
+            (intern_tag_key("date"), "2024".to_string()),
+            (intern_tag_key("genre"), "Rock".to_string()),
         ],
     }
 }

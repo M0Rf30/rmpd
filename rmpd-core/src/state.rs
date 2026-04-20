@@ -11,6 +11,41 @@ pub enum PlayerState {
     Pause,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ReplayGainMode {
+    #[default]
+    Off,
+    Track,
+    Album,
+    Auto,
+}
+
+impl ReplayGainMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Track => "track",
+            Self::Album => "album",
+            Self::Auto => "auto",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "track" => Self::Track,
+            "album" => Self::Album,
+            "auto" => Self::Auto,
+            _ => Self::Off,
+        }
+    }
+}
+
+impl std::fmt::Display for ReplayGainMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 impl PlayerState {
     /// Convert from atomic u8 representation (Stop=0, Play=1, Pause=2)
     pub fn from_atomic(value: u8) -> Self {
@@ -19,6 +54,16 @@ impl PlayerState {
             1 => Self::Play,
             2 => Self::Pause,
             _ => Self::Stop,
+        }
+    }
+}
+
+impl std::fmt::Display for PlayerState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Stop => f.write_str("stop"),
+            Self::Play => f.write_str("play"),
+            Self::Pause => f.write_str("pause"),
         }
     }
 }
@@ -67,7 +112,7 @@ pub struct PlayerStatus {
     pub playlist_length: u32,
     pub updating_db: Option<u32>,
     pub error: Option<String>,
-    pub replay_gain_mode: String,
+    pub replay_gain_mode: ReplayGainMode,
 }
 
 impl Default for PlayerStatus {
@@ -92,7 +137,31 @@ impl Default for PlayerStatus {
             playlist_length: 0,
             updating_db: None,
             error: None,
-            replay_gain_mode: "off".to_string(),
+            replay_gain_mode: ReplayGainMode::Off,
         }
+    }
+}
+
+impl std::fmt::Display for PlayerStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "state={} vol={} repeat={} random={} single={} consume={} playlist_length={}",
+            self.state,
+            self.volume,
+            if self.repeat { "on" } else { "off" },
+            if self.random { "on" } else { "off" },
+            match self.single {
+                SingleMode::Off => "off",
+                SingleMode::On => "on",
+                SingleMode::Oneshot => "oneshot",
+            },
+            match self.consume {
+                ConsumeMode::Off => "off",
+                ConsumeMode::On => "on",
+                ConsumeMode::Oneshot => "oneshot",
+            },
+            self.playlist_length
+        )
     }
 }

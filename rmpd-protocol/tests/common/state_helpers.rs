@@ -1,5 +1,5 @@
 use rmpd_core::queue::Queue;
-use rmpd_core::state::{ConsumeMode, PlayerState, PlayerStatus, QueuePosition, SingleMode};
+use rmpd_core::state::{ConsumeMode, PlayerState, PlayerStatus, QueuePosition, SingleMode, ReplayGainMode};
 pub use rmpd_core::test_utils::make_test_song;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -154,7 +154,7 @@ impl StatusBuilder {
             playlist_length,
             updating_db: None,
             error: None,
-            replay_gain_mode: "off".to_string(),
+            replay_gain_mode: ReplayGainMode::Off,
         }
     }
 }

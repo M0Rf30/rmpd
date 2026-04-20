@@ -6,7 +6,6 @@ use cpal::{Device, SampleFormat, Stream, StreamConfig};
 use rmpd_core::error::{Result, RmpdError};
 use rmpd_core::song::AudioFormat;
 use std::sync::mpsc::{SyncSender, sync_channel};
-use std::sync::{Arc, Mutex};
 
 pub struct CpalOutput {
     device: Device,
@@ -65,12 +64,11 @@ impl CpalOutput {
         };
         let sample_format = device_config.find_pcm_format()?;
 
-        let (tx, rx) = sync_channel::<Vec<f32>>(5);
-        let rx = Arc::new(Mutex::new(rx));
+        let (tx, rx) = sync_channel::<Vec<f32>>(32);
 
         let stream = match sample_format {
             SampleFormat::F32 => {
-                let mut buf = SampleBuffer::new(rx.clone());
+                let mut buf = SampleBuffer::new(rx);
                 self.device
                     .build_output_stream(
                         self.config,
@@ -87,7 +85,7 @@ impl CpalOutput {
                     .map_err(|e| RmpdError::Player(format!("Failed to build F32 stream: {e}")))?
             }
             SampleFormat::I16 => {
-                let mut buf = SampleBuffer::new(rx.clone());
+                let mut buf = SampleBuffer::new(rx);
                 self.device
                     .build_output_stream(
                         self.config,
@@ -104,7 +102,7 @@ impl CpalOutput {
                     .map_err(|e| RmpdError::Player(format!("Failed to build I16 stream: {e}")))?
             }
             SampleFormat::I32 => {
-                let mut buf = SampleBuffer::new(rx.clone());
+                let mut buf = SampleBuffer::new(rx);
                 self.device
                     .build_output_stream(
                         self.config,

@@ -1,5 +1,6 @@
 use crate::helpers;
 use crate::state::AppState;
+use crate::commands::utils::prepare_song_for_playback;
 use rmpd_core::event::Event;
 use rmpd_core::state::{PlayerState, QueuePosition};
 use std::time::Duration;
@@ -147,7 +148,7 @@ impl QueuePlaybackManager {
 
         // Get the next song
         if let Some(item) = queue.get(next_pos) {
-            let song = item.song.clone();
+            let song = (*item.song).clone();
             let item_id = item.id;
             drop(queue);
 
@@ -159,7 +160,8 @@ impl QueuePlaybackManager {
             }
 
             // Play the next song
-            match state.engine.write().await.play(song.clone()).await {
+            let playback_song = prepare_song_for_playback(&song, state.music_dir.as_deref());
+            match state.engine.write().await.play(playback_song).await {
                 Ok(_) => {
                     let mut status = state.status.write().await;
                     status.state = PlayerState::Play;

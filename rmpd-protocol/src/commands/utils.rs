@@ -9,12 +9,14 @@ pub const ACK_ERROR_PASSWORD: i32 = 3;
 pub const ACK_ERROR_PERMISSION: i32 = 4;
 pub const ACK_ERROR_UNKNOWN: i32 = 5;
 pub const ACK_ERROR_NO_EXIST: i32 = 50;
+/// TODO: Remove when playlist size limit enforcement is implemented
 #[allow(dead_code)]
 pub const ACK_ERROR_PLAYLIST_MAX: i32 = 51;
-#[allow(dead_code)]
 pub const ACK_ERROR_SYS: i32 = 52;
+/// TODO: Remove when playlist loading error handling is implemented
 #[allow(dead_code)]
 pub const ACK_ERROR_PLAYLIST_LOAD: i32 = 53;
+/// TODO: Remove when database update conflict detection is implemented
 #[allow(dead_code)]
 pub const ACK_ERROR_UPDATE_ALREADY: i32 = 54;
 pub const ACK_ERROR_PLAYER_SYNC: i32 = 55;
@@ -133,14 +135,18 @@ pub fn update_next_song(
             });
 }
 
-/// Clone a song and resolve its path to an absolute path for playback.
+/// Prepare a song for playback by resolving its path to an absolute path.
+/// Returns a PlaybackSong that shares the song via Arc and includes the resolved path.
 pub fn prepare_song_for_playback(
     song: &rmpd_core::song::Song,
     music_dir: Option<&str>,
-) -> rmpd_core::song::Song {
-    let mut playback_song = song.clone();
-    playback_song.path = resolve_path(song.path.as_str(), music_dir).into();
-    playback_song
+) -> rmpd_core::playback::PlaybackSong {
+    use std::sync::Arc;
+    let resolved_path = resolve_path(song.path.as_str(), music_dir).into();
+    rmpd_core::playback::PlaybackSong {
+        song: Arc::new(song.clone()),
+        resolved_path,
+    }
 }
 
 pub use rmpd_core::path::resolve_path;
