@@ -3,45 +3,6 @@ use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::time::Duration;
 
-/// MPD tag type canonical order (matching `Names.cxx` TagType enum).
-/// Used for output ordering: songs emit tags in this exact order.
-#[allow(dead_code)]
-pub(crate) const TAG_ORDER: &[&str] = &[
-    "artist",
-    "artistsort",
-    "album",
-    "albumsort",
-    "albumartist",
-    "albumartistsort",
-    "title",
-    "titlesort",
-    "track",
-    "name",
-    "genre",
-    "mood",
-    "date",
-    "originaldate",
-    "composer",
-    "composersort",
-    "performer",
-    "conductor",
-    "work",
-    "movement",
-    "movementnumber",
-    "ensemble",
-    "location",
-    "grouping",
-    "comment",
-    "disc",
-    "label",
-    "musicbrainz_artistid",
-    "musicbrainz_albumid",
-    "musicbrainz_albumartistid",
-    "musicbrainz_trackid",
-    "musicbrainz_releasetrackid",
-    "musicbrainz_releasegroupid",
-    "musicbrainz_workid",
-];
 
 /// Well-known MPD tag names. Using static references avoids per-song String allocation.
 pub fn intern_tag_key(key: &str) -> Cow<'static, str> {
