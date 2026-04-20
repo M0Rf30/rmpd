@@ -5,6 +5,7 @@ use std::time::Duration;
 
 /// MPD tag type canonical order (matching `Names.cxx` TagType enum).
 /// Used for output ordering: songs emit tags in this exact order.
+#[allow(dead_code)]
 pub(crate) const TAG_ORDER: &[&str] = &[
     "artist",
     "artistsort",
