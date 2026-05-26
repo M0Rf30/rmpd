@@ -9,7 +9,6 @@ mod app;
 #[allow(clippy::disallowed_methods)] // process::exit is required by the double-fork daemonize pattern
 fn daemonize() -> Result<()> {
     use nix::unistd::{ForkResult, fork, setsid};
-    use std::os::fd::AsRawFd;
 
     // First fork — parent exits so the shell thinks the command is done.
     match unsafe { fork()? } {
@@ -31,10 +30,9 @@ fn daemonize() -> Result<()> {
         .read(true)
         .write(true)
         .open("/dev/null")?;
-    let fd = devnull.as_raw_fd();
-    nix::unistd::dup2(fd, 0)?;
-    nix::unistd::dup2(fd, 1)?;
-    nix::unistd::dup2(fd, 2)?;
+    nix::unistd::dup2_stdin(&devnull)?;
+    nix::unistd::dup2_stdout(&devnull)?;
+    nix::unistd::dup2_stderr(&devnull)?;
 
     // Change to root to avoid holding a mount point.
     std::env::set_current_dir("/")?;

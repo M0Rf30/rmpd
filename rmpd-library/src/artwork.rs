@@ -58,7 +58,11 @@ impl AlbumArtExtractor {
             // Calculate hash for deduplication
             let mut hasher = Sha256::new();
             hasher.update(data);
-            let hash = format!("{:x}", hasher.finalize());
+            let hash = hasher
+                .finalize()
+                .iter()
+                .map(|b| format!("{:02x}", b))
+                .collect::<String>();
 
             // Get MIME type
             let mime_type = pic.mime_type().map(|m| m.to_string()).unwrap_or_else(|| {

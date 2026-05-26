@@ -114,7 +114,11 @@ impl RmpdTestHarness {
         use sha2::{Digest, Sha256};
         let mut hasher = Sha256::new();
         hasher.update(&artwork.data);
-        let hash = format!("{:x}", hasher.finalize());
+        let hash = hasher
+            .finalize()
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect::<String>();
 
         self.database.store_artwork(
             path,
