@@ -484,11 +484,18 @@ impl PlaybackEngine {
             .bit_order()
             .unwrap_or(symphonia::core::codecs::audio::BitOrder::LsbFirst);
 
-        let dop_encoder =
-            DopEncoder::new(dsd_sample_rate, channels as usize, channel_layout, bit_order)?;
+        let dop_encoder = DopEncoder::new(
+            dsd_sample_rate,
+            channels as usize,
+            channel_layout,
+            bit_order,
+        )?;
         let pcm_sample_rate = dop_encoder.pcm_sample_rate();
 
-        info!("dsd playback: {} Hz, {} channels", dsd_sample_rate, channels);
+        info!(
+            "dsd playback: {} Hz, {} channels",
+            dsd_sample_rate, channels
+        );
         info!(
             "dsd format: channel_layout={:?}, bit_order={:?}",
             channel_layout, bit_order

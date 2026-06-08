@@ -93,14 +93,15 @@ impl AppState {
         // Create a pooled database connection up front (schema is initialised
         // once here). Reused across commands so a chatty client doesn't pay the
         // cost of opening a fresh SQLite connection per request.
-        let db_pool = db_path.as_ref().and_then(|path| match rmpd_library::DbPool::new(path) {
-            Ok(pool) => Some(pool),
-            Err(e) => {
-                tracing::warn!("failed to create database connection pool: {e}");
-                None
-            }
-        });
-
+        let db_pool = db_path
+            .as_ref()
+            .and_then(|path| match rmpd_library::DbPool::new(path) {
+                Ok(pool) => Some(pool),
+                Err(e) => {
+                    tracing::warn!("failed to create database connection pool: {e}");
+                    None
+                }
+            });
 
         Self {
             queue: Arc::new(RwLock::new(Queue::new())),

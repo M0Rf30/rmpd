@@ -3,8 +3,8 @@
 pub mod commands;
 pub mod connection;
 pub mod discovery;
-pub mod mpris;
 pub(crate) mod helpers;
+pub mod mpris;
 pub mod parser;
 pub mod queue_playback;
 pub mod response;
