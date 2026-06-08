@@ -1,9 +1,10 @@
 use crate::audio_output::{AudioOutput, PauseState};
 use crate::conversion::{self, SampleBuffer};
-use crate::resampler::LinearResampler;
 use crate::cpal_utils::CpalDeviceConfig;
+use crate::resampler::StreamResampler;
 use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{Device, SampleFormat, Stream, StreamConfig};
+use rmpd_core::config::ResamplerQuality;
 use rmpd_core::error::{Result, RmpdError};
 use rmpd_core::song::AudioFormat;
 use std::sync::mpsc::{SyncSender, sync_channel};
@@ -14,11 +15,11 @@ pub struct CpalOutput {
     sample_sender: Option<SyncSender<Vec<f32>>>,
     config: StreamConfig,
     pause_state: PauseState,
-    resampler: Option<LinearResampler>,
+    resampler: Option<StreamResampler>,
 }
 
 impl CpalOutput {
-    pub fn new(format: AudioFormat) -> Result<Self> {
+    pub fn new(format: AudioFormat, quality: ResamplerQuality) -> Result<Self> {
         let device_config = CpalDeviceConfig::new(format.sample_rate, format.channels as u16)?;
 
         // If the device could not take the requested rate, CpalDeviceConfig
@@ -27,15 +28,25 @@ impl CpalOutput {
         let device_rate = device_config.config.sample_rate;
         let resampler = if device_rate != format.sample_rate {
             tracing::info!(
-                "output device does not support {} Hz; resampling to {} Hz",
+                "output device does not support {} Hz; resampling to {} Hz ({:?})",
                 format.sample_rate,
-                device_rate
+                device_rate,
+                quality
             );
-            Some(LinearResampler::new(
+            let rs = StreamResampler::new(
                 format.sample_rate,
                 device_rate,
                 format.channels as usize,
-            ))
+                quality,
+            );
+            if rs.is_none() {
+                tracing::error!(
+                    "failed to build resampler {} -> {} Hz; audio may play at the wrong speed",
+                    format.sample_rate,
+                    device_rate
+                );
+            }
+            rs
         } else {
             None
         };

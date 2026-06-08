@@ -7,9 +7,8 @@ license.workspace = true
 repository.workspace = true
 
 [package.metadata.cargo-machete]
-# rubato used for sample rate conversion
 # thiserror used for error handling macros
-ignored = ["rubato", "thiserror"]
+ignored = ["thiserror"]
 
 [features]
 # Enable PipeWire audio backend. Requires bindgen at build time (slow).
@@ -22,6 +21,7 @@ rmpd-core = { workspace = true, features = ["player-errors"] }
 symphonia.workspace = true
 cpal.workspace = true
 rubato.workspace = true
+audioadapter-buffers.workspace = true
 tokio.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
