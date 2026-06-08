@@ -57,12 +57,13 @@ impl FilesystemWatcher {
             DEBOUNCE_DURATION,
             None,
             move |result: DebounceEventResult| {
-                let tx = tx.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = tx.send(result).await {
-                        error!("failed to send watch event: {}", e);
-                    }
-                });
+                // This callback runs on notify's own dedicated thread, which has
+                // no Tokio runtime — so we must NOT `tokio::spawn` here (that
+                // panics with "no reactor running"). `blocking_send` bridges the
+                // event into the async handler task below.
+                if let Err(e) = tx.blocking_send(result) {
+                    error!("failed to send watch event: {}", e);
+                }
             },
         )
         .map_err(|e| RmpdError::Library(format!("Failed to create watcher: {e}")))?;

@@ -141,6 +141,41 @@ impl AppState {
             tracing::warn!("mDNS advertisement failed: {}", e);
         }
     }
+
+    /// Spawn a background library scan of the configured music directory.
+    ///
+    /// Shared by the `update`/`rescan` commands and by auto-update on startup.
+    /// Returns immediately; the scan runs on a blocking task and reports
+    /// progress/results via the event bus and the tracing log. Does nothing if
+    /// the database or music directory is not configured.
+    pub fn spawn_library_update(&self) {
+        let (Some(db_path), Some(music_dir)) = (self.db_path.clone(), self.music_dir.clone())
+        else {
+            tracing::warn!("library update requested but database/music_dir not configured");
+            return;
+        };
+        let event_bus = self.event_bus.clone();
+
+        tokio::task::spawn_blocking(move || {
+            tracing::info!("starting library update");
+            match rmpd_library::Database::open(&db_path) {
+                Ok(db) => {
+                    let scanner = rmpd_library::Scanner::new(event_bus.clone());
+                    match scanner.scan_directory(&db, std::path::Path::new(&music_dir)) {
+                        Ok(stats) => tracing::info!(
+                            "library scan complete: {} scanned, {} added, {} updated, {} errors",
+                            stats.scanned,
+                            stats.added,
+                            stats.updated,
+                            stats.errors
+                        ),
+                        Err(e) => tracing::error!("library scan error: {}", e),
+                    }
+                }
+                Err(e) => tracing::error!("failed to open database for update: {}", e),
+            }
+        });
+    }
 }
 
 impl Default for AppState {
