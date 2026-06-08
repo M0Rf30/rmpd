@@ -24,16 +24,17 @@ pub const ACK_ERROR_EXIST: i32 = 56;
 /// Alias kept for backward compat within rmpd (maps to ACK_ERROR_NO_EXIST = 50)
 pub const ACK_ERROR_SYSTEM: i32 = ACK_ERROR_NO_EXIST;
 
-/// Open the music database, returning an error response string on failure.
-/// This eliminates the repeated db_path check + Database::open boilerplate.
+/// Borrow a pooled database connection, returning an error response string on
+/// failure. Reuses connections from the shared pool instead of opening a fresh
+/// SQLite connection (and re-running schema init) on every command.
 pub fn open_db(
     state: &crate::state::AppState,
     command: &str,
 ) -> Result<rmpd_library::Database, String> {
-    let db_path = state.db_path.as_ref().ok_or_else(|| {
+    let pool = state.db_pool.as_ref().ok_or_else(|| {
         ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, command, "database not configured")
     })?;
-    rmpd_library::Database::open(db_path).map_err(|e| {
+    rmpd_library::Database::from_pool(pool).map_err(|e| {
         ResponseBuilder::error(
             ACK_ERROR_SYSTEM,
             0,
