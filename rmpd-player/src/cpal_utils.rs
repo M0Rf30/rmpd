@@ -11,48 +11,61 @@ pub struct CpalDeviceConfig {
 
 /// Resolve the output device, honoring the `RMPD_AUDIO_DEVICE` override.
 ///
-/// When the env var is set, select the output device whose name matches it
-/// (exact match first, then case-insensitive substring). This lets you target a
-/// raw ALSA hardware device such as `hw:CARD=D50s,DEV=0` to bypass
-/// PipeWire/PulseAudio — required for bit-perfect DoP/DSD output, which any
-/// resampling, mixing, or volume change would corrupt. Set `RMPD_LIST_DEVICES=1`
-/// to log every available device name.
+/// When the env var is set, select the output device whose **id** (the ALSA PCM
+/// name, e.g. `hw:CARD=1,DEV=0`) or description matches it — exact match first,
+/// then case-insensitive substring. This lets you target a raw ALSA hardware
+/// device to bypass PipeWire/PulseAudio, which is required for bit-perfect
+/// DoP/DSD output (any resampling, mixing, or volume change corrupts it).
+///
+/// Set `RMPD_LIST_DEVICES=1` to log every device's id + description so you can
+/// pick the exact `hw:` device.
 fn resolve_output_device(host: &cpal::Host) -> Result<Device> {
-    let devices: Vec<(Device, String)> = host
+    // (device, id string e.g. "hw:CARD=1,DEV=0", human description)
+    let devices: Vec<(Device, String, String)> = host
         .output_devices()
         .map(|devs| {
             devs.map(|d| {
-                let n = d.to_string();
-                (d, n)
+                let id = d.id().map(|i| i.id().to_owned()).unwrap_or_default();
+                let desc = d.to_string();
+                (d, id, desc)
             })
             .collect()
         })
         .unwrap_or_default();
 
     if std::env::var_os("RMPD_LIST_DEVICES").is_some() {
-        let names: Vec<&str> = devices.iter().map(|(_, n)| n.as_str()).collect();
-        tracing::info!("available output devices: {names:?}");
+        for (_, id, desc) in &devices {
+            tracing::info!("output device: id='{id}' desc='{desc}'");
+        }
     }
 
     if let Ok(want) = std::env::var("RMPD_AUDIO_DEVICE") {
         let want = want.trim();
         if !want.is_empty() {
-            if let Some((dev, name)) = devices.iter().find(|(_, n)| n == want) {
-                tracing::info!("using output device '{name}' (RMPD_AUDIO_DEVICE)");
-                return Ok(dev.clone());
-            }
+            // 1) exact id, 2) exact desc, 3) substring id, 4) substring desc
             let lower = want.to_lowercase();
-            if let Some((dev, name)) = devices
+            let pick = devices
                 .iter()
-                .find(|(_, n)| n.to_lowercase().contains(&lower))
-            {
-                tracing::info!("using output device '{name}' (matched RMPD_AUDIO_DEVICE='{want}')");
+                .find(|(_, id, _)| id == want)
+                .or_else(|| devices.iter().find(|(_, _, desc)| desc == want))
+                .or_else(|| {
+                    devices
+                        .iter()
+                        .find(|(_, id, _)| id.to_lowercase().contains(&lower))
+                })
+                .or_else(|| {
+                    devices
+                        .iter()
+                        .find(|(_, _, desc)| desc.to_lowercase().contains(&lower))
+                });
+            if let Some((dev, id, desc)) = pick {
+                tracing::info!("using output device id='{id}' desc='{desc}' (RMPD_AUDIO_DEVICE='{want}')");
                 return Ok(dev.clone());
             }
-            let available: Vec<&str> = devices.iter().map(|(_, n)| n.as_str()).collect();
+            let available: Vec<&str> = devices.iter().map(|(_, id, _)| id.as_str()).collect();
             tracing::warn!(
                 "RMPD_AUDIO_DEVICE='{want}' not found; using default device instead. \
-                 Available: {available:?}"
+                 Available ids: {available:?}"
             );
         }
     }
