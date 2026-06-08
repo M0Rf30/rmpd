@@ -17,9 +17,15 @@ impl CpalDeviceConfig {
             .default_output_device()
             .ok_or_else(|| RmpdError::Player("No output device available".to_owned()))?;
 
+        // Choose a rate the device actually supports: the requested rate when
+        // available, otherwise the device's default rate (always supported).
+        // When they differ the caller resamples to bridge the gap, so playback
+        // never fails just because the exact rate is unsupported.
+        let rate = Self::device_supported_rate(&device, sample_rate);
+
         let config = StreamConfig {
             channels,
-            sample_rate,
+            sample_rate: rate,
             buffer_size: cpal::BufferSize::Default,
         };
 
@@ -28,6 +34,39 @@ impl CpalDeviceConfig {
             config,
             sample_format: SampleFormat::F32, // Default, will be updated by find methods
         })
+    }
+
+    /// Return `requested` if the device supports it, else the device's default
+    /// output rate (which is always supported by definition).
+    fn device_supported_rate(device: &Device, requested: SampleRate) -> SampleRate {
+        if Self::device_supports(device, requested) {
+            return requested;
+        }
+        device
+            .default_output_config()
+            .map(|c| c.sample_rate())
+            .unwrap_or(requested)
+    }
+
+    /// Whether `device` advertises support for `rate`.
+    fn device_supports(device: &Device, rate: SampleRate) -> bool {
+        device
+            .supported_output_configs()
+            .map(|configs| {
+                configs.into_iter().any(|c| {
+                    rate >= c.min_sample_rate() && rate <= c.max_sample_rate()
+                })
+            })
+            .unwrap_or(false)
+    }
+
+    /// Whether the default output device natively supports `rate` (no
+    /// resampling required). Used to prefer bit-exact rates.
+    pub fn default_device_supports_rate(rate: SampleRate) -> bool {
+        cpal::default_host()
+            .default_output_device()
+            .map(|device| Self::device_supports(&device, rate))
+            .unwrap_or(false)
     }
 
     /// Create a device configuration using the JACK host.

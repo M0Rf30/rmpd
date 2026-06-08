@@ -261,59 +261,19 @@ impl PlaybackEngine {
                     warn!("DoP playback not available: {}", e);
                     info!("falling back to DSD-to-PCM conversion");
 
-                    // Try PCM conversion rates in order of preference (highest to lowest)
-                    // Test both decoder conversion AND output creation at each rate
-                    // All rates are in the 44.1kHz family (standard DSD)
-                    // - 705.6kHz: Ultra quality (DSD512: 32x, DSD256: 16x, DSD128: 8x decimation)
-                    // - 352.8kHz: Best quality (DSD512: 64x, DSD256: 32x, DSD128: 16x, DSD64: 8x)
-                    // - 176.4kHz: High quality (DSD512: 128x, DSD256: 64x, DSD128: 32x, DSD64: 16x)
-                    // - 88.2kHz: Good quality (DSD256: 128x, DSD128: 64x, DSD64: 32x)
-                    // - 44.1kHz: Standard quality (DSD128: 128x, DSD64: 64x)
+                    // Prefer a natively-supported rate in the 44.1 kHz family
+                    // (bit-exact, no resampling). If the device supports none of
+                    // them, decode at 44.1 kHz and let the PCM output resample to
+                    // a supported device rate so the file always plays.
                     let preferred_rates = [705600, 352800, 176400, 88200, 44100];
+                    let decode_rate = preferred_rates
+                        .iter()
+                        .copied()
+                        .find(|&r| CpalOutput::supports_rate(r))
+                        .unwrap_or(44100);
 
-                    let mut conversion_success = false;
-                    for &rate in &preferred_rates {
-                        // Try to enable PCM conversion at this rate
-                        if let Err(e) = decoder.enable_pcm_conversion(rate) {
-                            debug!("failed to enable PCM conversion at {} Hz: {}", rate, e);
-                            continue;
-                        }
-
-                        // Test if hardware actually supports this rate
-                        // Need to test both new() and start() since ALSA checks rate in start()
-                        let format = decoder.format();
-                        let mut test_output = match CpalOutput::new(format) {
-                            Ok(output) => output,
-                            Err(e) => {
-                                debug!("failed to create output at {} Hz: {}", rate, e);
-                                continue;
-                            }
-                        };
-
-                        match test_output.start() {
-                            Ok(()) => {
-                                info!(
-                                    "successfully configured DSD-to-PCM conversion at {} Hz",
-                                    rate
-                                );
-                                // Stop test output - we'll create a new one later
-                                let _ = test_output.stop();
-                                conversion_success = true;
-                                break;
-                            }
-                            Err(e) => {
-                                debug!("hardware doesn't support {} Hz: {}", rate, e);
-                                let _ = test_output.stop();
-                                continue;
-                            }
-                        }
-                    }
-
-                    if !conversion_success {
-                        return Err(rmpd_core::error::RmpdError::Player(
-                            "Failed to enable DSD-to-PCM conversion at any supported rate (hardware limitation)".to_owned()
-                        ));
-                    }
+                    decoder.enable_pcm_conversion(decode_rate)?;
+                    info!("DSD-to-PCM conversion enabled at {} Hz", decode_rate);
                 }
             }
         }
