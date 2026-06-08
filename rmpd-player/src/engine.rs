@@ -240,42 +240,53 @@ impl PlaybackEngine {
         // Open decoder (pass-through mode by default)
         let mut decoder = SymphoniaDecoder::open(path)?;
 
-        // Check if this is a DSD file - try DoP first, then fall back to PCM conversion
+        // DSD: native DoP playback is opt-in (RMPD_DOP=1); default is PCM.
         if decoder.is_dsd() {
-            info!("DSD file detected, attempting DoP output");
+            // DoP (1-bit DSD over PCM) only produces sound on a DoP-capable DAC
+            // reached over a bit-perfect path. There is no reliable way to detect
+            // that support, and selecting DoP for an ordinary DAC yields silence,
+            // so DoP is opt-in. Default to PCM conversion, which always plays.
+            let dop_enabled = std::env::var("RMPD_DOP")
+                .map(|v| matches!(v.trim(), "1" | "true" | "yes" | "on"))
+                .unwrap_or(false);
 
-            // Try to create DoP output and play
-            match Self::try_dop_playback(&decoder) {
-                Ok(()) => {
-                    info!("DoP output available, using native DSD playback");
-                    return Self::playback_thread_dsd(
-                        decoder,
-                        atomic_state,
-                        event_bus,
-                        stop_flag,
-                        volume,
-                        command_rx,
-                    );
+            if dop_enabled {
+                info!("DSD file detected, attempting DoP output (RMPD_DOP enabled)");
+                match Self::try_dop_playback(&decoder) {
+                    Ok(()) => {
+                        info!("DoP output available, using native DSD playback");
+                        return Self::playback_thread_dsd(
+                            decoder,
+                            atomic_state,
+                            event_bus,
+                            stop_flag,
+                            volume,
+                            command_rx,
+                        );
+                    }
+                    Err(e) => {
+                        warn!("DoP playback not available: {}; falling back to PCM", e);
+                    }
                 }
-                Err(e) => {
-                    warn!("DoP playback not available: {}", e);
-                    info!("falling back to DSD-to-PCM conversion");
-
-                    // Prefer a natively-supported rate in the 44.1 kHz family
-                    // (bit-exact, no resampling). If the device supports none of
-                    // them, decode at 44.1 kHz and let the PCM output resample to
-                    // a supported device rate so the file always plays.
-                    let preferred_rates = [705600, 352800, 176400, 88200, 44100];
-                    let decode_rate = preferred_rates
-                        .iter()
-                        .copied()
-                        .find(|&r| CpalOutput::supports_rate(r))
-                        .unwrap_or(44100);
-
-                    decoder.enable_pcm_conversion(decode_rate)?;
-                    info!("DSD-to-PCM conversion enabled at {} Hz", decode_rate);
-                }
+            } else {
+                info!(
+                    "DSD file detected; using DSD-to-PCM conversion \
+                     (set RMPD_DOP=1 for native DSD on a DoP-capable DAC)"
+                );
             }
+
+            // DSD-to-PCM: prefer a natively-supported 44.1 kHz-family rate
+            // (bit-exact); otherwise decode at 44.1 kHz and let the output
+            // resample to a supported device rate so the file always plays.
+            let preferred_rates = [705600, 352800, 176400, 88200, 44100];
+            let decode_rate = preferred_rates
+                .iter()
+                .copied()
+                .find(|&r| CpalOutput::supports_rate(r))
+                .unwrap_or(44100);
+
+            decoder.enable_pcm_conversion(decode_rate)?;
+            info!("DSD-to-PCM conversion enabled at {} Hz", decode_rate);
         }
 
         // Standard PCM playback (works for all formats including DSD with PCM conversion)
