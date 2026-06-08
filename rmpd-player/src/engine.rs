@@ -442,10 +442,10 @@ impl PlaybackEngine {
         let channels = decoder.channels();
         let channel_layout = decoder
             .channel_data_layout()
-            .unwrap_or(symphonia::core::codecs::ChannelDataLayout::Planar);
+            .unwrap_or(symphonia::core::codecs::audio::ChannelDataLayout::Planar);
         let bit_order = decoder
             .bit_order()
-            .unwrap_or(symphonia::core::codecs::BitOrder::LsbFirst);
+            .unwrap_or(symphonia::core::codecs::audio::BitOrder::LsbFirst);
 
         // Try to create DoP encoder (validates DSD rate)
         let dop_encoder = DopEncoder::new(
@@ -475,10 +475,10 @@ impl PlaybackEngine {
         let channels = decoder.channels();
         let channel_layout = decoder
             .channel_data_layout()
-            .unwrap_or(symphonia::core::codecs::ChannelDataLayout::Planar);
+            .unwrap_or(symphonia::core::codecs::audio::ChannelDataLayout::Planar);
         let bit_order = decoder
             .bit_order()
-            .unwrap_or(symphonia::core::codecs::BitOrder::LsbFirst);
+            .unwrap_or(symphonia::core::codecs::audio::BitOrder::LsbFirst);
 
         info!(
             "dsd playback: {} Hz, {} channels",

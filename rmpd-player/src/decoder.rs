@@ -1,28 +1,31 @@
 use rmpd_core::error::{Result, RmpdError};
 use rmpd_core::song::AudioFormat;
 use std::path::Path;
-use symphonia::core::codecs::{BitOrder, CODEC_TYPE_NULL, ChannelDataLayout, DecoderOptions};
+use symphonia::core::audio::GenericAudioBufferRef;
+use symphonia::core::codecs::CodecParameters;
+use symphonia::core::codecs::audio::{
+    AudioCodecId, AudioDecoder, AudioDecoderOptions, BitOrder, ChannelDataLayout,
+};
 use symphonia::core::errors::Error as SymphoniaError;
-use symphonia::core::formats::{FormatOptions, FormatReader};
+use symphonia::core::formats::probe::Hint;
+use symphonia::core::formats::{FormatOptions, FormatReader, SeekMode, SeekTo, TrackType};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
-use symphonia::core::probe::Hint;
-use symphonia::core::units::{Time, TimeBase};
+use symphonia::core::units::{Time, TimeBase, Timestamp};
 // DSD codec type (from Symphonia with DSD support)
 use symphonia::default::formats::CODEC_TYPE_DSD;
 
 /// Symphonia-based audio decoder
 pub struct SymphoniaDecoder {
     reader: Box<dyn FormatReader>,
-    decoder: Box<dyn symphonia::core::codecs::Decoder>,
+    decoder: Box<dyn AudioDecoder>,
     track_id: u32,
-    codec_type: symphonia::core::codecs::CodecType,
+    codec_id: AudioCodecId,
     sample_rate: u32,
     channels: Option<u8>,
     total_duration: Option<f64>,
-    current_frame: u64,
-    reusable_sample_buf: Option<symphonia::core::audio::SampleBuffer<f32>>,
-    has_buffered_data: bool,
+    sample_buf: Vec<f32>,
+    sample_pos: usize,
     current_bitrate: Option<u32>,
     time_base: Option<TimeBase>,
     channel_data_layout: Option<ChannelDataLayout>,
@@ -45,71 +48,67 @@ impl SymphoniaDecoder {
         }
 
         // Probe the media source
-        let probed = symphonia::default::get_probe()
-            .format(
+        let reader = symphonia::default::get_probe()
+            .probe(
                 &hint,
                 mss,
-                &FormatOptions::default(),
-                &MetadataOptions::default(),
+                FormatOptions::default(),
+                MetadataOptions::default(),
             )
             .map_err(|e| RmpdError::Player(format!("Failed to probe format: {e}")))?;
 
-        let reader = probed.format;
-
-        // Find the first audio track
+        // Find the default audio track
         let track = reader
-            .tracks()
-            .iter()
-            .find(|t| t.codec_params.codec != CODEC_TYPE_NULL)
+            .default_track(TrackType::Audio)
             .ok_or_else(|| RmpdError::Player("No audio tracks found".to_owned()))?;
 
         let track_id = track.id;
-        let codec_params = &track.codec_params;
+        let time_base = track.time_base;
 
-        // Store codec type for DSD detection
-        let codec_type = codec_params.codec;
+        // Get the audio codec parameters.
+        let audio = match track.codec_params.as_ref() {
+            Some(CodecParameters::Audio(audio)) => audio,
+            _ => return Err(RmpdError::Player("No audio codec parameters".to_owned())),
+        };
 
-        // Get audio format info
-        let sample_rate = codec_params
+        // Store codec id for DSD detection.
+        let codec_id = audio.codec;
+
+        let sample_rate = audio
             .sample_rate
             .ok_or_else(|| RmpdError::Player("Sample rate not available".to_owned()))?;
 
-        // Channels might not be available until after decoding starts
-        let channels = codec_params.channels.map(|ch| ch.count() as u8);
+        // Channels might not be available until after decoding starts.
+        let channels = audio.channels.as_ref().map(|ch| ch.count() as u8);
 
-        // Store time base for bitrate calculation
-        let time_base = codec_params.time_base;
+        // DSD metadata if available.
+        let channel_data_layout = audio.channel_data_layout;
+        let bit_order = audio.bit_order;
 
-        // Get DSD metadata if available
-        let channel_data_layout = codec_params.channel_data_layout;
-        let bit_order = codec_params.bit_order;
-
-        // Calculate total duration
-        let total_duration = if let (Some(n_frames), Some(tb)) = (codec_params.n_frames, time_base)
-        {
-            let time = tb.calc_time(n_frames);
-            Some(time.seconds as f64 + time.frac)
-        } else {
-            None
+        // Calculate total duration from the track frame count and timebase.
+        let total_duration = match (track.num_frames, time_base) {
+            (Some(n_frames), Some(tb)) => {
+                tb.calc_time(Timestamp::new(n_frames as i64)).map(|t| t.as_secs_f64())
+            }
+            _ => None,
         };
 
-        // Create decoder in pass-through mode (no PCM conversion)
-        // PCM conversion can be enabled later if needed
+        // Create decoder in pass-through mode (no PCM conversion).
+        // PCM conversion can be enabled later if needed.
         let decoder = symphonia::default::get_codecs()
-            .make(codec_params, &DecoderOptions::default())
+            .make_audio_decoder(audio, &AudioDecoderOptions::default())
             .map_err(|e| RmpdError::Player(format!("Failed to create decoder: {e}")))?;
 
         Ok(Self {
             reader,
             decoder,
             track_id,
-            codec_type,
+            codec_id,
             sample_rate,
             channels,
             total_duration,
-            current_frame: 0,
-            reusable_sample_buf: None,
-            has_buffered_data: false,
+            sample_buf: Vec::new(),
+            sample_pos: 0,
             current_bitrate: None,
             time_base,
             channel_data_layout,
@@ -120,12 +119,12 @@ impl SymphoniaDecoder {
 
     /// Check if this is a DSD file
     pub fn is_dsd(&self) -> bool {
-        self.codec_type == CODEC_TYPE_DSD
+        self.codec_id == CODEC_TYPE_DSD
     }
 
     /// Enable PCM conversion for DSD (can be called multiple times with different rates)
     pub fn enable_pcm_conversion(&mut self, output_rate: u32) -> Result<()> {
-        if self.codec_type != CODEC_TYPE_DSD {
+        if self.codec_id != CODEC_TYPE_DSD {
             return Ok(()); // Not DSD, nothing to do
         }
 
@@ -134,8 +133,7 @@ impl SymphoniaDecoder {
             return Ok(());
         }
 
-        // We need to recreate the decoder with PCM conversion enabled
-        // Get current track
+        // Get the current track's audio codec parameters.
         let track = self
             .reader
             .tracks()
@@ -143,13 +141,16 @@ impl SymphoniaDecoder {
             .find(|t| t.id == self.track_id)
             .ok_or_else(|| RmpdError::Player("Track not found".to_owned()))?;
 
-        let codec_params = &track.codec_params;
-        let input_rate = codec_params
+        let audio = match track.codec_params.as_ref() {
+            Some(CodecParameters::Audio(audio)) => audio,
+            _ => return Err(RmpdError::Player("No audio codec parameters".to_owned())),
+        };
+        let input_rate = audio
             .sample_rate
             .ok_or_else(|| RmpdError::Player("Sample rate not available".to_owned()))?;
 
         // Clone params and add PCM conversion mode via extra_data
-        let mut params_with_pcm = codec_params.clone();
+        let mut params_with_pcm = audio.clone();
         params_with_pcm.extra_data = Some(output_rate.to_le_bytes().to_vec().into_boxed_slice());
 
         tracing::info!(
@@ -160,7 +161,7 @@ impl SymphoniaDecoder {
 
         // Create new decoder with PCM conversion
         let decoder = symphonia::default::get_codecs()
-            .make(&params_with_pcm, &DecoderOptions::default())
+            .make_audio_decoder(&params_with_pcm, &AudioDecoderOptions::default())
             .map_err(|e| RmpdError::Player(format!("Failed to create PCM decoder: {e}")))?;
 
         // Get actual output sample rate from decoder
@@ -181,55 +182,32 @@ impl SymphoniaDecoder {
         let mut samples_written = 0;
 
         while samples_written < buffer.len() {
-            // If we have samples in the reusable buffer, copy them
-            if self.has_buffered_data
-                && let Some(ref sample_buf) = self.reusable_sample_buf
-            {
-                // sample_buf.samples() returns interleaved samples
-                // sample_buf.len() returns number of frames
-                // For stereo, samples().len() == len() * 2
-                let total_samples = sample_buf.samples().len();
-                let samples_available = total_samples - (self.current_frame as usize);
-                let samples_to_copy = (buffer.len() - samples_written).min(samples_available);
-
-                if samples_to_copy > 0 {
-                    let src_offset = self.current_frame as usize;
-                    buffer[samples_written..samples_written + samples_to_copy].copy_from_slice(
-                        &sample_buf.samples()[src_offset..src_offset + samples_to_copy],
-                    );
-
-                    samples_written += samples_to_copy;
-                    self.current_frame += samples_to_copy as u64;
-                }
-
-                // If buffer is exhausted, clear it
-                if self.current_frame >= total_samples as u64 {
-                    self.has_buffered_data = false;
-                    self.current_frame = 0;
-                }
-
+            // Drain any buffered interleaved samples first.
+            if self.sample_pos < self.sample_buf.len() {
+                let available = self.sample_buf.len() - self.sample_pos;
+                let to_copy = (buffer.len() - samples_written).min(available);
+                buffer[samples_written..samples_written + to_copy].copy_from_slice(
+                    &self.sample_buf[self.sample_pos..self.sample_pos + to_copy],
+                );
+                samples_written += to_copy;
+                self.sample_pos += to_copy;
                 if samples_written >= buffer.len() {
                     break;
                 }
             }
 
-            // Read next packet
+            // Read the next packet.
             let packet = match self.reader.next_packet() {
-                Ok(packet) => packet,
-                Err(SymphoniaError::IoError(e))
-                    if e.kind() == std::io::ErrorKind::UnexpectedEof =>
-                {
-                    // Only treat "end of stream" as actual EOF (per Symphonia docs)
-                    if e.to_string().contains("end of stream") {
-                        break;
-                    } else {
-                        // Other UnexpectedEof errors - continue reading
-                        continue;
-                    }
-                }
+                Ok(Some(packet)) => packet,
+                Ok(None) => break, // End of stream.
                 Err(SymphoniaError::ResetRequired) => {
                     self.decoder.reset();
                     continue;
+                }
+                Err(SymphoniaError::IoError(e))
+                    if e.kind() == std::io::ErrorKind::UnexpectedEof =>
+                {
+                    break;
                 }
                 Err(e) => {
                     tracing::error!("failed to read packet: {}", e);
@@ -237,105 +215,52 @@ impl SymphoniaDecoder {
                 }
             };
 
-            // Skip packets from other tracks
-            if packet.track_id() != self.track_id {
+            // Skip packets from other tracks.
+            if packet.track_id != self.track_id {
                 continue;
             }
 
-            // Calculate instantaneous bitrate from packet
-            if let Some(tb) = self.time_base {
-                let packet_bytes = packet.buf().len();
-                let packet_dur = packet.dur();
-
-                // Convert duration from TimeBase units to seconds
-                let time = tb.calc_time(packet_dur);
-                let duration_secs = time.seconds as f64 + time.frac;
-
+            // Calculate instantaneous bitrate from the packet.
+            if let Some(tb) = self.time_base
+                && let Some(time) = tb.calc_time(Timestamp::new(packet.dur.get() as i64))
+            {
+                let duration_secs = time.as_secs_f64();
                 if duration_secs > 0.0 {
-                    // Calculate bitrate: (bytes * 8 bits/byte) / duration_secs = bits/sec
-                    // Then convert to kbps
-                    let bitrate_bps = (packet_bytes as f64 * 8.0) / duration_secs;
-                    let bitrate_kbps = (bitrate_bps / 1000.0) as u32;
-                    self.current_bitrate = Some(bitrate_kbps);
+                    let bitrate_bps = (packet.data.len() as f64 * 8.0) / duration_secs;
+                    self.current_bitrate = Some((bitrate_bps / 1000.0) as u32);
                 }
             }
 
-            // Decode packet
+            // Decode the packet.
             let decoded = match self.decoder.decode(&packet) {
                 Ok(decoded) => decoded,
-                Err(SymphoniaError::DecodeError(_)) => {
-                    // Skip decode errors
-                    continue;
-                }
+                Err(SymphoniaError::DecodeError(_)) => continue,
                 Err(e) => {
                     return Err(RmpdError::Player(format!("Failed to decode packet: {e}")));
                 }
             };
 
-            // Check format for DSD with PCM conversion (should be F32)
-            if self.uses_pcm_conversion {
-                use symphonia::core::audio::AudioBufferRef;
-                let is_f32 = matches!(decoded, AudioBufferRef::F32(_));
-                let is_u8 = matches!(decoded, AudioBufferRef::U8(_));
-
-                if !is_f32 {
-                    tracing::error!(
-                        "DSD-to-PCM decoder returned wrong format, expected F32, got U8={}",
-                        is_u8
-                    );
-                    return Err(RmpdError::Player(
-                        "DSD decoder returned wrong sample format".to_owned(),
-                    ));
-                }
-            }
-
-            // Log first packet's sample info
-            use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
-            static LOGGED: AtomicBool = AtomicBool::new(false);
-            if !LOGGED.swap(true, AtomicOrdering::Relaxed) {
-                tracing::info!(
-                    "first packet: format=F32, frames={}, spec={:?}",
-                    decoded.frames(),
-                    decoded.spec()
-                );
-            }
-
-            // Convert to f32 samples
-            let spec = *decoded.spec();
-            let duration = decoded.frames() as u64;
-
-            // Skip empty packets (can happen with metadata or padding)
-            if duration == 0 {
-                continue;
-            }
-
-            // Update channels if not yet known
-            if self.channels.is_none() {
-                self.channels = Some(spec.channels.count() as u8);
-            }
-
-            // Reuse the pre-allocated buffer, resizing if needed for larger packets.
-            // capacity() is in total samples (frames * channels), so compare accordingly.
-            let n_samples = duration as usize * spec.channels.count();
-            if let Some(ref buf) = self.reusable_sample_buf {
-                if buf.capacity() < n_samples {
-                    self.reusable_sample_buf = Some(
-                        symphonia::core::audio::SampleBuffer::<f32>::new(duration, spec),
-                    );
-                }
-            } else {
-                self.reusable_sample_buf = Some(symphonia::core::audio::SampleBuffer::<f32>::new(
-                    duration, spec,
+            // For DSD with PCM conversion, the decoder must return F32.
+            if self.uses_pcm_conversion && !matches!(decoded, GenericAudioBufferRef::F32(_)) {
+                tracing::error!("DSD-to-PCM decoder returned a non-F32 buffer");
+                return Err(RmpdError::Player(
+                    "DSD decoder returned wrong sample format".to_owned(),
                 ));
             }
 
-            if let Some(ref mut buf) = self.reusable_sample_buf {
-                buf.copy_interleaved_ref(decoded);
+            // Skip empty packets (can happen with metadata or padding).
+            if decoded.frames() == 0 {
+                continue;
             }
 
-            // Mark that we have data in the reusable buffer
-            self.has_buffered_data = true;
-            self.current_frame = 0;
+            // Update channels if not yet known.
+            if self.channels.is_none() {
+                self.channels = Some(decoded.spec().channels().count() as u8);
+            }
+
+            // Copy decoded audio as interleaved f32 into the reusable buffer.
+            decoded.copy_to_vec_interleaved(&mut self.sample_buf);
+            self.sample_pos = 0;
         }
 
         Ok(samples_written)
@@ -346,27 +271,22 @@ impl SymphoniaDecoder {
             return Err(RmpdError::Player("Invalid seek position".to_owned()));
         }
 
-        let time_base = TimeBase::new(1, self.sample_rate);
-        let time = Time {
-            seconds: position as u64,
-            frac: position.fract(),
-        };
-
-        let ts = time_base.calc_timestamp(time);
+        let time = Time::try_from_secs_f64(position)
+            .ok_or_else(|| RmpdError::Player("Invalid seek position".to_owned()))?;
 
         self.reader
             .seek(
-                symphonia::core::formats::SeekMode::Accurate,
-                symphonia::core::formats::SeekTo::TimeStamp {
-                    ts,
-                    track_id: self.track_id,
+                SeekMode::Accurate,
+                SeekTo::Time {
+                    time,
+                    track_id: Some(self.track_id),
                 },
             )
             .map_err(|e| RmpdError::Player(format!("Seek failed: {e}")))?;
 
         self.decoder.reset();
-        self.has_buffered_data = false;
-        self.current_frame = 0;
+        self.sample_buf.clear();
+        self.sample_pos = 0;
 
         Ok(())
     }
@@ -413,13 +333,10 @@ impl SymphoniaDecoder {
 
         // Read next packet
         let packet = match self.reader.next_packet() {
-            Ok(packet) => packet,
+            Ok(Some(packet)) => packet,
+            Ok(None) => return Ok(0),
             Err(SymphoniaError::IoError(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-                if e.to_string().contains("end of stream") {
-                    return Ok(0);
-                } else {
-                    return self.read_dsd_raw(buffer); // Try again
-                }
+                return Ok(0);
             }
             Err(SymphoniaError::ResetRequired) => {
                 self.decoder.reset();
@@ -431,13 +348,13 @@ impl SymphoniaDecoder {
         };
 
         // Skip packets from other tracks
-        if packet.track_id() != self.track_id {
+        if packet.track_id != self.track_id {
             return self.read_dsd_raw(buffer);
         }
 
-        // For DSD, the packet buffer contains raw DSD data
-        // Copy it directly without decoding
-        buffer.extend_from_slice(packet.buf());
+        // For DSD, the packet buffer contains raw DSD data.
+        // Copy it directly without decoding.
+        buffer.extend_from_slice(&packet.data);
 
         Ok(buffer.len())
     }

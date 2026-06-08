@@ -33,10 +33,9 @@ rayon = "1.12"
 
 # Audio stack
 # Use remote Symphonia fork with DSD support
-symphonia = { git = "https://github.com/M0Rf30/Symphonia", branch = "dsd-support", features = ["all", "dsd"] }
-lofty = { git = "https://github.com/M0Rf30/lofty-rs", branch = "feat/dsd-support" }
-# PipeWire support is optional (disabled by default) to speed up builds
-cpal = { git = "https://github.com/RustAudio/cpal", branch = "master", default-features = false }
+symphonia = { git = "https://github.com/M0Rf30/Symphonia", rev = "a2796cc00f07bb75c19f2301873c96f9a6a7b719", features = ["all", "dsd"] }
+lofty = { git = "https://github.com/M0Rf30/lofty-rs", rev = "ae2411457c17c12338def0c5d42455832282279f" }
+cpal = { git = "https://github.com/RustAudio/cpal", rev = "94ecb6ec64546308885a59b38e29f938796e8100", default-features = false }
 rubato = "3.0"
 
 # Networking & Protocol
