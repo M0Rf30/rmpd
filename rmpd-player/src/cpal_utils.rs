@@ -34,6 +34,31 @@ pub fn output_device_configured() -> bool {
     configured_device().is_some()
 }
 
+/// Expand the classic ALSA shorthand `hw:<card>,<dev>` / `hw:<card>` (and the
+/// `plughw:` variants) to cpal's enumerated `hw:CARD=<card>,DEV=<dev>` form, so
+/// a config value of `hw:1,0` matches the enumerated id `hw:CARD=1,DEV=0`.
+/// Returns `None` when the input is not in numeric shorthand form.
+fn normalize_alsa(name: &str) -> Option<String> {
+    for prefix in ["plughw:", "hw:"] {
+        if let Some(rest) = name.strip_prefix(prefix) {
+            if rest.starts_with("CARD=") {
+                return None; // already canonical
+            }
+            let mut parts = rest.splitn(2, ',');
+            let card = parts.next()?.trim();
+            let dev = parts.next().map(str::trim).filter(|s| !s.is_empty()).unwrap_or("0");
+            if card.is_empty()
+                || !card.bytes().all(|b| b.is_ascii_digit())
+                || !dev.bytes().all(|b| b.is_ascii_digit())
+            {
+                return None;
+            }
+            return Some(format!("{prefix}CARD={card},DEV={dev}"));
+        }
+    }
+    None
+}
+
 /// CPAL device configuration helper
 pub struct CpalDeviceConfig {
     pub device: Device,
@@ -75,9 +100,14 @@ fn resolve_output_device(host: &cpal::Host) -> Result<Device> {
         let want = want.as_str();
         // 1) exact id, 2) exact desc, 3) substring id, 4) substring desc
         let lower = want.to_lowercase();
+        let norm = normalize_alsa(want);
         let pick = devices
             .iter()
             .find(|(_, id, _)| id == want)
+            .or_else(|| {
+                norm.as_deref()
+                    .and_then(|n| devices.iter().find(|(_, id, _)| id == n))
+            })
             .or_else(|| devices.iter().find(|(_, _, desc)| desc == want))
             .or_else(|| {
                 devices
@@ -103,6 +133,56 @@ fn resolve_output_device(host: &cpal::Host) -> Result<Device> {
         .ok_or_else(|| RmpdError::Player("No output device available".to_owned()))
 }
 
+/// Find a bit-perfect output device for DoP/native DSD: a raw ALSA `hw:` device
+/// that natively supports the exact `rate` with at least `channels` channels, so
+/// PipeWire/PulseAudio never resamples and corrupts the DoP stream.
+///
+/// If `prefer` (a configured id, possibly `hw:N,M` shorthand) names a qualifying
+/// device, it wins. Otherwise the most DAC-like qualifying device is chosen: the
+/// one advertising the highest maximum rate. This also disambiguates the DoP
+/// rate, which is a 44.1 kHz-family rate that onboard HDA codecs usually cannot
+/// do — so in practice only the real DAC qualifies.
+fn find_dop_device(
+    host: &cpal::Host,
+    rate: SampleRate,
+    channels: u16,
+    prefer: Option<&str>,
+) -> Option<(Device, String)> {
+    let prefer_norm = prefer.and_then(normalize_alsa);
+    let mut best: Option<(Device, String, u32)> = None;
+    for device in host.output_devices().ok()? {
+        let id = device.id().map(|i| i.id().to_owned()).unwrap_or_default();
+        // Only raw hardware devices give an exclusive, non-resampled path.
+        if !id.starts_with("hw:") {
+            continue;
+        }
+        let mut supports = false;
+        let mut max_rate = 0u32;
+        if let Ok(configs) = device.supported_output_configs() {
+            for c in configs {
+                max_rate = max_rate.max(c.max_sample_rate());
+                if c.channels() >= channels
+                    && rate >= c.min_sample_rate()
+                    && rate <= c.max_sample_rate()
+                {
+                    supports = true;
+                }
+            }
+        }
+        if !supports {
+            continue;
+        }
+        // An explicit, qualifying preference wins immediately.
+        if prefer == Some(id.as_str()) || prefer_norm.as_deref() == Some(id.as_str()) {
+            return Some((device, id));
+        }
+        if best.as_ref().is_none_or(|(_, _, m)| max_rate > *m) {
+            best = Some((device, id, max_rate));
+        }
+    }
+    best.map(|(device, id, _)| (device, id))
+}
+
 impl CpalDeviceConfig {
     /// Create a new device configuration with the given sample rate and channels
     pub fn new(sample_rate: SampleRate, channels: u16) -> Result<Self> {
@@ -126,6 +206,41 @@ impl CpalDeviceConfig {
             device,
             config,
             sample_format: SampleFormat::F32, // Default, will be updated by find methods
+        })
+    }
+
+    /// Device configuration for DoP/native DSD at the **exact** `sample_rate`
+    /// (no resampling). Auto-selects a bit-perfect `hw:` DAC that natively
+    /// supports the rate (see [`find_dop_device`]), preferring an explicitly
+    /// configured device when it qualifies, and falling back to the resolved
+    /// device otherwise (DoP then likely fails and the caller reverts to PCM).
+    pub fn new_dop(sample_rate: SampleRate, channels: u16) -> Result<Self> {
+        let host = cpal::default_host();
+        let configured = configured_device();
+        let device = match find_dop_device(&host, sample_rate, channels, configured.as_deref()) {
+            Some((device, id)) => {
+                tracing::info!("DoP: auto-selected bit-perfect device '{id}' at {sample_rate} Hz");
+                device
+            }
+            None => {
+                tracing::warn!(
+                    "DoP: no raw hardware device natively supports {sample_rate} Hz; \
+                     output may be silent. Set audio.device to your DAC."
+                );
+                resolve_output_device(&host)?
+            }
+        };
+
+        let config = StreamConfig {
+            channels,
+            sample_rate,
+            buffer_size: cpal::BufferSize::Default,
+        };
+
+        Ok(Self {
+            device,
+            config,
+            sample_format: SampleFormat::F32,
         })
     }
 

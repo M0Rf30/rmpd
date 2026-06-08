@@ -17,7 +17,7 @@ pub struct DopOutput {
 
 impl DopOutput {
     pub fn new(sample_rate: u32, channels: u8) -> Result<Self> {
-        let device_config = CpalDeviceConfig::new(sample_rate, channels as u16)?;
+        let device_config = CpalDeviceConfig::new_dop(sample_rate, channels as u16)?;
 
         tracing::warn!(
             "DoP requires direct hardware access at {} Hz, ensure PipeWire/PulseAudio isn't resampling",
