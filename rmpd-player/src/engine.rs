@@ -313,16 +313,17 @@ impl PlaybackEngine {
             };
 
             if dop_enabled {
-                info!("DSD file detected, attempting DoP output (RMPD_DOP enabled)");
-                match Self::try_dop_playback(&decoder) {
-                    Ok(()) => {
+                info!("DSD file detected, attempting DoP output");
+                match Self::setup_dop(&decoder) {
+                    Ok((dop_encoder, output)) => {
                         info!("DoP output available, using native DSD playback");
-                        return Self::playback_thread_dsd(
+                        return Self::run_dsd_dop(
                             decoder,
+                            dop_encoder,
+                            output,
                             atomic_state,
                             event_bus,
                             stop_flag,
-                            volume,
                             command_rx,
                         );
                     }
@@ -469,8 +470,11 @@ impl PlaybackEngine {
         }
     }
 
-    /// Try to create DoP output (test if hardware supports it)
-    fn try_dop_playback(decoder: &SymphoniaDecoder) -> Result<()> {
+    /// Build the DoP encoder and start the DoP output for `decoder`. Building and
+    /// starting the stream here means any failure (configured device can't do the
+    /// DoP rate, device busy, no DoP DAC) surfaces as an error so the caller can
+    /// cleanly revert to PCM instead of aborting playback.
+    fn setup_dop(decoder: &SymphoniaDecoder) -> Result<(DopEncoder, DopOutput)> {
         let dsd_sample_rate = decoder.sample_rate();
         let channels = decoder.channels();
         let channel_layout = decoder
@@ -480,67 +484,39 @@ impl PlaybackEngine {
             .bit_order()
             .unwrap_or(symphonia::core::codecs::audio::BitOrder::LsbFirst);
 
-        // Try to create DoP encoder (validates DSD rate)
-        let dop_encoder = DopEncoder::new(
-            dsd_sample_rate,
-            channels as usize,
-            channel_layout,
-            bit_order,
-        )?;
+        let dop_encoder =
+            DopEncoder::new(dsd_sample_rate, channels as usize, channel_layout, bit_order)?;
         let pcm_sample_rate = dop_encoder.pcm_sample_rate();
 
-        // Try to create DoP output (will fail if hardware doesn't support the rate)
-        let _test_output = DopOutput::new(pcm_sample_rate, channels)?;
-
-        Ok(())
-    }
-
-    /// DSD playback thread using DoP encoding
-    fn playback_thread_dsd(
-        mut decoder: SymphoniaDecoder,
-        atomic_state: Arc<AtomicU8>,
-        event_bus: EventBus,
-        stop_flag: Arc<AtomicBool>,
-        _volume: Arc<AtomicU8>, // Volume controlled by system mixer for DoP
-        command_rx: mpsc::Receiver<PlaybackCommand>,
-    ) -> Result<()> {
-        let dsd_sample_rate = decoder.sample_rate();
-        let channels = decoder.channels();
-        let channel_layout = decoder
-            .channel_data_layout()
-            .unwrap_or(symphonia::core::codecs::audio::ChannelDataLayout::Planar);
-        let bit_order = decoder
-            .bit_order()
-            .unwrap_or(symphonia::core::codecs::audio::BitOrder::LsbFirst);
-
-        info!(
-            "dsd playback: {} Hz, {} channels",
-            dsd_sample_rate, channels
-        );
+        info!("dsd playback: {} Hz, {} channels", dsd_sample_rate, channels);
         info!(
             "dsd format: channel_layout={:?}, bit_order={:?}",
             channel_layout, bit_order
         );
-
-        // Create DoP encoder
-        let mut dop_encoder = DopEncoder::new(
-            dsd_sample_rate,
-            channels as usize,
-            channel_layout,
-            bit_order,
-        )?;
-        let pcm_sample_rate = dop_encoder.pcm_sample_rate();
-
         info!(
             "DoP encoding: DSD {} Hz -> PCM {} Hz",
             dsd_sample_rate, pcm_sample_rate
         );
 
-        // Create DoP output
         let mut output = DopOutput::new(pcm_sample_rate, channels)?;
         output.start()?;
 
-        // Playback loop
+        Ok((dop_encoder, output))
+    }
+
+    /// DSD playback loop over an already-started DoP output.
+    fn run_dsd_dop(
+        mut decoder: SymphoniaDecoder,
+        mut dop_encoder: DopEncoder,
+        mut output: DopOutput,
+        atomic_state: Arc<AtomicU8>,
+        event_bus: EventBus,
+        stop_flag: Arc<AtomicBool>,
+        command_rx: mpsc::Receiver<PlaybackCommand>,
+    ) -> Result<()> {
+        let dsd_sample_rate = decoder.sample_rate();
+        let channels = decoder.channels();
+
         let mut dsd_buffer = Vec::new();
         let mut dop_i32_buffer = Vec::new();
         let mut total_dsd_bytes: u64 = 0;
@@ -605,7 +581,6 @@ impl PlaybackEngine {
             }
         }
 
-        // Stop output
         output.stop()?;
 
         Ok(())
