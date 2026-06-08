@@ -14,7 +14,7 @@
 ///
 /// Reference: https://dsd-guide.com/sites/default/files/white-papers/DoP_openStandard_1v1.pdf
 use rmpd_core::error::{Result, RmpdError};
-use symphonia::core::codecs::{BitOrder, ChannelDataLayout};
+use symphonia::core::codecs::audio::{BitOrder, ChannelDataLayout};
 
 const DOP_MARKER_1: u8 = 0x05;
 const DOP_MARKER_2: u8 = 0xFA;

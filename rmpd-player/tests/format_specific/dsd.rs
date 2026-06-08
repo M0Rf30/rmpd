@@ -7,7 +7,7 @@
 /// - Channel layout (planar vs interleaved)
 /// - Sample rate conversions (DSD64 → 176.4kHz, DSD128 → 352.8kHz)
 use rmpd_player::dop::DopEncoder;
-use symphonia::core::codecs::{BitOrder, ChannelDataLayout};
+use symphonia::core::codecs::audio::{BitOrder, ChannelDataLayout};
 
 const DOP_MARKER_1: u8 = 0x05;
 const DOP_MARKER_2: u8 = 0xFA;
