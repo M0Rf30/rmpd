@@ -10,7 +10,9 @@ static OUTPUT_DEVICE: RwLock<Option<String>> = RwLock::new(None);
 /// Set the preferred output device id (ALSA PCM name, e.g. `hw:CARD=1,DEV=0`)
 /// from configuration. `None`/empty selects the system default device.
 pub fn set_output_device(device: Option<String>) {
-    let cleaned = device.map(|s| s.trim().to_owned()).filter(|s| !s.is_empty());
+    let cleaned = device
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty());
     if let Ok(mut guard) = OUTPUT_DEVICE.write() {
         *guard = cleaned;
     }
@@ -46,7 +48,11 @@ fn normalize_alsa(name: &str) -> Option<String> {
             }
             let mut parts = rest.splitn(2, ',');
             let card = parts.next()?.trim();
-            let dev = parts.next().map(str::trim).filter(|s| !s.is_empty()).unwrap_or("0");
+            let dev = parts
+                .next()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .unwrap_or("0");
             if card.is_empty()
                 || !card.bytes().all(|b| b.is_ascii_digit())
                 || !dev.bytes().all(|b| b.is_ascii_digit())

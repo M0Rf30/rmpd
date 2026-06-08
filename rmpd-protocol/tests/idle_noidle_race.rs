@@ -86,5 +86,8 @@ async fn bare_noidle_without_idle_emits_nothing() {
 
     // The ping response must be exactly OK — not preceded by a stray noidle OK.
     let resp = client.command("ping").await;
-    assert_eq!(resp, "OK\n", "bare noidle must not emit its own OK: {resp:?}");
+    assert_eq!(
+        resp, "OK\n",
+        "bare noidle must not emit its own OK: {resp:?}"
+    );
 }

@@ -313,7 +313,9 @@ async fn execute_command_list(
         match parse_command(cmd_str) {
             Ok(Command::Idle { .. }) => {
                 return Response::Text(ResponseBuilder::error(
-                    5, index as i32, "idle",
+                    5,
+                    index as i32,
+                    "idle",
                     "cannot be used inside a command list",
                 ));
             }

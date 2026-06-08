@@ -419,10 +419,16 @@ mod tests {
         // match present-but-empty rows and miss tagless songs).
         let expr = FilterExpression::parse("((AlbumArtist == ''))").unwrap();
         let (sql, params) = expr.to_sql();
-        assert!(sql.starts_with("NOT EXISTS"), "expected NOT EXISTS, got: {sql}");
+        assert!(
+            sql.starts_with("NOT EXISTS"),
+            "expected NOT EXISTS, got: {sql}"
+        );
         assert!(sql.contains("st.value != ''"), "got: {sql}");
         assert!(sql.contains("albumartist") && sql.contains("artist"));
-        assert!(params.is_empty(), "empty-equality takes no bound params: {params:?}");
+        assert!(
+            params.is_empty(),
+            "empty-equality takes no bound params: {params:?}"
+        );
     }
 
     #[test]
