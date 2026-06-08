@@ -137,23 +137,23 @@ fn resolve_output_device(host: &cpal::Host) -> Result<Device> {
 /// that natively supports the exact `rate` with at least `channels` channels, so
 /// PipeWire/PulseAudio never resamples and corrupts the DoP stream.
 ///
-/// If `prefer` (a configured id, possibly `hw:N,M` shorthand) names a qualifying
-/// device, it wins. Otherwise the most DAC-like qualifying device is chosen: the
-/// one advertising the highest maximum rate. This also disambiguates the DoP
-/// rate, which is a 44.1 kHz-family rate that onboard HDA codecs usually cannot
-/// do — so in practice only the real DAC qualifies.
-fn find_dop_device(
-    host: &cpal::Host,
-    rate: SampleRate,
-    channels: u16,
-    prefer: Option<&str>,
-) -> Option<(Device, String)> {
-    let prefer_norm = prefer.and_then(normalize_alsa);
-    let mut best: Option<(Device, String, u32)> = None;
+/// HDMI and S/PDIF outputs are excluded — they advertise high PCM rates but are
+/// not DoP DACs (auto-picking one yields silence). USB-described devices are
+/// preferred, then the highest maximum rate. Returns `None` when nothing clearly
+/// qualifies; the caller should fall back to PCM rather than guess. For
+/// certainty (or when the DAC is briefly busy), set `audio.device` explicitly.
+fn find_dop_device(host: &cpal::Host, rate: SampleRate, channels: u16) -> Option<(Device, String)> {
+    // (device, id, is_usb, max_rate)
+    let mut best: Option<(Device, String, bool, u32)> = None;
     for device in host.output_devices().ok()? {
         let id = device.id().map(|i| i.id().to_owned()).unwrap_or_default();
         // Only raw hardware devices give an exclusive, non-resampled path.
         if !id.starts_with("hw:") {
+            continue;
+        }
+        let desc = device.to_string().to_lowercase();
+        // HDMI/SPDIF take high PCM rates but are not DoP DACs — never auto-pick.
+        if desc.contains("hdmi") || desc.contains("s/pdif") || desc.contains("iec958") {
             continue;
         }
         let mut supports = false;
@@ -172,15 +172,16 @@ fn find_dop_device(
         if !supports {
             continue;
         }
-        // An explicit, qualifying preference wins immediately.
-        if prefer == Some(id.as_str()) || prefer_norm.as_deref() == Some(id.as_str()) {
-            return Some((device, id));
-        }
-        if best.as_ref().is_none_or(|(_, _, m)| max_rate > *m) {
-            best = Some((device, id, max_rate));
+        let is_usb = desc.contains("usb");
+        // Prefer a USB DAC, then the highest maximum rate.
+        if best
+            .as_ref()
+            .is_none_or(|(_, _, u, m)| (is_usb, max_rate) > (*u, *m))
+        {
+            best = Some((device, id, is_usb, max_rate));
         }
     }
-    best.map(|(device, id, _)| (device, id))
+    best.map(|(device, id, _, _)| (device, id))
 }
 
 impl CpalDeviceConfig {
@@ -216,18 +217,29 @@ impl CpalDeviceConfig {
     /// device otherwise (DoP then likely fails and the caller reverts to PCM).
     pub fn new_dop(sample_rate: SampleRate, channels: u16) -> Result<Self> {
         let host = cpal::default_host();
-        let configured = configured_device();
-        let device = match find_dop_device(&host, sample_rate, channels, configured.as_deref()) {
-            Some((device, id)) => {
-                tracing::info!("DoP: auto-selected bit-perfect device '{id}' at {sample_rate} Hz");
-                device
-            }
-            None => {
-                tracing::warn!(
-                    "DoP: no raw hardware device natively supports {sample_rate} Hz; \
-                     output may be silent. Set audio.device to your DAC."
-                );
-                resolve_output_device(&host)?
+        // An explicitly configured device is used verbatim (no auto-substitution),
+        // so DoP never silently routes to the wrong output. Auto-discovery only
+        // runs when no device is configured, and only over real (USB) DACs.
+        let device = if configured_device().is_some() {
+            let dev = resolve_output_device(&host)?;
+            tracing::info!("DoP: using configured device '{dev}' at {sample_rate} Hz");
+            dev
+        } else {
+            match find_dop_device(&host, sample_rate, channels) {
+                Some((dev, id)) => {
+                    tracing::info!(
+                        "DoP: auto-selected bit-perfect device '{id}' at {sample_rate} Hz"
+                    );
+                    dev
+                }
+                // No real DAC: fail so the caller cleanly reverts to PCM, rather
+                // than opening DoP on a wrong/HDMI/PipeWire device (silence).
+                None => {
+                    return Err(RmpdError::Player(format!(
+                        "no USB/hardware DAC natively supports {sample_rate} Hz \
+                         (HDMI/SPDIF excluded); set audio.device to your DAC"
+                    )));
+                }
             }
         };
 
