@@ -7,6 +7,7 @@ use crate::output::CpalOutput;
 use crate::pipe_output::PipeOutput;
 use crate::recorder_output::RecorderOutput;
 use rmpd_core::error::Result;
+use rmpd_core::config::ResamplerQuality;
 use rmpd_core::event::{Event, EventBus};
 use rmpd_core::song::Song;
 use rmpd_core::state::PlayerState;
@@ -89,6 +90,7 @@ pub struct PlaybackEngine {
     volume: Arc<AtomicU8>,
     command_tx: Option<mpsc::Sender<PlaybackCommand>>,
     output_config: PlayerOutputConfig,
+    resampler_quality: ResamplerQuality,
 }
 
 impl PlaybackEngine {
@@ -107,11 +109,18 @@ impl PlaybackEngine {
             volume: Arc::new(AtomicU8::new(100)),
             command_tx: None,
             output_config: PlayerOutputConfig::Cpal,
+            resampler_quality: ResamplerQuality::default(),
         }
     }
 
     pub fn set_output_config(&mut self, config: PlayerOutputConfig) {
         self.output_config = config;
+    }
+
+    /// Set the resampler quality used when the output device cannot natively
+    /// play the decoded stream's rate.
+    pub fn set_resampler_quality(&mut self, quality: ResamplerQuality) {
+        self.resampler_quality = quality;
     }
 
     pub async fn seek(&self, position: f64) -> Result<()> {
@@ -151,6 +160,7 @@ impl PlaybackEngine {
         let status_clone = self.status.clone();
         let atomic_state_clone = self.atomic_state.clone();
         let output_config = self.output_config.clone();
+        let resampler_quality = self.resampler_quality;
 
         let handle = thread::spawn(move || {
             if let Err(e) = Self::playback_thread(
@@ -162,6 +172,7 @@ impl PlaybackEngine {
                 volume,
                 command_rx,
                 output_config,
+                resampler_quality,
             ) {
                 error!("playback error: {}", e);
             }
@@ -268,6 +279,7 @@ impl PlaybackEngine {
         volume: Arc<AtomicU8>,
         command_rx: mpsc::Receiver<PlaybackCommand>,
         output_config: PlayerOutputConfig,
+        resampler_quality: ResamplerQuality,
     ) -> Result<()> {
         // Open decoder (pass-through mode by default)
         let mut decoder = SymphoniaDecoder::open(path)?;
@@ -328,7 +340,8 @@ impl PlaybackEngine {
         );
 
         // Create output
-        let mut output: Box<dyn AudioOutput> = Self::create_output(format, &output_config)?;
+        let mut output: Box<dyn AudioOutput> =
+            Self::create_output(format, &output_config, resampler_quality)?;
         output.start()?;
 
         // Playback loop
@@ -422,9 +435,10 @@ impl PlaybackEngine {
     fn create_output(
         format: rmpd_core::song::AudioFormat,
         cfg: &PlayerOutputConfig,
+        quality: ResamplerQuality,
     ) -> Result<Box<dyn AudioOutput>> {
         match cfg {
-            PlayerOutputConfig::Cpal => Ok(Box::new(CpalOutput::new(format)?)),
+            PlayerOutputConfig::Cpal => Ok(Box::new(CpalOutput::new(format, quality)?)),
             PlayerOutputConfig::Fifo { path } => Ok(Box::new(FifoOutput::new(path.clone()))),
             PlayerOutputConfig::Pipe { command } => Ok(Box::new(PipeOutput::new(command.clone()))),
             PlayerOutputConfig::Recorder { path } => {

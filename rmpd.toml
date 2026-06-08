@@ -21,6 +21,8 @@ mpris = true
 [audio]
 default_output = "default"
 buffer_time = 500
+# Sample-rate conversion quality, used only when the output device cannot play a
+# stream's native rate. One of: sinc_best, sinc_medium, sinc_fast, linear.
 resampler_quality = "sinc_medium"
 replay_gain = "off"
 replay_gain_preamp = 0.0
