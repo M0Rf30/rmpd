@@ -64,6 +64,7 @@ sha2 = "0.11"
 
 # Advanced features
 mdns-sd = "0.20"                  # Network discovery
+mpris-server = { version = "0.10", features = ["tokio"] }  # MPRIS D-Bus media player interface
 chromaprint-sys-next = "1.6"      # Audio fingerprinting
 base64 = "0.22"                   # Base64 encoding
 nix = { version = "0.31", features = ["mount", "process", "fs"] }  # Linux mount syscalls

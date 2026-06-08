@@ -41,6 +41,25 @@ pub async fn run(bind_address: String, config: Config) -> Result<()> {
     let advertise_port = config.network.port;
     state.advertise_mdns(advertise_port);
 
+    // Expose rmpd on the session D-Bus via MPRIS so desktop environments,
+    // `playerctl`, and media keys can discover and control it. Kept alive
+    // (`_mpris`) for the lifetime of the server; dropping it releases the
+    // D-Bus name. Failure (e.g. no session bus) is non-fatal.
+    let _mpris = if config.network.mpris {
+        match rmpd_protocol::mpris::spawn(state.clone()).await {
+            Ok(handle) => {
+                info!("MPRIS interface enabled (org.mpris.MediaPlayer2.rmpd)");
+                Some(handle)
+            }
+            Err(e) => {
+                warn!("MPRIS interface disabled: {}", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     // Trigger an initial library scan on startup when auto-update is enabled.
     if config.database.auto_update {
         info!("auto-update enabled: scanning music directory");

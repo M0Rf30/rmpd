@@ -14,6 +14,9 @@ bind_address = "127.0.0.1"
 port = 6600
 max_connections = 100
 connection_timeout = 60
+# Advertise rmpd on the session D-Bus via MPRIS (org.mpris.MediaPlayer2.rmpd)
+# so desktop environments, playerctl, and media keys can detect and control it.
+mpris = true
 
 [audio]
 default_output = "default"
