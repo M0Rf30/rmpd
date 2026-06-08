@@ -232,7 +232,7 @@ impl CpalDeviceConfig {
 
     /// Device configuration for DoP/native DSD at the **exact** `sample_rate`
     /// (no resampling). Auto-selects a bit-perfect `hw:` DAC that natively
-    /// supports the rate (see [`find_dop_device`]), preferring an explicitly
+    /// supports the rate (`find_dop_device`), preferring an explicitly
     /// configured device when it qualifies, and falling back to the resolved
     /// device otherwise (DoP then likely fails and the caller reverts to PCM).
     pub fn new_dop(sample_rate: SampleRate, channels: u16) -> Result<Self> {

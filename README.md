@@ -1,8 +1,12 @@
-# rmpd
+<p align="center">
+  <img src="assets/rmpd-logo.png" alt="rmpd — music player daemon" width="420">
+</p>
 
-[![CI](https://github.com/M0Rf30/rmpd/workflows/CI/badge.svg)](https://github.com/M0Rf30/rmpd/actions/workflows/ci.yml)
-[![Security](https://github.com/M0Rf30/rmpd/workflows/Security%20Audit/badge.svg)](https://github.com/M0Rf30/rmpd/actions/workflows/security.yml)
-[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE-MIT)
+<p align="center">
+  <a href="https://github.com/M0Rf30/rmpd/actions/workflows/ci.yml"><img src="https://github.com/M0Rf30/rmpd/workflows/CI/badge.svg" alt="CI"></a>
+  <a href="https://github.com/M0Rf30/rmpd/actions/workflows/security.yml"><img src="https://github.com/M0Rf30/rmpd/workflows/Security%20Audit/badge.svg" alt="Security Audit"></a>
+  <a href="LICENSE-MIT"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg" alt="License"></a>
+</p>
 
 **rmpd** is a modern, high-performance, memory-safe music server written in pure Rust. It aims for 100% compatibility with the Music Player Daemon (MPD) protocol while providing first-class extensibility through a plugin architecture.
 
