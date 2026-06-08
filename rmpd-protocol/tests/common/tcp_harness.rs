@@ -2,6 +2,9 @@
 //!
 //! Provides `MpdTestServer` (binds to port 0, spawns the real server) and
 //! `MpdTestClient` (connects via TCP, sends commands, validates responses).
+//!
+// Shared across multiple test binaries; each uses only a subset of the helpers.
+#![allow(dead_code)]
 
 use rmpd_core::test_utils::make_test_song;
 use rmpd_protocol::MpdServer;
