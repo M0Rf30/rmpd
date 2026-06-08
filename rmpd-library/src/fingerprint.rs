@@ -1,9 +1,21 @@
 use rmpd_core::error::{Result, RmpdError};
 use rmpd_player::SymphoniaDecoder;
 use std::path::Path;
+use std::sync::Mutex;
 
 /// Maximum duration to fingerprint (120 seconds recommended by Chromaprint)
 const MAX_FINGERPRINT_DURATION_SECS: u64 = 120;
+
+/// Serializes Chromaprint context creation/destruction.
+///
+/// `chromaprint_new` / `chromaprint_free` are NOT safe to call concurrently
+/// (context setup/teardown touches non-reentrant global state, e.g. FFT plan
+/// allocation), which corrupts the heap ("double free or corruption") when two
+/// `Fingerprinter`s are created/dropped on different threads — as happens with
+/// parallel `getfingerprint` commands or parallel tests. Holding this lock only
+/// around the alloc/free FFI calls keeps that lifecycle serialized while leaving
+/// per-context feeding/finishing concurrent.
+static CHROMAPRINT_LOCK: Mutex<()> = Mutex::new(());
 
 /// Audio fingerprinter using Chromaprint library
 pub struct Fingerprinter {
@@ -17,7 +29,12 @@ impl Fingerprinter {
         // SAFETY: chromaprint_new is a safe FFI call that allocates and initializes a new
         // Chromaprint context. The returned pointer is either valid or null; we check for
         // null immediately after and return an error if allocation failed.
-        let ctx = unsafe { chromaprint_sys_next::chromaprint_new(1) };
+        let ctx = {
+            let _guard = CHROMAPRINT_LOCK
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            unsafe { chromaprint_sys_next::chromaprint_new(1) }
+        };
 
         if ctx.is_null() {
             return Err(RmpdError::Library(
@@ -165,6 +182,9 @@ impl Drop for Fingerprinter {
             // chromaprint_new. chromaprint_free is the correct deallocation function.
             // We only call it once per Fingerprinter instance, and the null check ensures
             // we don't double-free.
+            let _guard = CHROMAPRINT_LOCK
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
             unsafe {
                 chromaprint_sys_next::chromaprint_free(self.ctx);
             }
