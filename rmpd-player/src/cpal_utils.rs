@@ -188,7 +188,21 @@ impl CpalDeviceConfig {
     /// Create a new device configuration with the given sample rate and channels
     pub fn new(sample_rate: SampleRate, channels: u16) -> Result<Self> {
         let host = cpal::default_host();
-        let device = resolve_output_device(&host)?;
+        let mut device = resolve_output_device(&host)?;
+
+        // The configured device may be busy (held by PipeWire) or disconnected.
+        // For ordinary PCM playback, degrade gracefully to the default device
+        // rather than failing all playback. (DoP uses `new_dop`, which instead
+        // reports the failure so the engine falls back to PCM conversion.)
+        if device.supported_output_configs().is_err()
+            && let Some(default) = host.default_output_device()
+        {
+            tracing::warn!(
+                "configured output device '{device}' is unavailable/busy; \
+                 falling back to the default device"
+            );
+            device = default;
+        }
         tracing::debug!("cpal output device: {device}");
 
         // Choose a rate the device actually supports: the requested rate when
