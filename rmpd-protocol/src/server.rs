@@ -560,12 +560,10 @@ async fn handle_command(
         Command::Stats => {
             // Get stats from database if available
             let (songs, artists, albums, db_playtime, db_update) =
-                if let Some(ref db_path) = state.db_path {
-                    let result = rmpd_library::Database::open(db_path);
-                    if let Ok(db) = result {
-                        db.get_stats().unwrap_or((0, 0, 0, 0, 0))
-                    } else {
-                        (0, 0, 0, 0, 0)
+                if let Some(ref pool) = state.db_pool {
+                    match rmpd_library::Database::from_pool(pool) {
+                        Ok(db) => db.get_stats().unwrap_or((0, 0, 0, 0, 0)),
+                        Err(_) => (0, 0, 0, 0, 0),
                     }
                 } else {
                     (0, 0, 0, 0, 0)

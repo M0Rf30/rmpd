@@ -30,6 +30,7 @@ pub struct AppState {
     pub atomic_state: Arc<std::sync::atomic::AtomicU8>, // Lock-free state access
     pub event_bus: EventBus,
     pub db_path: Option<String>,
+    pub db_pool: Option<Arc<rmpd_library::DbPool>>,
     pub music_dir: Option<String>,
     pub playlist_dir: Option<String>,
     pub outputs: Arc<RwLock<Vec<OutputInfo>>>,
@@ -89,6 +90,17 @@ impl AppState {
         let partition_manager = PartitionManager::new();
         // Note: Creating the default partition is async, so we'll handle it during actual usage
         // For now, partition_manager exists but has no partitions until first command
+        // Create a pooled database connection up front (schema is initialised
+        // once here). Reused across commands so a chatty client doesn't pay the
+        // cost of opening a fresh SQLite connection per request.
+        let db_pool = db_path.as_ref().and_then(|path| match rmpd_library::DbPool::new(path) {
+            Ok(pool) => Some(pool),
+            Err(e) => {
+                tracing::warn!("failed to create database connection pool: {e}");
+                None
+            }
+        });
+
 
         Self {
             queue: Arc::new(RwLock::new(Queue::new())),
@@ -97,6 +109,7 @@ impl AppState {
             atomic_state,
             event_bus,
             db_path,
+            db_pool,
             music_dir,
             playlist_dir,
             outputs: Arc::new(RwLock::new(vec![default_output])),

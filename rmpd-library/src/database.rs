@@ -6,6 +6,7 @@ use rmpd_core::tag::tag_fallback_chain;
 use rmpd_core::time::system_time_to_unix_secs;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use std::cmp::Ordering;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 /// Compare two optional strings using ICU root-locale collation: None sorts before Some.
@@ -72,20 +73,129 @@ fn get_playlist_id(conn: &Connection, name: &str) -> Result<i64> {
     .ok_or_else(|| RmpdError::Library(format!("Playlist not found: {name}")))
 }
 
+/// Open a SQLite connection configured for rmpd: WAL journaling (lets readers
+/// run concurrently with a writer), a busy timeout (writers wait under WAL
+/// contention instead of erroring), and foreign-key enforcement.
+fn open_connection(path: &str) -> Result<Connection> {
+    let conn = Connection::open(path)?;
+    conn.busy_timeout(Duration::from_secs(5))?;
+    conn.execute_batch(
+        "PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON;",
+    )?;
+    Ok(conn)
+}
+
+/// A pool of reusable SQLite connections.
+///
+/// Opening a connection per command is expensive: SQLite re-probes the
+/// `-wal`/`-journal`/`-shm` sidecar files on every open, and rmpd additionally
+/// re-ran schema init each time. Reusing pooled connections removes that
+/// per-command cost (a chatty client otherwise pegs a core opening the DB).
+#[derive(Debug)]
+pub struct DbPool {
+    path: String,
+    idle: Mutex<Vec<Connection>>,
+    max_idle: usize,
+}
+
+impl DbPool {
+    /// Create a pool for `path`, running schema migration/initialisation once.
+    pub fn new(path: &str) -> Result<Arc<Self>> {
+        let conn = open_connection(path)?;
+        // Run migration + schema setup exactly once, on this connection.
+        let db = Database {
+            conn: DbConn::Direct(conn),
+        };
+        db.migrate_schema()?;
+        db.init_schema()?;
+        let DbConn::Direct(conn) = db.conn else {
+            unreachable!("constructed as Direct above")
+        };
+        Ok(Arc::new(Self {
+            path: path.to_owned(),
+            idle: Mutex::new(vec![conn]),
+            max_idle: 8,
+        }))
+    }
+
+    /// Check out a connection, reusing an idle one when available.
+    pub fn checkout(self: &Arc<Self>) -> Result<PooledConn> {
+        let reused = self.idle.lock().unwrap_or_else(|e| e.into_inner()).pop();
+        let conn = match reused {
+            Some(conn) => conn,
+            None => open_connection(&self.path)?,
+        };
+        Ok(PooledConn {
+            conn: Some(conn),
+            pool: Arc::clone(self),
+        })
+    }
+
+    fn checkin(&self, conn: Connection) {
+        let mut idle = self.idle.lock().unwrap_or_else(|e| e.into_inner());
+        if idle.len() < self.max_idle {
+            idle.push(conn);
+        }
+        // Otherwise drop the connection: the pool is already at capacity.
+    }
+}
+
+/// A connection borrowed from a [`DbPool`], returned to it on drop.
+#[derive(Debug)]
+pub struct PooledConn {
+    conn: Option<Connection>,
+    pool: Arc<DbPool>,
+}
+
+impl Drop for PooledConn {
+    fn drop(&mut self) {
+        if let Some(conn) = self.conn.take() {
+            self.pool.checkin(conn);
+        }
+    }
+}
+
+/// Connection backing a [`Database`]: either standalone or borrowed from a pool.
+#[derive(Debug)]
+enum DbConn {
+    Direct(Connection),
+    Pooled(PooledConn),
+}
+
+impl std::ops::Deref for DbConn {
+    type Target = Connection;
+    fn deref(&self) -> &Connection {
+        match self {
+            DbConn::Direct(conn) => conn,
+            DbConn::Pooled(pooled) => pooled.conn.as_ref().expect("pooled connection in use"),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Database {
-    conn: Connection,
+    conn: DbConn,
 }
 
 impl Database {
+    /// Open a standalone database connection (used by the scanner/watcher and
+    /// tests). Runs schema migration/initialisation.
     pub fn open(path: &str) -> Result<Self> {
-        let conn = Connection::open(path)?;
-        conn.execute_batch("PRAGMA foreign_keys = ON;")?;
-
-        let db = Self { conn };
+        let conn = open_connection(path)?;
+        let db = Self {
+            conn: DbConn::Direct(conn),
+        };
         db.migrate_schema()?;
         db.init_schema()?;
         Ok(db)
+    }
+
+    /// Construct a database backed by a pooled connection. The pool already ran
+    /// schema setup, so this just borrows a ready connection.
+    pub fn from_pool(pool: &Arc<DbPool>) -> Result<Self> {
+        Ok(Self {
+            conn: DbConn::Pooled(pool.checkout()?),
+        })
     }
 
     /// Perform schema migrations for existing databases.
