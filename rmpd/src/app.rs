@@ -41,6 +41,27 @@ pub async fn run(bind_address: String, config: Config) -> Result<()> {
     let advertise_port = config.network.port;
     state.advertise_mdns(advertise_port);
 
+    // Trigger an initial library scan on startup when auto-update is enabled.
+    if config.database.auto_update {
+        info!("auto-update enabled: scanning music directory");
+        state.spawn_library_update();
+    }
+
+    // Start the filesystem watcher so the database stays in sync with on-disk
+    // changes. Kept alive (`_watcher`) for the lifetime of the server; dropping
+    // it would stop watching.
+    let _watcher = if config.database.filesystem_watch {
+        match start_filesystem_watch(&state, &db_path, &music_dir).await {
+            Ok(w) => Some(w),
+            Err(e) => {
+                warn!("filesystem watch disabled: {}", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     // Clone state for shutdown handler
     let shutdown_state = state.clone();
     let shutdown_state_file_path = state_file_path.clone();
@@ -78,6 +99,28 @@ pub async fn run(bind_address: String, config: Config) -> Result<()> {
 
     server_result?;
     Ok(())
+}
+
+/// Open a dedicated database handle and start watching the music directory for
+/// changes, returning the live watcher (which must be kept alive to keep
+/// watching).
+async fn start_filesystem_watch(
+    state: &AppState,
+    db_path: &str,
+    music_dir: &str,
+) -> Result<rmpd_library::FilesystemWatcher> {
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
+    let db = rmpd_library::Database::open(db_path)?;
+    let mut watcher = rmpd_library::FilesystemWatcher::new(
+        std::path::PathBuf::from(music_dir),
+        Arc::new(Mutex::new(db)),
+        state.event_bus.clone(),
+    )?;
+    watcher.start().await?;
+    info!("filesystem watcher started for {}", music_dir);
+    Ok(watcher)
 }
 
 async fn restore_state(

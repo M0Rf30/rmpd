@@ -426,56 +426,20 @@ pub async fn handle_count_command(
 }
 
 pub async fn handle_update_command(state: &AppState, _path: Option<&str>) -> String {
-    let db_path = match &state.db_path {
-        Some(p) => p.clone(),
-        None => {
-            return ResponseBuilder::error(
-                ACK_ERROR_SYSTEM,
-                0,
-                "update",
-                "database not configured",
-            );
-        }
-    };
+    if state.db_path.is_none() {
+        return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "update", "database not configured");
+    }
+    if state.music_dir.is_none() {
+        return ResponseBuilder::error(
+            ACK_ERROR_SYSTEM,
+            0,
+            "update",
+            "music directory not configured",
+        );
+    }
 
-    let music_dir = match &state.music_dir {
-        Some(p) => p.clone(),
-        None => {
-            return ResponseBuilder::error(
-                ACK_ERROR_SYSTEM,
-                0,
-                "update",
-                "music directory not configured",
-            );
-        }
-    };
-
-    let event_bus = state.event_bus.clone();
-
-    // Spawn background scanning task (blocking task since scan is synchronous)
-    tokio::task::spawn_blocking(move || {
-        info!("starting library update");
-
-        match rmpd_library::Database::open(&db_path) {
-            Ok(db) => {
-                let scanner = rmpd_library::Scanner::new(event_bus.clone());
-                match scanner.scan_directory(&db, std::path::Path::new(&music_dir)) {
-                    Ok(stats) => {
-                        info!(
-                            "library scan complete: {} scanned, {} added, {} updated, {} errors",
-                            stats.scanned, stats.added, stats.updated, stats.errors
-                        );
-                    }
-                    Err(e) => {
-                        error!("library scan error: {}", e);
-                    }
-                }
-            }
-            Err(e) => {
-                error!("failed to open database: {}", e);
-            }
-        }
-    });
+    // Spawn the background scan (shared with auto-update on startup).
+    state.spawn_library_update();
 
     // Return update job ID
     let mut resp = ResponseBuilder::new();
