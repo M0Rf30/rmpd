@@ -10,6 +10,7 @@ pub mod fifo_output;
 pub mod output;
 pub mod pipe_output;
 pub mod recorder_output;
+pub mod resampler;
 
 pub use decoder::{Decoder, SymphoniaDecoder};
 pub use dop::DopEncoder;

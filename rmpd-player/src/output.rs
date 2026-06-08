@@ -1,5 +1,6 @@
 use crate::audio_output::{AudioOutput, PauseState};
 use crate::conversion::{self, SampleBuffer};
+use crate::resampler::LinearResampler;
 use crate::cpal_utils::CpalDeviceConfig;
 use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{Device, SampleFormat, Stream, StreamConfig};
@@ -13,11 +14,31 @@ pub struct CpalOutput {
     sample_sender: Option<SyncSender<Vec<f32>>>,
     config: StreamConfig,
     pause_state: PauseState,
+    resampler: Option<LinearResampler>,
 }
 
 impl CpalOutput {
     pub fn new(format: AudioFormat) -> Result<Self> {
         let device_config = CpalDeviceConfig::new(format.sample_rate, format.channels as u16)?;
+
+        // If the device could not take the requested rate, CpalDeviceConfig
+        // selected a supported one; resample to bridge the difference so the
+        // file plays regardless of hardware constraints.
+        let device_rate = device_config.config.sample_rate;
+        let resampler = if device_rate != format.sample_rate {
+            tracing::info!(
+                "output device does not support {} Hz; resampling to {} Hz",
+                format.sample_rate,
+                device_rate
+            );
+            Some(LinearResampler::new(
+                format.sample_rate,
+                device_rate,
+                format.channels as usize,
+            ))
+        } else {
+            None
+        };
 
         Ok(Self {
             device: device_config.device,
@@ -25,7 +46,14 @@ impl CpalOutput {
             sample_sender: None,
             config: device_config.config,
             pause_state: PauseState::new(),
+            resampler,
         })
+    }
+
+    /// Whether the default output device natively supports `rate`. Lets callers
+    /// prefer a bit-exact rate before falling back to resampling.
+    pub fn supports_rate(rate: u32) -> bool {
+        CpalDeviceConfig::default_device_supports_rate(rate)
     }
 
     #[cfg(feature = "jack")]
@@ -37,6 +65,7 @@ impl CpalOutput {
             sample_sender: None,
             config: device_config.config,
             pause_state: PauseState::new(),
+            resampler: None,
         })
     }
 
@@ -49,6 +78,7 @@ impl CpalOutput {
             sample_sender: None,
             config: device_config.config,
             pause_state: PauseState::new(),
+            resampler: None,
         })
     }
 
@@ -148,13 +178,23 @@ impl CpalOutput {
             return Ok(0);
         }
 
-        if let Some(ref sender) = self.sample_sender {
-            sender
-                .send(samples.to_vec())
-                .map_err(|_| RmpdError::Player("Failed to send samples to output".to_owned()))?;
-            Ok(samples.len())
-        } else {
-            Err(RmpdError::Player("Output not started".to_owned()))
+        // Resample to the device rate when required (bridges unsupported rates).
+        let out = match self.resampler {
+            Some(ref mut rs) => rs.process(samples),
+            None => samples.to_vec(),
+        };
+        let n = out.len();
+
+        match self.sample_sender {
+            Some(ref sender) => {
+                if n > 0 {
+                    sender.send(out).map_err(|_| {
+                        RmpdError::Player("Failed to send samples to output".to_owned())
+                    })?;
+                }
+                Ok(n)
+            }
+            None => Err(RmpdError::Player("Output not started".to_owned())),
         }
     }
 
