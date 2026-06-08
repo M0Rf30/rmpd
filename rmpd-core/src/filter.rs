@@ -69,28 +69,37 @@ impl FilterExpression {
                     return (format!("path {sql_op} ?"), vec![value_param]);
                 }
 
-                // For tags with fallback chains, generate OR-ed EXISTS subqueries
                 let fallback_tags = tag_fallback_chain(&tag_lower);
-                let (sql_op, value_param) = op_to_sql(op, value);
+                let tag_list = fallback_tags
+                    .iter()
+                    .map(|t| format!("'{t}'"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
 
-                if fallback_tags.len() == 1 {
-                    let sql = format!(
-                        "EXISTS (SELECT 1 FROM song_tags st WHERE st.song_id = songs.id AND st.tag = '{}' AND st.value {sql_op} ?)",
-                        fallback_tags[0]
+                // MPD treats a missing tag as an empty value, so comparing a tag
+                // (or its fallback chain) against the empty string must also match
+                // songs that have no row at all for those tags. A plain
+                // `value = ''` EXISTS check would miss them, leaving e.g. the empty
+                // AlbumArtist group (shown by `list`) unreachable via `find`/`count`
+                // — which traps browsers like rmpc in a re-query loop.
+                if value.is_empty() && matches!(op, CompareOp::Equal | CompareOp::NotEqual) {
+                    let has_nonempty = format!(
+                        "EXISTS (SELECT 1 FROM song_tags st WHERE st.song_id = songs.id \
+                         AND st.tag IN ({tag_list}) AND st.value != '')"
                     );
-                    (sql, vec![value_param])
-                } else {
-                    // Multiple fallback tags: use single EXISTS with IN clause for O(1) performance
-                    let tag_list = fallback_tags
-                        .iter()
-                        .map(|t| format!("'{t}'"))
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    let sql = format!(
-                        "EXISTS (SELECT 1 FROM song_tags st WHERE st.song_id = songs.id AND st.tag IN ({tag_list}) AND st.value {sql_op} ?)"
-                    );
-                    (sql, vec![value_param])
+                    let sql = match op {
+                        CompareOp::Equal => format!("NOT {has_nonempty}"),
+                        _ => has_nonempty,
+                    };
+                    return (sql, vec![]);
                 }
+
+                let (sql_op, value_param) = op_to_sql(op, value);
+                let sql = format!(
+                    "EXISTS (SELECT 1 FROM song_tags st WHERE st.song_id = songs.id \
+                     AND st.tag IN ({tag_list}) AND st.value {sql_op} ?)"
+                );
+                (sql, vec![value_param])
             }
             FilterExpression::And(left, right) => {
                 let (left_sql, mut left_params) = left.to_sql();
@@ -400,5 +409,29 @@ mod tests {
         let (sql, params) = expr.to_sql();
         assert_eq!(sql, "path = ?");
         assert_eq!(params, vec!["some/path.mp3"]);
+    }
+
+    #[test]
+    fn test_empty_equality_matches_missing_tag() {
+        // `Tag == ''` must match songs that have NO non-empty value for the tag
+        // (including songs with the tag entirely absent), so it is generated as a
+        // NOT EXISTS over non-empty rows — never as `value = ''` (which would only
+        // match present-but-empty rows and miss tagless songs).
+        let expr = FilterExpression::parse("((AlbumArtist == ''))").unwrap();
+        let (sql, params) = expr.to_sql();
+        assert!(sql.starts_with("NOT EXISTS"), "expected NOT EXISTS, got: {sql}");
+        assert!(sql.contains("st.value != ''"), "got: {sql}");
+        assert!(sql.contains("albumartist") && sql.contains("artist"));
+        assert!(params.is_empty(), "empty-equality takes no bound params: {params:?}");
+    }
+
+    #[test]
+    fn test_empty_inequality_matches_present_value() {
+        // `Tag != ''` matches songs that DO have a non-empty value.
+        let expr = FilterExpression::parse("((Artist != ''))").unwrap();
+        let (sql, params) = expr.to_sql();
+        assert!(sql.starts_with("EXISTS"), "expected EXISTS, got: {sql}");
+        assert!(sql.contains("st.value != ''"), "got: {sql}");
+        assert!(params.is_empty());
     }
 }
