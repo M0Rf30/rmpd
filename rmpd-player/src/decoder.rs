@@ -87,9 +87,9 @@ impl SymphoniaDecoder {
 
         // Calculate total duration from the track frame count and timebase.
         let total_duration = match (track.num_frames, time_base) {
-            (Some(n_frames), Some(tb)) => {
-                tb.calc_time(Timestamp::new(n_frames as i64)).map(|t| t.as_secs_f64())
-            }
+            (Some(n_frames), Some(tb)) => tb
+                .calc_time(Timestamp::new(n_frames as i64))
+                .map(|t| t.as_secs_f64()),
             _ => None,
         };
 
@@ -186,9 +186,8 @@ impl SymphoniaDecoder {
             if self.sample_pos < self.sample_buf.len() {
                 let available = self.sample_buf.len() - self.sample_pos;
                 let to_copy = (buffer.len() - samples_written).min(available);
-                buffer[samples_written..samples_written + to_copy].copy_from_slice(
-                    &self.sample_buf[self.sample_pos..self.sample_pos + to_copy],
-                );
+                buffer[samples_written..samples_written + to_copy]
+                    .copy_from_slice(&self.sample_buf[self.sample_pos..self.sample_pos + to_copy]);
                 samples_written += to_copy;
                 self.sample_pos += to_copy;
                 if samples_written >= buffer.len() {
