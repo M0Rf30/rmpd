@@ -22,11 +22,10 @@ pub async fn handle_add_command(state: &AppState, uri: &str, position: Option<u3
         }
         if scheme != "file" {
             let stream_song = helpers::create_stream_song(uri);
-            let id = state.queue.write().await.add_at(stream_song, position);
+            // `add` returns no Id (unlike `addid`) — MPD replies with bare OK.
+            state.queue.write().await.add_at(stream_song, position);
             helpers::update_playlist_version(state).await;
-            let mut resp = ResponseBuilder::new();
-            resp.field("Id", id);
-            return resp.ok();
+            return ResponseBuilder::new().ok();
         }
     }
     // Get song from database (file:// or relative path)
@@ -50,12 +49,11 @@ pub async fn handle_add_command(state: &AppState, uri: &str, position: Option<u3
         }
     };
 
-    let id = state.queue.write().await.add_at(song, position);
+    // `add` returns no Id (unlike `addid`) — MPD replies with bare OK.
+    state.queue.write().await.add_at(song, position);
     helpers::update_playlist_version(state).await;
 
-    let mut resp = ResponseBuilder::new();
-    resp.field("Id", id);
-    resp.ok()
+    ResponseBuilder::new().ok()
 }
 
 pub async fn handle_clear_command(state: &AppState) -> String {
