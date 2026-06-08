@@ -48,6 +48,11 @@ pub struct NetworkConfig {
     #[serde(default = "default_connection_timeout")]
     pub connection_timeout: u64,
     pub password: Option<String>,
+    /// Advertise the daemon on the session D-Bus via the MPRIS interface
+    /// (`org.mpris.MediaPlayer2.rmpd`) so desktop environments, `playerctl`,
+    /// and media keys can discover and control rmpd.
+    #[serde(default = "default_true")]
+    pub mpris: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -308,6 +313,7 @@ impl Default for Config {
                 max_connections: default_max_connections(),
                 connection_timeout: default_connection_timeout(),
                 password: None,
+                mpris: true,
             },
             audio: AudioConfig {
                 default_output: default_output(),
