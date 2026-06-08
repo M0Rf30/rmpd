@@ -6,7 +6,7 @@ use crate::fifo_output::FifoOutput;
 use crate::output::CpalOutput;
 use crate::pipe_output::PipeOutput;
 use crate::recorder_output::RecorderOutput;
-use rmpd_core::config::ResamplerQuality;
+use rmpd_core::config::{DopMode, ResamplerQuality};
 use rmpd_core::error::Result;
 use rmpd_core::event::{Event, EventBus};
 use rmpd_core::song::Song;
@@ -91,6 +91,7 @@ pub struct PlaybackEngine {
     command_tx: Option<mpsc::Sender<PlaybackCommand>>,
     output_config: PlayerOutputConfig,
     resampler_quality: ResamplerQuality,
+    dop_mode: DopMode,
 }
 
 impl PlaybackEngine {
@@ -110,6 +111,7 @@ impl PlaybackEngine {
             command_tx: None,
             output_config: PlayerOutputConfig::Cpal,
             resampler_quality: ResamplerQuality::default(),
+            dop_mode: DopMode::default(),
         }
     }
 
@@ -121,6 +123,11 @@ impl PlaybackEngine {
     /// play the decoded stream's rate.
     pub fn set_resampler_quality(&mut self, quality: ResamplerQuality) {
         self.resampler_quality = quality;
+    }
+
+    /// Set the DSD-over-PCM (DoP) mode for DSD sources.
+    pub fn set_dop_mode(&mut self, mode: DopMode) {
+        self.dop_mode = mode;
     }
 
     pub async fn seek(&self, position: f64) -> Result<()> {
@@ -161,6 +168,7 @@ impl PlaybackEngine {
         let atomic_state_clone = self.atomic_state.clone();
         let output_config = self.output_config.clone();
         let resampler_quality = self.resampler_quality;
+        let dop_mode = self.dop_mode;
 
         let handle = thread::spawn(move || {
             if let Err(e) = Self::playback_thread(
@@ -173,6 +181,7 @@ impl PlaybackEngine {
                 command_rx,
                 output_config,
                 resampler_quality,
+                dop_mode,
             ) {
                 error!("playback error: {}", e);
             }
@@ -280,6 +289,7 @@ impl PlaybackEngine {
         command_rx: mpsc::Receiver<PlaybackCommand>,
         output_config: PlayerOutputConfig,
         resampler_quality: ResamplerQuality,
+        dop_mode: DopMode,
     ) -> Result<()> {
         // Open decoder (pass-through mode by default)
         let mut decoder = SymphoniaDecoder::open(path)?;
@@ -290,9 +300,17 @@ impl PlaybackEngine {
             // reached over a bit-perfect path. There is no reliable way to detect
             // that support, and selecting DoP for an ordinary DAC yields silence,
             // so DoP is opt-in. Default to PCM conversion, which always plays.
-            let dop_enabled = std::env::var("RMPD_DOP")
-                .map(|v| matches!(v.trim(), "1" | "true" | "yes" | "on"))
-                .unwrap_or(false);
+            // Resolve DoP: the `RMPD_DOP` env var overrides; otherwise use the
+            // configured mode. `Auto` enables DoP only when an explicit output
+            // device is configured (assumed a dedicated, DoP-capable DAC).
+            let dop_enabled = match std::env::var("RMPD_DOP") {
+                Ok(v) => matches!(v.trim(), "1" | "true" | "yes" | "on"),
+                Err(_) => match dop_mode {
+                    DopMode::Yes => true,
+                    DopMode::No => false,
+                    DopMode::Auto => crate::cpal_utils::output_device_configured(),
+                },
+            };
 
             if dop_enabled {
                 info!("DSD file detected, attempting DoP output (RMPD_DOP enabled)");
@@ -315,7 +333,7 @@ impl PlaybackEngine {
             } else {
                 info!(
                     "DSD file detected; using DSD-to-PCM conversion \
-                     (set RMPD_DOP=1 for native DSD on a DoP-capable DAC)"
+                     (set audio.dop=\"yes\" or RMPD_DOP=1 for native DSD on a DoP DAC)"
                 );
             }
 

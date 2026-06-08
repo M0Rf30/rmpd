@@ -16,4 +16,5 @@ pub use decoder::{Decoder, SymphoniaDecoder};
 pub use dop::DopEncoder;
 pub use dop_output::DopOutput;
 pub use engine::{PlaybackEngine, PlayerOutputConfig};
+pub use cpal_utils::set_output_device;
 pub use output::CpalOutput;

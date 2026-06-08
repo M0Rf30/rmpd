@@ -1,6 +1,38 @@
 use cpal::traits::{DeviceTrait, HostTrait};
 use cpal::{Device, SampleFormat, SampleRate, StreamConfig};
 use rmpd_core::error::{Result, RmpdError};
+use std::sync::RwLock;
+
+/// Output device id configured at startup (from `audio.device`). Takes
+/// precedence over the `RMPD_AUDIO_DEVICE` env var.
+static OUTPUT_DEVICE: RwLock<Option<String>> = RwLock::new(None);
+
+/// Set the preferred output device id (ALSA PCM name, e.g. `hw:CARD=1,DEV=0`)
+/// from configuration. `None`/empty selects the system default device.
+pub fn set_output_device(device: Option<String>) {
+    let cleaned = device.map(|s| s.trim().to_owned()).filter(|s| !s.is_empty());
+    if let Ok(mut guard) = OUTPUT_DEVICE.write() {
+        *guard = cleaned;
+    }
+}
+
+/// The configured output device id: the config value first, then the
+/// `RMPD_AUDIO_DEVICE` env override.
+fn configured_device() -> Option<String> {
+    if let Some(dev) = OUTPUT_DEVICE.read().ok().and_then(|g| g.clone()) {
+        return Some(dev);
+    }
+    std::env::var("RMPD_AUDIO_DEVICE")
+        .ok()
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty())
+}
+
+/// Whether an explicit output device is configured (via config or env). Used to
+/// decide auto-DoP: a dedicated device implies a real (likely DoP-capable) DAC.
+pub fn output_device_configured() -> bool {
+    configured_device().is_some()
+}
 
 /// CPAL device configuration helper
 pub struct CpalDeviceConfig {
@@ -39,35 +71,32 @@ fn resolve_output_device(host: &cpal::Host) -> Result<Device> {
         }
     }
 
-    if let Ok(want) = std::env::var("RMPD_AUDIO_DEVICE") {
-        let want = want.trim();
-        if !want.is_empty() {
-            // 1) exact id, 2) exact desc, 3) substring id, 4) substring desc
-            let lower = want.to_lowercase();
-            let pick = devices
-                .iter()
-                .find(|(_, id, _)| id == want)
-                .or_else(|| devices.iter().find(|(_, _, desc)| desc == want))
-                .or_else(|| {
-                    devices
-                        .iter()
-                        .find(|(_, id, _)| id.to_lowercase().contains(&lower))
-                })
-                .or_else(|| {
-                    devices
-                        .iter()
-                        .find(|(_, _, desc)| desc.to_lowercase().contains(&lower))
-                });
-            if let Some((dev, id, desc)) = pick {
-                tracing::info!("using output device id='{id}' desc='{desc}' (RMPD_AUDIO_DEVICE='{want}')");
-                return Ok(dev.clone());
-            }
-            let available: Vec<&str> = devices.iter().map(|(_, id, _)| id.as_str()).collect();
-            tracing::warn!(
-                "RMPD_AUDIO_DEVICE='{want}' not found; using default device instead. \
-                 Available ids: {available:?}"
-            );
+    if let Some(want) = configured_device() {
+        let want = want.as_str();
+        // 1) exact id, 2) exact desc, 3) substring id, 4) substring desc
+        let lower = want.to_lowercase();
+        let pick = devices
+            .iter()
+            .find(|(_, id, _)| id == want)
+            .or_else(|| devices.iter().find(|(_, _, desc)| desc == want))
+            .or_else(|| {
+                devices
+                    .iter()
+                    .find(|(_, id, _)| id.to_lowercase().contains(&lower))
+            })
+            .or_else(|| {
+                devices
+                    .iter()
+                    .find(|(_, _, desc)| desc.to_lowercase().contains(&lower))
+            });
+        if let Some((dev, id, desc)) = pick {
+            tracing::info!("using output device id='{id}' desc='{desc}' (configured '{want}')");
+            return Ok(dev.clone());
         }
+        let available: Vec<&str> = devices.iter().map(|(_, id, _)| id.as_str()).collect();
+        tracing::warn!(
+            "configured output device '{want}' not found; using default. Available ids: {available:?}"
+        );
     }
 
     host.default_output_device()
