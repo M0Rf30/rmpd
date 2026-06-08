@@ -5,7 +5,36 @@ use crate::cpal_utils::CpalDeviceConfig;
 use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{Device, SampleFormat, Stream, StreamConfig};
 use rmpd_core::error::{Result, RmpdError};
-use std::sync::mpsc::{SyncSender, sync_channel};
+use std::sync::mpsc::{SyncSender, TrySendError, sync_channel};
+use std::time::{Duration, Instant};
+
+/// Outcome of a bounded send on the DoP sample channel.
+enum SendOutcome {
+    Sent,
+    TimedOut,
+    Disconnected,
+}
+
+/// Send on the bounded channel, waiting up to `timeout` for space via
+/// non-blocking `try_send` retries. `std::sync::mpsc` has no stable timed send,
+/// and a plain blocking `send` would hang forever if the output callback stalls
+/// (device xrun/disconnect) — leaking the exclusive ALSA device.
+fn send_bounded(sender: &SyncSender<Vec<i32>>, mut payload: Vec<i32>, timeout: Duration) -> SendOutcome {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match sender.try_send(payload) {
+            Ok(()) => return SendOutcome::Sent,
+            Err(TrySendError::Disconnected(_)) => return SendOutcome::Disconnected,
+            Err(TrySendError::Full(returned)) => {
+                if Instant::now() >= deadline {
+                    return SendOutcome::TimedOut;
+                }
+                payload = returned;
+                std::thread::sleep(Duration::from_millis(2));
+            }
+        }
+    }
+}
 
 pub struct DopOutput {
     device: Device,
@@ -123,8 +152,14 @@ impl DopOutput {
 
         let chunk_size = self.config.sample_rate as usize / 50 * self.config.channels as usize;
         for chunk in primer_samples.chunks(chunk_size) {
-            tx.send(chunk.to_vec())
-                .map_err(|e| RmpdError::Player(format!("Failed to send DoP primer chunk: {e}")))?;
+            // Bounded wait so a stalled callback can't hang priming forever.
+            if !matches!(
+                send_bounded(&tx, chunk.to_vec(), Duration::from_millis(500)),
+                SendOutcome::Sent
+            ) {
+                tracing::warn!("DoP primer send stalled; continuing");
+                break;
+            }
         }
 
         tracing::info!(
@@ -141,13 +176,20 @@ impl DopOutput {
             return Ok(0);
         }
 
-        if let Some(ref sender) = self.sample_sender {
-            sender.send(samples.to_vec()).map_err(|_| {
-                RmpdError::Player("Failed to send DoP samples to output".to_owned())
-            })?;
-            Ok(samples.len())
-        } else {
-            Err(RmpdError::Player("DoP output not started".to_owned()))
+        let Some(ref sender) = self.sample_sender else {
+            return Err(RmpdError::Player("DoP output not started".to_owned()));
+        };
+
+        // Bounded send: normally returns quickly (backpressure paces the decoder
+        // to playback rate). If the output callback stalls (device xrun or
+        // disconnect), don't block forever — drop this buffer so the playback
+        // loop stays responsive to stop/seek and the device can be released.
+        match send_bounded(sender, samples.to_vec(), Duration::from_millis(500)) {
+            SendOutcome::Sent => Ok(samples.len()),
+            SendOutcome::TimedOut => Ok(0),
+            SendOutcome::Disconnected => {
+                Err(RmpdError::Player("DoP output stream closed".to_owned()))
+            }
         }
     }
 
@@ -183,7 +225,8 @@ impl DopOutput {
                 reset_samples.push(0);
             }
 
-            let _ = sender.send(reset_samples);
+            // Best-effort: never block shutdown if the callback isn't draining.
+            let _ = sender.try_send(reset_samples);
 
             std::thread::sleep(std::time::Duration::from_millis(150));
 
@@ -192,6 +235,9 @@ impl DopOutput {
 
         if let Some(stream) = self.stream.take() {
             drop(stream);
+            // Let ALSA/USB fully release the exclusive device before any
+            // subsequent open, avoiding spurious "busy" on rapid track switches.
+            std::thread::sleep(std::time::Duration::from_millis(80));
         }
         self.sample_sender = None;
         self.is_paused = false;
