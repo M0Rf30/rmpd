@@ -229,7 +229,6 @@ async fn handle_client_inner(
 
         debug!("received command: {}", trimmed);
 
-        // Handle command batching
         let response = match parse_command(trimmed) {
             Ok(Command::CommandListBegin) => {
                 batch_mode = true;
@@ -273,6 +272,16 @@ async fn handle_client_inner(
                 batch_commands.push(trimmed.to_string());
                 continue; // Don't send response yet
             }
+            Ok(Command::NoIdle) => {
+                // `noidle` received while NOT in idle mode. This happens when an
+                // idle event was already delivered (flushing `changed: …\nOK\n`)
+                // before the client's racing `noidle` arrived. Per MPD's
+                // Client::ProcessLine, the server writes NOTHING in this case —
+                // the client already received the full idle response. Emitting an
+                // extra `OK` here would desync the stream (clients like rmpc then
+                // report `Expected 'OK' but got '<value>'`).
+                Response::Text(String::new())
+            }
             Ok(Command::Close) => {
                 // Close: terminate the connection immediately (per MPD spec)
                 break;
@@ -302,9 +311,18 @@ async fn execute_command_list(
 
     for (index, cmd_str) in commands.iter().enumerate() {
         match parse_command(cmd_str) {
+            Ok(Command::Idle { .. }) => {
+                return Response::Text(ResponseBuilder::error(
+                    5, index as i32, "idle",
+                    "cannot be used inside a command list",
+                ));
+            }
+            Ok(Command::NoIdle) => {
+                // Silently ignore noidle inside command list
+                continue;
+            }
             Ok(cmd) => {
                 let cmd_response = handle_command(cmd, state, conn_state).await;
-
                 // Convert response to string for batching (binary commands not allowed in batch)
                 let cmd_response_str = match cmd_response {
                     Response::Text(s) => s,
