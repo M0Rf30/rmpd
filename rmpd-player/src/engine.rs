@@ -41,6 +41,38 @@ pub enum PlayerOutputConfig {
 
 const BUFFER_SIZE: usize = 4096;
 
+/// Valid DSD-to-PCM decode rates, ascending. DSD decimates cleanly only by an
+/// integer power of two, so every target is 44.1 kHz-family.
+const DSD_PCM_RATES: [u32; 4] = [44100, 88200, 176400, 352800];
+
+/// Choose the DSD-to-PCM decode rate for a device running at `device_rate`.
+///
+/// Returns the SMALLEST DSD-family rate that both covers `device_rate` and is
+/// reported as supported, falling back to the largest supported family rate and
+/// finally to 88.2 kHz.
+///
+/// Decoding to the highest rate a device merely *advertises* is harmful:
+/// systems like PipeWire advertise enormous ranges (up to ~768 kHz) but
+/// resample internally, so an over-high PCM rate (a) gives a punishingly short
+/// real-time callback period that underruns on scheduling jitter (audible
+/// crackle), and (b) leaves DSD's ultrasonic shaped noise in the PCM, muddying
+/// the sound. A moderate rate lets the decimation filter remove that noise and
+/// keeps the buffer period comfortable.
+fn select_dsd_pcm_rate(device_rate: u32, supports_rate: impl Fn(u32) -> bool) -> u32 {
+    DSD_PCM_RATES
+        .iter()
+        .copied()
+        .find(|&r| r >= device_rate && supports_rate(r))
+        .or_else(|| {
+            DSD_PCM_RATES
+                .iter()
+                .rev()
+                .copied()
+                .find(|&r| supports_rate(r))
+        })
+        .unwrap_or(88200)
+}
+
 /// Commands that can be sent to the playback thread
 enum PlaybackCommand {
     Seek(f64),
@@ -275,18 +307,16 @@ impl PlaybackEngine {
                 );
             }
 
-            // DSD-to-PCM: prefer a natively-supported 44.1 kHz-family rate
-            // (bit-exact); otherwise decode at 44.1 kHz and let the output
-            // resample to a supported device rate so the file always plays.
-            let preferred_rates = [705600, 352800, 176400, 88200, 44100];
-            let decode_rate = preferred_rates
-                .iter()
-                .copied()
-                .find(|&r| CpalOutput::supports_rate(r))
-                .unwrap_or(44100);
+            // Pick the DSD-to-PCM decode rate sized to the device (see
+            // `select_dsd_pcm_rate`), not to the device's huge advertised max.
+            let device_rate = CpalOutput::default_output_rate().unwrap_or(48000);
+            let decode_rate = select_dsd_pcm_rate(device_rate, CpalOutput::supports_rate);
 
             decoder.enable_pcm_conversion(decode_rate)?;
-            info!("DSD-to-PCM conversion enabled at {} Hz", decode_rate);
+            info!(
+                "DSD-to-PCM conversion enabled at {} Hz (device {} Hz)",
+                decode_rate, device_rate
+            );
         }
 
         // Standard PCM playback (works for all formats including DSD with PCM conversion)
@@ -556,5 +586,55 @@ impl Drop for PlaybackEngine {
         if let Some(handle) = self.playback_thread.take() {
             let _ = handle.join();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pipewire_like_device_picks_moderate_rate_not_advertised_max() {
+        // PipeWire advertises everything (huge range) and defaults to 48 kHz.
+        // We must NOT pick 352.8 kHz; the smallest family rate covering 48 kHz
+        // is 88.2 kHz.
+        let rate = select_dsd_pcm_rate(48000, |_| true);
+        assert_eq!(rate, 88200);
+    }
+
+    #[test]
+    fn device_at_44100_picks_44100() {
+        let rate = select_dsd_pcm_rate(44100, |_| true);
+        assert_eq!(rate, 44100);
+    }
+
+    #[test]
+    fn device_at_96000_picks_176400() {
+        // 88.2 kHz does not cover 96 kHz; the smallest family rate >= 96 kHz is
+        // 176.4 kHz.
+        let rate = select_dsd_pcm_rate(96000, |_| true);
+        assert_eq!(rate, 176400);
+    }
+
+    #[test]
+    fn device_at_192000_picks_352800() {
+        let rate = select_dsd_pcm_rate(192000, |_| true);
+        assert_eq!(rate, 352800);
+    }
+
+    #[test]
+    fn strict_48k_device_falls_back_to_largest_supported_family_rate() {
+        // A device that only natively supports 44.1 kHz (e.g. some hw-locked
+        // ALSA devices) while running at 48 kHz: no family rate >= 48 kHz is
+        // supported, so fall back to the largest supported one (44.1 kHz). The
+        // output layer then resamples 44.1 -> 48 kHz.
+        let rate = select_dsd_pcm_rate(48000, |r| r == 44100);
+        assert_eq!(rate, 44100);
+    }
+
+    #[test]
+    fn no_support_info_falls_back_to_default() {
+        let rate = select_dsd_pcm_rate(48000, |_| false);
+        assert_eq!(rate, 88200);
     }
 }

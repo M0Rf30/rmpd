@@ -56,6 +56,11 @@ impl CpalOutput {
         CpalDeviceConfig::default_device_supports_rate(rate)
     }
 
+    /// The default output device's preferred sample rate (Hz), if known.
+    pub fn default_output_rate() -> Option<u32> {
+        CpalDeviceConfig::default_output_rate()
+    }
+
     #[cfg(feature = "jack")]
     pub fn new_jack(format: AudioFormat) -> Result<Self> {
         let device_config = CpalDeviceConfig::new_jack(format.sample_rate, format.channels as u16)?;

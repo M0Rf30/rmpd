@@ -69,6 +69,16 @@ impl CpalDeviceConfig {
             .unwrap_or(false)
     }
 
+    /// The default output device's preferred (default) sample rate in Hz, if
+    /// known. Used to size DSD-to-PCM decoding to the device instead of to the
+    /// (often huge) advertised maximum.
+    pub fn default_output_rate() -> Option<SampleRate> {
+        cpal::default_host()
+            .default_output_device()
+            .and_then(|device| device.default_output_config().ok())
+            .map(|config| config.sample_rate())
+    }
+
     /// Create a device configuration using the JACK host.
     #[cfg(feature = "jack")]
     pub fn new_jack(sample_rate: SampleRate, channels: u16) -> Result<Self> {
