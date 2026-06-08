@@ -154,9 +154,10 @@ impl QueuePlaybackManager {
 
             // Handle consume mode (remove current song after playing)
             if consume.is_on() {
-                let mut queue = state.queue.write().await;
-                queue.delete(current_pos);
-                drop(queue);
+                state.queue.write().await.delete(current_pos);
+                // Notify the `playlist` idle subsystem that the consumed song was
+                // removed from the queue.
+                helpers::update_playlist_version(state).await;
             }
 
             // Play the next song

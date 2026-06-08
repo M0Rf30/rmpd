@@ -128,6 +128,7 @@ pub async fn handle_addid_command(state: &AppState, uri: &str, position: Option<
         if scheme != "file" {
             let stream_song = helpers::create_stream_song(uri);
             let id = state.queue.write().await.add_at(stream_song, position);
+            helpers::update_playlist_version(state).await;
             let mut resp = ResponseBuilder::new();
             resp.field("Id", id);
             return resp.ok();
@@ -155,6 +156,7 @@ pub async fn handle_addid_command(state: &AppState, uri: &str, position: Option<
 
     // Add to queue at specific position
     let id = state.queue.write().await.add_at(song, position);
+    helpers::update_playlist_version(state).await;
 
     let mut resp = ResponseBuilder::new();
     resp.field("Id", id);
@@ -337,15 +339,32 @@ pub async fn handle_playid_command(state: &AppState, id: Option<u32>) -> String 
 
             match state.engine.write().await.play(playback_song).await {
                 Ok(_) => {
-                    let mut status = state.status.write().await;
-                    status.state = rmpd_core::state::PlayerState::Play;
-                    status.current_song = Some(rmpd_core::state::QueuePosition {
-                        position,
-                        id: song_id,
-                    });
+                    {
+                        let mut status = state.status.write().await;
+                        status.state = rmpd_core::state::PlayerState::Play;
+                        status.elapsed = Some(std::time::Duration::ZERO);
+                        status.duration = song.duration;
+                        status.bitrate = song.bitrate;
+                        status.audio_format = helpers::extract_audio_format(&song);
+                        status.current_song = Some(rmpd_core::state::QueuePosition {
+                            position,
+                            id: song_id,
+                        });
 
-                    let queue = state.queue.read().await;
-                    update_next_song(&mut status, &queue, position);
+                        let queue = state.queue.read().await;
+                        update_next_song(&mut status, &queue, position);
+                    }
+
+                    // Mirror `play`: notify the `player` idle subsystem so clients
+                    // update their now-playing view and cover art.
+                    state
+                        .event_bus
+                        .emit(rmpd_core::event::Event::PlayerStateChanged(
+                            rmpd_core::state::PlayerState::Play,
+                        ));
+                    state
+                        .event_bus
+                        .emit(rmpd_core::event::Event::SongChanged(Some(song)));
 
                     ResponseBuilder::new().ok()
                 }
@@ -370,11 +389,13 @@ pub async fn handle_playid_command(state: &AppState, id: Option<u32>) -> String 
 /// Sets the priority for all songs within the specified position ranges.
 /// Priority is 0-255 where higher values have higher priority.
 pub async fn handle_prio_command(state: &AppState, priority: u8, ranges: &[(u32, u32)]) -> String {
-    let mut queue = state.queue.write().await;
-    queue.set_priority_range(priority, ranges);
-
-    let mut status = state.status.write().await;
-    status.playlist_version = queue.version();
+    let version = {
+        let mut queue = state.queue.write().await;
+        queue.set_priority_range(priority, ranges);
+        queue.version()
+    };
+    state.status.write().await.playlist_version = version;
+    state.event_bus.emit(rmpd_core::event::Event::QueueChanged);
 
     ResponseBuilder::new().ok()
 }
@@ -394,12 +415,15 @@ pub async fn handle_prioid_command(state: &AppState, priority: u8, ids: &[u32]) 
         }
     }
 
-    let mut queue = state.queue.write().await;
-    let changed = queue.set_priority_ids(priority, ids);
+    let (changed, version) = {
+        let mut queue = state.queue.write().await;
+        let changed = queue.set_priority_ids(priority, ids);
+        (changed, queue.version())
+    };
 
     if changed {
-        let mut status = state.status.write().await;
-        status.playlist_version = queue.version();
+        state.status.write().await.playlist_version = version;
+        state.event_bus.emit(rmpd_core::event::Event::QueueChanged);
     }
 
     ResponseBuilder::new().ok()

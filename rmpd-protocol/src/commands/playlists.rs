@@ -368,9 +368,7 @@ pub async fn handle_load_command(
         }
     }
 
-    let mut status = state.status.write().await;
-    status.playlist_version += 1;
-    status.playlist_length = state.queue.read().await.len() as u32;
+    crate::helpers::update_playlist_version(state).await;
     ResponseBuilder::new().ok()
 }
 

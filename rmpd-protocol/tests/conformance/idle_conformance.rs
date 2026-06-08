@@ -74,3 +74,75 @@ async fn idle_multiple_subsystems() {
     let resp = client.read_response().await;
     assert_ok(&resp);
 }
+
+#[tokio::test]
+async fn idle_triggered_by_addid() {
+    // Regression: `addid` must wake an idling client on the `playlist`
+    // subsystem, otherwise event-driven clients (rmpc) never refetch the queue
+    // and it appears empty even though playback started.
+    let (server, mut adder, _tmp) = setup_with_db(3).await;
+    let mut idler = MpdTestClient::connect(server.port()).await;
+
+    idler.send_raw("idle\n").await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let resp = adder.command("addid \"music/song1.flac\"").await;
+    assert!(
+        get_field(&resp, "Id").is_some(),
+        "addid must return Id: {resp}"
+    );
+
+    let idle_resp = idler.read_response().await;
+    assert!(
+        idle_resp.contains("changed: playlist"),
+        "addid should notify the playlist idle subsystem, got: {idle_resp}"
+    );
+    assert_ok(&idle_resp);
+}
+
+#[tokio::test]
+async fn idle_triggered_by_add() {
+    let (server, mut adder, _tmp) = setup_with_db(3).await;
+    let mut idler = MpdTestClient::connect(server.port()).await;
+
+    idler.send_raw("idle playlist\n").await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let resp = adder.command("add \"music/song1.flac\"").await;
+    assert_ok(&resp);
+
+    let idle_resp = idler.read_response().await;
+    assert!(
+        idle_resp.contains("changed: playlist"),
+        "add should notify the playlist idle subsystem, got: {idle_resp}"
+    );
+    assert_ok(&idle_resp);
+}
+
+#[tokio::test]
+async fn single_connection_idle_sees_buffered_addid() {
+    // Faithful to rmpc's usage: one connection that cycles idle -> noidle ->
+    // command -> idle. A queue change made between idle calls must be buffered
+    // and reported on the next idle.
+    let (_server, mut client, _tmp) = setup_with_db(3).await;
+
+    client.send_raw("idle\n").await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    client.send_raw("noidle\n").await;
+    let r = client.read_response().await;
+    assert_ok(&r);
+
+    let resp = client.command("addid \"music/song1.flac\"").await;
+    assert!(
+        get_field(&resp, "Id").is_some(),
+        "addid must return Id: {resp}"
+    );
+
+    // Re-entering idle must immediately report the buffered playlist change.
+    let idle_resp = client.command("idle").await;
+    assert!(
+        idle_resp.contains("changed: playlist"),
+        "next idle should report the buffered playlist change, got: {idle_resp}"
+    );
+    assert_ok(&idle_resp);
+}
