@@ -17,13 +17,17 @@ pub async fn run(bind_address: String, config: Config) -> Result<()> {
     // Configure password authentication if set in config.
     state.set_password(config.network.password.clone());
 
-    // Apply the configured resampler quality (used only when the output device
-    // cannot natively play a decoded stream's sample rate).
-    state
-        .engine
-        .write()
-        .await
-        .set_resampler_quality(config.audio.resampler_quality);
+    // Apply audio settings from config to the player.
+    // - resampler quality: used only when the device can't play a rate natively.
+    // - DoP mode: native DSD-over-PCM policy for DSD sources.
+    // - output device: select a specific (e.g. raw ALSA `hw:`) device, bypassing
+    //   PipeWire/PulseAudio for bit-perfect DoP. Env vars still override.
+    {
+        let mut engine = state.engine.write().await;
+        engine.set_resampler_quality(config.audio.resampler_quality);
+        engine.set_dop_mode(config.dop_mode());
+    }
+    rmpd_player::set_output_device(config.output_device());
 
     // Load state from file if it exists
     let state_file = StateFile::new(state_file_path.clone());

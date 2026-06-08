@@ -63,6 +63,14 @@ pub struct AudioConfig {
     pub buffer_time: u32,
     #[serde(default)]
     pub resampler_quality: ResamplerQuality,
+    /// DSD over PCM mode: "no" (default), "yes", or "auto".
+    #[serde(default)]
+    pub dop: DopMode,
+    /// Output device id (ALSA PCM name, e.g. "hw:CARD=1,DEV=0"). Unset/empty =
+    /// system default. Set a raw `hw:` device for bit-perfect DoP, bypassing
+    /// PipeWire/PulseAudio resampling.
+    #[serde(default)]
+    pub device: Option<String>,
     #[serde(default)]
     pub replay_gain: ReplayGainMode,
     #[serde(default)]
@@ -153,6 +161,21 @@ pub enum ResamplerQuality {
     SincMedium,
     SincFast,
     Linear,
+}
+
+/// DSD over PCM (DoP) policy for DSD sources.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DopMode {
+    /// Always convert DSD to PCM. Works on any DAC. Default.
+    #[default]
+    No,
+    /// Always attempt native DSD via DoP. Needs a DoP-capable DAC over a
+    /// bit-perfect path — set `audio.device` to a raw `hw:` device.
+    Yes,
+    /// Use DoP only when an explicit output `device` is configured (assumed a
+    /// dedicated DAC); otherwise convert to PCM.
+    Auto,
 }
 
 // Default value functions
@@ -259,6 +282,63 @@ impl Config {
         Self::load().unwrap_or_else(|_| Self::default())
     }
 
+    /// Effective DoP mode. Prefers `[audio].dop`; if that is the default `No`,
+    /// falls back to the first enabled `[[output]]` block's `dop` setting
+    /// (MPD's `audio_output { dop "yes" }`).
+    #[must_use]
+    pub fn dop_mode(&self) -> DopMode {
+        if self.audio.dop != DopMode::No {
+            return self.audio.dop;
+        }
+        for out in &self.output {
+            if !out.enabled {
+                continue;
+            }
+            let yes = match out.settings.get("dop") {
+                Some(toml::Value::Boolean(b)) => *b,
+                Some(toml::Value::String(s)) => {
+                    matches!(s.trim(), "yes" | "true" | "1" | "on")
+                }
+                _ => false,
+            };
+            if yes {
+                return DopMode::Yes;
+            }
+        }
+        DopMode::No
+    }
+
+    /// Effective output device id. Prefers `[audio].device`; otherwise the first
+    /// enabled `[[output]]` block's `device` setting (MPD's
+    /// `audio_output { device "hw:0,0" }`). Returns `None` for the system default.
+    #[must_use]
+    pub fn output_device(&self) -> Option<String> {
+        if let Some(dev) = self
+            .audio
+            .device
+            .as_ref()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+        {
+            return Some(dev.to_owned());
+        }
+        for out in &self.output {
+            if !out.enabled {
+                continue;
+            }
+            let dev = out
+                .settings
+                .get("device")
+                .and_then(toml::Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty());
+            if let Some(dev) = dev {
+                return Some(dev.to_owned());
+            }
+        }
+        None
+    }
+
     fn find_config_file() -> Result<PathBuf> {
         let candidates = [
             dirs::config_dir().map(|p| p.join("rmpd/rmpd.toml")),
@@ -319,6 +399,8 @@ impl Default for Config {
                 default_output: default_output(),
                 buffer_time: default_buffer_time(),
                 resampler_quality: ResamplerQuality::default(),
+                dop: DopMode::default(),
+                device: None,
                 replay_gain: ReplayGainMode::default(),
                 replay_gain_preamp: 0.0,
                 replay_gain_missing_preamp: 0.0,
@@ -334,5 +416,58 @@ impl Default for Config {
             plugins: PluginConfig::default(),
             database: DatabaseConfig::default(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn output_block(enabled: bool) -> OutputConfig {
+        let mut settings = toml::Table::new();
+        settings.insert(
+            "device".to_owned(),
+            toml::Value::String("hw:CARD=1,DEV=0".to_owned()),
+        );
+        settings.insert("dop".to_owned(), toml::Value::String("yes".to_owned()));
+        OutputConfig {
+            name: "DAC".to_owned(),
+            output_type: "alsa".to_owned(),
+            enabled,
+            settings,
+        }
+    }
+
+    #[test]
+    fn dop_and_device_default_off() {
+        let c = Config::default();
+        assert_eq!(c.dop_mode(), DopMode::No);
+        assert_eq!(c.output_device(), None);
+    }
+
+    #[test]
+    fn audio_section_dop_and_device() {
+        let mut c = Config::default();
+        c.audio.dop = DopMode::Yes;
+        c.audio.device = Some("hw:CARD=1,DEV=0".to_owned());
+        assert_eq!(c.dop_mode(), DopMode::Yes);
+        assert_eq!(c.output_device().as_deref(), Some("hw:CARD=1,DEV=0"));
+    }
+
+    #[test]
+    fn mpd_style_output_block_fallback() {
+        // No [audio] dop/device -> fall back to the enabled [[output]] block.
+        let mut c = Config::default();
+        c.output.push(output_block(true));
+        assert_eq!(c.dop_mode(), DopMode::Yes);
+        assert_eq!(c.output_device().as_deref(), Some("hw:CARD=1,DEV=0"));
+    }
+
+    #[test]
+    fn disabled_output_block_ignored() {
+        let mut c = Config::default();
+        c.output.push(output_block(false));
+        assert_eq!(c.dop_mode(), DopMode::No);
+        assert_eq!(c.output_device(), None);
     }
 }

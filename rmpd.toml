@@ -24,6 +24,16 @@ buffer_time = 500
 # Sample-rate conversion quality, used only when the output device cannot play a
 # stream's native rate. One of: sinc_best, sinc_medium, sinc_fast, linear.
 resampler_quality = "sinc_medium"
+# DSD over PCM (DoP) for DSD files. "no" = always convert to PCM (default,
+# works on any DAC); "yes" = always send native DSD via DoP (needs a DoP DAC on
+# a bit-perfect path — set `device` below); "auto" = DoP only when `device` is
+# set. The RMPD_DOP env var overrides this.
+dop = "no"
+# Output device id (ALSA PCM name). Empty/unset = system default (PipeWire).
+# Set a raw `hw:` device for bit-perfect DoP, bypassing PipeWire's resampling.
+# Discover ids with: cargo run -p rmpd-player --example list_devices
+# (or set RMPD_LIST_DEVICES=1). The RMPD_AUDIO_DEVICE env var overrides this.
+# device = "hw:CARD=1,DEV=0"
 replay_gain = "off"
 replay_gain_preamp = 0.0
 replay_gain_missing_preamp = 0.0
@@ -37,6 +47,14 @@ mixramp_delay = 0.0
 name = "Default Output"
 type = "default"
 enabled = true
+# MPD-style per-output settings are also honored (used when [audio].dop/device
+# are unset), e.g. a dedicated DAC for bit-perfect DoP:
+# [[output]]
+# name = "Fosi DS2"
+# type = "alsa"
+# enabled = true
+# device = "hw:CARD=1,DEV=0"
+# dop = "yes"
 
 [decoder]
 enabled = ["symphonia"]
