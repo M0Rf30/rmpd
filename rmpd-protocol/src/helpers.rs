@@ -9,11 +9,17 @@ use rmpd_core::event::Event;
 use rmpd_core::song::{AudioFormat, Song};
 use rmpd_core::state::PlayerState;
 
-/// Acquires a write lock on `state.status` and a read lock on `state.queue`.
+/// Bump the queue (playlist) version and length, then notify the `playlist`
+/// idle subsystem so event-driven clients (rmpc, ncmpcpp, …) refetch the queue
+/// after it changes. Acquires a write lock on `state.status` and a read lock on
+/// `state.queue`.
 pub(crate) async fn update_playlist_version(state: &AppState) {
-    let mut status = state.status.write().await;
-    status.playlist_version += 1;
-    status.playlist_length = state.queue.read().await.len() as u32;
+    {
+        let mut status = state.status.write().await;
+        status.playlist_version += 1;
+        status.playlist_length = state.queue.read().await.len() as u32;
+    }
+    state.event_bus.emit(Event::QueueChanged);
 }
 
 pub(crate) fn is_known_uri_scheme(scheme: &str) -> bool {
