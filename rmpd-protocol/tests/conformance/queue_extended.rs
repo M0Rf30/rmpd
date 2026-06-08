@@ -63,13 +63,18 @@ async fn addid_nonexistent_song() {
 }
 
 #[tokio::test]
-async fn add_returns_id() {
+async fn add_returns_bare_ok_without_id() {
     let (_server, mut client, _tmp) = setup_with_db(3).await;
     let resp = client.command("add \"music/song1.flac\"").await;
     assert_ok(&resp);
-    // rmpd returns Id field from add (MPD 0.23+ compatible)
+    // MPD's `add` returns ONLY `OK` — no `Id` line (that's `addid`).
+    // Clients like rmpc read `add` with read_ok() and choke on a stray Id.
+    assert_eq!(
+        resp, "OK\n",
+        "add must return bare OK with no Id field: {resp}"
+    );
     assert!(
-        get_field(&resp, "Id").is_some(),
-        "add should return Id field: {resp}"
+        get_field(&resp, "Id").is_none(),
+        "add must NOT return an Id field: {resp}"
     );
 }
