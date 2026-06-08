@@ -9,13 +9,64 @@ pub struct CpalDeviceConfig {
     pub sample_format: SampleFormat,
 }
 
+/// Resolve the output device, honoring the `RMPD_AUDIO_DEVICE` override.
+///
+/// When the env var is set, select the output device whose name matches it
+/// (exact match first, then case-insensitive substring). This lets you target a
+/// raw ALSA hardware device such as `hw:CARD=D50s,DEV=0` to bypass
+/// PipeWire/PulseAudio — required for bit-perfect DoP/DSD output, which any
+/// resampling, mixing, or volume change would corrupt. Set `RMPD_LIST_DEVICES=1`
+/// to log every available device name.
+fn resolve_output_device(host: &cpal::Host) -> Result<Device> {
+    let devices: Vec<(Device, String)> = host
+        .output_devices()
+        .map(|devs| {
+            devs.map(|d| {
+                let n = d.to_string();
+                (d, n)
+            })
+            .collect()
+        })
+        .unwrap_or_default();
+
+    if std::env::var_os("RMPD_LIST_DEVICES").is_some() {
+        let names: Vec<&str> = devices.iter().map(|(_, n)| n.as_str()).collect();
+        tracing::info!("available output devices: {names:?}");
+    }
+
+    if let Ok(want) = std::env::var("RMPD_AUDIO_DEVICE") {
+        let want = want.trim();
+        if !want.is_empty() {
+            if let Some((dev, name)) = devices.iter().find(|(_, n)| n == want) {
+                tracing::info!("using output device '{name}' (RMPD_AUDIO_DEVICE)");
+                return Ok(dev.clone());
+            }
+            let lower = want.to_lowercase();
+            if let Some((dev, name)) = devices
+                .iter()
+                .find(|(_, n)| n.to_lowercase().contains(&lower))
+            {
+                tracing::info!("using output device '{name}' (matched RMPD_AUDIO_DEVICE='{want}')");
+                return Ok(dev.clone());
+            }
+            let available: Vec<&str> = devices.iter().map(|(_, n)| n.as_str()).collect();
+            tracing::warn!(
+                "RMPD_AUDIO_DEVICE='{want}' not found; using default device instead. \
+                 Available: {available:?}"
+            );
+        }
+    }
+
+    host.default_output_device()
+        .ok_or_else(|| RmpdError::Player("No output device available".to_owned()))
+}
+
 impl CpalDeviceConfig {
     /// Create a new device configuration with the given sample rate and channels
     pub fn new(sample_rate: SampleRate, channels: u16) -> Result<Self> {
         let host = cpal::default_host();
-        let device = host
-            .default_output_device()
-            .ok_or_else(|| RmpdError::Player("No output device available".to_owned()))?;
+        let device = resolve_output_device(&host)?;
+        tracing::debug!("cpal output device: {device}");
 
         // Choose a rate the device actually supports: the requested rate when
         // available, otherwise the device's default rate (always supported).
@@ -53,9 +104,9 @@ impl CpalDeviceConfig {
         device
             .supported_output_configs()
             .map(|configs| {
-                configs.into_iter().any(|c| {
-                    rate >= c.min_sample_rate() && rate <= c.max_sample_rate()
-                })
+                configs
+                    .into_iter()
+                    .any(|c| rate >= c.min_sample_rate() && rate <= c.max_sample_rate())
             })
             .unwrap_or(false)
     }
@@ -63,8 +114,8 @@ impl CpalDeviceConfig {
     /// Whether the default output device natively supports `rate` (no
     /// resampling required). Used to prefer bit-exact rates.
     pub fn default_device_supports_rate(rate: SampleRate) -> bool {
-        cpal::default_host()
-            .default_output_device()
+        let host = cpal::default_host();
+        resolve_output_device(&host)
             .map(|device| Self::device_supports(&device, rate))
             .unwrap_or(false)
     }
@@ -73,8 +124,9 @@ impl CpalDeviceConfig {
     /// known. Used to size DSD-to-PCM decoding to the device instead of to the
     /// (often huge) advertised maximum.
     pub fn default_output_rate() -> Option<SampleRate> {
-        cpal::default_host()
-            .default_output_device()
+        let host = cpal::default_host();
+        resolve_output_device(&host)
+            .ok()
             .and_then(|device| device.default_output_config().ok())
             .map(|config| config.sample_rate())
     }

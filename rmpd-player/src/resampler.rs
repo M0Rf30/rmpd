@@ -115,15 +115,16 @@ impl StreamResampler {
                         Err(_) => break,
                     };
                 let out_cap = self.scratch.len() / ch;
-                let mut out_adapter = match InterleavedSlice::new_mut(&mut self.scratch, ch, out_cap)
-                {
-                    Ok(a) => a,
-                    Err(_) => break,
-                };
-                match self
-                    .resampler
-                    .process_into_buffer(&in_adapter, &mut out_adapter, Some(&indexing))
-                {
+                let mut out_adapter =
+                    match InterleavedSlice::new_mut(&mut self.scratch, ch, out_cap) {
+                        Ok(a) => a,
+                        Err(_) => break,
+                    };
+                match self.resampler.process_into_buffer(
+                    &in_adapter,
+                    &mut out_adapter,
+                    Some(&indexing),
+                ) {
                     Ok(counts) => counts,
                     Err(_) => break,
                 }
@@ -152,9 +153,12 @@ fn sinc_params(quality: ResamplerQuality) -> SincInterpolationParameters {
             SincInterpolationType::Cubic,
             WindowFunction::BlackmanHarris2,
         ),
-        ResamplerQuality::SincFast => {
-            (64, 128, SincInterpolationType::Linear, WindowFunction::Hann2)
-        }
+        ResamplerQuality::SincFast => (
+            64,
+            128,
+            SincInterpolationType::Linear,
+            WindowFunction::Hann2,
+        ),
         // SincMedium (the default) and the `Linear` fallthrough (which does not
         // call this) use balanced parameters.
         _ => (
