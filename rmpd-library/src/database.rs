@@ -745,7 +745,7 @@ impl Database {
                 .join(",");
             let sql = format!(
                 "SELECT EXISTS(SELECT 1 FROM songs WHERE id NOT IN \
-                 (SELECT DISTINCT song_id FROM song_tags WHERE tag IN ({placeholders})))"
+                 (SELECT DISTINCT song_id FROM song_tags WHERE tag IN ({placeholders}) AND value != ''))"
             );
             let mut stmt = self.conn.prepare(&sql)?;
             stmt.query_row(rusqlite::params_from_iter(tag_list.iter()), |row| {
