@@ -14,6 +14,7 @@
 - 🎧 **High-Quality Audio** - DSD support, ReplayGain, gapless playback, crossfade
 - 🎼 **Format Support** - FLAC, MP3, Ogg Vorbis, WAV, AAC, DSD (DoP and native)
 - 🏠 **Multi-Room Ready** - Snapcast integration for synchronized playback
+- 🖥️ **Desktop Integration** - Native MPRIS D-Bus interface (media keys, `playerctl`, GNOME/KDE) plus mDNS auto-discovery
 - 📱 **Multi-Protocol** - MPD and OpenSubsonic support (planned)
 - ⚡ **Efficient** - Runs on everything from Raspberry Pi to high-end servers
 
@@ -84,6 +85,7 @@ log_level = "info"
 [network]
 bind_address = "127.0.0.1"
 port = 6600
+mpris = true
 
 [audio]
 default_output = "alsa"
@@ -105,6 +107,19 @@ fifo_path = "/tmp/snapfifo"
 ```
 
 See [rmpd.toml](rmpd.toml) for a complete configuration example.
+
+## Desktop Integration (MPRIS)
+
+rmpd exposes a native [MPRIS](https://specifications.freedesktop.org/mpris-spec/latest/) interface on the session D-Bus as `org.mpris.MediaPlayer2.rmpd`. This lets Linux desktops (GNOME Shell, KDE Plasma), `playerctl`, lock screens, and multimedia keys discover and control rmpd directly — no external bridge such as `mpDris2` required.
+
+It is enabled by default and can be toggled with `mpris` under `[network]`. Verify it with:
+
+```bash
+playerctl -p rmpd metadata
+busctl --user introspect org.mpris.MediaPlayer2.rmpd /org/mpris/MediaPlayer2
+```
+
+rmpd also advertises itself over **mDNS/Zeroconf** so MPD clients on the local network can auto-discover the server.
 
 ## Audio Format Support
 
@@ -184,6 +199,11 @@ See [CI.md](CI.md) for detailed CI/CD documentation.
   - Status and statistics
   - Playlist management
   - Output control
+
+- **Desktop Integration**
+  - Native MPRIS D-Bus interface (`org.mpris.MediaPlayer2.rmpd`)
+  - Media keys, `playerctl`, and GNOME/KDE media controls
+  - mDNS/Zeroconf service advertisement for client auto-discovery
 
 ### In Progress 🚧
 
