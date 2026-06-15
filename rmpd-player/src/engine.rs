@@ -73,6 +73,7 @@ pub struct PlaybackEngine {
     volume_normalization: bool,
     resampler_quality: ResamplerQuality,
     dop_mode: DopMode,
+    output_slot: Arc<crate::output_slot::OutputSlot>,
 }
 
 impl PlaybackEngine {
@@ -97,6 +98,7 @@ impl PlaybackEngine {
             volume_normalization: false,
             resampler_quality: ResamplerQuality::default(),
             dop_mode: DopMode::default(),
+            output_slot: Arc::new(crate::output_slot::OutputSlot::new()),
         }
     }
 
@@ -171,6 +173,7 @@ impl PlaybackEngine {
         );
         let resampler_quality = self.resampler_quality;
         let dop_mode = self.dop_mode;
+        let output_slot = self.output_slot.clone();
 
         let handle = thread::spawn(move || {
             if let Err(e) = Self::playback_thread(
@@ -185,6 +188,7 @@ impl PlaybackEngine {
                 resampler_quality,
                 dop_mode,
                 gain_scale,
+                output_slot,
             ) {
                 error!("playback error: {}", e);
             }
@@ -230,6 +234,9 @@ impl PlaybackEngine {
     pub async fn stop(&mut self) -> Result<()> {
         debug!("stopping playback");
         self.stop_internal().await?;
+        // User stop: tear down the cached output/device (song transitions use
+        // stop_internal, which keeps it for gapless reuse).
+        self.output_slot.clear();
         // Emit event to notify clients (external stop)
         self.event_bus.emit(Event::SongChanged(None));
         Ok(())
@@ -294,6 +301,7 @@ impl PlaybackEngine {
         resampler_quality: ResamplerQuality,
         dop_mode: DopMode,
         gain_scale: f32,
+        output_slot: Arc<crate::output_slot::OutputSlot>,
     ) -> Result<()> {
         // Open decoder (pass-through mode by default)
         let mut decoder = SymphoniaDecoder::open(path)?;
@@ -318,6 +326,8 @@ impl PlaybackEngine {
 
             if dop_enabled {
                 info!("DSD file detected, attempting DoP output");
+                // Release any cached PCM output so DoP can open the device.
+                output_slot.clear();
                 match Self::setup_dop(&decoder) {
                     Ok((dop_encoder, dop_out)) => {
                         info!("DoP output available, using native DSD playback");
@@ -373,23 +383,41 @@ impl PlaybackEngine {
             outputs
         };
 
-        let mut boxes: Vec<Box<dyn AudioOutput>> = Vec::with_capacity(effective_outputs.len());
-        for (i, cfg) in effective_outputs.iter().enumerate() {
-            match Self::create_output(format, cfg, resampler_quality) {
-                Ok(b) => boxes.push(b),
-                Err(e) => {
-                    if i == 0 {
-                        return Err(e);
+        let signature: Vec<String> = effective_outputs
+            .iter()
+            .map(|c| format!("{}|{}", c.output_type, c.name))
+            .collect();
+        let key = crate::output_slot::OutputKey {
+            sample_rate: format.sample_rate,
+            channels: format.channels,
+            bits_per_sample: format.bits_per_sample,
+            signature,
+        };
+        // Reuse the existing output (and its open device) across consecutive
+        // same-key tracks for gapless transitions; rebuild on format/output
+        // change. The closure (which opens devices) runs only on a cache miss.
+        let multi = output_slot.acquire(key, || {
+            let mut boxes: Vec<Box<dyn AudioOutput>> = Vec::with_capacity(effective_outputs.len());
+            for (i, cfg) in effective_outputs.iter().enumerate() {
+                match Self::create_output(format, cfg, resampler_quality) {
+                    Ok(b) => boxes.push(b),
+                    Err(e) => {
+                        if i == 0 {
+                            return Err(e);
+                        }
+                        warn!(
+                            "secondary output '{}' failed to create: {}; skipping",
+                            cfg.name, e
+                        );
                     }
-                    warn!(
-                        "secondary output '{}' failed to create: {}; skipping",
-                        cfg.name, e
-                    );
                 }
             }
-        }
-
-        let multi = crate::multi_output::MultiOutput::spawn(boxes, 16, volume.clone())?;
+            Ok(Arc::new(crate::multi_output::MultiOutput::spawn(
+                boxes,
+                16,
+                volume.clone(),
+            )?))
+        })?;
 
         // Playback loop
         let mut buffer = vec![0.0f32; BUFFER_SIZE];
@@ -483,8 +511,6 @@ impl PlaybackEngine {
                 event_bus.emit(Event::BitrateChanged(current_bitrate));
             }
         }
-
-        multi.stop();
 
         Ok(())
     }
