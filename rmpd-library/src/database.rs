@@ -1172,34 +1172,32 @@ impl Database {
     ///
     /// Like `add_song` but (a) sets `source = source_token` on the row so local
     /// filesystem scans never touch it, and (b) builds the synthetic directory
-    /// chain from the virtual path explicitly rather than via `path.parent()`,
-    /// which mis-parses `://` authorities.
+    /// chain from the mount-style virtual path explicitly (one row per segment),
+    /// setting the song's `directory_id` to the leaf directory.
     ///
-    /// The virtual path convention is `<scheme>://<name>/<seg>.../<remote-id>`;
-    /// the song's `directory_id` is set to the leaf directory (everything before
-    /// the final `/` segment).
+    /// The virtual path convention is mount-style `<name>/<seg>.../<leaf>` (no
+    /// `scheme://`): the first segment is the mount point shown at the library
+    /// root, and the final segment is the song leaf (`<id>[.<suffix>]`).
     pub fn add_source_song(&self, song: &Song, source_token: &str) -> Result<i64> {
-        // Parse "scheme://authority/seg1/.../id" → leaf dir path = "scheme://authority/seg1/...".
-        // The scheme+authority forms the first virtual directory level.
+        // Mount-style virtual path: "<name>/<seg>/.../<leaf>" (no scheme://).
+        // The first segment is the mount point (a child of root); every segment
+        // except the final leaf forms the synthetic browse-directory chain, with
+        // each directory's `path` being the segments joined so far.
         let path_str = song.path.as_str();
-        let (scheme, after_scheme) = path_str.split_once("://").unwrap_or(("source", path_str));
-        let segments: Vec<&str> = after_scheme.split('/').collect();
-        let authority = segments.first().copied().unwrap_or("unknown");
+        let segments: Vec<&str> = path_str.split('/').collect();
 
-        // Build directory chain: root → scheme://authority → .../seg1 → .../leafdir
         let root_id = self.ensure_root_dir()?;
-        let scheme_auth = format!("{scheme}://{authority}");
-        let mut current_path = scheme_auth;
-        let mut parent_id = self.get_or_create_dir_with_parent(&current_path, root_id)?;
-
-        // Middle segments (all except authority[0] and id[last])
-        let dir_segs = if segments.len() > 2 {
-            &segments[1..segments.len() - 1]
-        } else {
-            &segments[0..0]
-        };
-        for seg in dir_segs {
-            current_path = format!("{current_path}/{seg}");
+        let mut parent_id = root_id;
+        let mut current_path = String::new();
+        // All segments except the final leaf are directories.
+        let dir_count = segments.len().saturating_sub(1);
+        for seg in &segments[..dir_count] {
+            if current_path.is_empty() {
+                current_path.push_str(seg);
+            } else {
+                current_path.push('/');
+                current_path.push_str(seg);
+            }
             parent_id = self.get_or_create_dir_with_parent(&current_path, parent_id)?;
         }
         let leaf_dir_id = parent_id;

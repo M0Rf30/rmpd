@@ -60,67 +60,50 @@ impl SourceRegistry {
         self.sources.iter().map(|s| s.as_ref())
     }
 
-    /// Returns `true` if any live source owns `scheme`.
+    /// Find the source that owns `path` by matching the first `/`-segment (the
+    /// mount point) against each source's [`name`](MusicSource::name).
     ///
-    /// Used by add/addid command routing to decide whether to hand off to a
-    /// remote source.
-    pub fn is_source_scheme(&self, scheme: &str) -> bool {
-        self.sources.iter().any(|s| s.scheme() == scheme)
-    }
-
-    /// Find the owning source for a virtual URI (`<scheme>://<name>/...`).
-    ///
-    /// Matches by `scheme()` **and** `name()` against the URI's scheme and
-    /// authority components respectively. Returns `None` when no live source
-    /// claims the URI.
-    pub fn for_uri(&self, virtual_uri: &str) -> Option<&dyn MusicSource> {
-        let (scheme, authority, _path) = parse_virtual_uri(virtual_uri)?;
+    /// Mount-style virtual paths are `<name>/<artist>/<album>/<id>[.<suffix>]`
+    /// with no `scheme://` prefix, mirroring how MPD surfaces mounted remote
+    /// storage under a plain top-level directory. Returns `None` when no live
+    /// source claims the path's mount point.
+    pub fn owning_source(&self, path: &str) -> Option<&dyn MusicSource> {
+        let mount = path.split('/').next().unwrap_or(path);
+        if mount.is_empty() {
+            return None;
+        }
         self.sources
             .iter()
-            .find(|s| s.scheme() == scheme && s.name() == authority)
+            .find(|s| s.name() == mount)
             .map(|s| s.as_ref())
     }
 
-    /// Resolve a virtual URI to a directly-playable stream URL.
+    /// `true` when a live source owns `path` (mount-point match). Convenience
+    /// over [`owning_source`](Self::owning_source) for command routing.
+    pub fn owns_path(&self, path: &str) -> bool {
+        self.owning_source(path).is_some()
+    }
+
+    /// Resolve a mount-style virtual path to a directly-playable stream URL.
     ///
-    /// Parses `<scheme>://<name>/<...>/<id>`, locates the owning source, and
-    /// calls `source.resolve_stream_uri(id)` with the **trailing path segment**
-    /// as the remote id.
-    pub async fn resolve_stream_uri(&self, virtual_uri: &str) -> SourceResult<String> {
-        let (scheme, authority, path) = parse_virtual_uri(virtual_uri).ok_or_else(|| {
-            SourceError::NotFound(format!("malformed virtual URI: {virtual_uri}"))
-        })?;
+    /// Locates the owning source via the first segment, recovers the remote id
+    /// from the last segment (stripping a trailing audio extension), and calls
+    /// `source.resolve_stream_uri(id)`.
+    pub async fn resolve_stream_uri(&self, path: &str) -> SourceResult<String> {
         let source = self
-            .sources
-            .iter()
-            .find(|s| s.scheme() == scheme && s.name() == authority)
-            .map(|s| s.as_ref())
-            .ok_or_else(|| {
-                SourceError::NotFound(format!("no source for {scheme}://{authority}"))
-            })?;
-        // The remote id is the trailing path segment.
-        let id = path.rsplit('/').next().unwrap_or(path);
-        source.resolve_stream_uri(id).await
+            .owning_source(path)
+            .ok_or_else(|| SourceError::NotFound(format!("no source owns path: {path}")))?;
+        source.resolve_stream_uri(extract_remote_id(path)).await
     }
 
-    /// Fetch cover-art bytes for a virtual URI, using the trailing path segment
-    /// as the remote id. Returns `Ok(None)` when the URI is unowned or the
-    /// source has no art for it.
-    pub async fn cover_art(&self, virtual_uri: &str) -> SourceResult<Option<Vec<u8>>> {
-        let (scheme, authority, path) = match parse_virtual_uri(virtual_uri) {
-            Some(parts) => parts,
-            None => return Ok(None),
-        };
-        let Some(source) = self
-            .sources
-            .iter()
-            .find(|s| s.scheme() == scheme && s.name() == authority)
-            .map(|s| s.as_ref())
-        else {
+    /// Fetch cover-art bytes for a mount-style virtual path, using the remote
+    /// id recovered from the last segment. Returns `Ok(None)` when the path is
+    /// unowned or the source has no art for it.
+    pub async fn cover_art(&self, path: &str) -> SourceResult<Option<Vec<u8>>> {
+        let Some(source) = self.owning_source(path) else {
             return Ok(None);
         };
-        let id = path.rsplit('/').next().unwrap_or(path);
-        source.cover_art(id).await
+        source.cover_art(extract_remote_id(path)).await
     }
     /// Number of live sources.
     pub fn len(&self) -> usize {
@@ -162,20 +145,31 @@ pub async fn sync_source(source: &dyn MusicSource, db_path: &str) -> Result<usiz
     .map_err(|e| SourceError::Protocol(format!("sync task panicked: {e}")))?
 }
 
-// ─── URI parsing helpers ──────────────────────────────────────────────────────
+// ─── Path helpers ──────────────────────────────────────────────────────────────
 
-/// Parse `<scheme>://<authority>[/<path>]` into `(scheme, authority, path)`.
+/// Known audio-file extensions appended to a virtual leaf by a source's song
+/// mapper (e.g. Subsonic's `Child.suffix`). Compared case-insensitively when
+/// recovering the bare remote id from a mount-style path.
+const AUDIO_EXTENSIONS: &[&str] = &[
+    "flac", "mp3", "ogg", "oga", "opus", "m4a", "aac", "mp4", "wav", "wv", "ape", "wma", "alac",
+    "aif", "aiff", "dsf", "dff",
+];
+
+/// Recover the raw remote id from a mount-style path's last `/`-segment by
+/// stripping a trailing known audio extension (case-insensitive).
 ///
-/// `path` is everything after the first `/` following the authority, or `""`
-/// when the URI has no path component. No allocation; all slices borrow from
-/// the input.
-fn parse_virtual_uri(uri: &str) -> Option<(&str, &str, &str)> {
-    let (scheme, rest) = uri.split_once("://")?;
-    let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
-    if scheme.is_empty() || authority.is_empty() {
-        return None;
+/// `map_song` builds the leaf as `<id>[.<suffix>]`; the id itself is never
+/// encoded and Subsonic ids are opaque tokens, so removing a recognized audio
+/// extension yields the exact id the backend expects. A leaf without such an
+/// extension (no suffix was appended) is returned unchanged.
+fn extract_remote_id(path: &str) -> &str {
+    let leaf = path.rsplit('/').next().unwrap_or(path);
+    if let Some((stem, ext)) = leaf.rsplit_once('.')
+        && AUDIO_EXTENSIONS.iter().any(|e| e.eq_ignore_ascii_case(ext))
+    {
+        return stem;
     }
-    Some((scheme, authority, path))
+    leaf
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -198,55 +192,40 @@ mod tests {
     }
 
     #[test]
-    fn for_uri_finds_filesystem_home() {
+    fn owning_source_matches_first_segment() {
         let reg = make_registry_with_home();
-        let source = reg.for_uri("file://home/x/y/id");
-        assert!(source.is_some(), "should find a source for file://home/...");
-        let s = source.unwrap();
-        assert_eq!(s.scheme(), "file");
-        assert_eq!(s.name(), "home");
+        let source = reg.owning_source("home/Artist/Album/id.flac");
+        assert!(source.is_some(), "should own a path under the 'home' mount");
+        assert_eq!(source.unwrap().name(), "home");
     }
 
     #[test]
-    fn for_uri_returns_none_for_wrong_name() {
+    fn owning_source_none_for_unowned_mount() {
         let reg = make_registry_with_home();
-        assert!(
-            reg.for_uri("file://other/x/y/id").is_none(),
-            "wrong name should not match"
-        );
+        assert!(reg.owning_source("other/Artist/Album/id").is_none());
+        // A bare radio URI's first segment ("http:") never matches a mount name.
+        assert!(reg.owning_source("http://radio.example/stream").is_none());
+        assert!(reg.owning_source("").is_none());
     }
 
     #[test]
-    fn for_uri_returns_none_for_wrong_scheme() {
+    fn owns_path_is_owning_source_predicate() {
         let reg = make_registry_with_home();
-        assert!(
-            reg.for_uri("subsonic://home/id").is_none(),
-            "wrong scheme should not match"
-        );
+        assert!(reg.owns_path("home/a/b/c.mp3"));
+        assert!(!reg.owns_path("Music/a/b/c.mp3"));
     }
 
     #[test]
-    fn is_source_scheme_true_for_file() {
-        let reg = make_registry_with_home();
-        assert!(reg.is_source_scheme("file"));
-        assert!(!reg.is_source_scheme("subsonic"));
-    }
-
-    #[test]
-    fn parse_virtual_uri_splits_correctly() {
-        let result = parse_virtual_uri("file://home/x/y/id");
-        assert_eq!(result, Some(("file", "home", "x/y/id")));
-    }
-
-    #[test]
-    fn parse_virtual_uri_no_path() {
-        let result = parse_virtual_uri("file://home");
-        assert_eq!(result, Some(("file", "home", "")));
-    }
-
-    #[test]
-    fn parse_virtual_uri_rejects_malformed() {
-        assert!(parse_virtual_uri("not-a-uri").is_none());
-        assert!(parse_virtual_uri("://empty-scheme/foo").is_none());
+    fn extract_remote_id_strips_known_audio_extension() {
+        // Extension stripped, case-insensitively.
+        assert_eq!(extract_remote_id("home/A/B/song-123.flac"), "song-123");
+        assert_eq!(extract_remote_id("home/A/B/song-123.FLAC"), "song-123");
+        assert_eq!(extract_remote_id("home/A/B/al-7.opus"), "al-7");
+        // No extension: returned unchanged (no suffix was appended).
+        assert_eq!(extract_remote_id("home/A/B/song-123"), "song-123");
+        // Unknown extension is NOT stripped (ids may contain dots).
+        assert_eq!(extract_remote_id("home/A/B/id.42"), "id.42");
+        // Bare leaf with no separators.
+        assert_eq!(extract_remote_id("song-123.mp3"), "song-123");
     }
 }

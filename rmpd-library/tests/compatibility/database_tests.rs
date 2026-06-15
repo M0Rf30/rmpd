@@ -457,15 +457,16 @@ fn test_source_column_migration_idempotent() {
     let db = rmpd_library::database::Database::open(&db_path).unwrap();
 
     // Prove the column exists and is usable by inserting a source song.
-    let song = make_virtual_song("subsonic://srv/A/B/id1", "Test");
+    let song = make_virtual_song("srv/A/B/id1.flac", "Test");
     db.add_source_song(&song, "subsonic:srv").unwrap();
     // A third open (migration re-run) must also succeed.
     rmpd_library::database::Database::open(&db_path).unwrap();
 }
 
-/// (b) After `add_source_song` for `subsonic://srv/A/B/id`:
-///  - `list_directory("")` shows `subsonic://srv`
-///  - `list_directory("subsonic://srv/A/B")` returns the song
+/// (b) After `add_source_song` for the mount-style `alarm-music/Artist/Album/<id>.flac`:
+///  - `list_directory("")` shows the bare `alarm-music` mount point
+///  - `list_directory("alarm-music")` shows `alarm-music/Artist`
+///  - `list_directory("alarm-music/Artist/Album")` returns the song
 ///  - `get_song_by_path` finds it by exact path
 #[test]
 fn test_add_source_song_directory_traversal() {
@@ -473,35 +474,80 @@ fn test_add_source_song_directory_traversal() {
     let db_path = temp_dir.path().join("src.db").to_string_lossy().to_string();
     let db = rmpd_library::database::Database::open(&db_path).unwrap();
 
-    let virtual_path = "subsonic://srv/A/B/track-42";
+    let virtual_path = "alarm-music/Artist/Album/track-42.flac";
     let song = make_virtual_song(virtual_path, "Track 42");
-    db.add_source_song(&song, "subsonic:srv").unwrap();
+    db.add_source_song(&song, "subsonic:alarm-music").unwrap();
 
-    // Root listing must include "subsonic://srv"
+    // Root listing must include the bare mount point "alarm-music" (no scheme).
     let root = db.list_directory("").unwrap();
     let root_dirs: Vec<&str> = root.directories.iter().map(|(p, _)| p.as_str()).collect();
     assert!(
-        root_dirs.contains(&"subsonic://srv"),
-        "root listing missing subsonic://srv; got: {:?}",
-        root_dirs
+        root_dirs.contains(&"alarm-music"),
+        "root listing missing alarm-music; got: {root_dirs:?}"
     );
 
-    // Leaf directory listing must contain the song
-    let leaf = db.list_directory("subsonic://srv/A/B").unwrap();
+    // The mount point lists its artist child.
+    let mount = db.list_directory("alarm-music").unwrap();
+    let mount_dirs: Vec<&str> = mount.directories.iter().map(|(p, _)| p.as_str()).collect();
+    assert!(
+        mount_dirs.contains(&"alarm-music/Artist"),
+        "alarm-music listing missing alarm-music/Artist; got: {mount_dirs:?}"
+    );
+
+    // The album (leaf) directory contains the song.
+    let leaf = db.list_directory("alarm-music/Artist/Album").unwrap();
     assert_eq!(
         leaf.songs.len(),
         1,
-        "expected 1 song in subsonic://srv/A/B, got {}",
+        "expected 1 song in alarm-music/Artist/Album, got {}",
         leaf.songs.len()
     );
     assert_eq!(leaf.songs[0].path.as_str(), virtual_path);
 
-    // get_song_by_path must find the song
+    // get_song_by_path must find the song by its exact mount-style path.
     let found = db.get_song_by_path(virtual_path).unwrap();
     assert!(found.is_some(), "get_song_by_path returned None");
     let found = found.unwrap();
     assert_eq!(found.path.as_str(), virtual_path);
     assert_eq!(found.tag("title"), Some("Track 42"));
+}
+
+/// (b2) A synced source song is found by catalog search: full-text (`search`)
+/// and case-insensitive substring tag match. Proves the FTS index + tag table
+/// are populated for remote rows, so client `search`/`find` works.
+#[test]
+fn test_source_song_searchable_by_tag() {
+    let temp_dir = tempfile::TempDir::new().unwrap();
+    let db_path = temp_dir
+        .path()
+        .join("search.db")
+        .to_string_lossy()
+        .to_string();
+    let db = rmpd_library::database::Database::open(&db_path).unwrap();
+
+    let mut song = make_virtual_song("alarm-music/Pink Floyd/Meddle/echoes-1.flac", "Echoes");
+    song.tags.push((
+        rmpd_core::song::intern_tag_key("artist"),
+        "Pink Floyd".to_string(),
+    ));
+    db.add_source_song(&song, "subsonic:alarm-music").unwrap();
+
+    // Full-text search over indexed tags returns the remote song.
+    let fts = db.search_songs("Echoes").unwrap();
+    assert_eq!(fts.len(), 1, "FTS search should return the source song");
+    assert_eq!(
+        fts[0].path.as_str(),
+        "alarm-music/Pink Floyd/Meddle/echoes-1.flac"
+    );
+
+    // Case-insensitive substring tag match (the `search` command path).
+    let by_artist = db.search_songs_by_tag("artist", "pink").unwrap();
+    assert_eq!(
+        by_artist.len(),
+        1,
+        "substring tag search should return the source song"
+    );
+    assert_eq!(by_artist[0].tag("title"), Some("Echoes"));
 }
 
 /// (c) `clear_source("subsonic:srv")` deletes only remote rows and leaves a
@@ -517,8 +563,8 @@ fn test_clear_source_leaves_local_songs() {
     db.add_song(&local).unwrap();
 
     // Add two remote songs
-    let r1 = make_virtual_song("subsonic://srv/Artist/Album/id1", "Remote 1");
-    let r2 = make_virtual_song("subsonic://srv/Artist/Album/id2", "Remote 2");
+    let r1 = make_virtual_song("srv/Artist/Album/id1.flac", "Remote 1");
+    let r2 = make_virtual_song("srv/Artist/Album/id2.flac", "Remote 2");
     db.add_source_song(&r1, "subsonic:srv").unwrap();
     db.add_source_song(&r2, "subsonic:srv").unwrap();
 
@@ -561,12 +607,12 @@ fn test_search_after_delete_no_fts_corruption() {
     db.add_song(&make_virtual_song("music/a/dropbeta.flac", "dropbeta"))
         .unwrap();
     db.add_source_song(
-        &make_virtual_song("subsonic://srv/X/Y/r1", "keepgamma"),
+        &make_virtual_song("srv/X/Y/r1.flac", "keepgamma"),
         "subsonic:srv",
     )
     .unwrap();
     db.add_source_song(
-        &make_virtual_song("subsonic://srv/X/Y/r2", "dropdelta"),
+        &make_virtual_song("srv/X/Y/r2.flac", "dropdelta"),
         "subsonic:srv",
     )
     .unwrap();

@@ -129,8 +129,8 @@ rmpd can aggregate a remote [OpenSubsonic](https://opensubsonic.netlify.app/)
 server (Navidrome, Airsonic, gonic, …) into its library as a *music source*.
 The remote catalog is synced into the database at startup and on `update`, and
 tracks stream on demand through the same HTTP path used for internet radio — so
-any MPD client browses and plays them like local files (under virtual paths such
-as `subsonic://home/Artist/Album/<id>`).
+any MPD client browses and plays them like local files (under mount-style paths
+such as `home/Artist/Album/<id>.flac`, where the source name is the mount point).
 
 Build with the `subsonic` feature, then add one or more `[[source]]` blocks:
 
@@ -140,7 +140,7 @@ cargo build --release --features subsonic
 
 ```toml
 [[source]]
-name = "home"                      # becomes the source's virtual-path authority
+name = "home"                      # becomes the mount point (top-level directory)
 type = "subsonic"
 enabled = true
 url = "https://music.example.com"

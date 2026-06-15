@@ -457,11 +457,9 @@ pub async fn handle_albumart_command(state: &AppState, uri: &str, offset: usize)
         Err(e) => return Response::Text(e),
     };
 
-    // Source-backed virtual paths (e.g. subsonic://…): artwork is fetched from
-    // the source server (once) and cached locally — never read from a file.
-    if let Some((scheme, _)) = uri.split_once("://")
-        && state.sources.is_source_scheme(scheme)
-    {
+    // Source-backed mount-style paths (e.g. `alarm-music/…`): artwork is fetched
+    // from the source server (once) and cached locally — never read from a file.
+    if state.sources.owns_path(uri) {
         let extractor = rmpd_library::AlbumArtExtractor::new(db);
         if !extractor.is_cached(uri)
             && let Ok(Some(bytes)) = state.sources.cover_art(uri).await
@@ -530,11 +528,9 @@ pub async fn handle_readpicture_command(state: &AppState, uri: &str, offset: usi
         Err(e) => return Response::Text(e),
     };
 
-    // Source-backed virtual paths: serve the cached server cover art; "no art"
-    // is an empty OK (matching readpicture semantics), not an error.
-    if let Some((scheme, _)) = uri.split_once("://")
-        && state.sources.is_source_scheme(scheme)
-    {
+    // Source-backed mount-style paths: serve the cached server cover art; "no
+    // art" is an empty OK (matching readpicture semantics), not an error.
+    if state.sources.owns_path(uri) {
         let extractor = rmpd_library::AlbumArtExtractor::new(db);
         if !extractor.is_cached(uri)
             && let Ok(Some(bytes)) = state.sources.cover_art(uri).await
@@ -1122,6 +1118,12 @@ pub async fn handle_getfingerprint_command(state: &AppState, uri: &str) -> Strin
 pub async fn handle_readcomments_command(state: &AppState, uri: &str) -> String {
     use camino::Utf8PathBuf;
     use rmpd_library::MetadataExtractor;
+
+    // Source-backed (remote) songs have no local file to read tags from; running
+    // lofty on a mount-style path would fail. readcomments returns an empty OK.
+    if state.sources.owns_path(uri) {
+        return ResponseBuilder::new().ok();
+    }
 
     // Resolve absolute path from music_dir + relative URI
     let abs_path = if let Some(music_dir) = &state.music_dir {

@@ -180,25 +180,38 @@ pub fn subsonic_source_factory(cfg: &SourceConfig) -> Result<Box<dyn MusicSource
 // ─── Song mapping ────────────────────────────────────────────────────────────
 
 impl SubsonicSource {
-    /// Convert a Subsonic `Child` to an `rmpd_core::song::Song` with a virtual path.
+    /// Convert a Subsonic `Child` to an `rmpd_core::song::Song` with a virtual,
+    /// MPD mount-style path.
     ///
-    /// Virtual path scheme:
+    /// Path grammar (no `scheme://` — a synced source appears under a plain
+    /// top-level mount directory, exactly like MPD's mounted remote storage):
     /// ```text
-    /// subsonic://<source-name>/<enc(artist)>/<enc(album)>/<child.id>
+    /// <source-name>/<enc(artist)>/<enc(album)>/<child.id>[.<suffix>]
     /// ```
     /// `enc()` percent-encodes `%` and `/` so that splitting on `/` and taking
-    /// the trailing segment always recovers the original unencoded `child.id`.
+    /// the trailing segment always recovers the `child.id`. The id itself is
+    /// left unencoded (Subsonic ids are URL-safe tokens); a trailing
+    /// `.<suffix>` (from `Child.suffix`, lower-cased) lets clients infer the
+    /// codec/format. `SourceRegistry::resolve_stream_uri` strips that extension
+    /// to recover the bare id.
     fn map_song(&self, c: &opensubsonic::data::Child) -> Song {
         let artist = c.artist.as_deref().unwrap_or("Unknown Artist");
         let album = c.album.as_deref().unwrap_or("Unknown Album");
 
-        // child.id is NOT encoded — Subsonic IDs are URL-safe tokens.
+        // Leaf = raw id, plus a lower-cased file extension when the server
+        // reports one, so clients can show/derive the format.
+        let leaf = match c.suffix.as_deref() {
+            Some(suffix) if !suffix.is_empty() => {
+                format!("{}.{}", c.id, suffix.to_ascii_lowercase())
+            }
+            _ => c.id.clone(),
+        };
         let path = Utf8PathBuf::from(format!(
-            "subsonic://{}/{}/{}/{}",
+            "{}/{}/{}/{}",
             self.name,
             enc(artist),
             enc(album),
-            c.id,
+            leaf,
         ));
 
         let mut tags: Vec<(std::borrow::Cow<'static, str>, String)> = Vec::new();
@@ -296,7 +309,7 @@ impl MusicSource for SubsonicSource {
                 .index
                 .iter()
                 .flat_map(|idx| idx.artist.iter())
-                .map(|a| SourceEntry::Dir(format!("subsonic://{}/{}", self.name, enc(&a.name))))
+                .map(|a| SourceEntry::Dir(format!("{}/{}", self.name, enc(&a.name))))
                 .collect();
             Ok(entries)
         } else {
@@ -451,6 +464,7 @@ mod tests {
     fn make_child() -> opensubsonic::data::Child {
         serde_json::from_value(serde_json::json!({
             "id": "song-123",
+            "suffix": "flac",
             "isDir": false,
             "title": "Test Song",
             "album": "Test Album",
@@ -479,7 +493,7 @@ mod tests {
         // Virtual path
         assert_eq!(
             song.path.as_str(),
-            "subsonic://home/Test Artist/Test Album/song-123"
+            "home/Test Artist/Test Album/song-123.flac"
         );
 
         let tag = |name: &str| -> Option<&str> {
@@ -508,17 +522,24 @@ mod tests {
 
     // ── (b) Path round-trip ───────────────────────────────────────────────────
 
-    /// The trailing `/`-segment of the virtual path must equal the original
-    /// `child.id`, matching what `SourceRegistry::resolve_stream_uri` extracts.
+    /// The trailing `/`-segment of the mount-style path carries the raw
+    /// `child.id` plus the lower-cased file extension; stripping the extension
+    /// (what `SourceRegistry::resolve_stream_uri` does) recovers the bare id.
     #[test]
-    fn path_trailing_segment_is_child_id() {
+    fn path_trailing_segment_is_child_id_with_extension() {
         let source = make_source("myserver");
         let child = make_child();
         let song = source.map_song(&child);
 
         let path_str = song.path.as_str();
         let trailing = path_str.rsplit('/').next().expect("path has segments");
-        assert_eq!(trailing, child.id.as_str());
+        assert_eq!(trailing, "song-123.flac");
+        // Stripping the audio extension round-trips to the original id.
+        let stem = trailing
+            .rsplit_once('.')
+            .map(|(s, _)| s)
+            .unwrap_or(trailing);
+        assert_eq!(stem, child.id.as_str());
     }
 
     /// Artist/album names containing `%` or `/` are encoded so they cannot
@@ -538,12 +559,16 @@ mod tests {
         let song = source.map_song(&child);
         let path_str = song.path.as_str();
 
-        // id is NOT encoded
+        // Mount-style: starts with the source name, no scheme prefix.
+        assert!(path_str.starts_with("home/"));
+        assert!(!path_str.contains("://"));
+
+        // id is NOT encoded (no suffix on this child, so the leaf is the bare id).
         let trailing = path_str.rsplit('/').next().unwrap();
         assert_eq!(trailing, "abc123");
 
         // The encoded artist/album segments must not contain raw `/` or `%`
-        // (only the final `/<id>` separator is a raw slash).
+        // (only the segment separators are raw slashes).
         assert!(path_str.contains("Artist%2FWith%2FSlashes"));
         assert!(path_str.contains("100%25 Real Album"));
     }

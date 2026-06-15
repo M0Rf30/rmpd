@@ -14,18 +14,15 @@ use super::utils::{
 
 pub async fn handle_add_command(state: &AppState, uri: &str, position: Option<u32>) -> String {
     debug!("add command received with URI: [{}]", uri);
-    // Handle URI schemes
+    // A `<scheme>://` URI is a network stream (radio): validate the scheme and
+    // add a synthetic stream song. Mount-style source paths and local paths have
+    // no `://`, so they skip this block and fall through to the DB lookup below.
     if let Some(scheme_end) = uri.find("://") {
         let scheme = &uri[..scheme_end];
-        let is_source = state.sources.is_source_scheme(scheme);
-        if !helpers::is_known_uri_scheme(scheme) && !is_source {
+        if !helpers::is_known_uri_scheme(scheme) {
             return ResponseBuilder::error(ACK_ERROR_ARG, 0, "add", "Unsupported URI scheme");
         }
-        // Bare network streams (http radio, etc.) become a synthetic stream song.
-        // Source-backed virtual paths (e.g. subsonic://…) are catalog entries in
-        // the DB — fall through to the lookup below so they carry full metadata
-        // and resolve to a real stream URL at playback time.
-        if scheme != "file" && !is_source {
+        if scheme != "file" {
             let stream_song = helpers::create_stream_song(uri);
             // `add` returns no Id (unlike `addid`) — MPD replies with bare OK.
             state.queue.write().await.add_at(stream_song, position);
@@ -124,16 +121,15 @@ pub async fn handle_addid_command(state: &AppState, uri: &str, position: Option<
         "addid command received with URI: [{}], position: {:?}",
         uri, position
     );
-    // Handle URI schemes
+    // A `<scheme>://` URI is a network stream (radio): validate the scheme and
+    // add a synthetic stream song. Mount-style source paths and local paths have
+    // no `://`, so they skip this block and fall through to the DB lookup below.
     if let Some(scheme_end) = uri.find("://") {
         let scheme = &uri[..scheme_end];
-        let is_source = state.sources.is_source_scheme(scheme);
-        if !helpers::is_known_uri_scheme(scheme) && !is_source {
+        if !helpers::is_known_uri_scheme(scheme) {
             return ResponseBuilder::error(ACK_ERROR_ARG, 0, "addid", "Unsupported URI scheme");
         }
-        // Source-backed virtual paths fall through to the DB lookup below;
-        // only true network streams become a synthetic stream song here.
-        if scheme != "file" && !is_source {
+        if scheme != "file" {
             let stream_song = helpers::create_stream_song(uri);
             let id = state.queue.write().await.add_at(stream_song, position);
             helpers::update_playlist_version(state).await;

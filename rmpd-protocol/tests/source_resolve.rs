@@ -1,7 +1,7 @@
 //! Regression tests for PR5: the prepare_song_for_playback resolve hook.
 //!
 //! Uses a stub `MusicSource` to prove that:
-//!   (a) a virtual `subsonic://name/artist/album/id` path is resolved to the
+//!   (a) a mount-style `name/artist/album/id.ext` path is resolved to the
 //!       stub's returned `http://` URL before playback, while a local path
 //!       passes through unchanged;
 //!   (b) a source whose `ping` / `list_all` errors does NOT abort startup or
@@ -104,7 +104,7 @@ async fn resolve_virtual_path_substitutes_stream_url() {
         Some("https://stream.example"),
         false,
     ));
-    let song = test_song("subsonic://home/Artist/Album/remote-id-42");
+    let song = test_song("home/Artist/Album/remote-id-42.flac");
 
     let result =
         rmpd_protocol::commands::utils::prepare_song_for_playback(&song, None, None, &registry)
@@ -167,7 +167,7 @@ async fn unreachable_source_does_not_abort_startup_or_update() {
     let registry = Arc::new(stub_registry("down", "subsonic", None, true));
 
     assert!(!registry.is_empty());
-    assert!(registry.is_source_scheme("subsonic"));
+    assert!(registry.owns_path("down/Artist/Album/id.flac"));
 
     // Ping fails — caller should skip, not abort.
     for source in registry.iter() {
