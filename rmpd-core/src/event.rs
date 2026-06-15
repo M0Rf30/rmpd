@@ -14,6 +14,10 @@ pub enum Event {
     VolumeChanged(u8),
     BitrateChanged(Option<u32>), // Instantaneous bitrate in kbps (for VBR files)
     SongFinished,
+    /// The engine advanced to the look-ahead (next) song in-thread — gaplessly
+    /// or via crossfade — instead of stopping. The protocol promotes its fed
+    /// "next" to current and feeds the following song.
+    AdvancedToNext,
 
     // Queue events
     QueueChanged,
@@ -21,7 +25,10 @@ pub enum Event {
 
     // Database events
     DatabaseUpdateStarted,
-    DatabaseUpdateProgress { scanned: u32, total: u32 },
+    DatabaseUpdateProgress {
+        scanned: u32,
+        total: u32,
+    },
     DatabaseUpdateFinished,
 
     // Output events
@@ -43,7 +50,9 @@ pub enum Event {
     FilesystemWatchStopped,
     SongAdded(Song),
     SongUpdated(Song),
-    SongDeleted { path: String },
+    SongDeleted {
+        path: String,
+    },
 }
 
 /// Maps to MPD's idle subsystems

@@ -3,6 +3,7 @@ use crate::decoder::SymphoniaDecoder;
 use crate::dop::DopEncoder;
 use crate::dop_output::DopOutput;
 use crate::output::CpalOutput;
+use parking_lot::Mutex;
 use rmpd_core::config::{DopMode, OutputConfig, ReplayGainMode, ResamplerQuality};
 use rmpd_core::error::Result;
 use rmpd_core::event::{Event, EventBus};
@@ -63,7 +64,7 @@ pub struct PlaybackEngine {
     stop_flag: Arc<AtomicBool>,
     atomic_state: Arc<AtomicU8>, // For lock-free state checking in playback thread
     playback_thread: Option<thread::JoinHandle<()>>,
-    current_song: Arc<RwLock<Option<Song>>>,
+    current_song: Arc<Mutex<Option<Song>>>,
     volume: Arc<AtomicU8>,
     command_tx: Option<mpsc::Sender<PlaybackCommand>>,
     outputs: Vec<OutputConfig>,
@@ -74,6 +75,15 @@ pub struct PlaybackEngine {
     resampler_quality: ResamplerQuality,
     dop_mode: DopMode,
     output_slot: Arc<crate::output_slot::OutputSlot>,
+    /// Crossfade duration in seconds (0 = disabled / DORMANT).
+    crossfade: u32,
+    /// Pre-fetched next song for gapless / crossfade transitions.
+    ///
+    /// The protocol layer sets this while the current song is playing; the
+    /// decode thread claims it atomically with `take()` at the transition
+    /// point.  When nothing is fed the slot stays `None` and the engine
+    /// behaves exactly as it did before this field was added.
+    next_song: Arc<Mutex<Option<rmpd_core::playback::PlaybackSong>>>,
 }
 
 impl PlaybackEngine {
@@ -88,7 +98,7 @@ impl PlaybackEngine {
             stop_flag: Arc::new(AtomicBool::new(false)),
             atomic_state,
             playback_thread: None,
-            current_song: Arc::new(RwLock::new(None)),
+            current_song: Arc::new(Mutex::new(None)),
             volume: Arc::new(AtomicU8::new(100)),
             command_tx: None,
             outputs: vec![OutputConfig::cpal_default()],
@@ -99,6 +109,8 @@ impl PlaybackEngine {
             resampler_quality: ResamplerQuality::default(),
             dop_mode: DopMode::default(),
             output_slot: Arc::new(crate::output_slot::OutputSlot::new()),
+            crossfade: 0,
+            next_song: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -127,8 +139,22 @@ impl PlaybackEngine {
         self.dop_mode = mode;
     }
 
+    /// Set the crossfade duration.  0 = disabled (default).
+    pub fn set_crossfade(&mut self, seconds: u32) {
+        self.crossfade = seconds;
+    }
+
+    /// Feed the next song for a gapless or crossfade transition.
+    ///
+    /// Callable while playing (`&self`) — uses interior mutability.  The
+    /// decode thread will claim the value with a single `take()` at the
+    /// appropriate transition point.  Pass `None` to cancel a pre-fed song.
+    pub fn set_next_song(&self, next: Option<rmpd_core::playback::PlaybackSong>) {
+        *self.next_song.lock() = next;
+    }
+
     pub async fn seek(&self, position: f64) -> Result<()> {
-        if let Some(ref tx) = self.command_tx {
+        if let Some(tx) = &self.command_tx {
             tx.send(PlaybackCommand::Seek(position)).map_err(|_| {
                 rmpd_core::error::RmpdError::Player("Failed to send seek command".to_owned())
             })?;
@@ -147,7 +173,7 @@ impl PlaybackEngine {
         self.stop_internal().await?;
 
         // Update current song - clone the song from Arc
-        *self.current_song.write().await = Some((*playback_song.song).clone());
+        *self.current_song.lock() = Some((*playback_song.song).clone());
 
         // Reset stop flag
         self.stop_flag.store(false, Ordering::Release);
@@ -174,6 +200,9 @@ impl PlaybackEngine {
         let resampler_quality = self.resampler_quality;
         let dop_mode = self.dop_mode;
         let output_slot = self.output_slot.clone();
+        let next_song = self.next_song.clone();
+        let crossfade_secs = self.crossfade;
+        let current_song = self.current_song.clone();
 
         let handle = thread::spawn(move || {
             if let Err(e) = Self::playback_thread(
@@ -189,6 +218,9 @@ impl PlaybackEngine {
                 dop_mode,
                 gain_scale,
                 output_slot,
+                next_song,
+                crossfade_secs,
+                current_song,
             ) {
                 error!("playback error: {}", e);
             }
@@ -260,7 +292,10 @@ impl PlaybackEngine {
         // Update atomic state (caller must update status to avoid deadlock)
         self.atomic_state
             .store(PlayerState::Stop as u8, Ordering::Release);
-        *self.current_song.write().await = None;
+        *self.current_song.lock() = None;
+
+        // Clear the look-ahead; the protocol re-feeds it after play().
+        *self.next_song.lock() = None;
 
         Ok(())
     }
@@ -276,7 +311,7 @@ impl PlaybackEngine {
     }
 
     pub async fn get_current_song(&self) -> Option<Song> {
-        self.current_song.read().await.clone()
+        self.current_song.lock().clone()
     }
 
     pub async fn set_volume(&mut self, vol: u8) -> Result<()> {
@@ -289,6 +324,7 @@ impl PlaybackEngine {
         self.volume.load(Ordering::Acquire)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn playback_thread(
         path: &Path,
         _status: Arc<RwLock<rmpd_core::state::PlayerStatus>>,
@@ -302,6 +338,9 @@ impl PlaybackEngine {
         dop_mode: DopMode,
         gain_scale: f32,
         output_slot: Arc<crate::output_slot::OutputSlot>,
+        next_song: Arc<Mutex<Option<rmpd_core::playback::PlaybackSong>>>,
+        crossfade_secs: u32,
+        current_song: Arc<Mutex<Option<Song>>>,
     ) -> Result<()> {
         // Open decoder (pass-through mode by default)
         let mut decoder = SymphoniaDecoder::open(path)?;
@@ -419,7 +458,7 @@ impl PlaybackEngine {
             )?))
         })?;
 
-        // Playback loop
+        // ── Playback state ────────────────────────────────────────────────────
         let mut buffer = vec![0.0f32; BUFFER_SIZE];
         let mut total_samples_played: u64 = 0;
         let samples_per_second = format.sample_rate as u64 * format.channels as u64;
@@ -427,89 +466,301 @@ impl PlaybackEngine {
         // spamming the same message every 100 ms.
         let mut multi_paused = false;
 
-        while !stop_flag.load(Ordering::Acquire) {
-            // Check for commands (non-blocking)
-            if let Ok(cmd) = command_rx.try_recv() {
-                match cmd {
-                    PlaybackCommand::Seek(position) => {
-                        debug!("seeking to position: {:.2}s", position);
-                        if let Err(e) = decoder.seek(position) {
-                            error!("seek failed: {}", e);
-                        } else {
-                            // Reset sample counter after seek
-                            total_samples_played = (position * samples_per_second as f64) as u64;
-                            // Emit position change event
-                            event_bus.emit(Event::PositionChanged(
-                                std::time::Duration::from_secs_f64(position),
-                            ));
+        // ── Outer song loop ───────────────────────────────────────────────────
+        // Each iteration decodes one song.  An in-thread advance (gapless or
+        // crossfade) breaks the inner buffer loop, updates `decoder`, and loops
+        // back here — the MultiOutput device stays open and audio is continuous.
+        'song: loop {
+            // Per-buffer inner loop
+            'buf: loop {
+                if stop_flag.load(Ordering::Acquire) {
+                    break 'song;
+                }
+
+                // ── Commands ──────────────────────────────────────────────────
+                if let Ok(cmd) = command_rx.try_recv() {
+                    match cmd {
+                        PlaybackCommand::Seek(position) => {
+                            debug!("seeking to position: {:.2}s", position);
+                            if let Err(e) = decoder.seek(position) {
+                                error!("seek failed: {}", e);
+                            } else {
+                                // Reset sample counter after seek
+                                total_samples_played =
+                                    (position * samples_per_second as f64) as u64;
+                                // Emit position change event
+                                event_bus.emit(Event::PositionChanged(
+                                    std::time::Duration::from_secs_f64(position),
+                                ));
+                            }
                         }
                     }
                 }
-            }
 
-            // Check if paused — read from atomic state (no locks needed)
-            let current_state = PlayerState::from_atomic(atomic_state.load(Ordering::Acquire));
-
-            if current_state == PlayerState::Pause {
-                if !multi_paused {
-                    multi.pause();
-                    multi_paused = true;
+                // ── Pause ─────────────────────────────────────────────────────
+                let current_state = PlayerState::from_atomic(atomic_state.load(Ordering::Acquire));
+                if current_state == PlayerState::Pause {
+                    if !multi_paused {
+                        multi.pause();
+                        multi_paused = true;
+                    }
+                    thread::sleep(StdDuration::from_millis(100));
+                    continue 'buf;
+                } else if multi_paused {
+                    multi.resume();
+                    multi_paused = false;
                 }
-                thread::sleep(StdDuration::from_millis(100));
-                continue;
-            } else if multi_paused {
-                multi.resume();
-                multi_paused = false;
+
+                // ── Crossfade look-ahead ──────────────────────────────────────
+                // DORMANT when crossfade_secs == 0 (the default): this entire
+                // block is skipped, so behaviour is byte-identical to the
+                // pre-look-ahead engine.
+                if crossfade_secs > 0
+                    && let Some(duration) = decoder.duration()
+                {
+                    // Sample offset at which the overlap window begins
+                    let cf_start = ((duration - crossfade_secs as f64) * samples_per_second as f64)
+                        .max(0.0) as u64;
+
+                    if total_samples_played >= cf_start {
+                        // Claim the pre-fetched next song (destructive take —
+                        // only the first crossing of cf_start ever finds a value).
+                        let cf_next = next_song.lock().take().and_then(|ps| {
+                            SymphoniaDecoder::open(ps.resolved_path.as_std_path())
+                                .ok()
+                                .filter(|dec| {
+                                    !dec.is_dsd()
+                                        && dec.format().sample_rate == format.sample_rate
+                                        && dec.format().channels == format.channels
+                                })
+                                .map(|dec| (dec, ps))
+                        });
+
+                        if let Some((mut next_dec, ps)) = cf_next {
+                            // ── Crossfade overlap loop ────────────────────
+                            let window = crate::crossfade::crossfade_window_samples(
+                                format.sample_rate,
+                                format.channels,
+                                crossfade_secs,
+                            );
+                            // Pre-allocated mixing buffers (no per-iteration alloc)
+                            let mut cf_cur = vec![0.0f32; BUFFER_SIZE];
+                            let mut cf_nxt = vec![0.0f32; BUFFER_SIZE];
+                            let mut overlap_done: usize = 0;
+                            // Tracks how many samples were consumed from next_dec
+                            // during the overlap (becomes total_samples_played after
+                            // the transition).
+                            let mut next_pos: u64 = 0;
+                            let mut transitioned = false;
+
+                            'cf: loop {
+                                if stop_flag.load(Ordering::Acquire) {
+                                    break 'song;
+                                }
+
+                                // Pause inside crossfade
+                                let st =
+                                    PlayerState::from_atomic(atomic_state.load(Ordering::Acquire));
+                                if st == PlayerState::Pause {
+                                    if !multi_paused {
+                                        multi.pause();
+                                        multi_paused = true;
+                                    }
+                                    thread::sleep(StdDuration::from_millis(100));
+                                    continue 'cf;
+                                } else if multi_paused {
+                                    multi.resume();
+                                    multi_paused = false;
+                                }
+
+                                // Seek during crossfade: seek current decoder and
+                                // abandon the blend so the user hears the new
+                                // position without the incoming track underneath.
+                                if let Ok(PlaybackCommand::Seek(pos)) = command_rx.try_recv() {
+                                    if let Err(e) = decoder.seek(pos) {
+                                        error!("seek failed during crossfade: {}", e);
+                                    } else {
+                                        total_samples_played =
+                                            (pos * samples_per_second as f64) as u64;
+                                        event_bus.emit(Event::PositionChanged(
+                                            std::time::Duration::from_secs_f64(pos),
+                                        ));
+                                    }
+                                    // next_dec is dropped here; next_song slot is
+                                    // already empty so the protocol must re-feed.
+                                    break 'cf;
+                                }
+
+                                // Window exhausted: outgoing is fully faded out
+                                if overlap_done >= window {
+                                    transitioned = true;
+                                    break 'cf;
+                                }
+
+                                // Read from outgoing decoder
+                                let n_cur = decoder.read(&mut cf_cur)?;
+                                if n_cur == 0 {
+                                    // Outgoing ended inside window → switch fully
+                                    transitioned = true;
+                                    break 'cf;
+                                }
+
+                                // Read the same count from incoming, keeping both
+                                // decoders aligned (format is guaranteed to match).
+                                let n_nxt = next_dec.read(&mut cf_nxt[..n_cur])?;
+                                if n_nxt == 0 {
+                                    // Edge case: next song shorter than the crossfade
+                                    // window.  Play the remaining outgoing samples
+                                    // unmodified and abandon the blend.
+                                    for s in cf_cur[..n_cur].iter_mut() {
+                                        *s *= gain_scale;
+                                    }
+                                    if multi.write(Arc::from(&cf_cur[..n_cur])).is_err() {
+                                        warn!("output disconnected (crossfade/next-eof)");
+                                        break 'song;
+                                    }
+                                    total_samples_played += n_cur as u64;
+                                    // Continue with current decoder; next_dec dropped.
+                                    break 'cf;
+                                }
+
+                                // Equal-power blend into cf_cur (n_nxt ≤ n_cur)
+                                let n_mix = n_nxt;
+                                let progress =
+                                    (overlap_done as f32 / window as f32).clamp(0.0, 1.0);
+                                let (g_out, g_in) = crate::crossfade::equal_power_gains(progress);
+
+                                // In-place: cf_cur = cur*gain*g_out + nxt*gain*g_in
+                                for s in cf_cur[..n_mix].iter_mut() {
+                                    *s *= gain_scale * g_out;
+                                }
+                                crate::crossfade::mix_into(
+                                    &mut cf_cur[..n_mix],
+                                    &cf_nxt[..n_mix],
+                                    1.0,
+                                    gain_scale * g_in,
+                                );
+
+                                if multi.write(Arc::from(&cf_cur[..n_mix])).is_err() {
+                                    warn!("output disconnected during crossfade");
+                                    break 'song;
+                                }
+
+                                overlap_done += n_mix;
+                                next_pos += n_mix as u64;
+                                total_samples_played += n_mix as u64;
+
+                                // Position/bitrate events (~1 s throttle)
+                                if total_samples_played % samples_per_second < (n_mix as u64) {
+                                    let elapsed =
+                                        total_samples_played as f64 / samples_per_second as f64;
+                                    event_bus.emit(Event::PositionChanged(
+                                        std::time::Duration::from_secs_f64(elapsed),
+                                    ));
+                                    event_bus
+                                        .emit(Event::BitrateChanged(decoder.current_bitrate()));
+                                }
+                            } // end 'cf
+
+                            if transitioned {
+                                decoder = next_dec;
+                                total_samples_played = next_pos;
+                                *current_song.lock() = Some((*ps.song).clone());
+                                event_bus.emit(Event::AdvancedToNext);
+                                // Break inner loop; 'song iterates with new decoder.
+                                break 'buf;
+                            }
+                            // Crossfade was abandoned (seek or next-eof).
+                            // Continue the inner loop with the current decoder;
+                            // next_song is already empty so subsequent iterations
+                            // find nothing and fall through to normal decode.
+                            continue 'buf;
+                        }
+                        // cf_next was None (no valid next available yet) → fall through
+                    }
+                }
+
+                // ── Normal decode ─────────────────────────────────────────────
+                let samples_read = decoder.read(&mut buffer)?;
+
+                if samples_read == 0 {
+                    debug!(
+                        "End of stream reached, total samples decoded: {}",
+                        total_samples_played
+                    );
+
+                    // DORMANCY: when next_song is empty (the default until the
+                    // protocol feeds it), `next_song.lock().take()` returns None
+                    // and we always take the SongFinished branch — byte-identical
+                    // to the pre-look-ahead engine.  Only when the protocol has
+                    // pre-fed a format-compatible next song does the gapless path
+                    // activate.
+                    let gapless_next = next_song.lock().take().and_then(|ps| {
+                        SymphoniaDecoder::open(ps.resolved_path.as_std_path())
+                            .ok()
+                            .filter(|dec| {
+                                !dec.is_dsd()
+                                    && dec.format().sample_rate == format.sample_rate
+                                    && dec.format().channels == format.channels
+                            })
+                            .map(|dec| (dec, ps))
+                    });
+
+                    match gapless_next {
+                        Some((next_dec, ps)) => {
+                            // In-thread gapless advance: same MultiOutput stays
+                            // open, audio is continuous with no gap.
+                            decoder = next_dec;
+                            total_samples_played = 0;
+                            *current_song.lock() = Some((*ps.song).clone());
+                            event_bus.emit(Event::AdvancedToNext);
+                            break 'buf; // continue 'song
+                        }
+                        None => {
+                            // Default (dormant) path — identical to today.
+                            event_bus.emit(Event::SongFinished);
+                            break 'song;
+                        }
+                    }
+                }
+
+                if samples_read < buffer.len() {
+                    debug!(
+                        "partial read: {} samples (buffer size: {})",
+                        samples_read,
+                        buffer.len()
+                    );
+                }
+
+                // Apply ReplayGain source-side (lock-free); volume is applied
+                // per-output in each MultiOutput worker via VolumeFilter.
+                for sample in buffer[..samples_read].iter_mut() {
+                    *sample *= gain_scale;
+                }
+
+                // Fan the chunk out to all outputs.
+                let chunk: Arc<[f32]> = Arc::from(&buffer[..samples_read]);
+                if multi.write(chunk).is_err() {
+                    warn!("primary output disconnected; stopping playback");
+                    break 'song;
+                }
+
+                // Update elapsed time
+                total_samples_played += samples_read as u64;
+
+                // Emit position update event every ~1 second of audio (throttled)
+                if total_samples_played % samples_per_second < (samples_read as u64) {
+                    let elapsed_seconds = total_samples_played as f64 / samples_per_second as f64;
+                    event_bus.emit(Event::PositionChanged(std::time::Duration::from_secs_f64(
+                        elapsed_seconds,
+                    )));
+
+                    // Also emit current bitrate (for VBR files this changes during playback)
+                    let current_bitrate = decoder.current_bitrate();
+                    event_bus.emit(Event::BitrateChanged(current_bitrate));
+                }
             }
-
-            // Read from decoder
-            let samples_read = decoder.read(&mut buffer)?;
-
-            if samples_read == 0 {
-                // End of stream
-                debug!(
-                    "End of stream reached, total samples decoded: {}",
-                    total_samples_played
-                );
-                event_bus.emit(Event::SongFinished);
-                break;
-            }
-
-            if samples_read < buffer.len() {
-                debug!(
-                    "partial read: {} samples (buffer size: {})",
-                    samples_read,
-                    buffer.len()
-                );
-            }
-
-            // Apply ReplayGain source-side (lock-free); volume is applied
-            // per-output in each MultiOutput worker via VolumeFilter.
-            for sample in buffer[..samples_read].iter_mut() {
-                *sample *= gain_scale;
-            }
-
-            // Fan the chunk out to all outputs.
-            let chunk: Arc<[f32]> = Arc::from(&buffer[..samples_read]);
-            if multi.write(chunk).is_err() {
-                warn!("primary output disconnected; stopping playback");
-                break;
-            }
-
-            // Update elapsed time
-            total_samples_played += samples_read as u64;
-
-            // Emit position update event every ~1 second of audio (throttled)
-            if total_samples_played % samples_per_second < (samples_read as u64) {
-                let elapsed_seconds = total_samples_played as f64 / samples_per_second as f64;
-                event_bus.emit(Event::PositionChanged(std::time::Duration::from_secs_f64(
-                    elapsed_seconds,
-                )));
-
-                // Also emit current bitrate (for VBR files this changes during playback)
-                let current_bitrate = decoder.current_bitrate();
-                event_bus.emit(Event::BitrateChanged(current_bitrate));
-            }
+            // 'buf exited normally (in-thread advance) → 'song loops with the new decoder
         }
 
         Ok(())
