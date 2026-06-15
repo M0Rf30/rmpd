@@ -556,7 +556,20 @@ pub async fn handle_currentsong_command(state: &AppState) -> String {
         && let Some(item) = queue.get(current.position)
     {
         let mut resp = ResponseBuilder::new();
-        resp.song(&item.song, Some(current.position), Some(current.id));
+        // For remote streams, surface the live ICY "now playing" title as Title.
+        if rmpd_core::path::is_uri(item.song.path.as_str())
+            && let Some(title) = state.stream_title.read().await.clone()
+        {
+            let mut song = (*item.song).clone();
+            if let Some(slot) = song.tags.iter_mut().find(|(k, _)| k == "title") {
+                slot.1 = title;
+            } else {
+                song.tags.push((std::borrow::Cow::Borrowed("title"), title));
+            }
+            resp.song(&song, Some(current.position), Some(current.id));
+        } else {
+            resp.song(&item.song, Some(current.position), Some(current.id));
+        }
         return resp.ok();
     }
 

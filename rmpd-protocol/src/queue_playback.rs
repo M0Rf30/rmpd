@@ -74,6 +74,10 @@ impl QueuePlaybackManager {
                         let mut status = state.status.write().await;
                         status.bitrate = bitrate;
                     }
+                    Ok(Event::StreamTitleChanged(title)) => {
+                        debug!("stream title changed to: {:?}", title);
+                        *state.stream_title.write().await = title;
+                    }
                     Ok(Event::AdvancedToNext) => {
                         info!("engine advanced to next song in-thread (gapless/crossfade)");
                         if let Err(e) = Self::handle_advanced(&state).await {
@@ -82,6 +86,8 @@ impl QueuePlaybackManager {
                         Self::feed_next_song(&state).await;
                     }
                     Ok(Event::SongChanged(_)) => {
+                        // A new song invalidates any prior stream title.
+                        *state.stream_title.write().await = None;
                         // (Re)feed look-ahead whenever the current song changes — covers
                         // manual play/playid, resume, and the SongFinished fallback.
                         Self::feed_next_song(&state).await;

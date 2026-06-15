@@ -18,6 +18,10 @@ pub enum Event {
     /// or via crossfade — instead of stopping. The protocol promotes its fed
     /// "next" to current and feeds the following song.
     AdvancedToNext,
+    /// A remote stream's ICY "now playing" title changed. Carries the new
+    /// title (None clears it). Notifies the `player` subsystem so idle clients
+    /// re-query `currentsong`.
+    StreamTitleChanged(Option<String>),
 
     // Queue events
     QueueChanged,
@@ -79,9 +83,10 @@ impl Event {
         match self {
             // Only notify idle for significant player events (state/song changes)
             // NOT for position/bitrate changes - those are too frequent and should be polled
-            Event::PlayerStateChanged(_) | Event::SongChanged(_) | Event::SongFinished => {
-                &[Subsystem::Player]
-            }
+            Event::PlayerStateChanged(_)
+            | Event::SongChanged(_)
+            | Event::SongFinished
+            | Event::StreamTitleChanged(_) => &[Subsystem::Player],
             // Position and bitrate changes are internal - don't notify idle
             Event::PositionChanged(_) | Event::BitrateChanged(_) => &[],
             Event::VolumeChanged(_) => &[Subsystem::Mixer],

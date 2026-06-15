@@ -73,6 +73,11 @@ mpc update
 # Add and play music
 mpc add /
 mpc play
+
+# Play internet radio (any HTTP/HTTPS stream URL)
+mpc add https://stream.example/radio.mp3
+mpc play
+mpc current   # shows the live ICY "now playing" title for streams
 ```
 
 ## Configuration
@@ -194,6 +199,7 @@ See [CI.md](CI.md) for detailed CI/CD documentation.
   - Multiple output types (ALSA, PulseAudio, PipeWire)
   - Gapless playback
   - ReplayGain support
+  - Internet radio: HTTP(S) streaming input with Shoutcast/Icecast (ICY) "now playing" metadata
 
 - **Library Management**
   - Filesystem scanning
@@ -219,7 +225,7 @@ See [CI.md](CI.md) for detailed CI/CD documentation.
 
 - Gapless playback and crossfade / MixRamp (needs real-device validation)
 - Compressed stream encoders (FLAC / Opus / Vorbis) for the `httpd` output
-- HTTP / network input (internet radio) and network storage backends
+- Network storage backends (SMB / NFS) and Shoutcast v1 (`ICY 200 OK`) servers
 - `.cue` sheet playlists (`.m3u`, `.pls`, and XSPF already supported)
 - OpenSubsonic protocol support
 

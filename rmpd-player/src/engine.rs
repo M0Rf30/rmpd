@@ -501,6 +501,9 @@ impl PlaybackEngine {
         // Track whether we have sent pause/resume to the workers to avoid
         // spamming the same message every 100 ms.
         let mut multi_paused = false;
+        // Last ICY "now playing" title emitted, to avoid re-emitting it every
+        // throttle tick while it is unchanged (remote streams only).
+        let mut last_stream_title: Option<String> = None;
 
         // ── Outer song loop ───────────────────────────────────────────────────
         // Each iteration decodes one song.  An in-thread advance (gapless or
@@ -833,6 +836,13 @@ impl PlaybackEngine {
                     // Also emit current bitrate (for VBR files this changes during playback)
                     let current_bitrate = decoder.current_bitrate();
                     event_bus.emit(Event::BitrateChanged(current_bitrate));
+
+                    // Surface ICY "now playing" title changes for remote streams.
+                    let title = decoder.stream_title();
+                    if title != last_stream_title {
+                        last_stream_title = title.clone();
+                        event_bus.emit(Event::StreamTitleChanged(title));
+                    }
                 }
             }
             // 'buf exited normally (in-thread advance) → 'song loops with the new decoder

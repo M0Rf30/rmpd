@@ -44,6 +44,9 @@ pub struct AppState {
     pub shutdown_tx: Option<broadcast::Sender<()>>,
     pub disable_actual_mount: bool,
     pub password: Option<String>,
+    /// Latest ICY "now playing" title for a remote stream (None when not
+    /// streaming or no metadata has arrived). Injected into `currentsong`.
+    pub stream_title: Arc<RwLock<Option<String>>>,
 }
 
 impl fmt::Debug for AppState {
@@ -127,6 +130,7 @@ impl AppState {
                 .map(|v| v == "1" || v.to_lowercase() == "true")
                 .unwrap_or(false),
             password: None,
+            stream_title: Arc::new(RwLock::new(None)),
         }
     }
 
