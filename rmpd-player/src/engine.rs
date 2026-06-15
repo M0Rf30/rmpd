@@ -77,6 +77,10 @@ pub struct PlaybackEngine {
     output_slot: Arc<crate::output_slot::OutputSlot>,
     /// Crossfade duration in seconds (0 = disabled / DORMANT).
     crossfade: u32,
+    /// MixRamp threshold in dBFS (0.0 = disabled; use time-based crossfade).
+    mixramp_db: f32,
+    /// Extra delay applied after the MixRamp overlap window (seconds).
+    mixramp_delay: f32,
     /// Pre-fetched next song for gapless / crossfade transitions.
     ///
     /// The protocol layer sets this while the current song is playing; the
@@ -110,6 +114,8 @@ impl PlaybackEngine {
             dop_mode: DopMode::default(),
             output_slot: Arc::new(crate::output_slot::OutputSlot::new()),
             crossfade: 0,
+            mixramp_db: 0.0,
+            mixramp_delay: 0.0,
             next_song: Arc::new(Mutex::new(None)),
         }
     }
@@ -142,6 +148,16 @@ impl PlaybackEngine {
     /// Set the crossfade duration.  0 = disabled (default).
     pub fn set_crossfade(&mut self, seconds: u32) {
         self.crossfade = seconds;
+    }
+
+    /// Set the MixRamp threshold and delay.
+    ///
+    /// `db` is the dBFS level at which the outgoing/incoming tracks are
+    /// blended; `delay` is an additional silence gap in seconds. Both default
+    /// to 0.0 (time-based crossfade fallback).
+    pub fn set_mixramp(&mut self, db: f32, delay: f32) {
+        self.mixramp_db = db;
+        self.mixramp_delay = delay;
     }
 
     /// Feed the next song for a gapless or crossfade transition.
@@ -203,6 +219,12 @@ impl PlaybackEngine {
         let next_song = self.next_song.clone();
         let crossfade_secs = self.crossfade;
         let current_song = self.current_song.clone();
+        let replay_gain_mode = self.replay_gain_mode;
+        let replay_gain_preamp = self.replay_gain_preamp;
+        let replay_gain_missing_preamp = self.replay_gain_missing_preamp;
+        let volume_normalization = self.volume_normalization;
+        let mixramp_db = self.mixramp_db;
+        let mixramp_delay = self.mixramp_delay;
 
         let handle = thread::spawn(move || {
             if let Err(e) = Self::playback_thread(
@@ -221,6 +243,12 @@ impl PlaybackEngine {
                 next_song,
                 crossfade_secs,
                 current_song,
+                replay_gain_mode,
+                replay_gain_preamp,
+                replay_gain_missing_preamp,
+                volume_normalization,
+                mixramp_db,
+                mixramp_delay,
             ) {
                 error!("playback error: {}", e);
             }
@@ -341,7 +369,15 @@ impl PlaybackEngine {
         next_song: Arc<Mutex<Option<rmpd_core::playback::PlaybackSong>>>,
         crossfade_secs: u32,
         current_song: Arc<Mutex<Option<Song>>>,
+        replay_gain_mode: ReplayGainMode,
+        replay_gain_preamp: f32,
+        replay_gain_missing_preamp: f32,
+        volume_normalization: bool,
+        mixramp_db: f32,
+        mixramp_delay: f32,
     ) -> Result<()> {
+        // Shadow as mutable so per-song gain can be updated on in-thread advance.
+        let mut gain_scale = gain_scale;
         // Open decoder (pass-through mode by default)
         let mut decoder = SymphoniaDecoder::open(path)?;
 
@@ -538,10 +574,39 @@ impl PlaybackEngine {
 
                         if let Some((mut next_dec, ps)) = cf_next {
                             // ── Crossfade overlap loop ────────────────────
-                            let window = crate::crossfade::crossfade_window_samples(
+                            // Compute per-song gain for the incoming track.
+                            let next_gain_scale = Self::compute_gain_scale(
+                                &ps.song,
+                                replay_gain_mode,
+                                replay_gain_preamp,
+                                replay_gain_missing_preamp,
+                                volume_normalization,
+                            );
+                            // MixRamp: derive overlap window from tags; fall
+                            // back to time-based crossfade if either tag is
+                            // absent or the threshold is not crossed.
+                            let cur_end_tag: Option<String> = current_song
+                                .lock()
+                                .as_ref()
+                                .and_then(|s| s.tag("mixramp_end").map(str::to_owned));
+                            let next_start_tag: Option<String> =
+                                ps.song.tag("mixramp_start").map(str::to_owned);
+                            let cur_rg_db = 20.0_f32 * gain_scale.max(1e-9_f32).log10();
+                            let next_rg_db = 20.0_f32 * next_gain_scale.max(1e-9_f32).log10();
+                            let window_secs: f32 = crate::crossfade::mixramp_overlap_seconds(
+                                next_start_tag.as_deref(),
+                                cur_end_tag.as_deref(),
+                                mixramp_db,
+                                cur_rg_db,
+                                next_rg_db,
+                                mixramp_delay,
+                            )
+                            .filter(|&s| s > 0.0)
+                            .unwrap_or(crossfade_secs as f32);
+                            let window = crate::crossfade::window_samples_secs(
                                 format.sample_rate,
                                 format.channels,
-                                crossfade_secs,
+                                window_secs,
                             );
                             // Pre-allocated mixing buffers (no per-iteration alloc)
                             let mut cf_cur = vec![0.0f32; BUFFER_SIZE];
@@ -638,7 +703,7 @@ impl PlaybackEngine {
                                     &mut cf_cur[..n_mix],
                                     &cf_nxt[..n_mix],
                                     1.0,
-                                    gain_scale * g_in,
+                                    next_gain_scale * g_in,
                                 );
 
                                 if multi.write(Arc::from(&cf_cur[..n_mix])).is_err() {
@@ -667,6 +732,8 @@ impl PlaybackEngine {
                                 total_samples_played = next_pos;
                                 *current_song.lock() = Some((*ps.song).clone());
                                 event_bus.emit(Event::AdvancedToNext);
+                                // Update gain for the now-active next song.
+                                gain_scale = next_gain_scale;
                                 // Break inner loop; 'song iterates with new decoder.
                                 break 'buf;
                             }
@@ -714,6 +781,14 @@ impl PlaybackEngine {
                             total_samples_played = 0;
                             *current_song.lock() = Some((*ps.song).clone());
                             event_bus.emit(Event::AdvancedToNext);
+                            // Recompute gain for the new song (it has its own tags).
+                            gain_scale = Self::compute_gain_scale(
+                                &ps.song,
+                                replay_gain_mode,
+                                replay_gain_preamp,
+                                replay_gain_missing_preamp,
+                                volume_normalization,
+                            );
                             break 'buf; // continue 'song
                         }
                         None => {

@@ -167,6 +167,8 @@ impl MetadataExtractor {
                         val
                     };
                     tags.push((intern_tag_key(tag_name), effective_val));
+                } else if key_lower == "mixramp_start" || key_lower == "mixramp_end" {
+                    tags.push((intern_tag_key(&key_lower), val));
                 }
             }
         } else if let Some(tag) = tag {
@@ -243,6 +245,20 @@ impl MetadataExtractor {
                 && let Some(norm) = normalize_decimal(&disc.to_string())
             {
                 tags.push((intern_tag_key("disc"), norm));
+            }
+
+            // MixRamp analysis tags (TXXX frames in ID3 / equivalent in other formats)
+            if let Some(key) = ItemKey::from_key(tag.tag_type(), "MIXRAMP_START")
+                && let Some(val) = tag.get_string(key)
+                && !val.is_empty()
+            {
+                tags.push((intern_tag_key("mixramp_start"), val.to_string()));
+            }
+            if let Some(key) = ItemKey::from_key(tag.tag_type(), "MIXRAMP_END")
+                && let Some(val) = tag.get_string(key)
+                && !val.is_empty()
+            {
+                tags.push((intern_tag_key("mixramp_end"), val.to_string()));
             }
         }
 

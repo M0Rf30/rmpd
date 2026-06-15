@@ -86,14 +86,22 @@ pub async fn handle_crossfade_command(state: &AppState, seconds: u32) -> String 
 }
 
 pub async fn handle_mixrampdb_command(state: &AppState, decibels: f32) -> String {
-    let mut status = state.status.write().await;
-    status.mixramp_db = decibels;
+    let delay = {
+        let mut status = state.status.write().await;
+        status.mixramp_db = decibels;
+        status.mixramp_delay
+    };
+    state.engine.write().await.set_mixramp(decibels, delay);
     ResponseBuilder::new().ok()
 }
 
 pub async fn handle_mixrampdelay_command(state: &AppState, seconds: f32) -> String {
-    let mut status = state.status.write().await;
-    status.mixramp_delay = seconds;
+    let db = {
+        let mut status = state.status.write().await;
+        status.mixramp_delay = seconds;
+        status.mixramp_db
+    };
+    state.engine.write().await.set_mixramp(db, seconds);
     ResponseBuilder::new().ok()
 }
 

@@ -33,6 +33,7 @@ pub async fn run(bind_address: String, config: Config) -> Result<()> {
         );
         engine.set_volume_normalization(config.audio.volume_normalization);
         engine.set_crossfade(config.audio.crossfade as u32);
+        engine.set_mixramp(config.audio.mixramp_db, config.audio.mixramp_delay);
         engine.set_outputs({
             let enabled: Vec<rmpd_core::config::OutputConfig> = config
                 .output
@@ -201,12 +202,12 @@ async fn restore_state(
         status.replay_gain_mode = saved_state.replay_gain_mode;
     }
 
-    // Keep the engine's crossfade window in sync with the restored option.
-    state
-        .engine
-        .write()
-        .await
-        .set_crossfade(saved_state.crossfade);
+    // Keep the engine's crossfade + MixRamp settings in sync with restored state.
+    {
+        let mut engine = state.engine.write().await;
+        engine.set_crossfade(saved_state.crossfade);
+        engine.set_mixramp(saved_state.mixramp_db, saved_state.mixramp_delay);
+    }
 
     // Restore per-output enabled state, then point the engine at the first
     // still-enabled output.

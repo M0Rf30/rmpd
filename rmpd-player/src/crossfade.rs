@@ -65,6 +65,84 @@ pub fn mixramp_db_to_gain(db: f32) -> f32 {
     10f32.powf(db / 20.0)
 }
 
+/// Port of MPD's `mixramp_interpolate`: scan a MixRamp ramp list
+/// `"<db> <sec>;<db> <sec>;..."` (dB values monotonically increasing) and
+/// return the time in seconds at which the level crosses `required_db`.
+///
+/// Returns `None` when the required level is above all entries, or on any
+/// parse failure (MPD returns −1; we use `None` so callers fall back cleanly).
+#[must_use]
+pub fn mixramp_interpolate(ramp_list: &str, required_db: f32) -> Option<f32> {
+    let mut last_db: f32 = 0.0;
+    let mut last_dur: f32 = 0.0;
+    let mut has_last = false;
+
+    for entry in ramp_list.split(';') {
+        let entry = entry.trim();
+        if entry.is_empty() {
+            continue;
+        }
+        let (db_str, dur_str) = entry.split_once(' ')?;
+        let db: f32 = db_str.trim().parse().ok()?;
+        let dur: f32 = dur_str.trim().parse().ok()?;
+
+        if db == required_db {
+            return Some(dur);
+        }
+        if db < required_db {
+            last_db = db;
+            last_dur = dur;
+            has_last = true;
+        } else {
+            // db > required_db
+            if !has_last {
+                // required is below all entries: return the first (smallest) time
+                return Some(dur);
+            }
+            // interpolate between the last-saved point and this one
+            return Some(last_dur + (required_db - last_db) * (dur - last_dur) / (db - last_db));
+        }
+    }
+    // required_db is above all entries → no crossing found
+    None
+}
+
+/// Compute the MixRamp crossfade overlap window in seconds, or `None` to fall
+/// back to a time-based crossfade.
+///
+/// * `next_start` — the incoming track's `MIXRAMP_START` tag value.
+/// * `cur_end`    — the outgoing track's `MIXRAMP_END` tag value.
+/// * `*_rg_db`   — ReplayGain dB already applied to each respective track.
+/// * `delay`     — extra silence gap from `mixrampdelay` (seconds).
+#[must_use]
+pub fn mixramp_overlap_seconds(
+    next_start: Option<&str>,
+    cur_end: Option<&str>,
+    mixramp_db: f32,
+    cur_rg_db: f32,
+    next_rg_db: f32,
+    delay: f32,
+) -> Option<f32> {
+    let (ns, ce) = (next_start?, cur_end?);
+    let oc = mixramp_interpolate(ns, mixramp_db - next_rg_db)?;
+    let op = mixramp_interpolate(ce, mixramp_db - cur_rg_db)?;
+    if oc < 0.0 || op < 0.0 {
+        return None;
+    }
+    let overlap = oc + op;
+    if delay <= overlap {
+        Some(overlap - delay)
+    } else {
+        None
+    }
+}
+
+/// Interleaved-sample count for a fractional-seconds window.
+#[must_use]
+pub fn window_samples_secs(sample_rate: u32, channels: u8, seconds: f32) -> usize {
+    ((sample_rate as f32 * channels as f32 * seconds).max(0.0)) as usize
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -128,5 +206,95 @@ mod tests {
         assert!(close(mixramp_db_to_gain(0.0), 1.0));
         assert!(close(mixramp_db_to_gain(-6.0), 0.501_187_2));
         assert!(close(mixramp_db_to_gain(-20.0), 0.1));
+    }
+
+    // ── mixramp_interpolate ───────────────────────────────────────────────
+
+    #[test]
+    fn mixramp_exact_match() {
+        // dB value is exactly in the list → return its time directly.
+        assert_eq!(mixramp_interpolate("-10 1.5;-5 3.0", -10.0), Some(1.5));
+        assert_eq!(mixramp_interpolate("-10 1.5;-5 3.0", -5.0), Some(3.0));
+    }
+
+    #[test]
+    fn mixramp_interpolates_between_points() {
+        // list: -10 @ 0.0 s, -5 @ 2.0 s.  required = -7.5 → midpoint → 1.0 s
+        assert!(close(
+            mixramp_interpolate("-10 0.0;-5 2.0", -7.5).unwrap(),
+            1.0
+        ));
+    }
+
+    #[test]
+    fn mixramp_required_below_all_returns_first() {
+        // required_db is below the first entry → MPD returns that entry's time
+        // (the "least" crossing).
+        assert_eq!(mixramp_interpolate("-5 1.0;-3 2.0", -10.0), Some(1.0));
+    }
+
+    #[test]
+    fn mixramp_required_above_all_returns_none() {
+        // required_db is higher than every entry → no crossing found.
+        assert_eq!(mixramp_interpolate("-10 0.0;-5 2.0", 0.0), None);
+    }
+
+    #[test]
+    fn mixramp_malformed_returns_none() {
+        assert_eq!(mixramp_interpolate("notadb 1.0", -5.0), None);
+        assert_eq!(mixramp_interpolate("-5", -5.0), None); // missing seconds
+    }
+
+    #[test]
+    fn mixramp_empty_list_returns_none() {
+        assert_eq!(mixramp_interpolate("", -5.0), None);
+        assert_eq!(mixramp_interpolate(";;;", -5.0), None);
+    }
+
+    // ── mixramp_overlap_seconds ───────────────────────────────────────────
+
+    #[test]
+    fn overlap_none_when_tag_missing() {
+        // Either tag missing → None.
+        assert_eq!(
+            mixramp_overlap_seconds(None, Some("-10 2.0"), -17.0, 0.0, 0.0, 0.0),
+            None
+        );
+        assert_eq!(
+            mixramp_overlap_seconds(Some("-10 2.0"), None, -17.0, 0.0, 0.0, 0.0),
+            None
+        );
+    }
+
+    #[test]
+    fn overlap_sum_minus_delay() {
+        // next_start "-20 0.0;-15 2.0", required -17 → (−17−−20)·2.0/(−15−−20) = 1.2 s
+        // cur_end    "-20 0.0;-15 3.0", required -17 → 3·3.0/5 = 1.8 s
+        let start = "-20 0.0;-15 2.0";
+        let end = "-20 0.0;-15 3.0";
+        let expected = 1.2 + 1.8; // = 3.0 (delay 0)
+        let got = mixramp_overlap_seconds(Some(start), Some(end), -17.0, 0.0, 0.0, 0.0);
+        assert!(close(got.unwrap(), expected));
+    }
+
+    #[test]
+    fn overlap_none_when_delay_exceeds_overlap() {
+        // overlap = 1.2 + 1.8 = 3.0 s, delay = 4.0 s → None
+        let start = "-20 0.0;-15 2.0";
+        let end = "-20 0.0;-15 3.0";
+        assert_eq!(
+            mixramp_overlap_seconds(Some(start), Some(end), -17.0, 0.0, 0.0, 4.0),
+            None
+        );
+    }
+
+    // ── window_samples_secs ───────────────────────────────────────────────
+
+    #[test]
+    fn window_samples_fractional() {
+        // 0.5 s of 44100 Hz stereo = 44100 * 2 * 0.5 = 44100
+        assert_eq!(window_samples_secs(44100, 2, 0.5), 44100);
+        // Negative seconds → 0
+        assert_eq!(window_samples_secs(44100, 2, -1.0), 0);
     }
 }
