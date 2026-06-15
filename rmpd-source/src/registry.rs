@@ -21,8 +21,8 @@ pub type SourceFactory = fn(&SourceConfig) -> Result<Box<dyn MusicSource>, Sourc
 /// ```
 pub static SOURCE_PLUGINS: &[(&str, SourceFactory)] = &[
     ("filesystem", filesystem_source_factory),
-    // #[cfg(feature = "subsonic")]
-    // ("subsonic", subsonic_source_factory),  // added in PR2
+    #[cfg(feature = "subsonic")]
+    ("subsonic", crate::subsonic::subsonic_source_factory),
 ];
 
 /// Select and construct a `MusicSource` from a `[[source]]` config block.

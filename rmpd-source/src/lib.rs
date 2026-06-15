@@ -8,6 +8,8 @@
 //! `sync_source` (PR5 catalog-sync integration) is intentionally absent here.
 
 pub mod filesystem;
+#[cfg(feature = "subsonic")]
+pub mod subsonic;
 pub mod registry;
 
 // Re-export the SPI types so callers only need to depend on `rmpd-source`.
