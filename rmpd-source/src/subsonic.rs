@@ -4,6 +4,7 @@
 //! No network I/O occurs at construction time; the client is validated lazily on `ping`.
 
 use async_trait::async_trait;
+use futures::StreamExt;
 use camino::Utf8PathBuf;
 use opensubsonic::{Auth, Client, Error as SubsonicError, SubsonicApiError};
 use rmpd_core::config::SourceConfig;
@@ -245,6 +246,25 @@ impl SubsonicSource {
             tags,
         }
     }
+
+    /// Like [`map_song`](Self::map_song), but fills in artist/album from the
+    /// containing album when a `getAlbum` child omits them (some servers only
+    /// populate those on `getSong`/`search3`).
+    fn map_album_song(
+        &self,
+        c: &opensubsonic::data::Child,
+        fallback_artist: Option<&str>,
+        fallback_album: Option<&str>,
+    ) -> Song {
+        let mut c = c.clone();
+        if c.artist.is_none() {
+            c.artist = fallback_artist.map(str::to_owned);
+        }
+        if c.album.is_none() {
+            c.album = fallback_album.map(str::to_owned);
+        }
+        self.map_song(&c)
+    }
 }
 
 // ─── MusicSource impl ────────────────────────────────────────────────────────
@@ -285,35 +305,78 @@ impl MusicSource for SubsonicSource {
         }
     }
 
-    /// Walk the full artist → album → song tree and return every song.
+    /// Enumerate the entire catalog.
     ///
-    /// Sequential awaits are used deliberately for v1; the catalog-sync path
-    /// that calls this is already running in a background task.
+    /// Albums are listed via paginated `getAlbumList2` (one cheap request per
+    /// 500 albums, instead of a `getArtists` + per-artist `getArtist` walk),
+    /// then each album's songs are fetched with bounded concurrency. A single
+    /// album that fails to load is logged and skipped rather than aborting the
+    /// whole sync.
     async fn list_all(&self) -> SourceResult<Vec<Song>> {
-        let artists = self.client.get_artists(None).await.map_err(map_err)?;
-        let mut songs = Vec::new();
+        use opensubsonic::AlbumListType;
 
-        for index in &artists.index {
-            for artist_stub in &index.artist {
-                let artist = self
-                    .client
-                    .get_artist(&artist_stub.id)
-                    .await
-                    .map_err(map_err)?;
+        /// Albums requested per `getAlbumList2` page (Subsonic caps `size` at 500).
+        const PAGE: i32 = 500;
+        /// Concurrent in-flight `getAlbum` requests.
+        const CONCURRENCY: usize = 8;
 
-                for album_stub in &artist.album {
-                    let album = self
-                        .client
-                        .get_album(&album_stub.id)
-                        .await
-                        .map_err(map_err)?;
+        // 1. Page through every album stub (cheap; no songs yet).
+        let mut albums: Vec<opensubsonic::data::AlbumId3> = Vec::new();
+        let mut offset = 0i32;
+        loop {
+            let page = self
+                .client
+                .get_album_list2(
+                    AlbumListType::AlphabeticalByName,
+                    Some(PAGE),
+                    Some(offset),
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .await
+                .map_err(map_err)?;
+            let n = page.len() as i32;
+            albums.extend(page);
+            if n < PAGE {
+                break;
+            }
+            offset += PAGE;
+        }
 
-                    for child in &album.song {
-                        songs.push(self.map_song(child));
+        // 2. Fetch each album's songs concurrently, mapping to rmpd songs.
+        let songs: Vec<Song> = futures::stream::iter(albums)
+            .map(|album| async move {
+                match self.client.get_album(&album.id).await {
+                    Ok(detail) => {
+                        let fb_artist = detail.artist.clone();
+                        let fb_album = Some(detail.name.clone());
+                        detail
+                            .song
+                            .iter()
+                            .map(|c| {
+                                self.map_album_song(c, fb_artist.as_deref(), fb_album.as_deref())
+                            })
+                            .collect::<Vec<Song>>()
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "subsonic source '{}': skipping album {} ({})",
+                            self.name,
+                            album.id,
+                            map_err(e)
+                        );
+                        Vec::new()
                     }
                 }
-            }
-        }
+            })
+            .buffer_unordered(CONCURRENCY)
+            .collect::<Vec<Vec<Song>>>()
+            .await
+            .into_iter()
+            .flatten()
+            .collect();
 
         Ok(songs)
     }
