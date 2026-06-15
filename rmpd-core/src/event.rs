@@ -27,6 +27,13 @@ pub enum Event {
     QueueChanged,
     QueueOptionsChanged,
 
+    // Stored playlist events
+    /// The set or contents of on-disk stored playlists changed (save, rm,
+    /// rename, playlistadd, playlistdelete, playlistclear, playlistmove,
+    /// searchaddpl). Notifies the `stored_playlist` idle subsystem so clients
+    /// re-query `listplaylists` / `listplaylistinfo`.
+    StoredPlaylistChanged,
+
     // Database events
     DatabaseUpdateStarted,
     DatabaseUpdateProgress {
@@ -92,6 +99,7 @@ impl Event {
             Event::VolumeChanged(_) => &[Subsystem::Mixer],
             Event::QueueChanged => &[Subsystem::Playlist],
             Event::QueueOptionsChanged => &[Subsystem::Options],
+            Event::StoredPlaylistChanged => &[Subsystem::StoredPlaylist],
             Event::DatabaseUpdateStarted | Event::DatabaseUpdateProgress { .. } => {
                 &[Subsystem::Update]
             }

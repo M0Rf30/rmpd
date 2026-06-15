@@ -20,6 +20,14 @@ fn strip_file_uri_prefix(value: &str) -> String {
     }
 }
 
+/// Notify idle clients that the set or contents of stored playlists changed,
+/// mirroring MPD's `idle_add(IDLE_STORED_PLAYLIST)` after a successful mutation.
+fn notify_stored_playlist(state: &AppState) {
+    state
+        .event_bus
+        .emit(rmpd_core::event::Event::StoredPlaylistChanged);
+}
+
 /// Parse an .m3u playlist file and return the list of relative paths.
 /// Lines starting with '#' are comments and are skipped.
 fn read_m3u_playlist(playlist_dir: &str, name: &str) -> Result<Vec<String>, String> {
@@ -359,7 +367,10 @@ pub async fn handle_save_command(
         content + "\n"
     };
     match std::fs::write(&pl_path, &content) {
-        Ok(_) => ResponseBuilder::new().ok(),
+        Ok(_) => {
+            notify_stored_playlist(state);
+            ResponseBuilder::new().ok()
+        }
         Err(e) => ResponseBuilder::error(
             ACK_ERROR_SYSTEM,
             0,
@@ -549,7 +560,10 @@ pub async fn handle_searchaddpl_command(
         content + "\n"
     };
     match std::fs::write(&pl_path, &content) {
-        Ok(_) => ResponseBuilder::new().ok(),
+        Ok(_) => {
+            notify_stored_playlist(state);
+            ResponseBuilder::new().ok()
+        }
         Err(e) => {
             ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "searchaddpl", &format!("Error: {e}"))
         }
@@ -709,7 +723,10 @@ pub async fn handle_playlistadd_command(
         content + "\n"
     };
     match std::fs::write(&pl_path, &content) {
-        Ok(_) => ResponseBuilder::new().ok(),
+        Ok(_) => {
+            notify_stored_playlist(state);
+            ResponseBuilder::new().ok()
+        }
         Err(e) => {
             ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "playlistadd", &format!("Error: {e}"))
         }
@@ -733,7 +750,10 @@ pub async fn handle_playlistclear_command(state: &AppState, name: &str) -> Strin
         return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "playlistclear", "No such playlist");
     }
     match std::fs::write(&pl_path, "") {
-        Ok(_) => ResponseBuilder::new().ok(),
+        Ok(_) => {
+            notify_stored_playlist(state);
+            ResponseBuilder::new().ok()
+        }
         Err(e) => {
             ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "playlistclear", &format!("Error: {e}"))
         }
@@ -773,7 +793,10 @@ pub async fn handle_playlistdelete_command(state: &AppState, name: &str, positio
     };
     let pl_path = Path::new(&playlist_dir).join(format!("{name}.m3u"));
     match std::fs::write(&pl_path, &content) {
-        Ok(_) => ResponseBuilder::new().ok(),
+        Ok(_) => {
+            notify_stored_playlist(state);
+            ResponseBuilder::new().ok()
+        }
         Err(e) => ResponseBuilder::error(
             ACK_ERROR_SYSTEM,
             0,
@@ -824,7 +847,10 @@ pub async fn handle_playlistmove_command(
     };
     let pl_path = Path::new(&playlist_dir).join(format!("{name}.m3u"));
     match std::fs::write(&pl_path, &content) {
-        Ok(_) => ResponseBuilder::new().ok(),
+        Ok(_) => {
+            notify_stored_playlist(state);
+            ResponseBuilder::new().ok()
+        }
         Err(e) => {
             ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "playlistmove", &format!("Error: {e}"))
         }
@@ -848,7 +874,10 @@ pub async fn handle_rm_command(state: &AppState, name: &str) -> String {
         return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "rm", "No such playlist");
     }
     match std::fs::remove_file(&pl_path) {
-        Ok(_) => ResponseBuilder::new().ok(),
+        Ok(_) => {
+            notify_stored_playlist(state);
+            ResponseBuilder::new().ok()
+        }
         Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "rm", &format!("Error: {e}")),
     }
 }
@@ -874,7 +903,10 @@ pub async fn handle_rename_command(state: &AppState, from: &str, to: &str) -> St
         return ResponseBuilder::error(ACK_ERROR_EXIST, 0, "rename", "Playlist exists already");
     }
     match std::fs::rename(&from_path, &to_path) {
-        Ok(_) => ResponseBuilder::new().ok(),
+        Ok(_) => {
+            notify_stored_playlist(state);
+            ResponseBuilder::new().ok()
+        }
         Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "rename", &format!("Error: {e}")),
     }
 }
