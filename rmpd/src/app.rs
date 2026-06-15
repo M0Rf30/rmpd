@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use rmpd_core::config::Config;
 use rmpd_core::error::Result;
 use rmpd_core::state::PlayerState;
@@ -15,6 +16,10 @@ pub async fn run(bind_address: String, config: Config) -> Result<()> {
     let mut state = AppState::with_all_paths(db_path.clone(), music_dir.clone(), playlist_dir);
 
     // Configure password authentication if set in config.
+
+    // Build music-source registry from [[source]] config blocks.
+    let source_registry = Arc::new(rmpd_source::SourceRegistry::from_config(&config.source));
+    state.set_sources(source_registry);
     state.set_password(config.network.password.clone());
 
     // Apply audio settings from config to the player.
@@ -103,6 +108,12 @@ pub async fn run(bind_address: String, config: Config) -> Result<()> {
     if config.database.auto_update {
         info!("auto-update enabled: scanning music directory");
         state.spawn_library_update();
+    }
+
+    // Sync enabled music sources (ping first; unreachable sources are skipped).
+    if !state.sources.is_empty() {
+        info!("syncing music source catalogs");
+        state.spawn_source_sync();
     }
 
     // Start the filesystem watcher so the database stays in sync with on-disk
@@ -280,11 +291,20 @@ async fn restore_state(
                         position, play_state
                     );
 
-                    let playback_song = rmpd_protocol::commands::utils::prepare_song_for_playback(
+                    let playback_song = match rmpd_protocol::commands::utils::prepare_song_for_playback(
                         &song,
                         Some(music_dir),
                         range,
-                    );
+                        &state.sources,
+                    )
+                    .await
+                    {
+                        Ok(ps) => ps,
+                        Err(e) => {
+                            warn!("failed to resolve song during state restore: {}", e);
+                            return;
+                        }
+                    };
 
                     // Set current song immediately
                     let mut status = state.status.write().await;

@@ -2980,6 +2980,7 @@ dependencies = [
  "rmpd-library",
  "rmpd-player",
  "rmpd-protocol",
+ "rmpd-source",
  "tokio",
  "tracing",
  "tracing-journald",
@@ -3069,6 +3070,7 @@ dependencies = [
 name = "rmpd-protocol"
 version = "0.4.0"
 dependencies = [
+ "async-trait",
  "bytes",
  "camino",
  "mdns-sd",
@@ -3078,6 +3080,7 @@ dependencies = [
  "rmpd-library",
  "rmpd-macros",
  "rmpd-player",
+ "rmpd-source",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",

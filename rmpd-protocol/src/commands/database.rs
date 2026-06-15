@@ -440,6 +440,8 @@ pub async fn handle_update_command(state: &AppState, _path: Option<&str>) -> Str
 
     // Spawn the background scan (shared with auto-update on startup).
     state.spawn_library_update();
+    // Also sync enabled music sources.
+    state.spawn_source_sync();
 
     // Return update job ID
     let mut resp = ResponseBuilder::new();

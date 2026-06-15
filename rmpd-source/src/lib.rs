@@ -28,7 +28,7 @@ use tracing::warn;
 /// `Arc<RwLock<…>>` — the registry itself is `Send + Sync` because every
 /// element is `Box<dyn MusicSource: Send + Sync>`.
 pub struct SourceRegistry {
-    sources: Vec<Box<dyn MusicSource>>,
+    pub sources: Vec<Box<dyn MusicSource>>,
 }
 
 impl SourceRegistry {
@@ -104,6 +104,43 @@ impl SourceRegistry {
         let id = path.rsplit('/').next().unwrap_or(path);
         source.resolve_stream_uri(id).await
     }
+    /// Number of live sources.
+    pub fn len(&self) -> usize {
+        self.sources.len()
+    }
+
+    /// True when no live sources are registered.
+    pub fn is_empty(&self) -> bool {
+        self.sources.is_empty()
+    }
+}
+
+/// Sync a music source's catalog into the local database.
+///
+/// Calls `source.list_all()`, then atomically replaces every cached row for
+/// that source in one `spawn_blocking` transaction: `clear_source` followed by
+/// `add_source_song` for each song. Returns the number of songs inserted.
+///
+/// This function is `async` because `list_all` does network I/O; the DB work
+/// runs on a blocking thread so libsqlite does not stall the Tokio runtime.
+pub async fn sync_source(source: &dyn MusicSource, db_path: &str) -> Result<usize, SourceError> {
+    let songs = source.list_all().await?;
+    let count = songs.len();
+    let token = format!("{}:{}", source.scheme(), source.name());
+    let db_path = db_path.to_owned();
+    tokio::task::spawn_blocking(move || -> Result<usize, SourceError> {
+        let db = rmpd_library::Database::open(&db_path)
+            .map_err(|e| SourceError::Protocol(format!("failed to open database: {e}")))?;
+        let _old = db.clear_source(&token)
+            .map_err(|e| SourceError::Protocol(format!("clear_source: {e}")))?;
+        for song in &songs {
+            db.add_source_song(song, &token)
+                .map_err(|e| SourceError::Protocol(format!("add_source_song: {e}")))?;
+        }
+        Ok(count)
+    })
+    .await
+    .map_err(|e| SourceError::Protocol(format!("sync task panicked: {e}")))?
 }
 
 // ─── URI parsing helpers ──────────────────────────────────────────────────────

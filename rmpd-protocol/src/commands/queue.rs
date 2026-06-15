@@ -336,7 +336,24 @@ pub async fn handle_playid_command(state: &AppState, id: Option<u32>) -> String 
             let range = item.range;
             drop(queue);
 
-            let playback_song = prepare_song_for_playback(&song, state.music_dir.as_deref(), range);
+            let playback_song = match prepare_song_for_playback(
+                &song,
+                state.music_dir.as_deref(),
+                range,
+                &state.sources,
+            )
+            .await
+            {
+                Ok(ps) => ps,
+                Err(e) => {
+                    return ResponseBuilder::error(
+                        ACK_ERROR_SYSTEM,
+                        0,
+                        "playid",
+                        &format!("Cannot resolve song: {}", e),
+                    );
+                }
+            };
 
             match state.engine.write().await.play(playback_song).await {
                 Ok(_) => {

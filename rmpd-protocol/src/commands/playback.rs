@@ -44,7 +44,24 @@ pub async fn handle_play_command(state: &AppState, position: Option<u32>) -> Str
         .and_then(|it| it.range);
     drop(queue);
 
-    let playback_song = prepare_song_for_playback(&song, state.music_dir.as_deref(), range);
+    let playback_song = match prepare_song_for_playback(
+        &song,
+        state.music_dir.as_deref(),
+        range,
+        &state.sources,
+    )
+    .await
+    {
+        Ok(ps) => ps,
+        Err(e) => {
+            return ResponseBuilder::error(
+                ACK_ERROR_SYSTEM,
+                0,
+                "play",
+                &format!("Cannot resolve song: {}", e),
+            );
+        }
+    };
 
     match state.engine.write().await.play(playback_song).await {
         Ok(_) => {
@@ -162,7 +179,24 @@ pub async fn handle_next_command(state: &AppState) -> String {
         drop(queue);
         drop(status);
 
-        let playback_song = prepare_song_for_playback(&song, state.music_dir.as_deref(), range);
+        let playback_song = match prepare_song_for_playback(
+            &song,
+            state.music_dir.as_deref(),
+            range,
+            &state.sources,
+        )
+        .await
+        {
+            Ok(ps) => ps,
+            Err(e) => {
+                return ResponseBuilder::error(
+                    ACK_ERROR_SYSTEM,
+                    0,
+                    "next",
+                    &format!("Cannot resolve song: {}", e),
+                );
+            }
+        };
 
         match state.engine.write().await.play(playback_song).await {
             Ok(_) => {
@@ -211,7 +245,24 @@ pub async fn handle_previous_command(state: &AppState) -> String {
         drop(queue);
         drop(status);
 
-        let playback_song = prepare_song_for_playback(&song, state.music_dir.as_deref(), range);
+        let playback_song = match prepare_song_for_playback(
+            &song,
+            state.music_dir.as_deref(),
+            range,
+            &state.sources,
+        )
+        .await
+        {
+            Ok(ps) => ps,
+            Err(e) => {
+                return ResponseBuilder::error(
+                    ACK_ERROR_SYSTEM,
+                    0,
+                    "previous",
+                    &format!("Cannot resolve song: {}", e),
+                );
+            }
+        };
 
         match state.engine.write().await.play(playback_song).await {
             Ok(_) => {

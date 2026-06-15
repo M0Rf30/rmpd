@@ -183,7 +183,7 @@ impl PlaybackEngine {
     }
 
     pub async fn play(&mut self, playback_song: rmpd_core::playback::PlaybackSong) -> Result<()> {
-        info!("starting playback: {}", playback_song.resolved_path);
+        info!("starting playback: {}", playback_song.song.path);
 
         // Stop current playback if any (internal stop, no events - caller will emit)
         self.stop_internal().await?;

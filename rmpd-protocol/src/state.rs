@@ -44,6 +44,8 @@ pub struct AppState {
     pub shutdown_tx: Option<broadcast::Sender<()>>,
     pub disable_actual_mount: bool,
     pub password: Option<String>,
+    /// Music-source registry built from `[[source]]` config blocks.
+    pub sources: std::sync::Arc<rmpd_source::SourceRegistry>,
     /// Latest ICY "now playing" title for a remote stream (None when not
     /// streaming or no metadata has arrived). Injected into `currentsong`.
     pub stream_title: Arc<RwLock<Option<String>>>,
@@ -131,6 +133,7 @@ impl AppState {
                 .unwrap_or(false),
             password: None,
             stream_title: Arc::new(RwLock::new(None)),
+            sources: std::sync::Arc::new(rmpd_source::SourceRegistry::from_config(&[])),
         }
     }
 
@@ -153,6 +156,12 @@ impl AppState {
 
     pub fn set_password(&mut self, password: Option<String>) {
         self.password = password;
+    }
+
+    /// Set the music-source registry. Call at startup after building the
+    /// registry from `[[source]]` config blocks.
+    pub fn set_sources(&mut self, sources: std::sync::Arc<rmpd_source::SourceRegistry>) {
+        self.sources = sources;
     }
 
     pub fn advertise_mdns(&self, port: u16) {
@@ -195,6 +204,59 @@ impl AppState {
                 }
                 Err(e) => tracing::error!("failed to open database for update: {}", e),
             }
+        });
+    }
+
+    /// Spawn a background source sync for every enabled music source.
+    ///
+    /// Each source is pinged first; on success the catalog is synced into the
+    /// database via `rmpd_source::sync_source`. Sources that fail ping are
+    /// skipped (cached rows are kept intact). Emits `DatabaseUpdateStarted` /
+    /// `DatabaseUpdateFinished` idle events so waiting clients wake up.
+    /// Does nothing when no sources are configured or the database is absent.
+    pub fn spawn_source_sync(&self) {
+        let db_path = match self.db_path.clone() {
+            Some(p) => p,
+            None => return,
+        };
+        let sources = self.sources.clone();
+        if sources.is_empty() {
+            return;
+        }
+        let event_bus = self.event_bus.clone();
+
+        tokio::spawn(async move {
+            event_bus.emit(rmpd_core::event::Event::DatabaseUpdateStarted);
+            for source in sources.iter() {
+                let scheme = source.scheme().to_owned();
+                let name = source.name().to_owned();
+                match source.ping().await {
+                    Ok(()) => {
+                        tracing::info!("syncing music source '{}://{}'", scheme, name);
+                        match rmpd_source::sync_source(source, &db_path).await {
+                            Ok(count) => {
+                                tracing::info!(
+                                    "music source '{}://{}' synced {} songs",
+                                    scheme, name, count
+                                );
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    "music source '{}://{}' sync error: {}",
+                                    scheme, name, e
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "music source '{}://{}' ping failed, skipping sync: {}",
+                            scheme, name, e
+                        );
+                    }
+                }
+            }
+            event_bus.emit(rmpd_core::event::Event::DatabaseUpdateFinished);
         });
     }
 

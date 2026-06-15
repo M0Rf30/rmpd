@@ -136,21 +136,49 @@ pub fn update_next_song(
             });
 }
 
-/// Prepare a song for playback by resolving its path to an absolute path.
-/// Returns a PlaybackSong that shares the song via Arc and includes the resolved
-/// path plus an optional playback range (CUE virtual tracks / `rangeid`).
-pub fn prepare_song_for_playback(
+/// Prepare a song for playback by resolving its path.
+///
+/// When `song.path` is a virtual URI owned by a live music source (e.g.
+/// `subsonic://home/…/id`), the path is resolved to a directly-playable
+/// `http(s)://` stream URL via the source registry. All other paths
+/// (local files or plain `http(s)://` radio streams) are left unchanged.
+///
+/// Returns a `PlaybackSong` with the resolved path and an optional playback
+/// range (CUE virtual tracks / `rangeid`).  Errors when the owning source
+/// cannot resolve the URI (unreachable server, unknown id).
+pub async fn prepare_song_for_playback(
     song: &rmpd_core::song::Song,
     music_dir: Option<&str>,
     range: Option<(f64, f64)>,
-) -> rmpd_core::playback::PlaybackSong {
+    sources: &std::sync::Arc<rmpd_source::SourceRegistry>,
+) -> Result<rmpd_core::playback::PlaybackSong, rmpd_source::SourceError> {
     use std::sync::Arc;
-    let resolved_path = resolve_path(song.path.as_str(), music_dir).into();
-    rmpd_core::playback::PlaybackSong {
+    let resolved_path: String = if rmpd_core::path::is_uri(song.path.as_str()) {
+        // Check whether a live source owns this scheme.
+        if let Some((scheme, _rest)) = song.path.as_str().split_once("://")
+            && sources.is_source_scheme(scheme)
+        {
+            // Spawn the resolution onto a Tokio task so the non-Sync
+            // async_trait future does not poison the outer future with a
+            // non-Sync bound (required by the MPRIS interface).
+            let sources = sources.clone();
+            let path = song.path.as_str().to_owned();
+            tokio::spawn(async move { sources.resolve_stream_uri(&path).await })
+                .await
+                .map_err(|e| {
+                    rmpd_source::SourceError::Protocol(format!("resolve task panicked: {e}"))
+                })?? // JoinError then SourceError
+        } else {
+            resolve_path(song.path.as_str(), music_dir)
+        }
+    } else {
+        resolve_path(song.path.as_str(), music_dir)
+    };
+    Ok(rmpd_core::playback::PlaybackSong {
         song: Arc::new(song.clone()),
-        resolved_path,
+        resolved_path: resolved_path.into(),
         range,
-    }
+    })
 }
 
 pub use rmpd_core::path::resolve_path;

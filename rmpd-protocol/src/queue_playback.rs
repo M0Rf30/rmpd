@@ -180,7 +180,20 @@ impl QueuePlaybackManager {
             }
 
             // Play the next song
-            let playback_song = prepare_song_for_playback(&song, state.music_dir.as_deref(), range);
+            let playback_song = match prepare_song_for_playback(
+                &song,
+                state.music_dir.as_deref(),
+                range,
+                &state.sources,
+            )
+            .await
+            {
+                Ok(ps) => ps,
+                Err(e) => {
+                    tracing::error!("failed to resolve next song: {}", e);
+                    return Ok(());
+                }
+            };
             match state.engine.write().await.play(playback_song).await {
                 Ok(_) => {
                     let mut status = state.status.write().await;
@@ -277,16 +290,25 @@ impl QueuePlaybackManager {
                 // eligible for the in-thread gapless/crossfade look-ahead, which
                 // doesn't seek/limit. They fall back to the SongFinished path,
                 // where play() honors the range.
-                Some(np) => queue
-                    .get(np)
-                    .filter(|item| item.range.is_none())
-                    .map(|item| {
-                        prepare_song_for_playback(
+                Some(np) => match queue.get(np).filter(|item| item.range.is_none()) {
+                    Some(item) => {
+                        match prepare_song_for_playback(
                             &(*item.song).clone(),
                             state.music_dir.as_deref(),
                             item.range,
+                            &state.sources,
                         )
-                    }),
+                        .await
+                        {
+                            Ok(ps) => Some(ps),
+                            Err(e) => {
+                                tracing::warn!("failed to resolve look-ahead song: {}", e);
+                                None
+                            }
+                        }
+                    }
+                    None => None,
+                },
                 None => None,
             }
         };
