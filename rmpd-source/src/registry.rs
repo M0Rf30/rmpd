@@ -35,9 +35,7 @@ pub fn create_source(cfg: &SourceConfig) -> Result<Box<dyn MusicSource>, SourceE
         .iter()
         .find(|(name, _)| *name == ty)
         .map(|(_, factory)| factory(cfg))
-        .unwrap_or_else(|| {
-            Err(SourceError::Config(format!("unknown source type: {ty}")))
-        })
+        .unwrap_or_else(|| Err(SourceError::Config(format!("unknown source type: {ty}"))))
 }
 
 #[cfg(test)]

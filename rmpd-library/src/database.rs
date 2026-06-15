@@ -299,28 +299,28 @@ impl Database {
                 |row| row.get(0),
             )
             .optional()?;
-        if let Some(sql) = fts_sql {
-            if !sql.contains("contentless_delete") {
-                self.conn.execute_batch(
-                    "BEGIN;
-                     DROP TRIGGER IF EXISTS songs_fts_delete;
-                     DROP TABLE IF EXISTS songs_fts;",
-                )?;
-                self.conn.execute(SONGS_FTS_CREATE_SQL, [])?;
-                self.conn.execute(SONGS_FTS_DELETE_TRIGGER_SQL, [])?;
-                // Rebuild from song_tags: re-run the canonical per-song FTS insert for
-                // every song. The table is freshly empty, so each insert's rowid-only
-                // pre-delete is a harmless no-op.
-                let ids: Vec<i64> = {
-                    let mut stmt = self.conn.prepare("SELECT id FROM songs")?;
-                    stmt.query_map([], |row| row.get(0))?
-                        .collect::<std::result::Result<Vec<_>, _>>()?
-                };
-                for id in ids {
-                    self.update_fts_for_song(id as u64)?;
-                }
-                self.conn.execute_batch("COMMIT;")?;
+        if let Some(sql) = fts_sql
+            && !sql.contains("contentless_delete")
+        {
+            self.conn.execute_batch(
+                "BEGIN;
+                 DROP TRIGGER IF EXISTS songs_fts_delete;
+                 DROP TABLE IF EXISTS songs_fts;",
+            )?;
+            self.conn.execute(SONGS_FTS_CREATE_SQL, [])?;
+            self.conn.execute(SONGS_FTS_DELETE_TRIGGER_SQL, [])?;
+            // Rebuild from song_tags: re-run the canonical per-song FTS insert for
+            // every song. The table is freshly empty, so each insert's rowid-only
+            // pre-delete is a harmless no-op.
+            let ids: Vec<i64> = {
+                let mut stmt = self.conn.prepare("SELECT id FROM songs")?;
+                stmt.query_map([], |row| row.get(0))?
+                    .collect::<std::result::Result<Vec<_>, _>>()?
+            };
+            for id in ids {
+                self.update_fts_for_song(id as u64)?;
             }
+            self.conn.execute_batch("COMMIT;")?;
         }
 
         Ok(())
@@ -1115,8 +1115,10 @@ impl Database {
     }
 
     pub fn delete_song_by_path(&self, path: &str) -> Result<()> {
-        self.conn
-            .execute("DELETE FROM songs WHERE path = ?1 AND source IS NULL", params![path])?;
+        self.conn.execute(
+            "DELETE FROM songs WHERE path = ?1 AND source IS NULL",
+            params![path],
+        )?;
         Ok(())
     }
 
@@ -1180,9 +1182,7 @@ impl Database {
         // Parse "scheme://authority/seg1/.../id" → leaf dir path = "scheme://authority/seg1/...".
         // The scheme+authority forms the first virtual directory level.
         let path_str = song.path.as_str();
-        let (scheme, after_scheme) = path_str
-            .split_once("://")
-            .unwrap_or(("source", path_str));
+        let (scheme, after_scheme) = path_str.split_once("://").unwrap_or(("source", path_str));
         let segments: Vec<&str> = after_scheme.split('/').collect();
         let authority = segments.first().copied().unwrap_or("unknown");
 

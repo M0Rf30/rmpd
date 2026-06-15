@@ -32,14 +32,9 @@ async fn save_emits_stored_playlist_notification() {
     assert!(resp.contains("OK"), "save should succeed, got: {resp}");
 
     let mut got = false;
-    loop {
-        match rx.try_recv() {
-            Ok(ev) => {
-                if matches!(ev, Event::StoredPlaylistChanged) {
-                    got = true;
-                }
-            }
-            Err(_) => break,
+    while let Ok(ev) = rx.try_recv() {
+        if matches!(ev, Event::StoredPlaylistChanged) {
+            got = true;
         }
     }
 

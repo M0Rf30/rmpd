@@ -8,13 +8,13 @@
 //! `sync_source` (PR5 catalog-sync integration) is intentionally absent here.
 
 pub mod filesystem;
+pub mod registry;
 #[cfg(feature = "subsonic")]
 pub mod subsonic;
-pub mod registry;
 
 // Re-export the SPI types so callers only need to depend on `rmpd-source`.
+pub use registry::{SOURCE_PLUGINS, SourceFactory, create_source};
 pub use rmpd_plugin::source::{MusicSource, SourceEntry, SourceError, SourceResult};
-pub use registry::{SourceFactory, SOURCE_PLUGINS, create_source};
 
 use rmpd_core::config::SourceConfig;
 use tracing::warn;
@@ -96,9 +96,7 @@ impl SourceRegistry {
             .find(|s| s.scheme() == scheme && s.name() == authority)
             .map(|s| s.as_ref())
             .ok_or_else(|| {
-                SourceError::NotFound(format!(
-                    "no source for {scheme}://{authority}"
-                ))
+                SourceError::NotFound(format!("no source for {scheme}://{authority}"))
             })?;
         // The remote id is the trailing path segment.
         let id = path.rsplit('/').next().unwrap_or(path);
@@ -131,7 +129,8 @@ pub async fn sync_source(source: &dyn MusicSource, db_path: &str) -> Result<usiz
     tokio::task::spawn_blocking(move || -> Result<usize, SourceError> {
         let db = rmpd_library::Database::open(&db_path)
             .map_err(|e| SourceError::Protocol(format!("failed to open database: {e}")))?;
-        let _old = db.clear_source(&token)
+        let _old = db
+            .clear_source(&token)
             .map_err(|e| SourceError::Protocol(format!("clear_source: {e}")))?;
         for song in &songs {
             db.add_source_song(song, &token)

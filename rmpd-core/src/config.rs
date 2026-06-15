@@ -595,7 +595,10 @@ max_bitrate = 320
             sources[0].setting_str("url").as_deref(),
             Some("https://music.example.com")
         );
-        assert_eq!(sources[0].setting_str("max_bitrate").as_deref(), Some("320"));
+        assert_eq!(
+            sources[0].setting_str("max_bitrate").as_deref(),
+            Some("320")
+        );
     }
 
     #[test]
@@ -610,9 +613,8 @@ max_bitrate = 320
             #[serde(default)]
             source: Vec<SourceConfig>,
         }
-        let w: Wrapper = toml::from_str("[dummy]\nx = 1\n").unwrap_or(Wrapper {
-            source: Vec::new(),
-        });
+        let w: Wrapper =
+            toml::from_str("[dummy]\nx = 1\n").unwrap_or(Wrapper { source: Vec::new() });
         assert!(w.source.is_empty());
     }
 

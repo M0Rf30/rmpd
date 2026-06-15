@@ -414,10 +414,7 @@ fn test_get_song_by_path() {
 // ── Source-column tests (no FFmpeg required) ────────────────────────────────
 
 /// Build a minimal Song with a virtual path and optional title tag.
-fn make_virtual_song(
-    virtual_path: &str,
-    title: &str,
-) -> rmpd_core::song::Song {
+fn make_virtual_song(virtual_path: &str, title: &str) -> rmpd_core::song::Song {
     rmpd_core::song::Song {
         id: 0,
         path: virtual_path.into(),
@@ -446,7 +443,11 @@ fn make_local_song(path: &str) -> rmpd_core::song::Song {
 #[test]
 fn test_source_column_migration_idempotent() {
     let temp_dir = tempfile::TempDir::new().unwrap();
-    let db_path = temp_dir.path().join("idem.db").to_string_lossy().to_string();
+    let db_path = temp_dir
+        .path()
+        .join("idem.db")
+        .to_string_lossy()
+        .to_string();
 
     // First open: schema created fresh, migration runs (no-op for source since
     // the column is in the CREATE TABLE).
@@ -529,7 +530,9 @@ fn test_clear_source_leaves_local_songs() {
 
     // Local song must survive
     assert_eq!(db.count_songs().unwrap(), 1);
-    let local_check = db.get_song_by_path("music/artist/album/local.flac").unwrap();
+    let local_check = db
+        .get_song_by_path("music/artist/album/local.flac")
+        .unwrap();
     assert!(local_check.is_some(), "local song was incorrectly deleted");
 }
 
@@ -580,11 +583,19 @@ fn test_search_after_delete_no_fts_corruption() {
     db.delete_song_by_path("music/a/dropbeta.flac").unwrap();
     let cleared = db.clear_source("subsonic:srv").unwrap();
     assert_eq!(cleared, 2, "expected 2 remote songs cleared, got {cleared}");
-    assert_eq!(db.count_songs().unwrap(), 1, "only the kept local song remains");
+    assert_eq!(
+        db.count_songs().unwrap(),
+        1,
+        "only the kept local song remains"
+    );
 
     // Survivor still matches; deleted/cleared rows return nothing.
     let survivors = db.search_songs("keepalpha").unwrap();
-    assert_eq!(survivors.len(), 1, "surviving local song must still be searchable");
+    assert_eq!(
+        survivors.len(),
+        1,
+        "surviving local song must still be searchable"
+    );
     assert_eq!(survivors[0].path.as_str(), "music/a/keepalpha.flac");
     assert!(
         db.search_songs("dropbeta").unwrap().is_empty(),
@@ -683,7 +694,11 @@ fn test_fts_contentless_delete_migration_from_legacy_db() {
 
     // The index was rebuilt from song_tags: both legacy songs are searchable.
     let alpha = db.search_songs("legacalpha").unwrap();
-    assert_eq!(alpha.len(), 1, "rebuilt index must return the first legacy song");
+    assert_eq!(
+        alpha.len(),
+        1,
+        "rebuilt index must return the first legacy song"
+    );
     assert_eq!(alpha[0].path.as_str(), "music/legacone.flac");
     assert_eq!(db.search_songs("legacbeta").unwrap().len(), 1);
 
@@ -695,7 +710,11 @@ fn test_fts_contentless_delete_migration_from_legacy_db() {
         "deleted legacy song must not match after migration"
     );
     let beta = db.search_songs("legacbeta").unwrap();
-    assert_eq!(beta.len(), 1, "surviving legacy song must remain searchable");
+    assert_eq!(
+        beta.len(),
+        1,
+        "surviving legacy song must remain searchable"
+    );
     assert_eq!(beta[0].path.as_str(), "music/legactwo.flac");
 
     // Re-opening is idempotent: the guard now sees contentless_delete and the

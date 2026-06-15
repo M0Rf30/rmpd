@@ -1,8 +1,8 @@
-use std::sync::Arc;
 use rmpd_core::config::Config;
 use rmpd_core::error::Result;
 use rmpd_core::state::PlayerState;
 use rmpd_protocol::{AppState, MpdServer, StateFile};
+use std::sync::Arc;
 use tokio::signal;
 use tracing::{error, info, warn};
 
@@ -291,20 +291,21 @@ async fn restore_state(
                         position, play_state
                     );
 
-                    let playback_song = match rmpd_protocol::commands::utils::prepare_song_for_playback(
-                        &song,
-                        Some(music_dir),
-                        range,
-                        &state.sources,
-                    )
-                    .await
-                    {
-                        Ok(ps) => ps,
-                        Err(e) => {
-                            warn!("failed to resolve song during state restore: {}", e);
-                            return;
-                        }
-                    };
+                    let playback_song =
+                        match rmpd_protocol::commands::utils::prepare_song_for_playback(
+                            &song,
+                            Some(music_dir),
+                            range,
+                            &state.sources,
+                        )
+                        .await
+                        {
+                            Ok(ps) => ps,
+                            Err(e) => {
+                                warn!("failed to resolve song during state restore: {}", e);
+                                return;
+                            }
+                        };
 
                     // Set current song immediately
                     let mut status = state.status.write().await;

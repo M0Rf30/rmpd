@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use camino::Utf8PathBuf;
 use opensubsonic::{Auth, Client, Error as SubsonicError, SubsonicApiError};
 use rmpd_core::config::SourceConfig;
-use rmpd_core::song::{intern_tag_key, Song};
+use rmpd_core::song::{Song, intern_tag_key};
 use rmpd_plugin::source::{MusicSource, SourceEntry, SourceError, SourceResult};
 
 // ─── Percent-encoding helper ─────────────────────────────────────────────────
@@ -41,7 +41,7 @@ pub fn map_err(e: SubsonicError) -> SourceError {
             // 40 WrongCredentials, 41 TokenAuthNotSupported,
             // 42 AuthMechanismNotSupported, 43 ConflictingAuthentication,
             // 44 InvalidApiKey
-            40 | 41 | 42 | 43 | 44 => SourceError::Auth(message),
+            40..=44 => SourceError::Auth(message),
             _ => SourceError::Protocol(message),
         },
         SubsonicError::Url(e) => SourceError::Protocol(e.to_string()),
@@ -276,9 +276,7 @@ impl MusicSource for SubsonicSource {
                 .index
                 .iter()
                 .flat_map(|idx| idx.artist.iter())
-                .map(|a| {
-                    SourceEntry::Dir(format!("subsonic://{}/{}", self.name, enc(&a.name)))
-                })
+                .map(|a| SourceEntry::Dir(format!("subsonic://{}/{}", self.name, enc(&a.name))))
                 .collect();
             Ok(entries)
         } else {

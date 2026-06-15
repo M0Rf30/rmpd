@@ -237,13 +237,17 @@ impl AppState {
                             Ok(count) => {
                                 tracing::info!(
                                     "music source '{}://{}' synced {} songs",
-                                    scheme, name, count
+                                    scheme,
+                                    name,
+                                    count
                                 );
                             }
                             Err(e) => {
                                 tracing::warn!(
                                     "music source '{}://{}' sync error: {}",
-                                    scheme, name, e
+                                    scheme,
+                                    name,
+                                    e
                                 );
                             }
                         }
@@ -251,7 +255,9 @@ impl AppState {
                     Err(e) => {
                         tracing::warn!(
                             "music source '{}://{}' ping failed, skipping sync: {}",
-                            scheme, name, e
+                            scheme,
+                            name,
+                            e
                         );
                     }
                 }

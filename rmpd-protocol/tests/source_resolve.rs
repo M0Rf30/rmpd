@@ -8,7 +8,7 @@
 //!       the update handler.
 
 use async_trait::async_trait;
-use rmpd_source::{MusicSource, SourceEntry, SourceError, SourceResult, SourceRegistry};
+use rmpd_source::{MusicSource, SourceEntry, SourceError, SourceRegistry, SourceResult};
 use std::sync::Arc;
 
 // ─── Stub MusicSource ─────────────────────────────────────────────────────────
@@ -99,7 +99,10 @@ fn test_song(path: &str) -> rmpd_core::song::Song {
 #[tokio::test]
 async fn resolve_virtual_path_substitutes_stream_url() {
     let registry = Arc::new(stub_registry(
-        "home", "subsonic", Some("https://stream.example"), false,
+        "home",
+        "subsonic",
+        Some("https://stream.example"),
+        false,
     ));
     let song = test_song("subsonic://home/Artist/Album/remote-id-42");
 
@@ -110,7 +113,9 @@ async fn resolve_virtual_path_substitutes_stream_url() {
     assert!(result.is_ok());
     let ps = result.unwrap();
     assert!(
-        ps.resolved_path.as_str().starts_with("https://stream.example/"),
+        ps.resolved_path
+            .as_str()
+            .starts_with("https://stream.example/"),
         "expected resolved path to start with stub URL, got '{}'",
         ps.resolved_path
     );
@@ -125,11 +130,13 @@ async fn local_path_passes_through_unchanged() {
     let registry = Arc::new(stub_registry("home", "subsonic", None, false));
     let song = test_song("Music/Artist/Album/track.flac");
 
-    let result =
-        rmpd_protocol::commands::utils::prepare_song_for_playback(
-            &song, Some("/srv/media"), None, &registry,
-        )
-        .await;
+    let result = rmpd_protocol::commands::utils::prepare_song_for_playback(
+        &song,
+        Some("/srv/media"),
+        None,
+        &registry,
+    )
+    .await;
 
     assert!(result.is_ok());
     let ps = result.unwrap();

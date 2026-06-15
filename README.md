@@ -19,7 +19,7 @@
 - 🎼 **Format Support** - FLAC, MP3, Ogg Vorbis, WAV, AAC, DSD (DoP and native)
 - 🏠 **Multi-Room** - Plays to all enabled outputs at once; stream over HTTP (`httpd` output) or feed an external Snapcast server via FIFO
 - 🖥️ **Desktop Integration** - Native MPRIS D-Bus interface (media keys, `playerctl`, GNOME/KDE) plus mDNS auto-discovery
-- 📱 **Multi-Protocol** - MPD and OpenSubsonic support (planned)
+- 🌐 **Remote Libraries** - Browse and stream from OpenSubsonic servers (Navidrome, Airsonic, gonic) as a music source, built behind the `subsonic` Cargo feature
 - ⚡ **Efficient** - Runs on everything from Raspberry Pi to high-end servers
 
 ## Architecture
@@ -122,6 +122,36 @@ path = "/tmp/snapfifo"
 ```
 
 See [rmpd.toml](rmpd.toml) for a complete configuration example.
+
+### Music Sources (OpenSubsonic)
+
+rmpd can aggregate a remote [OpenSubsonic](https://opensubsonic.netlify.app/)
+server (Navidrome, Airsonic, gonic, …) into its library as a *music source*.
+The remote catalog is synced into the database at startup and on `update`, and
+tracks stream on demand through the same HTTP path used for internet radio — so
+any MPD client browses and plays them like local files (under virtual paths such
+as `subsonic://home/Artist/Album/<id>`).
+
+Build with the `subsonic` feature, then add one or more `[[source]]` blocks:
+
+```bash
+cargo build --release --features subsonic
+```
+
+```toml
+[[source]]
+name = "home"                      # becomes the source's virtual-path authority
+type = "subsonic"
+enabled = true
+url = "https://music.example.com"
+username = "alice"
+password = "secret"                # or use `api_key = "..."` instead
+# max_bitrate = 320                 # optional server-side transcode cap (kbps)
+# format = "mp3"                    # optional transcode target ("raw" = no transcode)
+```
+
+Credentials are never written to logs. An unreachable server is skipped at
+startup without aborting (previously-synced tracks remain browsable).
 
 ## Desktop Integration (MPRIS)
 

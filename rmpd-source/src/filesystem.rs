@@ -23,13 +23,9 @@ pub struct FilesystemSource {
 // ─── Factory ─────────────────────────────────────────────────────────────────
 
 /// Sync, no-I/O factory registered in `SOURCE_PLUGINS`.
-pub fn filesystem_source_factory(
-    cfg: &SourceConfig,
-) -> Result<Box<dyn MusicSource>, SourceError> {
+pub fn filesystem_source_factory(cfg: &SourceConfig) -> Result<Box<dyn MusicSource>, SourceError> {
     let music_dir = cfg.setting_str("music_directory").ok_or_else(|| {
-        SourceError::Config(
-            "filesystem source requires a `music_directory` setting".to_owned(),
-        )
+        SourceError::Config("filesystem source requires a `music_directory` setting".to_owned())
     })?;
     let db_path = cfg.setting_str("db").ok_or_else(|| {
         SourceError::Config("filesystem source requires a `db` setting".to_owned())
@@ -56,16 +52,14 @@ impl MusicSource for FilesystemSource {
     /// Checks that `music_dir` exists and is a directory.
     async fn ping(&self) -> SourceResult<()> {
         let dir = self.music_dir.clone();
-        tokio::task::spawn_blocking(move || {
-            match std::fs::metadata(dir.as_str()) {
-                Ok(m) if m.is_dir() => Ok(()),
-                Ok(_) => Err(SourceError::Unreachable(format!(
-                    "music_directory exists but is not a directory: {dir}"
-                ))),
-                Err(e) => Err(SourceError::Unreachable(format!(
-                    "music_directory not accessible ({e}): {dir}"
-                ))),
-            }
+        tokio::task::spawn_blocking(move || match std::fs::metadata(dir.as_str()) {
+            Ok(m) if m.is_dir() => Ok(()),
+            Ok(_) => Err(SourceError::Unreachable(format!(
+                "music_directory exists but is not a directory: {dir}"
+            ))),
+            Err(e) => Err(SourceError::Unreachable(format!(
+                "music_directory not accessible ({e}): {dir}"
+            ))),
         })
         .await
         .map_err(|e| SourceError::Protocol(format!("spawn_blocking panicked: {e}")))?
@@ -78,8 +72,7 @@ impl MusicSource for FilesystemSource {
         let db_path = self.db_path.clone();
         let dir = dir.to_owned();
         tokio::task::spawn_blocking(move || {
-            let db = Database::open(&db_path)
-                .map_err(|e| SourceError::Protocol(e.to_string()))?;
+            let db = Database::open(&db_path).map_err(|e| SourceError::Protocol(e.to_string()))?;
             let listing = db
                 .list_directory(&dir)
                 .map_err(|e| SourceError::Protocol(e.to_string()))?;
@@ -103,8 +96,7 @@ impl MusicSource for FilesystemSource {
     async fn list_all(&self) -> SourceResult<Vec<Song>> {
         let db_path = self.db_path.clone();
         tokio::task::spawn_blocking(move || {
-            let db = Database::open(&db_path)
-                .map_err(|e| SourceError::Protocol(e.to_string()))?;
+            let db = Database::open(&db_path).map_err(|e| SourceError::Protocol(e.to_string()))?;
             db.list_all_songs()
                 .map_err(|e| SourceError::Protocol(e.to_string()))
         })
@@ -117,8 +109,7 @@ impl MusicSource for FilesystemSource {
         let db_path = self.db_path.clone();
         let query = query.to_owned();
         tokio::task::spawn_blocking(move || {
-            let db = Database::open(&db_path)
-                .map_err(|e| SourceError::Protocol(e.to_string()))?;
+            let db = Database::open(&db_path).map_err(|e| SourceError::Protocol(e.to_string()))?;
             db.search_songs(&query)
                 .map_err(|e| SourceError::Protocol(e.to_string()))
         })
