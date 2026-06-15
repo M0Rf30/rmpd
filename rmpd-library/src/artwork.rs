@@ -86,6 +86,49 @@ impl AlbumArtExtractor {
         }
     }
 
+    /// Store externally-fetched artwork (e.g. from a remote music source such as
+    /// Subsonic) in the cache under `cache_key`, so subsequent chunked
+    /// [`get_artwork`](Self::get_artwork) calls serve it from cache without
+    /// re-fetching. The MIME type is inferred from the image magic bytes.
+    pub fn cache_external(&self, cache_key: &str, data: &[u8]) -> Result<()> {
+        if data.is_empty() {
+            return Ok(());
+        }
+        if data.len() > MAX_ARTWORK_SIZE {
+            return Err(RmpdError::Library(format!(
+                "Artwork too large: {} bytes (max {})",
+                data.len(),
+                MAX_ARTWORK_SIZE
+            )));
+        }
+        let mime_type = if data.starts_with(b"\xFF\xD8\xFF") {
+            "image/jpeg"
+        } else if data.starts_with(b"\x89PNG\r\n\x1a\n") {
+            "image/png"
+        } else if data.starts_with(b"GIF8") {
+            "image/gif"
+        } else if data.len() > 12 && &data[0..4] == b"RIFF" && &data[8..12] == b"WEBP" {
+            "image/webp"
+        } else {
+            "application/octet-stream"
+        };
+        let mut hasher = Sha256::new();
+        hasher.update(data);
+        let hash = hasher
+            .finalize()
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect::<String>();
+        self.db
+            .store_artwork(cache_key, "front", mime_type, data, &hash)
+    }
+
+    /// Whether artwork is already cached for `cache_key`.
+    #[must_use]
+    pub fn is_cached(&self, cache_key: &str) -> bool {
+        self.db.has_artwork(cache_key, "front").unwrap_or(false)
+    }
+
     /// Get album art from cache or extract if not cached
     /// `cache_key`: relative path for cache lookup (e.g., "01.m4a")
     /// `file_path`: absolute path for file reading (e.g., "/home/user/Music/01.m4a")

@@ -102,6 +102,26 @@ impl SourceRegistry {
         let id = path.rsplit('/').next().unwrap_or(path);
         source.resolve_stream_uri(id).await
     }
+
+    /// Fetch cover-art bytes for a virtual URI, using the trailing path segment
+    /// as the remote id. Returns `Ok(None)` when the URI is unowned or the
+    /// source has no art for it.
+    pub async fn cover_art(&self, virtual_uri: &str) -> SourceResult<Option<Vec<u8>>> {
+        let (scheme, authority, path) = match parse_virtual_uri(virtual_uri) {
+            Some(parts) => parts,
+            None => return Ok(None),
+        };
+        let Some(source) = self
+            .sources
+            .iter()
+            .find(|s| s.scheme() == scheme && s.name() == authority)
+            .map(|s| s.as_ref())
+        else {
+            return Ok(None);
+        };
+        let id = path.rsplit('/').next().unwrap_or(path);
+        source.cover_art(id).await
+    }
     /// Number of live sources.
     pub fn len(&self) -> usize {
         self.sources.len()

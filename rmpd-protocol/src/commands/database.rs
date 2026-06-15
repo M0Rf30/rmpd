@@ -457,6 +457,29 @@ pub async fn handle_albumart_command(state: &AppState, uri: &str, offset: usize)
         Err(e) => return Response::Text(e),
     };
 
+    // Source-backed virtual paths (e.g. subsonic://…): artwork is fetched from
+    // the source server (once) and cached locally — never read from a file.
+    if let Some((scheme, _)) = uri.split_once("://")
+        && state.sources.is_source_scheme(scheme)
+    {
+        let extractor = rmpd_library::AlbumArtExtractor::new(db);
+        if !extractor.is_cached(uri)
+            && let Ok(Some(bytes)) = state.sources.cover_art(uri).await
+        {
+            let _ = extractor.cache_external(uri, &bytes);
+        }
+        return match extractor.get_artwork(uri, "", offset) {
+            Ok(Some(artwork)) => {
+                let mut resp = ResponseBuilder::new();
+                resp.field("size", artwork.total_size);
+                resp.field("type", &artwork.mime_type);
+                resp.binary_field("binary", &artwork.data);
+                Response::Binary(resp.to_binary_response())
+            }
+            _ => Response::Text(ResponseBuilder::error(50, 0, "albumart", "No file exists")),
+        };
+    }
+
     // Resolve relative path to absolute path
     let absolute_path = if uri.starts_with('/') {
         // Already absolute
@@ -506,6 +529,29 @@ pub async fn handle_readpicture_command(state: &AppState, uri: &str, offset: usi
         Ok(d) => d,
         Err(e) => return Response::Text(e),
     };
+
+    // Source-backed virtual paths: serve the cached server cover art; "no art"
+    // is an empty OK (matching readpicture semantics), not an error.
+    if let Some((scheme, _)) = uri.split_once("://")
+        && state.sources.is_source_scheme(scheme)
+    {
+        let extractor = rmpd_library::AlbumArtExtractor::new(db);
+        if !extractor.is_cached(uri)
+            && let Ok(Some(bytes)) = state.sources.cover_art(uri).await
+        {
+            let _ = extractor.cache_external(uri, &bytes);
+        }
+        return match extractor.get_artwork(uri, "", offset) {
+            Ok(Some(artwork)) => {
+                let mut resp = ResponseBuilder::new();
+                resp.field("size", artwork.total_size);
+                resp.field("type", &artwork.mime_type);
+                resp.binary_field("binary", &artwork.data);
+                Response::Binary(resp.to_binary_response())
+            }
+            _ => Response::Text(ResponseBuilder::new().ok()),
+        };
+    }
 
     let absolute_path = if uri.starts_with('/') {
         uri.to_string()

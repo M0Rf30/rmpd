@@ -4,8 +4,8 @@
 //! No network I/O occurs at construction time; the client is validated lazily on `ping`.
 
 use async_trait::async_trait;
-use futures::StreamExt;
 use camino::Utf8PathBuf;
+use futures::StreamExt;
 use opensubsonic::{Auth, Client, Error as SubsonicError, SubsonicApiError};
 use rmpd_core::config::SourceConfig;
 use rmpd_core::song::{Song, intern_tag_key};
@@ -405,6 +405,25 @@ impl MusicSource for SubsonicSource {
             )
             .map(|u| u.to_string())
             .map_err(map_err)
+    }
+
+    /// Fetch cover art from the server via `getCoverArt`. Subsonic resolves a
+    /// song id to its album/track artwork. A missing/erroring art request is
+    /// treated as "no art" (`Ok(None)`) rather than a hard failure.
+    async fn cover_art(&self, song_id: &str) -> SourceResult<Option<Vec<u8>>> {
+        match self.client.get_cover_art(song_id, None).await {
+            Ok(bytes) if !bytes.is_empty() => Ok(Some(bytes.to_vec())),
+            Ok(_) => Ok(None),
+            Err(e) => {
+                tracing::debug!(
+                    "subsonic source '{}': no cover art for {} ({})",
+                    self.name,
+                    song_id,
+                    map_err(e)
+                );
+                Ok(None)
+            }
+        }
     }
 }
 

@@ -91,4 +91,13 @@ pub trait MusicSource: Send + Sync {
     /// Returns `String` (not `url::Url`) so `rmpd-plugin` never needs `url`
     /// or `reqwest`.
     async fn resolve_stream_uri(&self, song_id: &str) -> SourceResult<String>;
+
+    /// Fetch raw cover-art bytes for a song id (e.g. Subsonic `getCoverArt`).
+    ///
+    /// Default: `Ok(None)` — filesystem-backed sources serve embedded art via
+    /// the local extractor, so they need not implement this. Remote sources
+    /// override it; the caller caches the bytes and infers the MIME type.
+    async fn cover_art(&self, _song_id: &str) -> SourceResult<Option<Vec<u8>>> {
+        Ok(None)
+    }
 }
