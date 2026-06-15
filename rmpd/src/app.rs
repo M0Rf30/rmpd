@@ -26,8 +26,28 @@ pub async fn run(bind_address: String, config: Config) -> Result<()> {
         let mut engine = state.engine.write().await;
         engine.set_resampler_quality(config.audio.resampler_quality);
         engine.set_dop_mode(config.dop_mode());
+        engine.set_replay_gain(
+            config.audio.replay_gain,
+            config.audio.replay_gain_preamp,
+            config.audio.replay_gain_missing_preamp,
+        );
+        engine.set_volume_normalization(config.audio.volume_normalization);
+        engine.set_active_output(
+            config
+                .output
+                .iter()
+                .find(|o| o.enabled)
+                .cloned()
+                .unwrap_or_else(rmpd_core::config::OutputConfig::cpal_default),
+        );
     }
     rmpd_player::set_output_device(config.output_device());
+
+    // Build the protocol-visible output list from the [[output]] config blocks
+    // so `outputs`/`enableoutput`/`disableoutput` report the real configuration.
+    state
+        .set_outputs_from_config(&config.output, &config.audio.default_output)
+        .await;
 
     // Load state from file if it exists
     let state_file = StateFile::new(state_file_path.clone());
@@ -175,6 +195,29 @@ async fn restore_state(
         status.replay_gain_mode = saved_state.replay_gain_mode;
     }
 
+    // Restore per-output enabled state, then point the engine at the first
+    // still-enabled output.
+    if !saved_state.disabled_outputs.is_empty() {
+        let mut outputs = state.outputs.write().await;
+        for out in outputs.iter_mut() {
+            if saved_state.disabled_outputs.iter().any(|n| n == &out.name) {
+                out.enabled = false;
+            }
+        }
+    }
+    {
+        let first = {
+            let outputs = state.outputs.read().await;
+            outputs
+                .iter()
+                .find(|o| o.enabled)
+                .and_then(|o| o.config.clone())
+        };
+        if let Some(cfg) = first {
+            state.engine.write().await.set_active_output(cfg);
+        }
+    }
+
     // Restore playlist
     if !saved_state.playlist_paths.is_empty() {
         info!(
@@ -278,9 +321,17 @@ async fn restore_state(
 async fn save_state_on_shutdown(state: &AppState, state_file_path: &str) {
     let status = state.status.read().await;
     let queue = state.queue.read().await;
+    let disabled_outputs: Vec<String> = state
+        .outputs
+        .read()
+        .await
+        .iter()
+        .filter(|o| !o.enabled)
+        .map(|o| o.name.clone())
+        .collect();
 
     let state_file = StateFile::new(state_file_path.to_string());
-    if let Err(e) = state_file.save(&status, &queue).await {
+    if let Err(e) = state_file.save(&status, &queue, &disabled_outputs).await {
         error!("failed to save state: {}", e);
     }
 }

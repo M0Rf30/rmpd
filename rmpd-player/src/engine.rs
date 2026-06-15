@@ -2,11 +2,8 @@ use crate::audio_output::AudioOutput;
 use crate::decoder::SymphoniaDecoder;
 use crate::dop::DopEncoder;
 use crate::dop_output::DopOutput;
-use crate::fifo_output::FifoOutput;
 use crate::output::CpalOutput;
-use crate::pipe_output::PipeOutput;
-use crate::recorder_output::RecorderOutput;
-use rmpd_core::config::{DopMode, ResamplerQuality};
+use rmpd_core::config::{DopMode, OutputConfig, ReplayGainMode, ResamplerQuality};
 use rmpd_core::error::Result;
 use rmpd_core::event::{Event, EventBus};
 use rmpd_core::song::Song;
@@ -19,26 +16,6 @@ use std::thread;
 use std::time::Duration as StdDuration;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
-
-/// Selects which audio output backend to use.
-#[derive(Clone, Debug, Default)]
-pub enum PlayerOutputConfig {
-    /// Use the system audio device via cpal (default).
-    #[default]
-    Cpal,
-    /// Write raw s16le PCM to a named FIFO.
-    Fifo { path: String },
-    /// Write raw s16le PCM to the stdin of an external command.
-    Pipe { command: String },
-    /// Record audio to a WAV file.
-    Recorder { path: String },
-    /// Use the JACK audio server via cpal.
-    #[cfg(feature = "jack")]
-    Jack,
-    /// Use the ASIO audio host (Windows pro audio).
-    #[cfg(all(feature = "asio", target_os = "windows"))]
-    Asio,
-}
 
 const BUFFER_SIZE: usize = 4096;
 
@@ -89,7 +66,11 @@ pub struct PlaybackEngine {
     current_song: Arc<RwLock<Option<Song>>>,
     volume: Arc<AtomicU8>,
     command_tx: Option<mpsc::Sender<PlaybackCommand>>,
-    output_config: PlayerOutputConfig,
+    output: OutputConfig,
+    replay_gain_mode: ReplayGainMode,
+    replay_gain_preamp: f32,
+    replay_gain_missing_preamp: f32,
+    volume_normalization: bool,
     resampler_quality: ResamplerQuality,
     dop_mode: DopMode,
 }
@@ -109,14 +90,28 @@ impl PlaybackEngine {
             current_song: Arc::new(RwLock::new(None)),
             volume: Arc::new(AtomicU8::new(100)),
             command_tx: None,
-            output_config: PlayerOutputConfig::Cpal,
+            output: OutputConfig::cpal_default(),
+            replay_gain_mode: ReplayGainMode::default(),
+            replay_gain_preamp: 0.0,
+            replay_gain_missing_preamp: 0.0,
+            volume_normalization: false,
             resampler_quality: ResamplerQuality::default(),
             dop_mode: DopMode::default(),
         }
     }
 
-    pub fn set_output_config(&mut self, config: PlayerOutputConfig) {
-        self.output_config = config;
+    pub fn set_active_output(&mut self, output: OutputConfig) {
+        self.output = output;
+    }
+
+    pub fn set_replay_gain(&mut self, mode: ReplayGainMode, preamp: f32, missing_preamp: f32) {
+        self.replay_gain_mode = mode;
+        self.replay_gain_preamp = preamp;
+        self.replay_gain_missing_preamp = missing_preamp;
+    }
+
+    pub fn set_volume_normalization(&mut self, on: bool) {
+        self.volume_normalization = on;
     }
 
     /// Set the resampler quality used when the output device cannot natively
@@ -166,7 +161,14 @@ impl PlaybackEngine {
         let volume = self.volume.clone();
         let status_clone = self.status.clone();
         let atomic_state_clone = self.atomic_state.clone();
-        let output_config = self.output_config.clone();
+        let output = self.output.clone();
+        let gain_scale = Self::compute_gain_scale(
+            &playback_song.song,
+            self.replay_gain_mode,
+            self.replay_gain_preamp,
+            self.replay_gain_missing_preamp,
+            self.volume_normalization,
+        );
         let resampler_quality = self.resampler_quality;
         let dop_mode = self.dop_mode;
 
@@ -179,9 +181,10 @@ impl PlaybackEngine {
                 stop_flag,
                 volume,
                 command_rx,
-                output_config,
+                output,
                 resampler_quality,
                 dop_mode,
+                gain_scale,
             ) {
                 error!("playback error: {}", e);
             }
@@ -287,9 +290,10 @@ impl PlaybackEngine {
         stop_flag: Arc<AtomicBool>,
         volume: Arc<AtomicU8>,
         command_rx: mpsc::Receiver<PlaybackCommand>,
-        output_config: PlayerOutputConfig,
+        output: OutputConfig,
         resampler_quality: ResamplerQuality,
         dop_mode: DopMode,
+        gain_scale: f32,
     ) -> Result<()> {
         // Open decoder (pass-through mode by default)
         let mut decoder = SymphoniaDecoder::open(path)?;
@@ -360,7 +364,7 @@ impl PlaybackEngine {
 
         // Create output
         let mut output: Box<dyn AudioOutput> =
-            Self::create_output(format, &output_config, resampler_quality)?;
+            Self::create_output(format, &output, resampler_quality)?;
         output.start()?;
 
         // Playback loop
@@ -423,7 +427,7 @@ impl PlaybackEngine {
             // Apply volume (lock-free atomic read)
             let volume_factor = (volume.load(Ordering::Acquire) as f32) / 100.0;
             for sample in buffer[..samples_read].iter_mut() {
-                *sample *= volume_factor;
+                *sample *= volume_factor * gain_scale;
             }
 
             // Write to output
@@ -453,21 +457,48 @@ impl PlaybackEngine {
 
     fn create_output(
         format: rmpd_core::song::AudioFormat,
-        cfg: &PlayerOutputConfig,
+        cfg: &OutputConfig,
         quality: ResamplerQuality,
     ) -> Result<Box<dyn AudioOutput>> {
-        match cfg {
-            PlayerOutputConfig::Cpal => Ok(Box::new(CpalOutput::new(format, quality)?)),
-            PlayerOutputConfig::Fifo { path } => Ok(Box::new(FifoOutput::new(path.clone()))),
-            PlayerOutputConfig::Pipe { command } => Ok(Box::new(PipeOutput::new(command.clone()))),
-            PlayerOutputConfig::Recorder { path } => {
-                Ok(Box::new(RecorderOutput::new(path.clone(), format)))
-            }
-            #[cfg(feature = "jack")]
-            PlayerOutputConfig::Jack => Ok(Box::new(CpalOutput::new_jack(format)?)),
-            #[cfg(all(feature = "asio", target_os = "windows"))]
-            PlayerOutputConfig::Asio => Ok(Box::new(CpalOutput::new_asio(format)?)),
+        crate::output_registry::create_output(format, quality, cfg)
+    }
+
+    fn compute_gain_scale(
+        song: &Song,
+        mode: ReplayGainMode,
+        preamp: f32,
+        missing_preamp: f32,
+        normalization: bool,
+    ) -> f32 {
+        if mode == ReplayGainMode::Off {
+            return 1.0;
         }
+        let (gain_opt, peak_opt) = match mode {
+            ReplayGainMode::Off => unreachable!(),
+            ReplayGainMode::Track => (song.replay_gain_track_gain, song.replay_gain_track_peak),
+            ReplayGainMode::Album => (song.replay_gain_album_gain, song.replay_gain_album_peak),
+            ReplayGainMode::Auto => {
+                if song.replay_gain_album_gain.is_some() {
+                    (song.replay_gain_album_gain, song.replay_gain_album_peak)
+                } else {
+                    (song.replay_gain_track_gain, song.replay_gain_track_peak)
+                }
+            }
+        };
+        let (db, peak) = if let Some(gain) = gain_opt {
+            (gain + preamp, peak_opt)
+        } else {
+            (missing_preamp, None)
+        };
+        let mut scale = 10f32.powf(db / 20.0);
+        if normalization
+            && let Some(pk) = peak
+            && pk > 0.0
+            && scale * pk > 1.0
+        {
+            scale = 1.0 / pk;
+        }
+        scale
     }
 
     /// Build the DoP encoder and start the DoP output for `decoder`. Building and

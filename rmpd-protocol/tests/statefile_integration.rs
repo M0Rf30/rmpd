@@ -12,7 +12,7 @@ async fn save_and_load(
     let temp = TempStateFile::new_empty();
     let statefile = StateFile::new(temp.path_str());
 
-    statefile.save(status, queue).await?;
+    statefile.save(status, queue, &[]).await?;
     statefile
         .load()?
         .ok_or_else(|| rmpd_core::error::RmpdError::Library("No state loaded".to_string()))

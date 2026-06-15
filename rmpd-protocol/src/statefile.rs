@@ -17,7 +17,12 @@ impl StateFile {
     }
 
     /// Save current state to file
-    pub async fn save(&self, status: &PlayerStatus, queue: &Queue) -> Result<()> {
+    pub async fn save(
+        &self,
+        status: &PlayerStatus,
+        queue: &Queue,
+        disabled_outputs: &[String],
+    ) -> Result<()> {
         let mut content = String::new();
 
         // Volume (sw_volume for software volume)
@@ -67,6 +72,11 @@ impl StateFile {
             "replay_gain_mode: {}\n",
             status.replay_gain_mode.as_str()
         ));
+
+        // Output device states (only disabled ones; enabled is the default)
+        for name in disabled_outputs {
+            content.push_str(&format!("audio_device_state:0:{name}\n"));
+        }
 
         // Playlist
         content.push_str("playlist_begin\n");
@@ -176,6 +186,15 @@ impl StateFile {
                         "replay_gain_mode" => {
                             state.replay_gain_mode = ReplayGainMode::parse_mode(value);
                         }
+                        "audio_device_state" => {
+                            // value is "STATE:NAME" where NAME may contain ':'
+                            if let Some((state_str, name)) = value.split_once(':')
+                                && state_str == "0"
+                            {
+                                state.disabled_outputs.push(name.to_string());
+                            }
+                            // malformed or state "1" (enabled) → skip
+                        }
                         _ => {} // Ignore unknown keys
                     }
                 }
@@ -204,6 +223,7 @@ pub struct SavedState {
     pub mixramp_delay: f32,
     pub replay_gain_mode: ReplayGainMode,
     pub playlist_paths: Vec<String>,
+    pub disabled_outputs: Vec<String>,
 }
 
 #[cfg(test)]
@@ -252,7 +272,7 @@ mod tests {
             replay_gain_mode: ReplayGainMode::Off,
         };
 
-        statefile.save(&status, &queue).await.unwrap();
+        statefile.save(&status, &queue, &[]).await.unwrap();
 
         let loaded = statefile.load().unwrap().unwrap();
         assert_eq!(loaded.volume, 75);
@@ -298,7 +318,7 @@ mod tests {
             replay_gain_mode: ReplayGainMode::Off,
         };
 
-        statefile.save(&status, &queue).await.unwrap();
+        statefile.save(&status, &queue, &[]).await.unwrap();
         let loaded = statefile.load().unwrap().unwrap();
         assert_eq!(loaded.state, Some(PlayerState::Play));
         assert!(loaded.random);
@@ -311,13 +331,13 @@ mod tests {
 
         // Test Pause state
         status.state = PlayerState::Pause;
-        statefile.save(&status, &queue).await.unwrap();
+        statefile.save(&status, &queue, &[]).await.unwrap();
         let loaded = statefile.load().unwrap().unwrap();
         assert_eq!(loaded.state, Some(PlayerState::Pause));
 
         // Test Stop state
         status.state = PlayerState::Stop;
-        statefile.save(&status, &queue).await.unwrap();
+        statefile.save(&status, &queue, &[]).await.unwrap();
         let loaded = statefile.load().unwrap().unwrap();
         assert_eq!(loaded.state, Some(PlayerState::Stop));
     }
@@ -353,19 +373,19 @@ mod tests {
         };
 
         // Test SingleMode::Off
-        statefile.save(&status, &queue).await.unwrap();
+        statefile.save(&status, &queue, &[]).await.unwrap();
         let loaded = statefile.load().unwrap().unwrap();
         assert_eq!(loaded.single, SingleMode::Off);
 
         // Test SingleMode::On
         status.single = SingleMode::On;
-        statefile.save(&status, &queue).await.unwrap();
+        statefile.save(&status, &queue, &[]).await.unwrap();
         let loaded = statefile.load().unwrap().unwrap();
         assert_eq!(loaded.single, SingleMode::On);
 
         // Test SingleMode::Oneshot
         status.single = SingleMode::Oneshot;
-        statefile.save(&status, &queue).await.unwrap();
+        statefile.save(&status, &queue, &[]).await.unwrap();
         let loaded = statefile.load().unwrap().unwrap();
         assert_eq!(loaded.single, SingleMode::Oneshot);
     }
@@ -401,19 +421,19 @@ mod tests {
         };
 
         // Test ConsumeMode::Off
-        statefile.save(&status, &queue).await.unwrap();
+        statefile.save(&status, &queue, &[]).await.unwrap();
         let loaded = statefile.load().unwrap().unwrap();
         assert_eq!(loaded.consume, ConsumeMode::Off);
 
         // Test ConsumeMode::On
         status.consume = ConsumeMode::On;
-        statefile.save(&status, &queue).await.unwrap();
+        statefile.save(&status, &queue, &[]).await.unwrap();
         let loaded = statefile.load().unwrap().unwrap();
         assert_eq!(loaded.consume, ConsumeMode::On);
 
         // Test ConsumeMode::Oneshot
         status.consume = ConsumeMode::Oneshot;
-        statefile.save(&status, &queue).await.unwrap();
+        statefile.save(&status, &queue, &[]).await.unwrap();
         let loaded = statefile.load().unwrap().unwrap();
         assert_eq!(loaded.consume, ConsumeMode::Oneshot);
     }
@@ -448,7 +468,7 @@ mod tests {
             replay_gain_mode: ReplayGainMode::Off,
         };
 
-        statefile.save(&status, &queue).await.unwrap();
+        statefile.save(&status, &queue, &[]).await.unwrap();
         let loaded = statefile.load().unwrap().unwrap();
         assert_eq!(loaded.playlist_paths.len(), 0);
     }
@@ -487,7 +507,7 @@ mod tests {
             replay_gain_mode: ReplayGainMode::Off,
         };
 
-        statefile.save(&status, &queue).await.unwrap();
+        statefile.save(&status, &queue, &[]).await.unwrap();
         let loaded = statefile.load().unwrap().unwrap();
         assert_eq!(loaded.playlist_paths.len(), 1000);
         assert_eq!(loaded.playlist_paths[0], "/music/song0.mp3");
@@ -524,7 +544,7 @@ mod tests {
             replay_gain_mode: ReplayGainMode::Off,
         };
 
-        statefile.save(&status, &queue).await.unwrap();
+        statefile.save(&status, &queue, &[]).await.unwrap();
 
         // Verify temp file doesn't exist
         let temp_path = format!("{state_path}.tmp");
@@ -645,7 +665,7 @@ mod tests {
             replay_gain_mode: ReplayGainMode::Off,
         };
 
-        statefile.save(&status, &queue).await.unwrap();
+        statefile.save(&status, &queue, &[]).await.unwrap();
         let loaded = statefile.load().unwrap().unwrap();
         assert!(loaded.elapsed_seconds.is_some());
         let elapsed = loaded.elapsed_seconds.unwrap();
@@ -672,5 +692,54 @@ mod tests {
         assert_eq!(loaded.mixramp_db, 0.0);
         assert_eq!(loaded.mixramp_delay, 0.0);
         assert_eq!(loaded.playlist_paths.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_save_and_load_disabled_outputs() {
+        let temp_dir = TempDir::new().unwrap();
+        let state_path = temp_dir.path().join("state").to_str().unwrap().to_string();
+        let statefile = StateFile::new(state_path);
+
+        let queue = Queue::new();
+        let status = PlayerStatus {
+            volume: 100,
+            state: PlayerState::Stop,
+            current_song: None,
+            next_song: None,
+            elapsed: None,
+            duration: None,
+            bitrate: None,
+            audio_format: None,
+            random: false,
+            repeat: false,
+            single: SingleMode::Off,
+            consume: ConsumeMode::Off,
+            crossfade: 0,
+            mixramp_db: 0.0,
+            mixramp_delay: -1.0,
+            playlist_version: 1,
+            playlist_length: 0,
+            updating_db: None,
+            error: None,
+            replay_gain_mode: ReplayGainMode::Off,
+        };
+
+        // Persist two disabled outputs; one name contains a colon.
+        let disabled = vec!["Some Output".to_string(), "HDMI:Output 1".to_string()];
+        statefile.save(&status, &queue, &disabled).await.unwrap();
+
+        let loaded = statefile.load().unwrap().unwrap();
+        assert_eq!(loaded.disabled_outputs.len(), 2);
+        assert!(loaded.disabled_outputs.contains(&"Some Output".to_string()));
+        assert!(
+            loaded
+                .disabled_outputs
+                .contains(&"HDMI:Output 1".to_string())
+        );
+
+        // Enabled output should NOT appear in disabled_outputs.
+        statefile.save(&status, &queue, &[]).await.unwrap();
+        let loaded = statefile.load().unwrap().unwrap();
+        assert!(loaded.disabled_outputs.is_empty());
     }
 }

@@ -13,8 +13,6 @@ pub struct Config {
     #[serde(default)]
     pub decoder: DecoderConfig,
     #[serde(default)]
-    pub plugins: PluginConfig,
-    #[serde(default)]
     pub database: DatabaseConfig,
 }
 
@@ -104,20 +102,40 @@ pub struct OutputConfig {
     pub settings: toml::Table,
 }
 
+impl OutputConfig {
+    /// A synthesized default output (system audio via cpal). Used when no
+    /// `[[output]]` blocks are configured.
+    #[must_use]
+    pub fn cpal_default() -> Self {
+        Self {
+            name: "Default Output".to_owned(),
+            output_type: "cpal".to_owned(),
+            enabled: true,
+            settings: toml::Table::new(),
+        }
+    }
+
+    /// Look up a string-valued setting from the flattened `[[output]]` table,
+    /// trimmed and non-empty. Booleans/integers are stringified (for keys like
+    /// `dop`). Returns `None` when absent or empty.
+    #[must_use]
+    pub fn setting_str(&self, key: &str) -> Option<String> {
+        match self.settings.get(key) {
+            Some(toml::Value::String(s)) => {
+                let t = s.trim();
+                (!t.is_empty()).then(|| t.to_owned())
+            }
+            Some(toml::Value::Boolean(b)) => Some(b.to_string()),
+            Some(toml::Value::Integer(i)) => Some(i.to_string()),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
 pub struct DecoderConfig {
     #[serde(default = "default_enabled_decoders")]
     pub enabled: Vec<String>,
-}
-
-#[derive(Debug, Default, Clone, Deserialize, Serialize)]
-pub struct PluginConfig {
-    #[serde(default = "default_plugin_dirs")]
-    pub plugin_dirs: Vec<Utf8PathBuf>,
-    #[serde(default)]
-    pub enabled: Vec<String>,
-    #[serde(default)]
-    pub disabled: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
@@ -242,17 +260,6 @@ fn default_true() -> bool {
 
 fn default_enabled_decoders() -> Vec<String> {
     vec!["symphonia".to_owned()]
-}
-
-fn default_plugin_dirs() -> Vec<Utf8PathBuf> {
-    let mut dirs = Vec::new();
-    if let Some(config_dir) = dirs::config_dir()
-        && let Ok(path) = Utf8PathBuf::try_from(config_dir.join("rmpd/plugins"))
-    {
-        dirs.push(path);
-    }
-    dirs.push(Utf8PathBuf::from("/usr/lib/rmpd/plugins"));
-    dirs
 }
 
 fn default_cache_size() -> usize {
@@ -413,7 +420,6 @@ impl Default for Config {
             },
             output: vec![],
             decoder: DecoderConfig::default(),
-            plugins: PluginConfig::default(),
             database: DatabaseConfig::default(),
         }
     }

@@ -18,7 +18,9 @@ pub struct OutputInfo {
     pub name: String,
     pub plugin: String,
     pub enabled: bool,
-    pub partition: Option<String>, // Which partition owns this output
+    pub partition: Option<String>,
+    pub config: Option<rmpd_core::config::OutputConfig>,
+    pub attributes: std::collections::HashMap<String, String>,
 }
 
 /// Shared application state
@@ -68,13 +70,14 @@ impl AppState {
         ));
         let engine = PlaybackEngine::new(event_bus.clone(), status.clone(), atomic_state.clone());
 
-        // Create default output
         let default_output = OutputInfo {
             id: 0,
             name: "Default Output".to_string(),
             plugin: "cpal".to_string(),
             enabled: true,
             partition: Some("default".to_string()),
+            config: Some(rmpd_core::config::OutputConfig::cpal_default()),
+            attributes: std::collections::HashMap::new(),
         };
 
         // Initialize discovery service (may fail if mDNS not available)
@@ -189,6 +192,43 @@ impl AppState {
                 Err(e) => tracing::error!("failed to open database for update: {}", e),
             }
         });
+    }
+
+    pub async fn set_outputs_from_config(
+        &self,
+        outputs: &[rmpd_core::config::OutputConfig],
+        default_name: &str,
+    ) {
+        let built: Vec<OutputInfo> = if outputs.is_empty() {
+            vec![OutputInfo {
+                id: 0,
+                name: if default_name.is_empty() || default_name == "default" {
+                    "Default Output".to_string()
+                } else {
+                    default_name.to_string()
+                },
+                plugin: "cpal".to_string(),
+                enabled: true,
+                partition: Some("default".to_string()),
+                config: Some(rmpd_core::config::OutputConfig::cpal_default()),
+                attributes: std::collections::HashMap::new(),
+            }]
+        } else {
+            outputs
+                .iter()
+                .enumerate()
+                .map(|(i, c)| OutputInfo {
+                    id: i as u32,
+                    name: c.name.clone(),
+                    plugin: c.output_type.clone(),
+                    enabled: c.enabled,
+                    partition: Some("default".to_string()),
+                    config: Some(c.clone()),
+                    attributes: std::collections::HashMap::new(),
+                })
+                .collect()
+        };
+        *self.outputs.write().await = built;
     }
 }
 

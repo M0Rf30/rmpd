@@ -19,7 +19,10 @@ async fn simulate_restart(
     let statefile = StateFile::new(temp.path_str());
 
     // Save state before "shutdown"
-    statefile.save(initial_status, initial_queue).await.unwrap();
+    statefile
+        .save(initial_status, initial_queue, &[])
+        .await
+        .unwrap();
 
     // Simulate restart by creating a new StateFile instance
     let statefile_after_restart = StateFile::new(temp.path_str());
@@ -195,7 +198,7 @@ async fn test_multiple_restart_cycles() {
 
     // First save
     let statefile1 = StateFile::new(path.clone());
-    statefile1.save(&status, &queue).await.unwrap();
+    statefile1.save(&status, &queue, &[]).await.unwrap();
 
     // First load
     let statefile2 = StateFile::new(path.clone());
@@ -206,7 +209,7 @@ async fn test_multiple_restart_cycles() {
     status.volume = 60;
     queue.add(make_test_song("/music/new.mp3", 3));
     let statefile3 = StateFile::new(path.clone());
-    statefile3.save(&status, &queue).await.unwrap();
+    statefile3.save(&status, &queue, &[]).await.unwrap();
 
     // Load again
     let statefile4 = StateFile::new(path.clone());
@@ -289,7 +292,7 @@ async fn test_crash_recovery() {
         .build(2);
 
     let statefile = StateFile::new(path.clone());
-    statefile.save(&status, &queue).await.unwrap();
+    statefile.save(&status, &queue, &[]).await.unwrap();
 
     // Verify good state loads
     let statefile2 = StateFile::new(path.clone());

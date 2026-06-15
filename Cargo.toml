@@ -48,9 +48,6 @@ rusqlite = { version = "0.40", features = ["bundled"] }
 tantivy = "0.26"
 toml = "1.1"
 
-# Plugin System
-libloading = "0.9"
-abi_stable = "0.11"
 
 # Utilities
 clap = { version = "4", features = ["derive"] }
