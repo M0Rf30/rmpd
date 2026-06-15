@@ -145,6 +145,64 @@ fn read_cue_playlist(playlist_dir: &str, name: &str) -> Result<Vec<String>, Stri
     Ok(paths)
 }
 
+/// Parse a `.cue` sheet into virtual-track songs paired with playback ranges.
+/// Each track becomes a `Song` whose `path` is the referenced audio file plus
+/// CUE-derived tags (title/artist/album/albumartist/track), paired with its
+/// `(start, end)` range in seconds. A file's last track uses `end == start`
+/// to mean "play to the end of the file".
+fn read_cue_tracks(
+    playlist_dir: &str,
+    name: &str,
+) -> Result<Vec<(rmpd_core::song::Song, (f64, f64))>, String> {
+    use std::borrow::Cow;
+    let cue_path = Path::new(playlist_dir).join(format!("{name}.cue"));
+    let content = std::fs::read_to_string(&cue_path).map_err(|_| "No such playlist".to_string())?;
+    let mut out = Vec::new();
+    for t in rmpd_library::parse_cue(&content) {
+        let file_path = Path::new(&t.file);
+        let resolved = if file_path.is_absolute() {
+            file_path.to_path_buf()
+        } else {
+            Path::new(playlist_dir).join(file_path)
+        };
+        let mut tags: Vec<(Cow<'static, str>, String)> = Vec::new();
+        if let Some(v) = t.title {
+            tags.push((Cow::Borrowed("title"), v));
+        }
+        if let Some(v) = t.performer {
+            tags.push((Cow::Borrowed("artist"), v));
+        }
+        if let Some(v) = t.album {
+            tags.push((Cow::Borrowed("album"), v));
+        }
+        if let Some(v) = t.album_performer {
+            tags.push((Cow::Borrowed("albumartist"), v));
+        }
+        tags.push((Cow::Borrowed("track"), t.number.to_string()));
+        let duration = t
+            .end
+            .map(|e| std::time::Duration::from_secs_f64((e - t.start).max(0.0)));
+        let song = rmpd_core::song::Song {
+            id: 0,
+            path: camino::Utf8PathBuf::from(resolved.to_string_lossy().to_string()),
+            duration,
+            sample_rate: None,
+            channels: None,
+            bits_per_sample: None,
+            bitrate: None,
+            replay_gain_track_gain: None,
+            replay_gain_track_peak: None,
+            replay_gain_album_gain: None,
+            replay_gain_album_peak: None,
+            added_at: 0,
+            last_modified: 0,
+            tags,
+        };
+        out.push((song, (t.start, t.end.unwrap_or(t.start))));
+    }
+    Ok(out)
+}
+
 fn read_playlist(playlist_dir: &str, name: &str) -> Result<Vec<String>, String> {
     let path_m3u = std::path::Path::new(playlist_dir).join(format!("{name}.m3u"));
     let path_pls = std::path::Path::new(playlist_dir).join(format!("{name}.pls"));
@@ -329,6 +387,20 @@ pub async fn handle_load_command(
         }
     };
 
+    // A `.cue` sheet (when no higher-priority playlist of the same name exists)
+    // expands into virtual tracks with playback ranges instead of plain paths.
+    let cue_only = {
+        let p = |ext: &str| Path::new(&playlist_dir).join(format!("{name}.{ext}"));
+        p("cue").exists()
+            && !p("m3u").exists()
+            && !p("pls").exists()
+            && !p("xspf").exists()
+            && !p("asx").exists()
+    };
+    if cue_only {
+        return load_cue_virtual_tracks(state, &playlist_dir, name, range, position).await;
+    }
+
     let mut paths = match read_playlist(&playlist_dir, name) {
         Ok(p) => p,
         Err(e) => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "load", &e),
@@ -365,6 +437,43 @@ pub async fn handle_load_command(
             for song in songs {
                 queue.add(song);
             }
+        }
+    }
+
+    crate::helpers::update_playlist_version(state).await;
+    ResponseBuilder::new().ok()
+}
+
+/// Load a `.cue` sheet as virtual tracks: each track is added to the queue with
+/// its own playback range (start/end in seconds) so playback is restricted to
+/// that segment of the underlying audio file.
+async fn load_cue_virtual_tracks(
+    state: &AppState,
+    playlist_dir: &str,
+    name: &str,
+    range: Option<(u32, u32)>,
+    position: Option<u32>,
+) -> String {
+    let mut tracks = match read_cue_tracks(playlist_dir, name) {
+        Ok(t) => t,
+        Err(e) => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "load", &e),
+    };
+
+    if let Some((start, end)) = range {
+        let start = start as usize;
+        let end = (end as usize).min(tracks.len());
+        if start > tracks.len() || start > end {
+            return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "load", "Invalid range");
+        }
+        tracks = tracks[start..end].to_vec();
+    }
+
+    {
+        let mut queue = state.queue.write().await;
+        for (i, (song, song_range)) in tracks.into_iter().enumerate() {
+            let pos = position.map(|p| p + i as u32);
+            let id = queue.add_at(song, pos);
+            queue.set_range_by_id(id, Some(song_range));
         }
     }
 

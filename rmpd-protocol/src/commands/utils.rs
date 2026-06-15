@@ -137,16 +137,19 @@ pub fn update_next_song(
 }
 
 /// Prepare a song for playback by resolving its path to an absolute path.
-/// Returns a PlaybackSong that shares the song via Arc and includes the resolved path.
+/// Returns a PlaybackSong that shares the song via Arc and includes the resolved
+/// path plus an optional playback range (CUE virtual tracks / `rangeid`).
 pub fn prepare_song_for_playback(
     song: &rmpd_core::song::Song,
     music_dir: Option<&str>,
+    range: Option<(f64, f64)>,
 ) -> rmpd_core::playback::PlaybackSong {
     use std::sync::Arc;
     let resolved_path = resolve_path(song.path.as_str(), music_dir).into();
     rmpd_core::playback::PlaybackSong {
         song: Arc::new(song.clone()),
         resolved_path,
+        range,
     }
 }
 

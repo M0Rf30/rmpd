@@ -225,6 +225,7 @@ impl PlaybackEngine {
         let volume_normalization = self.volume_normalization;
         let mixramp_db = self.mixramp_db;
         let mixramp_delay = self.mixramp_delay;
+        let range = playback_song.range;
 
         let handle = thread::spawn(move || {
             if let Err(e) = Self::playback_thread(
@@ -249,6 +250,7 @@ impl PlaybackEngine {
                 volume_normalization,
                 mixramp_db,
                 mixramp_delay,
+                range,
             ) {
                 error!("playback error: {}", e);
             }
@@ -375,6 +377,7 @@ impl PlaybackEngine {
         volume_normalization: bool,
         mixramp_db: f32,
         mixramp_delay: f32,
+        range: Option<(f64, f64)>,
     ) -> Result<()> {
         // Shadow as mutable so per-song gain can be updated on in-thread advance.
         let mut gain_scale = gain_scale;
@@ -505,6 +508,28 @@ impl PlaybackEngine {
         // throttle tick while it is unchanged (remote streams only).
         let mut last_stream_title: Option<String> = None;
 
+        // Playback range (CUE virtual track / rangeid): seek to the start offset
+        // and compute the sample count after which the song ends. `None` plays
+        // the whole file. Range honoring is purely additive — when `range` is
+        // None nothing below changes.
+        let range_limit_samples: Option<u64> = match range {
+            Some((start, end)) => {
+                if start > 0.0
+                    && let Err(e) = decoder.seek(start)
+                {
+                    warn!("failed to seek to range start {start}s: {e}");
+                }
+                // An end at or before the start means "play to EOF" (CUE last
+                // track, or `rangeid id START:` with no end) — seek only.
+                let span = end - start;
+                if span > 0.0 {
+                    Some((span * samples_per_second as f64).round() as u64)
+                } else {
+                    None
+                }
+            }
+            None => None,
+        };
         // ── Outer song loop ───────────────────────────────────────────────────
         // Each iteration decodes one song.  An in-thread advance (gapless or
         // crossfade) breaks the inner buffer loop, updates `decoder`, and loops
@@ -802,6 +827,17 @@ impl PlaybackEngine {
                     }
                 }
 
+                // Range cutoff (CUE virtual track / rangeid): truncate the final
+                // chunk at the end boundary, then finish the song below.
+                let mut samples_read = samples_read;
+                let mut reached_range_end = false;
+                if let Some(limit) = range_limit_samples
+                    && total_samples_played + samples_read as u64 >= limit
+                {
+                    samples_read = limit.saturating_sub(total_samples_played) as usize;
+                    reached_range_end = true;
+                }
+
                 if samples_read < buffer.len() {
                     debug!(
                         "partial read: {} samples (buffer size: {})",
@@ -825,6 +861,12 @@ impl PlaybackEngine {
 
                 // Update elapsed time
                 total_samples_played += samples_read as u64;
+
+                if reached_range_end {
+                    debug!("reached range end at {total_samples_played} samples");
+                    event_bus.emit(Event::SongFinished);
+                    break 'song;
+                }
 
                 // Emit position update event every ~1 second of audio (throttled)
                 if total_samples_played % samples_per_second < (samples_read as u64) {

@@ -9,4 +9,7 @@ use std::sync::Arc;
 pub struct PlaybackSong {
     pub song: Arc<Song>,
     pub resolved_path: Utf8PathBuf,
+    /// Optional playback range `(start, end)` in seconds (CUE virtual tracks,
+    /// `rangeid`/`addid` ranges). `None` plays the whole file.
+    pub range: Option<(f64, f64)>,
 }

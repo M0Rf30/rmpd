@@ -333,9 +333,10 @@ pub async fn handle_playid_command(state: &AppState, id: Option<u32>) -> String 
         if let Some(item) = queue.get_by_id(song_id) {
             let song = (*item.song).clone();
             let position = item.position;
+            let range = item.range;
             drop(queue);
 
-            let playback_song = prepare_song_for_playback(&song, state.music_dir.as_deref());
+            let playback_song = prepare_song_for_playback(&song, state.music_dir.as_deref(), range);
 
             match state.engine.write().await.play(playback_song).await {
                 Ok(_) => {

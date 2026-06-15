@@ -38,9 +38,13 @@ pub async fn handle_play_command(state: &AppState, position: Option<u32>) -> Str
         }
     };
 
+    // Honor a per-item playback range (CUE virtual track / rangeid).
+    let range = actual_position
+        .and_then(|(p, _)| queue.get(p))
+        .and_then(|it| it.range);
     drop(queue);
 
-    let playback_song = prepare_song_for_playback(&song, state.music_dir.as_deref());
+    let playback_song = prepare_song_for_playback(&song, state.music_dir.as_deref(), range);
 
     match state.engine.write().await.play(playback_song).await {
         Ok(_) => {
@@ -154,10 +158,11 @@ pub async fn handle_next_command(state: &AppState) -> String {
     if let Some(item) = queue.get(next_pos) {
         let song = (*item.song).clone();
         let item_id = item.id;
+        let range = item.range;
         drop(queue);
         drop(status);
 
-        let playback_song = prepare_song_for_playback(&song, state.music_dir.as_deref());
+        let playback_song = prepare_song_for_playback(&song, state.music_dir.as_deref(), range);
 
         match state.engine.write().await.play(playback_song).await {
             Ok(_) => {
@@ -202,10 +207,11 @@ pub async fn handle_previous_command(state: &AppState) -> String {
     if let Some(item) = queue.get(prev_pos) {
         let song = (*item.song).clone();
         let item_id = item.id;
+        let range = item.range;
         drop(queue);
         drop(status);
 
-        let playback_song = prepare_song_for_playback(&song, state.music_dir.as_deref());
+        let playback_song = prepare_song_for_playback(&song, state.music_dir.as_deref(), range);
 
         match state.engine.write().await.play(playback_song).await {
             Ok(_) => {

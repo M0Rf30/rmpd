@@ -168,6 +168,7 @@ impl QueuePlaybackManager {
         if let Some(item) = queue.get(next_pos) {
             let song = (*item.song).clone();
             let item_id = item.id;
+            let range = item.range;
             drop(queue);
 
             // Handle consume mode (remove current song after playing)
@@ -179,7 +180,7 @@ impl QueuePlaybackManager {
             }
 
             // Play the next song
-            let playback_song = prepare_song_for_playback(&song, state.music_dir.as_deref());
+            let playback_song = prepare_song_for_playback(&song, state.music_dir.as_deref(), range);
             match state.engine.write().await.play(playback_song).await {
                 Ok(_) => {
                     let mut status = state.status.write().await;
@@ -272,9 +273,20 @@ impl QueuePlaybackManager {
             let queue = state.queue.read().await;
             match Self::lookahead_next_pos(current_pos, queue.len() as u32, repeat, random, single)
             {
-                Some(np) => queue.get(np).map(|item| {
-                    prepare_song_for_playback(&(*item.song).clone(), state.music_dir.as_deref())
-                }),
+                // Range-restricted songs (CUE virtual tracks / rangeid) are not
+                // eligible for the in-thread gapless/crossfade look-ahead, which
+                // doesn't seek/limit. They fall back to the SongFinished path,
+                // where play() honors the range.
+                Some(np) => queue
+                    .get(np)
+                    .filter(|item| item.range.is_none())
+                    .map(|item| {
+                        prepare_song_for_playback(
+                            &(*item.song).clone(),
+                            state.music_dir.as_deref(),
+                            item.range,
+                        )
+                    }),
                 None => None,
             }
         };

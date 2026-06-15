@@ -267,6 +267,7 @@ async fn restore_state(
         if let Some(item) = queue.get(position) {
             let song = (*item.song).clone();
             let song_id = item.id;
+            let range = item.range;
             drop(queue);
 
             // Check if we should auto-resume playback
@@ -282,6 +283,7 @@ async fn restore_state(
                     let playback_song = rmpd_protocol::commands::utils::prepare_song_for_playback(
                         &song,
                         Some(music_dir),
+                        range,
                     );
 
                     // Set current song immediately

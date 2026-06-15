@@ -34,8 +34,8 @@ rayon = "1.12"
 # Audio stack
 # Use remote Symphonia fork with DSD support
 symphonia = { git = "https://github.com/M0Rf30/Symphonia", rev = "e0649c9c77e6104a03ac99ce4600fef420b62478", features = ["all", "dsd"] }
-lofty = { git = "https://github.com/M0Rf30/lofty-rs", rev = "ae2411457c17c12338def0c5d42455832282279f" }
-cpal = { git = "https://github.com/RustAudio/cpal", rev = "94ecb6ec64546308885a59b38e29f938796e8100", default-features = false }
+lofty = { git = "https://github.com/M0Rf30/lofty-rs", rev = "bd7defe1d4f0408958787e4aa799dca11a71b90a" }
+cpal = { git = "https://github.com/RustAudio/cpal", rev = "a7f56fff9d9ae325a3c9c8c44194bc10eb60d7ee", default-features = false }
 rubato = "3.0"                   # High-quality (anti-aliased) sample-rate conversion
 audioadapter-buffers = "3.0"     # Buffer wrappers (InterleavedSlice) for rubato 3.x
 

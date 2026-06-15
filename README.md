@@ -213,7 +213,7 @@ See [CI.md](CI.md) for detailed CI/CD documentation.
   - Queue management (add, delete, move, shuffle)
   - Database queries (find, search, list)
   - Status and statistics
-  - Playlist management
+  - Playlist management (`.m3u`, `.pls`, XSPF/ASX; `.cue` sheets expand into range-restricted virtual tracks)
   - Output control
 
 - **Desktop Integration**
@@ -226,7 +226,6 @@ See [CI.md](CI.md) for detailed CI/CD documentation.
 - Gapless playback and crossfade / MixRamp (needs real-device validation)
 - Compressed stream encoders (FLAC / Opus / Vorbis) for the `httpd` output
 - Network storage backends (SMB / NFS) and Shoutcast v1 (`ICY 200 OK`) servers
-- `.cue` sheet playlists (`.m3u`, `.pls`, and XSPF already supported)
 - OpenSubsonic protocol support
 
 ## Compatibility
