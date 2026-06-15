@@ -1,0 +1,26 @@
+[package]
+name = "rmpd-source"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+# Placeholder — PR2 adds the opensubsonic dep and SubsonicSource here.
+subsonic = []
+
+[dependencies]
+rmpd-core.workspace = true
+rmpd-plugin.workspace = true
+rmpd-library.workspace = true
+async-trait.workspace = true
+camino.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+toml.workspace = true

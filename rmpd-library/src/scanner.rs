@@ -84,6 +84,13 @@ impl Scanner {
     }
 
     fn scan_recursive(&self, db: &Database, path: &Path, stats: &mut ScanStats) -> Result<()> {
+        // SOURCE ISOLATION: this scan only processes local filesystem files and
+        // only calls `db.add_song()` (which never sets `source`). Any future
+        // reconcile/prune step that deletes songs no longer on disk MUST use
+        // `Database::delete_song_by_path` (which is guarded with `AND source IS NULL`)
+        // or an equivalent query with a `WHERE source IS NULL` predicate to avoid
+        // evicting remote catalog rows inserted by `Database::add_source_song`.
+
         // Step 1: Collect all audio files and their metadata (sequential directory walk)
         let mut files_to_process = Vec::new();
         self.collect_audio_files(db, path, &mut files_to_process, stats)?;

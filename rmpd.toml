@@ -64,3 +64,23 @@ auto_update = true
 filesystem_watch = true
 cache_size = 64
 fts_enabled = true
+
+# ── Music Sources ────────────────────────────────────────────────────────────
+# Remote catalogs are declared as [[source]] blocks. Each enabled source is
+# synced into rmpd's SQLite index under a virtual path of the form
+# <type>://<name>/<Artist>/<Album>/<remote-id>.
+#
+# Example: OpenSubsonic-compatible server (Navidrome, Jellyfin, Airsonic …)
+# Uncomment and fill in your server details to activate.
+#
+# [[source]]
+# name = "home"           # arbitrary label; becomes the authority in virtual paths
+# type = "subsonic"       # backend type; "subsonic" requires the subsonic feature
+# enabled = false         # set to true to activate
+# url = "https://music.example.com"
+# username = "alice"
+# password = "s3cr3t"
+# # Optional: cap streaming bitrate (kbps). 0 or absent = server default.
+# # max_bitrate = 320
+# # Optional: preferred transcoding format ("raw" = original, "mp3", "opus", …).
+# # format = "raw"

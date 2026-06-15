@@ -2945,6 +2945,10 @@ dependencies = [
 [[package]]
 name = "rmpd-plugin"
 version = "0.4.0"
+dependencies = [
+ "async-trait",
+ "rmpd-core",
+]
 
 [[package]]
 name = "rmpd-protocol"
@@ -2964,6 +2968,20 @@ dependencies = [
  "tokio",
  "tracing",
  "winnow",
+]
+
+[[package]]
+name = "rmpd-source"
+version = "0.4.0"
+dependencies = [
+ "async-trait",
+ "camino",
+ "rmpd-core",
+ "rmpd-library",
+ "rmpd-plugin",
+ "tokio",
+ "toml",
+ "tracing",
 ]
 
 [[package]]

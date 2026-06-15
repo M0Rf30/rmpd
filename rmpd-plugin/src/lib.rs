@@ -12,3 +12,5 @@
 //! subsystems (e.g. the audio-output registry in `rmpd-player`). This crate is
 //! the future home for the cross-cutting SPI definitions; see
 //! `docs/PLUGIN_ARCHITECTURE.md`.
+pub mod source;
+pub use source::{MusicSource, SourceEntry, SourceError, SourceResult};

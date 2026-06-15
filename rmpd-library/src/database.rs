@@ -41,6 +41,27 @@ const SONG_COLUMNS_ALIASED: &str =
      s.replay_gain_album_gain, s.replay_gain_album_peak,
      s.added_at, s.last_modified";
 
+/// FTS5 full-text index over song tags. Contentless (`content=''`) — sync is
+/// maintained manually by `update_fts_for_song` and the `songs_fts_delete`
+/// trigger. `contentless_delete=1` (SQLite >= 3.43) is REQUIRED: it lets a row
+/// be removed with a plain `DELETE` on its rowid. Without it, a contentless 'delete' must
+/// repeat the originally-indexed column values; supplying empty strings writes
+/// bad tombstones that corrupt the index (surfacing later as "database disk
+/// image is malformed" when a row DELETE fires the trigger).
+const SONGS_FTS_CREATE_SQL: &str = "
+    CREATE VIRTUAL TABLE IF NOT EXISTS songs_fts USING fts5(
+        title, artist, album, album_artist, genre, composer,
+        content='', contentless_delete=1
+    )";
+
+/// Trigger that removes a song's FTS row when the song row is deleted. With
+/// `contentless_delete=1` the row is removed by a plain `DELETE` on its rowid
+/// (the special 'delete' insert command is rejected on such tables).
+const SONGS_FTS_DELETE_TRIGGER_SQL: &str = "
+    CREATE TRIGGER IF NOT EXISTS songs_fts_delete AFTER DELETE ON songs BEGIN
+        DELETE FROM songs_fts WHERE rowid = old.id;
+    END";
+
 /// Construct a Song (without tags) from a database row.
 /// Tags are loaded separately via `load_tags_for_songs`.
 fn song_from_row(row: &Row<'_>) -> rusqlite::Result<Song> {
@@ -201,6 +222,9 @@ impl Database {
     /// Perform schema migrations for existing databases.
     /// Currently handles:
     ///   v1→v2: Remove UNIQUE(song_id, tag, value) from song_tags to allow duplicate tag values
+    ///   v2→v3: Add songs.source column for remote catalog origin
+    ///   v3→v4: Recreate songs_fts with contentless_delete=1 (fixes FTS index
+    ///          corruption triggered by row deletes such as clear_source)
     fn migrate_schema(&self) -> Result<()> {
         // Check if song_tags already exists with the old UNIQUE constraint.
         // We detect this by looking at sqlite_master for the table definition.
@@ -237,6 +261,68 @@ impl Database {
             }
         }
 
+        // v2→v3: add songs.source for remote catalog origin (NULL = local, non-NULL = "<scheme>:<name>").
+        // Guard: only run ALTER when the songs table exists (it may not on a fresh DB where
+        // migrate_schema runs before init_schema). On fresh DBs init_schema creates the column.
+        let songs_table_exists: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='songs'",
+            [],
+            |r| r.get(0),
+        )?;
+        if songs_table_exists > 0 {
+            let has_source: i64 = self.conn.query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('songs') WHERE name='source'",
+                [],
+                |r| r.get(0),
+            )?;
+            if has_source == 0 {
+                self.conn
+                    .execute("ALTER TABLE songs ADD COLUMN source TEXT", [])?;
+            }
+        }
+
+        // v3→v4: songs_fts must be declared with contentless_delete=1 (SQLite >= 3.43)
+        // so its delete trigger and re-index path can delete by rowid alone. Pre-fix DBs
+        // created the contentless table without that option and maintained it with
+        // empty-string 'delete' commands that write bad tombstones and corrupt the index
+        // — surfacing only as "database disk image is malformed" when a later row DELETE
+        // fires the trigger (e.g. clear_source). Detect the old definition (its stored SQL
+        // lacks "contentless_delete"); drop the index + trigger, recreate both with the
+        // new form, and rebuild the index from song_tags. Wrapped in a transaction so an
+        // interrupted migration rolls back and re-runs on the next open instead of leaving
+        // a silently-incomplete index the guard would not retry.
+        let fts_sql: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='songs_fts'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(sql) = fts_sql {
+            if !sql.contains("contentless_delete") {
+                self.conn.execute_batch(
+                    "BEGIN;
+                     DROP TRIGGER IF EXISTS songs_fts_delete;
+                     DROP TABLE IF EXISTS songs_fts;",
+                )?;
+                self.conn.execute(SONGS_FTS_CREATE_SQL, [])?;
+                self.conn.execute(SONGS_FTS_DELETE_TRIGGER_SQL, [])?;
+                // Rebuild from song_tags: re-run the canonical per-song FTS insert for
+                // every song. The table is freshly empty, so each insert's rowid-only
+                // pre-delete is a harmless no-op.
+                let ids: Vec<i64> = {
+                    let mut stmt = self.conn.prepare("SELECT id FROM songs")?;
+                    stmt.query_map([], |row| row.get(0))?
+                        .collect::<std::result::Result<Vec<_>, _>>()?
+                };
+                for id in ids {
+                    self.update_fts_for_song(id as u64)?;
+                }
+                self.conn.execute_batch("COMMIT;")?;
+            }
+        }
+
         Ok(())
     }
 
@@ -259,6 +345,7 @@ impl Database {
                 replay_gain_album_peak REAL,
                 added_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
                 last_modified INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+                source TEXT,
                 FOREIGN KEY (directory_id) REFERENCES directories(id)
             )",
             [],
@@ -359,14 +446,8 @@ impl Database {
             [],
         )?;
 
-        // Full-text search using FTS5 (content-less — we manage sync manually)
-        self.conn.execute(
-            "CREATE VIRTUAL TABLE IF NOT EXISTS songs_fts USING fts5(
-                title, artist, album, album_artist, genre, composer,
-                content=''
-            )",
-            [],
-        )?;
+        // Full-text search index over song tags. See SONGS_FTS_CREATE_SQL.
+        self.conn.execute(SONGS_FTS_CREATE_SQL, [])?;
 
         // Indexes on song_tags
         self.conn.execute(
@@ -400,14 +481,8 @@ impl Database {
             [],
         )?;
 
-        // FTS delete trigger — clean up FTS when songs are deleted
-        self.conn.execute(
-            "CREATE TRIGGER IF NOT EXISTS songs_fts_delete AFTER DELETE ON songs BEGIN
-                INSERT INTO songs_fts(songs_fts, rowid, title, artist, album, album_artist, genre, composer)
-                VALUES ('delete', old.id, '', '', '', '', '', '');
-            END",
-            [],
-        )?;
+        // Keep the FTS index in sync on song deletes. See SONGS_FTS_DELETE_TRIGGER_SQL.
+        self.conn.execute(SONGS_FTS_DELETE_TRIGGER_SQL, [])?;
 
         Ok(())
     }
@@ -492,12 +567,14 @@ impl Database {
             }
         }
 
-        // Delete old FTS entry if it exists, then insert new one
+        // Remove any prior FTS entry for this rowid, then insert the current tags.
+        // contentless_delete=1 tables are deleted with a plain DELETE by rowid (the
+        // 'delete' insert command is rejected); deleting a not-yet-indexed rowid is a
+        // clean no-op, so this also covers the brand-new-song case.
         self.conn.execute(
-            "INSERT INTO songs_fts(songs_fts, rowid, title, artist, album, album_artist, genre, composer)
-             VALUES ('delete', ?1, '', '', '', '', '', '')",
+            "DELETE FROM songs_fts WHERE rowid = ?1",
             params![song_id as i64],
-        ).ok(); // ignore error if entry doesn't exist
+        )?;
 
         self.conn.execute(
             "INSERT INTO songs_fts(rowid, title, artist, album, album_artist, genre, composer)
@@ -1039,8 +1116,164 @@ impl Database {
 
     pub fn delete_song_by_path(&self, path: &str) -> Result<()> {
         self.conn
-            .execute("DELETE FROM songs WHERE path = ?1", params![path])?;
+            .execute("DELETE FROM songs WHERE path = ?1 AND source IS NULL", params![path])?;
         Ok(())
+    }
+
+    /// Ensure the root directory (path="", parent_id=NULL) exists and return its id.
+    /// Local scans create this automatically via `get_or_create_directory`; this
+    /// method creates it on first use in a remote-only deployment.
+    fn ensure_root_dir(&self) -> Result<i64> {
+        if let Some(id) = self
+            .conn
+            .query_row(
+                "SELECT id FROM directories WHERE parent_id IS NULL LIMIT 1",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+        {
+            return Ok(id);
+        }
+        let mtime = system_time_to_unix_secs(SystemTime::now());
+        self.conn.execute(
+            "INSERT INTO directories (path, parent_id, mtime) VALUES ('', NULL, ?1)",
+            params![mtime],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Get or create a directory row with an explicit parent_id.
+    /// Used by `add_source_song` to build virtual path chains without going through
+    /// `get_or_create_directory`, which mis-handles `://` authority segments.
+    fn get_or_create_dir_with_parent(&self, path: &str, parent_id: i64) -> Result<i64> {
+        if let Some(id) = self
+            .conn
+            .query_row(
+                "SELECT id FROM directories WHERE path = ?1",
+                params![path],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+        {
+            return Ok(id);
+        }
+        let mtime = system_time_to_unix_secs(SystemTime::now());
+        self.conn.execute(
+            "INSERT INTO directories (path, parent_id, mtime) VALUES (?1, ?2, ?3)",
+            params![path, parent_id, mtime],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Insert or update a song from a remote music source.
+    ///
+    /// Like `add_song` but (a) sets `source = source_token` on the row so local
+    /// filesystem scans never touch it, and (b) builds the synthetic directory
+    /// chain from the virtual path explicitly rather than via `path.parent()`,
+    /// which mis-parses `://` authorities.
+    ///
+    /// The virtual path convention is `<scheme>://<name>/<seg>.../<remote-id>`;
+    /// the song's `directory_id` is set to the leaf directory (everything before
+    /// the final `/` segment).
+    pub fn add_source_song(&self, song: &Song, source_token: &str) -> Result<i64> {
+        // Parse "scheme://authority/seg1/.../id" → leaf dir path = "scheme://authority/seg1/...".
+        // The scheme+authority forms the first virtual directory level.
+        let path_str = song.path.as_str();
+        let (scheme, after_scheme) = path_str
+            .split_once("://")
+            .unwrap_or(("source", path_str));
+        let segments: Vec<&str> = after_scheme.split('/').collect();
+        let authority = segments.first().copied().unwrap_or("unknown");
+
+        // Build directory chain: root → scheme://authority → .../seg1 → .../leafdir
+        let root_id = self.ensure_root_dir()?;
+        let scheme_auth = format!("{scheme}://{authority}");
+        let mut current_path = scheme_auth;
+        let mut parent_id = self.get_or_create_dir_with_parent(&current_path, root_id)?;
+
+        // Middle segments (all except authority[0] and id[last])
+        let dir_segs = if segments.len() > 2 {
+            &segments[1..segments.len() - 1]
+        } else {
+            &segments[0..0]
+        };
+        for seg in dir_segs {
+            current_path = format!("{current_path}/{seg}");
+            parent_id = self.get_or_create_dir_with_parent(&current_path, parent_id)?;
+        }
+        let leaf_dir_id = parent_id;
+
+        // Upsert the song row with the source column set.
+        self.conn.execute(
+            "INSERT INTO songs (
+                path, directory_id, mtime, duration,
+                sample_rate, channels, bits_per_sample, bitrate,
+                replay_gain_track_gain, replay_gain_track_peak,
+                replay_gain_album_gain, replay_gain_album_peak,
+                last_modified, source
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?3, ?13)
+            ON CONFLICT(path) DO UPDATE SET
+                directory_id = excluded.directory_id,
+                mtime = excluded.mtime,
+                duration = excluded.duration,
+                sample_rate = excluded.sample_rate,
+                channels = excluded.channels,
+                bits_per_sample = excluded.bits_per_sample,
+                bitrate = excluded.bitrate,
+                replay_gain_track_gain = excluded.replay_gain_track_gain,
+                replay_gain_track_peak = excluded.replay_gain_track_peak,
+                replay_gain_album_gain = excluded.replay_gain_album_gain,
+                replay_gain_album_peak = excluded.replay_gain_album_peak,
+                last_modified = excluded.mtime,
+                source = excluded.source",
+            params![
+                song.path.as_str(),
+                leaf_dir_id,
+                song.last_modified,
+                song.duration.map(|d| d.as_secs_f64()),
+                song.sample_rate,
+                song.channels,
+                song.bits_per_sample,
+                song.bitrate,
+                song.replay_gain_track_gain,
+                song.replay_gain_track_peak,
+                song.replay_gain_album_gain,
+                song.replay_gain_album_peak,
+                source_token,
+            ],
+        )?;
+
+        let song_id: i64 = self.conn.query_row(
+            "SELECT id FROM songs WHERE path = ?1",
+            params![song.path.as_str()],
+            |row| row.get(0),
+        )?;
+
+        // Refresh tags (same as add_song).
+        self.conn
+            .execute("DELETE FROM song_tags WHERE song_id = ?1", params![song_id])?;
+        let mut tag_stmt = self
+            .conn
+            .prepare("INSERT INTO song_tags (song_id, tag, value) VALUES (?1, ?2, ?3)")?;
+        for (tag, value) in &song.tags {
+            tag_stmt.execute(params![song_id, tag.as_ref(), value])?;
+        }
+        self.update_fts_for_song(song_id as u64)?;
+
+        Ok(song_id)
+    }
+
+    /// Delete all songs belonging to `source_token` (format `"<scheme>:<name>"`).
+    ///
+    /// `ON DELETE CASCADE` removes the associated `song_tags` and `artwork` rows.
+    /// Returns the number of songs deleted. Used for atomic resync: call
+    /// `clear_source` then repopulate with `add_source_song` inside a transaction.
+    pub fn clear_source(&self, source_token: &str) -> Result<usize> {
+        let count = self
+            .conn
+            .execute("DELETE FROM songs WHERE source = ?1", params![source_token])?;
+        Ok(count)
     }
 
     // Artwork methods

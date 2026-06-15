@@ -10,3 +10,5 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
+async-trait = { workspace = true }
+rmpd-core = { workspace = true }
