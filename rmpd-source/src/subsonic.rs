@@ -29,6 +29,49 @@ fn enc(s: &str) -> String {
     out
 }
 
+/// Derive a file extension for the virtual path so clients can infer the codec
+/// (e.g. rmpc shows "flac"). Prefer the server-reported `suffix`; when absent,
+/// map the MIME `content_type`. The extension MUST be one of
+/// `rmpd_source`'s known audio extensions so `resolve_stream_uri` can strip it
+/// back off to recover the bare id.
+fn file_ext_for(c: &opensubsonic::data::Child) -> Option<String> {
+    if let Some(s) = c.suffix.as_deref()
+        && !s.is_empty()
+    {
+        return Some(s.to_ascii_lowercase());
+    }
+    c.content_type
+        .as_deref()
+        .and_then(mime_to_ext)
+        .map(str::to_owned)
+}
+
+/// Map a common audio MIME type to a file extension. Returns `None` for
+/// unrecognized types (no extension is appended then).
+fn mime_to_ext(mime: &str) -> Option<&'static str> {
+    let base = mime
+        .split(';')
+        .next()
+        .unwrap_or(mime)
+        .trim()
+        .to_ascii_lowercase();
+    Some(match base.as_str() {
+        "audio/flac" | "audio/x-flac" => "flac",
+        "audio/mpeg" | "audio/mp3" | "audio/mpeg3" | "audio/x-mpeg-3" => "mp3",
+        "audio/ogg" | "application/ogg" | "audio/vorbis" => "ogg",
+        "audio/opus" => "opus",
+        "audio/aac" | "audio/aacp" => "aac",
+        "audio/mp4" | "audio/m4a" | "audio/x-m4a" => "m4a",
+        "audio/wav" | "audio/x-wav" | "audio/wave" | "audio/vnd.wave" => "wav",
+        "audio/x-ape" | "audio/ape" | "audio/x-monkeys-audio" => "ape",
+        "audio/x-wavpack" | "audio/wavpack" => "wv",
+        "audio/x-ms-wma" => "wma",
+        "audio/aiff" | "audio/x-aiff" => "aiff",
+        "audio/dsf" | "audio/x-dsf" => "dsf",
+        _ => return None,
+    })
+}
+
 // ─── Error mapping ───────────────────────────────────────────────────────────
 
 /// Map opensubsonic errors to `SourceError` without leaking credentials.
@@ -198,13 +241,11 @@ impl SubsonicSource {
         let artist = c.artist.as_deref().unwrap_or("Unknown Artist");
         let album = c.album.as_deref().unwrap_or("Unknown Album");
 
-        // Leaf = raw id, plus a lower-cased file extension when the server
-        // reports one, so clients can show/derive the format.
-        let leaf = match c.suffix.as_deref() {
-            Some(suffix) if !suffix.is_empty() => {
-                format!("{}.{}", c.id, suffix.to_ascii_lowercase())
-            }
-            _ => c.id.clone(),
+        // Leaf = raw id, plus a file extension (from the server `suffix`, or
+        // derived from the MIME `content_type`) so clients can infer the codec.
+        let leaf = match file_ext_for(c) {
+            Some(ext) => format!("{}.{}", c.id, ext),
+            None => c.id.clone(),
         };
         let path = Utf8PathBuf::from(format!(
             "{}/{}/{}/{}",
@@ -480,6 +521,33 @@ mod tests {
             "discNumber": 1
         }))
         .expect("valid Child JSON")
+    }
+
+    /// When the server omits `suffix` (some servers only set it on getSong),
+    /// the path extension is derived from the MIME `content_type` so clients
+    /// still see the codec.
+    #[test]
+    fn map_song_derives_extension_from_content_type() {
+        let source = make_source("home");
+        let child: opensubsonic::data::Child = serde_json::from_value(serde_json::json!({
+            "id": "abc",
+            "isDir": false,
+            "title": "No Suffix",
+            "artist": "A",
+            "album": "B",
+            "contentType": "audio/flac"
+        }))
+        .expect("valid Child JSON");
+        let song = source.map_song(&child);
+        assert_eq!(song.path.as_str(), "home/A/B/abc.flac");
+    }
+
+    #[test]
+    fn mime_to_ext_maps_common_types() {
+        assert_eq!(mime_to_ext("audio/mpeg"), Some("mp3"));
+        assert_eq!(mime_to_ext("audio/flac"), Some("flac"));
+        assert_eq!(mime_to_ext("audio/mp4; codecs=\"mp4a.40.2\""), Some("m4a"));
+        assert_eq!(mime_to_ext("audio/unknown"), None);
     }
 
     // ── (a) map_song tags and audio properties ────────────────────────────────
