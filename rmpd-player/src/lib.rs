@@ -2,6 +2,7 @@
 pub mod audio_output;
 pub mod conversion;
 pub mod cpal_utils;
+pub mod crossfade;
 pub mod decoder;
 pub mod dop;
 pub mod dop_output;
