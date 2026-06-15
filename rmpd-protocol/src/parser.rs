@@ -1361,42 +1361,38 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
         }
         // Stickers
         "sticker" => {
-            let operation = parse_string.parse_next(input)?;
+            let operation = parse_quoted_or_unquoted.parse_next(input)?;
             let _ = space0.parse_next(input)?;
-            let _type_str = parse_string.parse_next(input)?; // "song" for now
+            let _type_str = parse_quoted_or_unquoted.parse_next(input)?; // "song" for now
             let _ = space0.parse_next(input)?;
             let uri = parse_quoted_or_unquoted.parse_next(input)?;
             let _ = space0.parse_next(input)?;
 
             match operation.as_str() {
                 "get" => {
-                    let name = parse_string.parse_next(input)?;
+                    let name = parse_quoted_or_unquoted.parse_next(input)?;
                     Ok(Command::StickerGet { uri, name })
                 }
                 "set" => {
-                    let name = parse_string.parse_next(input)?;
+                    let name = parse_quoted_or_unquoted.parse_next(input)?;
                     let _ = space0.parse_next(input)?;
                     let value = parse_quoted_or_unquoted.parse_next(input)?;
                     Ok(Command::StickerSet { uri, name, value })
                 }
                 "delete" => {
-                    let name = opt(parse_string).parse_next(input)?;
+                    let name = opt(parse_quoted_or_unquoted).parse_next(input)?;
                     Ok(Command::StickerDelete { uri, name })
                 }
                 "list" => Ok(Command::StickerList { uri }),
                 "find" => {
-                    let name = parse_string.parse_next(input)?;
+                    let name = parse_quoted_or_unquoted.parse_next(input)?;
                     let _ = space0.parse_next(input)?;
                     // MPD supports optional comparison: [eq|ne|lt|gt|lte|gte VALUE]
-                    // Parse up to two more optional tokens (operator and value)
                     let first = opt(parse_quoted_or_unquoted).parse_next(input)?;
                     let _ = space0.parse_next(input)?;
                     let second = opt(parse_quoted_or_unquoted).parse_next(input)?;
-                    // If two tokens: first is operator, second is comparison value
-                    // If one token: it is the sticker value filter
                     let value = match (first, second) {
                         (Some(op), Some(val)) => {
-                            // operator + value form — store value, ignore op for now
                             let _ = op;
                             Some(val)
                         }
@@ -1406,10 +1402,10 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
                     Ok(Command::StickerFind { uri, name, value })
                 }
                 "inc" => {
-                    let name = parse_string.parse_next(input)?;
+                    let name = parse_quoted_or_unquoted.parse_next(input)?;
                     let _ = space0.parse_next(input)?;
                     let delta = opt(|input: &mut &str| {
-                        parse_string
+                        parse_quoted_or_unquoted
                             .parse_next(input)?
                             .parse::<i32>()
                             .map_err(|_| ErrMode::Cut(ContextError::default()))
@@ -1418,10 +1414,10 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
                     Ok(Command::StickerInc { uri, name, delta })
                 }
                 "dec" => {
-                    let name = parse_string.parse_next(input)?;
+                    let name = parse_quoted_or_unquoted.parse_next(input)?;
                     let _ = space0.parse_next(input)?;
                     let delta = opt(|input: &mut &str| {
-                        parse_string
+                        parse_quoted_or_unquoted
                             .parse_next(input)?
                             .parse::<i32>()
                             .map_err(|_| ErrMode::Cut(ContextError::default()))
@@ -2149,6 +2145,28 @@ mod tests {
                 filters: vec![("(Album == \"x\")".to_string(), String::new())],
                 sort: None,
                 window: Some((0, 100)),
+            }
+        );
+        // sticker: libmpdclient quotes the subcommand and type too
+        assert_eq!(
+            parse_command("sticker \"list\" \"song\" \"foo/bar.flac\"").unwrap(),
+            Command::StickerList {
+                uri: "foo/bar.flac".to_string()
+            }
+        );
+        assert_eq!(
+            parse_command("sticker \"set\" \"song\" \"foo.flac\" \"rating\" \"10\"").unwrap(),
+            Command::StickerSet {
+                uri: "foo.flac".to_string(),
+                name: "rating".to_string(),
+                value: "10".to_string(),
+            }
+        );
+        assert_eq!(
+            parse_command("sticker \"get\" \"song\" \"foo.flac\" \"rating\"").unwrap(),
+            Command::StickerGet {
+                uri: "foo.flac".to_string(),
+                name: "rating".to_string(),
             }
         );
     }
