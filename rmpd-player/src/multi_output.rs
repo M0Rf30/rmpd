@@ -10,8 +10,10 @@
 //! no deep copies.
 
 use crate::audio_output::AudioOutput;
+use crate::filter::{AudioFilter, VolumeFilter};
 use rmpd_core::error::{Result, RmpdError};
 use std::sync::Arc;
+use std::sync::atomic::AtomicU8;
 use std::sync::mpsc::{SyncSender, sync_channel};
 use std::thread::{self, JoinHandle};
 use tracing::{debug, warn};
@@ -41,12 +43,17 @@ impl MultiOutput {
     /// thread; if the primary fails to start, the channel becomes disconnected
     /// and the first `write()` call will return `Err`.  A secondary that fails
     /// to start is logged and dropped.
-    pub fn spawn(outputs: Vec<Box<dyn AudioOutput>>, depth: usize) -> Result<Self> {
+    pub fn spawn(
+        outputs: Vec<Box<dyn AudioOutput>>,
+        depth: usize,
+        volume: Arc<AtomicU8>,
+    ) -> Result<Self> {
         let mut workers = Vec::with_capacity(outputs.len());
 
         for (idx, mut out) in outputs.into_iter().enumerate() {
             let primary = idx == 0;
             let (tx, rx) = sync_channel::<OutputMsg>(depth);
+            let vol_arc = volume.clone();
 
             let handle = thread::Builder::new()
                 .name(if primary {
@@ -67,10 +74,13 @@ impl MultiOutput {
                         "{} output worker started",
                         if primary { "primary" } else { "secondary" }
                     );
+                    let mut vol = VolumeFilter::new(vol_arc);
                     loop {
                         match rx.recv() {
-                            Ok(OutputMsg::Samples(a)) => {
-                                let _ = out.write(&a);
+                            Ok(OutputMsg::Samples(arc)) => {
+                                let mut buf = arc.to_vec();
+                                vol.apply(&mut buf);
+                                let _ = out.write(&buf);
                             }
                             Ok(OutputMsg::Pause) => {
                                 let _ = out.pause();
@@ -262,8 +272,12 @@ mod tests {
         };
 
         // depth=4: secondary's channel fills after 4 chunks; try_send drops the rest.
-        let multi = MultiOutput::spawn(vec![Box::new(primary), Box::new(secondary)], 4)
-            .expect("spawn failed");
+        let multi = MultiOutput::spawn(
+            vec![Box::new(primary), Box::new(secondary)],
+            4,
+            Arc::new(std::sync::atomic::AtomicU8::new(100)),
+        )
+        .expect("spawn failed");
 
         // 100 writes should all succeed and complete quickly regardless of the
         // stalled secondary.

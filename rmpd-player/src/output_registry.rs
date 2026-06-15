@@ -5,6 +5,7 @@
 
 use crate::audio_output::AudioOutput;
 use crate::fifo_output::FifoOutput;
+use crate::httpd_output::HttpdOutput;
 use crate::null_output::NullOutput;
 use crate::output::CpalOutput;
 use crate::pipe_output::PipeOutput;
@@ -86,6 +87,14 @@ fn asio_factory(
     Ok(Box::new(CpalOutput::new_asio(format)?))
 }
 
+fn httpd_factory(
+    format: AudioFormat,
+    _quality: ResamplerQuality,
+    cfg: &OutputConfig,
+) -> Result<Box<dyn AudioOutput>> {
+    Ok(Box::new(HttpdOutput::new(format, cfg)))
+}
+
 pub static OUTPUT_PLUGINS: &[(&str, OutputFactory)] = &[
     ("cpal", cpal_factory),
     ("default", cpal_factory),
@@ -97,6 +106,7 @@ pub static OUTPUT_PLUGINS: &[(&str, OutputFactory)] = &[
     ("jack", jack_factory),
     #[cfg(all(feature = "asio", target_os = "windows"))]
     ("asio", asio_factory),
+    ("httpd", httpd_factory),
 ];
 
 pub fn create_output(

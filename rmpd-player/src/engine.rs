@@ -389,7 +389,7 @@ impl PlaybackEngine {
             }
         }
 
-        let multi = crate::multi_output::MultiOutput::spawn(boxes, 16)?;
+        let multi = crate::multi_output::MultiOutput::spawn(boxes, 16, volume.clone())?;
 
         // Playback loop
         let mut buffer = vec![0.0f32; BUFFER_SIZE];
@@ -455,10 +455,10 @@ impl PlaybackEngine {
                 );
             }
 
-            // Apply volume and ReplayGain source-side (lock-free atomic read)
-            let volume_factor = (volume.load(Ordering::Acquire) as f32) / 100.0;
+            // Apply ReplayGain source-side (lock-free); volume is applied
+            // per-output in each MultiOutput worker via VolumeFilter.
             for sample in buffer[..samples_read].iter_mut() {
-                *sample *= volume_factor * gain_scale;
+                *sample *= gain_scale;
             }
 
             // Fan the chunk out to all outputs.

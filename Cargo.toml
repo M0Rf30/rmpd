@@ -47,6 +47,7 @@ winnow = "1.0"
 rusqlite = { version = "0.40", features = ["bundled"] }
 tantivy = "0.26"
 toml = "1.1"
+parking_lot = "0.12"
 
 
 # Utilities
