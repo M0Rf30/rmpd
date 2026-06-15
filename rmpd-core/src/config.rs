@@ -280,6 +280,7 @@ impl Config {
             .map_err(|e| RmpdError::Config(format!("Failed to parse config: {e}")))?;
 
         config.expand_paths();
+        config.ensure_directories();
         config.validate()?;
         Ok(config)
     }
@@ -368,6 +369,26 @@ impl Config {
         self.general.playlist_directory = expand_tilde(&self.general.playlist_directory);
         self.general.db_file = expand_tilde(&self.general.db_file);
         self.general.state_file = expand_tilde(&self.general.state_file);
+    }
+
+    /// Create the directories referenced by the config entries if they do not
+    /// already exist. This covers the `playlist_directory` itself and the
+    /// parent directories of `db_file` and `state_file`. The `music_directory`
+    /// is intentionally left to `validate`, since it must be supplied by the
+    /// user rather than created automatically.
+    fn ensure_directories(&self) {
+        let mut dirs: Vec<&camino::Utf8Path> = vec![self.general.playlist_directory.as_path()];
+        dirs.extend(self.general.db_file.parent());
+        dirs.extend(self.general.state_file.parent());
+
+        for dir in dirs {
+            if dir.as_str().is_empty() || dir.exists() {
+                continue;
+            }
+            if let Err(e) = std::fs::create_dir_all(dir) {
+                tracing::warn!("failed to create directory {dir}: {e}");
+            }
+        }
     }
 
     fn validate(&self) -> Result<()> {
@@ -475,5 +496,33 @@ mod tests {
         c.output.push(output_block(false));
         assert_eq!(c.dop_mode(), DopMode::No);
         assert_eq!(c.output_device(), None);
+    }
+
+    #[test]
+    fn ensure_directories_creates_configured_dirs() {
+        let base = std::env::temp_dir().join(format!("rmpd-cfgtest-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let base = Utf8PathBuf::try_from(base).unwrap();
+
+        // music_directory must already exist (validate requires it).
+        let music = base.join("music");
+        std::fs::create_dir_all(&music).unwrap();
+
+        let mut c = Config::default();
+        c.general.music_directory = music;
+        c.general.playlist_directory = base.join("playlists");
+        c.general.db_file = base.join("state/rmpd.db");
+        c.general.state_file = base.join("run/state");
+
+        assert!(!c.general.playlist_directory.exists());
+        c.ensure_directories();
+
+        assert!(c.general.playlist_directory.exists());
+        assert!(c.general.db_file.parent().unwrap().exists());
+        assert!(c.general.state_file.parent().unwrap().exists());
+        assert!(c.validate().is_ok());
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 }
