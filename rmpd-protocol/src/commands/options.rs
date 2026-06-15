@@ -81,6 +81,7 @@ pub async fn handle_consume_command(state: &AppState, mode: &str) -> String {
 
 pub async fn handle_crossfade_command(state: &AppState, seconds: u32) -> String {
     state.status.write().await.crossfade = seconds;
+    state.engine.write().await.set_crossfade(seconds);
     ResponseBuilder::new().ok()
 }
 

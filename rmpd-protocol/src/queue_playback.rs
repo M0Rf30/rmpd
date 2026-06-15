@@ -74,6 +74,18 @@ impl QueuePlaybackManager {
                         let mut status = state.status.write().await;
                         status.bitrate = bitrate;
                     }
+                    Ok(Event::AdvancedToNext) => {
+                        info!("engine advanced to next song in-thread (gapless/crossfade)");
+                        if let Err(e) = Self::handle_advanced(&state).await {
+                            error!("error handling in-thread advance: {}", e);
+                        }
+                        Self::feed_next_song(&state).await;
+                    }
+                    Ok(Event::SongChanged(_)) => {
+                        // (Re)feed look-ahead whenever the current song changes — covers
+                        // manual play/playid, resume, and the SongFinished fallback.
+                        Self::feed_next_song(&state).await;
+                    }
                     Ok(_) => {} // Ignore other events
                     Err(e) => {
                         error!("event receive error: {}", e);
@@ -214,6 +226,109 @@ impl QueuePlaybackManager {
             debug!("no next song found");
         }
 
+        Ok(())
+    }
+
+    /// Returns the next position to look ahead to, or None when look-ahead must be
+    /// disabled (random, single engaged, or end-of-queue without repeat).
+    fn lookahead_next_pos(
+        current_pos: u32,
+        queue_len: u32,
+        repeat: bool,
+        random: bool,
+        single: rmpd_core::state::SingleMode,
+    ) -> Option<u32> {
+        if random || single.is_on() || single.is_oneshot() || queue_len == 0 {
+            return None;
+        }
+        let next = current_pos + 1;
+        if next >= queue_len {
+            if repeat { Some(0) } else { None }
+        } else {
+            Some(next)
+        }
+    }
+
+    /// Feed the engine the upcoming song for gapless/crossfade look-ahead.
+    pub async fn feed_next_song(state: &AppState) {
+        let (current_pos, repeat, random, single) = {
+            let status = state.status.read().await;
+            match status.current_song {
+                Some(ref p) => (p.position, status.repeat, status.random, status.single),
+                None => {
+                    drop(status);
+                    state.engine.read().await.set_next_song(None);
+                    return;
+                }
+            }
+        };
+        let next_ps = {
+            let queue = state.queue.read().await;
+            match Self::lookahead_next_pos(current_pos, queue.len() as u32, repeat, random, single)
+            {
+                Some(np) => queue.get(np).map(|item| {
+                    prepare_song_for_playback(&(*item.song).clone(), state.music_dir.as_deref())
+                }),
+                None => None,
+            }
+        };
+        state.engine.read().await.set_next_song(next_ps);
+    }
+
+    /// Handle in-thread advance event — the engine already started the next song
+    /// gaplessly/via crossfade; we only update bookkeeping (no engine.play call).
+    async fn handle_advanced(state: &AppState) -> rmpd_core::error::Result<()> {
+        let (current_pos, repeat, random, single, consume) = {
+            let s = state.status.read().await;
+            match s.current_song {
+                Some(ref p) => (p.position, s.repeat, s.random, s.single, s.consume),
+                None => return Ok(()),
+            }
+        };
+        let next_pos = match Self::lookahead_next_pos(
+            current_pos,
+            state.queue.read().await.len() as u32,
+            repeat,
+            random,
+            single,
+        ) {
+            Some(np) => np,
+            None => return Ok(()), // shouldn't happen — engine only advances when we fed
+        };
+        let (song, item_id) = {
+            let q = state.queue.read().await;
+            match q.get(next_pos) {
+                Some(i) => ((*i.song).clone(), i.id),
+                None => return Ok(()),
+            }
+        };
+        if consume.is_on() {
+            state.queue.write().await.delete(current_pos);
+            helpers::update_playlist_version(state).await;
+        }
+        {
+            let mut status = state.status.write().await;
+            status.state = PlayerState::Play;
+            status.elapsed = Some(Duration::ZERO);
+            status.duration = song.duration;
+            status.bitrate = song.bitrate;
+            status.audio_format = helpers::extract_audio_format(&song);
+            status.current_song = Some(QueuePosition {
+                position: if consume.is_on() && next_pos > current_pos {
+                    next_pos - 1
+                } else {
+                    next_pos
+                },
+                id: item_id,
+            });
+            if single.is_oneshot() {
+                status.single = rmpd_core::state::SingleMode::Off;
+            }
+            if consume.is_oneshot() {
+                status.consume = rmpd_core::state::ConsumeMode::Off;
+            }
+        }
+        state.event_bus.emit(Event::SongChanged(Some(song)));
         Ok(())
     }
 }
