@@ -32,14 +32,19 @@ pub async fn run(bind_address: String, config: Config) -> Result<()> {
             config.audio.replay_gain_missing_preamp,
         );
         engine.set_volume_normalization(config.audio.volume_normalization);
-        engine.set_active_output(
-            config
+        engine.set_outputs({
+            let enabled: Vec<rmpd_core::config::OutputConfig> = config
                 .output
                 .iter()
-                .find(|o| o.enabled)
+                .filter(|o| o.enabled)
                 .cloned()
-                .unwrap_or_else(rmpd_core::config::OutputConfig::cpal_default),
-        );
+                .collect();
+            if enabled.is_empty() {
+                vec![rmpd_core::config::OutputConfig::cpal_default()]
+            } else {
+                enabled
+            }
+        });
     }
     rmpd_player::set_output_device(config.output_device());
 
@@ -206,15 +211,16 @@ async fn restore_state(
         }
     }
     {
-        let first = {
+        let enabled: Vec<rmpd_core::config::OutputConfig> = {
             let outputs = state.outputs.read().await;
             outputs
                 .iter()
-                .find(|o| o.enabled)
-                .and_then(|o| o.config.clone())
+                .filter(|o| o.enabled)
+                .filter_map(|o| o.config.clone())
+                .collect()
         };
-        if let Some(cfg) = first {
-            state.engine.write().await.set_active_output(cfg);
+        if !enabled.is_empty() {
+            state.engine.write().await.set_outputs(enabled);
         }
     }
 

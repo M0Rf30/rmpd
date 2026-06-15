@@ -360,9 +360,76 @@ impl SymphoniaDecoder {
 }
 
 /// Trait for audio decoders
-pub trait Decoder {
+pub trait Decoder: Send {
     fn read(&mut self, buffer: &mut [f32]) -> Result<usize>;
     fn seek(&mut self, position: f64) -> Result<()>;
     fn format(&self) -> AudioFormat;
     fn duration(&self) -> Option<f64>;
+}
+
+impl Decoder for SymphoniaDecoder {
+    fn read(&mut self, buffer: &mut [f32]) -> Result<usize> {
+        self.read(buffer)
+    }
+    fn seek(&mut self, position: f64) -> Result<()> {
+        self.seek(position)
+    }
+    fn format(&self) -> AudioFormat {
+        self.format()
+    }
+    fn duration(&self) -> Option<f64> {
+        self.duration()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Decoder plugin SPI (MPD-style DecoderPlugin registry)
+// ---------------------------------------------------------------------------
+
+/// A decoder plugin descriptor: how to recognise files it can decode.
+pub struct DecoderPlugin {
+    pub name: &'static str,
+    pub suffixes: &'static [&'static str],
+    pub mime_types: &'static [&'static str],
+}
+
+/// The Symphonia-backed decoder handles all of rmpd's supported formats.
+pub static SYMPHONIA_DECODER: DecoderPlugin = DecoderPlugin {
+    name: "symphonia",
+    suffixes: &[
+        "flac", "mp3", "ogg", "oga", "opus", "wav", "wave", "aiff", "aif", "m4a", "mp4", "aac",
+        "alac", "ape", "wv", "mpc", "dsf", "dff", "webm", "mka", "caf",
+    ],
+    mime_types: &[
+        "audio/flac",
+        "audio/mpeg",
+        "audio/ogg",
+        "audio/opus",
+        "audio/wav",
+        "audio/x-wav",
+        "audio/aac",
+        "audio/mp4",
+        "audio/x-ape",
+        "audio/x-wavpack",
+        "audio/x-dsd",
+    ],
+};
+
+/// All compiled-in decoder plugins (compile-time registry, MPD-style).
+pub static DECODER_PLUGINS: &[&DecoderPlugin] = &[&SYMPHONIA_DECODER];
+
+/// Find a decoder plugin that lists `suffix` (case-insensitive, no leading dot).
+#[must_use]
+pub fn decoder_for_suffix(suffix: &str) -> Option<&'static DecoderPlugin> {
+    let s = suffix.trim_start_matches('.').to_ascii_lowercase();
+    DECODER_PLUGINS
+        .iter()
+        .copied()
+        .find(|p| p.suffixes.iter().any(|x| *x == s))
+}
+
+/// Whether any compiled-in decoder supports `suffix`.
+#[must_use]
+pub fn is_supported_suffix(suffix: &str) -> bool {
+    decoder_for_suffix(suffix).is_some()
 }

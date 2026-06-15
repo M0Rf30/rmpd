@@ -5,24 +5,21 @@ use crate::state::AppState;
 
 use super::utils::ACK_ERROR_SYSTEM;
 
-/// Reconcile the engine's active output after an enabled-flag change.
-/// Picks the first enabled output and calls set_active_output; if none are
-/// enabled, stops playback.
+/// Reconcile the engine's active output set after an enabled-flag change.
+/// Feeds the engine ALL enabled outputs; if none are enabled, stops playback.
 async fn reconcile_active_output(state: &AppState) {
-    let first = {
+    let enabled: Vec<rmpd_core::config::OutputConfig> = {
         let outputs = state.outputs.read().await;
         outputs
             .iter()
-            .find(|o| o.enabled)
-            .and_then(|o| o.config.clone())
+            .filter(|o| o.enabled)
+            .filter_map(|o| o.config.clone())
+            .collect()
     };
-    match first {
-        Some(cfg) => {
-            state.engine.write().await.set_active_output(cfg);
-        }
-        None => {
-            let _ = state.engine.write().await.stop().await;
-        }
+    if enabled.is_empty() {
+        let _ = state.engine.write().await.stop().await;
+    } else {
+        state.engine.write().await.set_outputs(enabled);
     }
 }
 

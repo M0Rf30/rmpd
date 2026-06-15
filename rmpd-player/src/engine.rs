@@ -66,7 +66,7 @@ pub struct PlaybackEngine {
     current_song: Arc<RwLock<Option<Song>>>,
     volume: Arc<AtomicU8>,
     command_tx: Option<mpsc::Sender<PlaybackCommand>>,
-    output: OutputConfig,
+    outputs: Vec<OutputConfig>,
     replay_gain_mode: ReplayGainMode,
     replay_gain_preamp: f32,
     replay_gain_missing_preamp: f32,
@@ -90,7 +90,7 @@ impl PlaybackEngine {
             current_song: Arc::new(RwLock::new(None)),
             volume: Arc::new(AtomicU8::new(100)),
             command_tx: None,
-            output: OutputConfig::cpal_default(),
+            outputs: vec![OutputConfig::cpal_default()],
             replay_gain_mode: ReplayGainMode::default(),
             replay_gain_preamp: 0.0,
             replay_gain_missing_preamp: 0.0,
@@ -100,8 +100,8 @@ impl PlaybackEngine {
         }
     }
 
-    pub fn set_active_output(&mut self, output: OutputConfig) {
-        self.output = output;
+    pub fn set_outputs(&mut self, outputs: Vec<OutputConfig>) {
+        self.outputs = outputs;
     }
 
     pub fn set_replay_gain(&mut self, mode: ReplayGainMode, preamp: f32, missing_preamp: f32) {
@@ -161,7 +161,7 @@ impl PlaybackEngine {
         let volume = self.volume.clone();
         let status_clone = self.status.clone();
         let atomic_state_clone = self.atomic_state.clone();
-        let output = self.output.clone();
+        let outputs = self.outputs.clone();
         let gain_scale = Self::compute_gain_scale(
             &playback_song.song,
             self.replay_gain_mode,
@@ -181,7 +181,7 @@ impl PlaybackEngine {
                 stop_flag,
                 volume,
                 command_rx,
-                output,
+                outputs,
                 resampler_quality,
                 dop_mode,
                 gain_scale,
@@ -290,7 +290,7 @@ impl PlaybackEngine {
         stop_flag: Arc<AtomicBool>,
         volume: Arc<AtomicU8>,
         command_rx: mpsc::Receiver<PlaybackCommand>,
-        output: OutputConfig,
+        outputs: Vec<rmpd_core::config::OutputConfig>,
         resampler_quality: ResamplerQuality,
         dop_mode: DopMode,
         gain_scale: f32,
@@ -319,12 +319,12 @@ impl PlaybackEngine {
             if dop_enabled {
                 info!("DSD file detected, attempting DoP output");
                 match Self::setup_dop(&decoder) {
-                    Ok((dop_encoder, output)) => {
+                    Ok((dop_encoder, dop_out)) => {
                         info!("DoP output available, using native DSD playback");
                         return Self::run_dsd_dop(
                             decoder,
                             dop_encoder,
-                            output,
+                            dop_out,
                             atomic_state,
                             event_bus,
                             stop_flag,
@@ -362,15 +362,42 @@ impl PlaybackEngine {
             format.sample_rate, format.channels
         );
 
-        // Create output
-        let mut output: Box<dyn AudioOutput> =
-            Self::create_output(format, &output, resampler_quality)?;
-        output.start()?;
+        // Build per-output boxes.  Fall back to null when no outputs configured
+        // so playback still advances (position/EOS events fire) silently.
+        let effective_outputs: Vec<rmpd_core::config::OutputConfig> = if outputs.is_empty() {
+            vec![rmpd_core::config::OutputConfig {
+                output_type: "null".into(),
+                ..rmpd_core::config::OutputConfig::cpal_default()
+            }]
+        } else {
+            outputs
+        };
+
+        let mut boxes: Vec<Box<dyn AudioOutput>> = Vec::with_capacity(effective_outputs.len());
+        for (i, cfg) in effective_outputs.iter().enumerate() {
+            match Self::create_output(format, cfg, resampler_quality) {
+                Ok(b) => boxes.push(b),
+                Err(e) => {
+                    if i == 0 {
+                        return Err(e);
+                    }
+                    warn!(
+                        "secondary output '{}' failed to create: {}; skipping",
+                        cfg.name, e
+                    );
+                }
+            }
+        }
+
+        let multi = crate::multi_output::MultiOutput::spawn(boxes, 16)?;
 
         // Playback loop
         let mut buffer = vec![0.0f32; BUFFER_SIZE];
         let mut total_samples_played: u64 = 0;
         let samples_per_second = format.sample_rate as u64 * format.channels as u64;
+        // Track whether we have sent pause/resume to the workers to avoid
+        // spamming the same message every 100 ms.
+        let mut multi_paused = false;
 
         while !stop_flag.load(Ordering::Acquire) {
             // Check for commands (non-blocking)
@@ -392,15 +419,19 @@ impl PlaybackEngine {
                 }
             }
 
-            // Check if paused - read from atomic state (no locks needed)
+            // Check if paused — read from atomic state (no locks needed)
             let current_state = PlayerState::from_atomic(atomic_state.load(Ordering::Acquire));
 
             if current_state == PlayerState::Pause {
-                output.pause()?;
+                if !multi_paused {
+                    multi.pause();
+                    multi_paused = true;
+                }
                 thread::sleep(StdDuration::from_millis(100));
                 continue;
-            } else if current_state == PlayerState::Play && output.is_paused() {
-                output.resume()?;
+            } else if multi_paused {
+                multi.resume();
+                multi_paused = false;
             }
 
             // Read from decoder
@@ -424,14 +455,18 @@ impl PlaybackEngine {
                 );
             }
 
-            // Apply volume (lock-free atomic read)
+            // Apply volume and ReplayGain source-side (lock-free atomic read)
             let volume_factor = (volume.load(Ordering::Acquire) as f32) / 100.0;
             for sample in buffer[..samples_read].iter_mut() {
                 *sample *= volume_factor * gain_scale;
             }
 
-            // Write to output
-            output.write(&buffer[..samples_read])?;
+            // Fan the chunk out to all outputs.
+            let chunk: Arc<[f32]> = Arc::from(&buffer[..samples_read]);
+            if multi.write(chunk).is_err() {
+                warn!("primary output disconnected; stopping playback");
+                break;
+            }
 
             // Update elapsed time
             total_samples_played += samples_read as u64;
@@ -449,8 +484,7 @@ impl PlaybackEngine {
             }
         }
 
-        // Stop output
-        output.stop()?;
+        multi.stop();
 
         Ok(())
     }
