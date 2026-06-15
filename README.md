@@ -17,7 +17,7 @@
 - 🔌 **Extensible** - Plugin system for decoders, outputs, and inputs
 - 🎧 **High-Quality Audio** - DSD support, ReplayGain, gapless playback, crossfade
 - 🎼 **Format Support** - FLAC, MP3, Ogg Vorbis, WAV, AAC, DSD (DoP and native)
-- 🏠 **Multi-Room Ready** - Snapcast integration for synchronized playback
+- 🏠 **Multi-Room** - Plays to all enabled outputs at once; stream over HTTP (`httpd` output) or feed an external Snapcast server via FIFO
 - 🖥️ **Desktop Integration** - Native MPRIS D-Bus interface (media keys, `playerctl`, GNOME/KDE) plus mDNS auto-discovery
 - 📱 **Multi-Protocol** - MPD and OpenSubsonic support (planned)
 - ⚡ **Efficient** - Runs on everything from Raspberry Pi to high-end servers
@@ -98,16 +98,22 @@ replay_gain = "auto"
 buffer_time = 500
 
 [[output]]
-name = "ALSA Output"
-type = "alsa"
+name = "Local Audio"
+type = "cpal"          # system audio via cpal (ALSA / PulseAudio / PipeWire host)
 enabled = true
-device = "default"
 
 [[output]]
-name = "Snapcast Output"
-type = "snapcast"
+name = "HTTP Stream"   # listen on http://<host>:8000 — play in a browser or another MPD
+type = "httpd"
 enabled = false
-fifo_path = "/tmp/snapfifo"
+port = 8000
+encoder = "wav"        # "wav" or "pcm"
+
+[[output]]
+name = "Snapcast FIFO" # feed an external snapserver for synchronized multi-room
+type = "fifo"
+enabled = false
+path = "/tmp/snapfifo"
 ```
 
 See [rmpd.toml](rmpd.toml) for a complete configuration example.
@@ -211,11 +217,11 @@ See [CI.md](CI.md) for detailed CI/CD documentation.
 
 ### In Progress 🚧
 
-- Advanced playback features (crossfade, MixRamp)
-- Plugin system
-- Snapcast integration
-- Complete MPD protocol coverage
-- OpenSubsonic support
+- Gapless playback and crossfade / MixRamp (needs real-device validation)
+- Compressed stream encoders (FLAC / Opus / Vorbis) for the `httpd` output
+- HTTP / network input (internet radio) and network storage backends
+- `.cue` sheet playlists (`.m3u`, `.pls`, and XSPF already supported)
+- OpenSubsonic protocol support
 
 ## Compatibility
 
@@ -230,7 +236,15 @@ See [CI.md](CI.md) for detailed CI/CD documentation.
 
 ### Multi-Room Audio
 
-- 🚧 **Snapcast** - Synchronous multi-room playback (integration in progress)
+rmpd plays to **all enabled outputs simultaneously**, so local audio and a
+network stream can run at once. Two routes to networked/multi-room playback:
+
+- **HTTP streaming** — enable a `type = "httpd"` output (default port 8000) and
+  point any browser, phone, or another MPD/VLC at `http://<host>:8000`. Works
+  today, no extra daemon required (`encoder = "wav"` or `"pcm"`).
+- **Snapcast (synchronized)** — enable a `type = "fifo"` output writing to
+  `/tmp/snapfifo` and run an external [Snapcast](https://github.com/badaix/snapcast)
+  `snapserver` reading that FIFO for sample-accurate multi-room sync.
 
 ## Performance
 
