@@ -54,11 +54,20 @@ fn select_dsd_pcm_rate(device_rate: u32, supports_rate: impl Fn(u32) -> bool) ->
 
 /// The device rate the cpal output should open at for a DSD-to-PCM stream
 /// decoded at `decode_rate` on a device whose native rate is `device_rate`.
-/// Returns `Some(device_rate)` when they differ (so rmpd resamples to the
-/// device's native rate instead of letting a sound server resample the
-/// advertised — but not natively run — decode rate), else `None`.
-fn dsd_output_target_rate(decode_rate: u32, device_rate: u32) -> Option<u32> {
-    (decode_rate != device_rate).then_some(device_rate)
+///
+/// Returns `None` (open the stream at `decode_rate`, no resampling) when the
+/// rates already match, or when `native_decode_ok` — the resolved output is an
+/// explicitly-configured device that natively supports `decode_rate`, so it is
+/// safe to play bit-perfect. Otherwise returns `Some(device_rate)` so rmpd
+/// resamples to the device's native rate itself, rather than letting a sound
+/// server (e.g. PipeWire) resample a rate it merely advertises — which underruns
+/// and leaves DSD ultrasonic noise in-band.
+fn dsd_output_target_rate(decode_rate: u32, device_rate: u32, native_decode_ok: bool) -> Option<u32> {
+    if native_decode_ok || decode_rate == device_rate {
+        None
+    } else {
+        Some(device_rate)
+    }
 }
 
 /// Commands that can be sent to the playback thread
@@ -469,12 +478,25 @@ impl PlaybackEngine {
             let decode_rate = select_dsd_pcm_rate(device_rate, CpalOutput::supports_rate);
 
             decoder.enable_pcm_conversion(decode_rate)?;
+            // Play the decoded rate bit-perfect only on an explicitly configured
+            // device that natively supports it (a real DAC on a bit-perfect path).
+            // For the system default (typically a sound server that advertises
+            // rates it actually resamples), open at the device's native rate and
+            // let rmpd resample instead — avoiding a server-side resample that
+            // underruns and leaves DSD ultrasonic noise in-band.
+            let native_decode_ok = crate::cpal_utils::output_device_configured()
+                && CpalOutput::supports_rate(decode_rate);
+            dsd_target_rate = dsd_output_target_rate(decode_rate, device_rate, native_decode_ok);
             info!(
-                "DSD-to-PCM conversion enabled at {} Hz (device {} Hz); \
-                 cpal stream will open at device-native rate",
-                decode_rate, device_rate
+                "DSD-to-PCM conversion enabled at {} Hz (device {} Hz); cpal stream opens at {}",
+                decode_rate,
+                device_rate,
+                if dsd_target_rate.is_some() {
+                    "the device-native rate (rmpd resamples)"
+                } else {
+                    "the decode rate (no resampling)"
+                }
             );
-            dsd_target_rate = dsd_output_target_rate(decode_rate, device_rate);
         }
 
         // Standard PCM playback (works for all formats including DSD with PCM conversion)
@@ -1183,17 +1205,26 @@ mod tests {
     // ── dsd_output_target_rate tests ─────────────────────────────────────────
 
     #[test]
-    fn dsd_output_target_rate_differs_returns_device_rate() {
-        // Bug scenario: DSD decoded at 88200 Hz, device natively 48000 Hz.
-        // rmpd must open cpal at 48000 and resample internally, not let
-        // PipeWire resample the advertised-but-non-native 88200 Hz stream.
-        assert_eq!(dsd_output_target_rate(88200, 48000), Some(48000));
+    fn dsd_output_target_rate_default_device_resamples() {
+        // System default (PipeWire, not bit-perfect): DSD decoded at 88200 Hz,
+        // device natively 48000 Hz. rmpd must open cpal at 48000 and resample
+        // internally, not let PipeWire resample the advertised-but-non-native
+        // 88200 Hz stream.
+        assert_eq!(dsd_output_target_rate(88200, 48000, false), Some(48000));
+    }
+
+    #[test]
+    fn dsd_output_target_rate_configured_dac_is_bit_perfect() {
+        // Explicit DAC that natively supports 88200 Hz: open at the decode rate
+        // (no override) so playback is bit-perfect, even though the device's
+        // default rate is 48000 Hz.
+        assert_eq!(dsd_output_target_rate(88200, 48000, true), None);
     }
 
     #[test]
     fn dsd_output_target_rate_same_returns_none() {
         // Device natively 44100 Hz, decode rate 44100 Hz: no extra resample needed.
-        assert_eq!(dsd_output_target_rate(44100, 44100), None);
+        assert_eq!(dsd_output_target_rate(44100, 44100, false), None);
     }
 
     #[test]

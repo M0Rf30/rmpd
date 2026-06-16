@@ -34,8 +34,12 @@ resampler_quality = "sinc_medium"
 # a bit-perfect path — set `device` below); "auto" = DoP only when `device` is
 # set. The RMPD_DOP env var overrides this.
 dop = "no"
-# Output device id (ALSA PCM name). Empty/unset = system default (PipeWire).
-# Set a raw `hw:` device for bit-perfect DoP, bypassing PipeWire's resampling.
+# Output device id (ALSA PCM name). Empty/unset = system default (PipeWire),
+# whose graph rate (often 48 kHz) is used for PCM and DSD-to-PCM — rmpd does NOT
+# auto-open your DAC at its native rate in that case. Set a raw `hw:` device for
+# bit-perfect DoP and for native-rate DSD-to-PCM (e.g. 88.2 kHz), bypassing
+# PipeWire's resampling: when the configured device natively supports the
+# decoded rate, rmpd opens it directly with no resampling.
 # Discover ids with: cargo run -p rmpd-player --example list_devices
 # (or set RMPD_LIST_DEVICES=1). The RMPD_AUDIO_DEVICE env var overrides this.
 # device = "hw:CARD=1,DEV=0"
