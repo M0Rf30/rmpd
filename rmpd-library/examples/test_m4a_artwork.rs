@@ -2,7 +2,13 @@ use lofty::prelude::*;
 use lofty::probe::Probe;
 
 fn main() {
-    let path = "/home/gianluca/Musica/01.m4a";
+    let path = match std::env::args().nth(1) {
+        Some(p) => p,
+        None => {
+            eprintln!("usage: test_m4a_artwork <path-to-audio-file>");
+            std::process::exit(2);
+        }
+    };
 
     println!("Testing M4A artwork extraction from: {}", path);
 

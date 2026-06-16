@@ -239,6 +239,13 @@ pub enum DopMode {
 }
 
 // Default value functions
+fn default_music_dir() -> Utf8PathBuf {
+    // Honor $XDG_MUSIC_DIR (e.g. ~/Musica) when set, else fall back to ~/Music.
+    dirs::audio_dir()
+        .and_then(|p| Utf8PathBuf::try_from(p).ok())
+        .unwrap_or_else(|| Utf8PathBuf::from("~/Music"))
+}
+
 fn default_playlist_dir() -> Utf8PathBuf {
     dirs::config_dir()
         .map(|p| p.join("rmpd/playlists"))
@@ -448,7 +455,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             general: GeneralConfig {
-                music_directory: Utf8PathBuf::from("~/Music"),
+                music_directory: default_music_dir(),
                 playlist_directory: default_playlist_dir(),
                 db_file: default_db_file(),
                 state_file: default_state_file(),
