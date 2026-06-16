@@ -77,6 +77,22 @@ fn make_bind_addr(addr: &str, port: u16) -> String {
     }
 }
 
+/// Build the tracing filter. Honors `RUST_LOG` when set; otherwise applies
+/// `level` to rmpd's own crates while pinning noisy third-party crates down so
+/// the default (non-debug) output stays readable.
+fn default_env_filter(level: &str) -> tracing_subscriber::EnvFilter {
+    tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        tracing_subscriber::EnvFilter::new(format!(
+            "{level},\
+             lofty=error,\
+             symphonia=warn,symphonia_core=warn,symphonia_bundle_mp3=warn,\
+             symphonia_format_isomp4=warn,symphonia_format_ogg=warn,\
+             symphonia_codec_vorbis=warn,symphonia_metadata=warn,\
+             cpal=warn,zbus=warn"
+        ))
+    })
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
@@ -87,8 +103,7 @@ async fn main() -> Result<()> {
         #[cfg(target_os = "linux")]
         {
             use tracing_subscriber::prelude::*;
-            let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(log_level));
+            let env_filter = default_env_filter(log_level);
             match tracing_journald::layer() {
                 Ok(journald) => {
                     tracing_subscriber::registry()
@@ -110,17 +125,11 @@ async fn main() -> Result<()> {
         tracing_subscriber::fmt()
             .with_ansi(false)
             .with_writer(std::io::stderr)
-            .with_env_filter(
-                tracing_subscriber::EnvFilter::try_from_default_env()
-                    .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(log_level)),
-            )
+            .with_env_filter(default_env_filter(log_level))
             .init();
     } else {
         tracing_subscriber::fmt()
-            .with_env_filter(
-                tracing_subscriber::EnvFilter::try_from_default_env()
-                    .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(log_level)),
-            )
+            .with_env_filter(default_env_filter(log_level))
             .init();
     }
 

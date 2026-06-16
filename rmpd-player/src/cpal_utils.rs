@@ -384,7 +384,7 @@ impl CpalDeviceConfig {
             .map_err(|e| RmpdError::Player(format!("Failed to get supported configs: {e}")))?;
 
         let mut found_format = None;
-        tracing::info!(
+        tracing::debug!(
             "searching for suitable {} format at {:?} Hz",
             format_type,
             self.config.sample_rate
@@ -404,7 +404,7 @@ impl CpalDeviceConfig {
                         // If this is the first preference, use it immediately
                         if i == 0 {
                             found_format = Some(sample_format);
-                            tracing::info!(
+                            tracing::debug!(
                                 "found preferred format: {:?} at {:?}-{:?} Hz",
                                 sample_format,
                                 min_rate,
@@ -415,7 +415,7 @@ impl CpalDeviceConfig {
                         // Otherwise, only use if we haven't found a better one yet
                         else if found_format.is_none() {
                             found_format = Some(sample_format);
-                            tracing::info!(
+                            tracing::debug!(
                                 "found fallback format: {:?} at {:?}-{:?} Hz",
                                 sample_format,
                                 min_rate,
@@ -433,7 +433,7 @@ impl CpalDeviceConfig {
         }
 
         let format = found_format.unwrap_or(preferences[0]);
-        tracing::info!("using sample format: {:?}", format);
+        tracing::debug!("using sample format: {:?}", format);
 
         self.sample_format = format;
         Ok(format)

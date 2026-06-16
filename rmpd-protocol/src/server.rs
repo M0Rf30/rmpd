@@ -117,7 +117,7 @@ impl MpdServer {
                             let state = self.state.clone();
                             tokio::spawn(async move {
                                 if let Err(e) = handle_client(stream, state).await {
-                                    error!("client error: {}", e);
+                                    log_client_error("client", &e);
                                 }
                             });
                         }
@@ -138,7 +138,7 @@ impl MpdServer {
                             let state = self.state.clone();
                             tokio::spawn(async move {
                                 if let Err(e) = handle_unix_client(stream, state).await {
-                                    error!("unix client error: {}", e);
+                                    log_client_error("unix client", &e);
                                 }
                             });
                         }
@@ -162,6 +162,29 @@ impl MpdServer {
 
         info!("server shutdown complete");
         Ok(())
+    }
+}
+
+/// Log an error from a client connection. A client closing its socket
+/// (connection reset / broken pipe / EOF) is routine for MPD clients, so those
+/// are logged at debug; anything else is a genuine error.
+fn log_client_error(kind: &str, e: &rmpd_core::error::RmpdError) {
+    use std::io::ErrorKind;
+    let benign = matches!(
+        e,
+        rmpd_core::error::RmpdError::Io(io)
+            if matches!(
+                io.kind(),
+                ErrorKind::ConnectionReset
+                    | ErrorKind::ConnectionAborted
+                    | ErrorKind::BrokenPipe
+                    | ErrorKind::UnexpectedEof
+            )
+    );
+    if benign {
+        debug!("{kind} disconnected: {e}");
+    } else {
+        error!("{kind} error: {e}");
     }
 }
 

@@ -253,14 +253,22 @@ async fn restore_state(
 
         if let Ok(db) = rmpd_library::Database::open(db_path) {
             let mut queue = state.queue.write().await;
+            let mut missing = 0usize;
 
             for path in &saved_state.playlist_paths {
                 // Try to find song in database
                 if let Ok(Some(song)) = db.get_song_by_path(path) {
                     queue.add(song);
                 } else {
-                    warn!("song not found in database: {}", path);
+                    missing += 1;
                 }
+            }
+
+            if missing > 0 {
+                warn!(
+                    "{missing} of {} restored songs not found in database (skipped)",
+                    saved_state.playlist_paths.len()
+                );
             }
 
             let playlist_len = queue.len() as u32;

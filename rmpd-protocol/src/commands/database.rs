@@ -1,6 +1,6 @@
 //! Database and library browsing command handlers
 
-use tracing::{error, info};
+use tracing::{debug, error};
 
 use crate::helpers;
 use crate::response::{Response, ResponseBuilder};
@@ -450,7 +450,7 @@ pub async fn handle_update_command(state: &AppState, _path: Option<&str>) -> Str
 }
 
 pub async fn handle_albumart_command(state: &AppState, uri: &str, offset: usize) -> Response {
-    info!("albumart command: uri=[{}], offset={}", uri, offset);
+    debug!("albumart command: uri=[{}], offset={}", uri, offset);
 
     let db = match open_db(state, "albumart") {
         Ok(d) => d,
