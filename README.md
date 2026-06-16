@@ -182,6 +182,7 @@ rmpd includes comprehensive DSD support:
 - DoP (DSD over PCM) for wider DAC compatibility
 - Native DSD playback for compatible hardware
 - Automatic format detection and conversion
+- DSD-to-PCM fallback decodes to a 44.1 kHz-family rate and resamples to the output device's native rate using the configured `resampler_quality`, so a sound server (e.g. PipeWire) never resamples internally — avoiding underruns and keeping DSD's ultrasonic noise out of the audible band
 
 ## Development
 
@@ -228,6 +229,7 @@ See [CI.md](CI.md) for detailed CI/CD documentation.
   - High-rate DSD support (DSD128, DSD256+)
   - Multiple output types (ALSA, PulseAudio, PipeWire)
   - Gapless playback
+  - Crossfade and MixRamp transitions
   - ReplayGain support
   - Internet radio: HTTP(S) streaming input with Shoutcast/Icecast (ICY) "now playing" metadata
 
@@ -251,12 +253,13 @@ See [CI.md](CI.md) for detailed CI/CD documentation.
   - Media keys, `playerctl`, and GNOME/KDE media controls
   - mDNS/Zeroconf service advertisement for client auto-discovery
 
+- **Remote Libraries**
+  - OpenSubsonic music sources (Navidrome, Airsonic, gonic) via the `subsonic` Cargo feature
+
 ### In Progress 🚧
 
-- Gapless playback and crossfade / MixRamp (needs real-device validation)
 - Compressed stream encoders (FLAC / Opus / Vorbis) for the `httpd` output
-- Network storage backends (SMB / NFS) and Shoutcast v1 (`ICY 200 OK`) servers
-- OpenSubsonic protocol support
+- Network storage backends (SMB / NFS) and a Shoutcast v1 (`ICY 200 OK`) greeting for the `httpd` output (which currently serves `HTTP/1.0`; consuming Shoutcast/Icecast ICY streams already works)
 
 ## Compatibility
 
