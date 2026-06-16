@@ -21,6 +21,7 @@ pub async fn run(bind_address: String, config: Config) -> Result<()> {
     let source_registry = Arc::new(rmpd_source::SourceRegistry::from_config(&config.source));
     state.set_sources(source_registry);
     state.set_password(config.network.password.clone());
+    state.set_follow_symlinks(config.general.follow_symlinks);
 
     // Apply audio settings from config to the player.
     // - resampler quality: used only when the device can't play a rate natively.
@@ -39,6 +40,7 @@ pub async fn run(bind_address: String, config: Config) -> Result<()> {
         engine.set_volume_normalization(config.audio.volume_normalization);
         engine.set_crossfade(config.audio.crossfade as u32);
         engine.set_mixramp(config.audio.mixramp_db, config.audio.mixramp_delay);
+        engine.set_buffer_time(config.audio.buffer_time);
         engine.set_outputs({
             let enabled: Vec<rmpd_core::config::OutputConfig> = config
                 .output

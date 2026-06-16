@@ -4,7 +4,7 @@ use rmpd_core::error::{Result, RmpdError};
 use rmpd_core::song::{Song, intern_tag_key};
 use rmpd_core::tag::tag_fallback_chain;
 use rmpd_core::time::system_time_to_unix_secs;
-use rusqlite::{Connection, OptionalExtension, Row, params};
+use rusqlite::{Connection, OptionalExtension, Row, functions::FunctionFlags, params};
 use std::cmp::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
@@ -128,6 +128,18 @@ fn open_connection(path: &str) -> Result<Connection> {
     conn.busy_timeout(Duration::from_secs(5))?;
     conn.execute_batch(
         "PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON;",
+    )?;
+    conn.create_scalar_function(
+        "regexp",
+        2,
+        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
+        |ctx| {
+            let pattern: String = ctx.get(0)?;
+            let text: String = ctx.get(1)?;
+            let re = regex::Regex::new(&pattern)
+                .map_err(|e| rusqlite::Error::UserFunctionError(Box::new(e)))?;
+            Ok(re.is_match(&text))
+        },
     )?;
     Ok(conn)
 }

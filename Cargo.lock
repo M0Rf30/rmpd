@@ -3047,6 +3047,7 @@ dependencies = [
  "notify",
  "notify-debouncer-full",
  "rayon",
+ "regex",
  "rmpd-core",
  "rmpd-player",
  "rusqlite",

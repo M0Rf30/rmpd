@@ -49,6 +49,9 @@ pub struct AppState {
     /// Latest ICY "now playing" title for a remote stream (None when not
     /// streaming or no metadata has arrived). Injected into `currentsong`.
     pub stream_title: Arc<RwLock<Option<String>>>,
+    /// Whether to follow symlinks when scanning the music directory.
+    /// Mirrors `general.follow_symlinks` from the config file.
+    pub follow_symlinks: bool,
 }
 
 impl fmt::Debug for AppState {
@@ -134,6 +137,7 @@ impl AppState {
             password: None,
             stream_title: Arc::new(RwLock::new(None)),
             sources: std::sync::Arc::new(rmpd_source::SourceRegistry::from_config(&[])),
+            follow_symlinks: false,
         }
     }
 
@@ -164,6 +168,10 @@ impl AppState {
         self.sources = sources;
     }
 
+    pub fn set_follow_symlinks(&mut self, v: bool) {
+        self.follow_symlinks = v;
+    }
+
     pub fn advertise_mdns(&self, port: u16) {
         if let Some(ref discovery) = self.discovery
             && let Err(e) = discovery.advertise(port)
@@ -185,12 +193,13 @@ impl AppState {
             return;
         };
         let event_bus = self.event_bus.clone();
+        let follow_symlinks = self.follow_symlinks;
 
         tokio::task::spawn_blocking(move || {
             tracing::info!("starting library update");
             match rmpd_library::Database::open(&db_path) {
                 Ok(db) => {
-                    let scanner = rmpd_library::Scanner::new(event_bus.clone());
+                    let scanner = rmpd_library::Scanner::new(event_bus.clone(), follow_symlinks);
                     match scanner.scan_directory(&db, std::path::Path::new(&music_dir)) {
                         Ok(stats) => tracing::info!(
                             "library scan complete: {} scanned, {} added, {} updated, {} errors",

@@ -88,6 +88,9 @@ pub struct PlaybackEngine {
     /// point.  When nothing is fed the slot stays `None` and the engine
     /// behaves exactly as it did before this field was added.
     next_song: Arc<Mutex<Option<rmpd_core::playback::PlaybackSong>>>,
+    /// Output buffer time in milliseconds (0 uses a safe default).
+    /// Sizes the PCM output's internal ring buffer / sync-channel depth.
+    buffer_time_ms: u32,
 }
 
 impl PlaybackEngine {
@@ -117,11 +120,19 @@ impl PlaybackEngine {
             mixramp_db: 0.0,
             mixramp_delay: 0.0,
             next_song: Arc::new(Mutex::new(None)),
+            buffer_time_ms: 500, // matches AudioConfig::default_buffer_time()
         }
     }
 
     pub fn set_outputs(&mut self, outputs: Vec<OutputConfig>) {
         self.outputs = outputs;
+    }
+
+    /// Set the output buffer time in milliseconds. Sizes the PCM ring buffer
+    /// depth so playback latency / resilience matches the configured value.
+    /// A value of 0 falls back to the safe default (500 ms).
+    pub fn set_buffer_time(&mut self, ms: u32) {
+        self.buffer_time_ms = if ms == 0 { 500 } else { ms };
     }
 
     pub fn set_replay_gain(&mut self, mode: ReplayGainMode, preamp: f32, missing_preamp: f32) {
@@ -226,6 +237,7 @@ impl PlaybackEngine {
         let mixramp_db = self.mixramp_db;
         let mixramp_delay = self.mixramp_delay;
         let range = playback_song.range;
+        let buffer_time_ms = self.buffer_time_ms;
 
         let handle = thread::spawn(move || {
             if let Err(e) = Self::playback_thread(
@@ -251,6 +263,7 @@ impl PlaybackEngine {
                 mixramp_db,
                 mixramp_delay,
                 range,
+                buffer_time_ms,
             ) {
                 error!("playback error: {}", e);
             }
@@ -378,6 +391,7 @@ impl PlaybackEngine {
         mixramp_db: f32,
         mixramp_delay: f32,
         range: Option<(f64, f64)>,
+        buffer_time_ms: u32,
     ) -> Result<()> {
         // Shadow as mutable so per-song gain can be updated on in-thread advance.
         let mut gain_scale = gain_scale;
@@ -477,7 +491,7 @@ impl PlaybackEngine {
         let multi = output_slot.acquire(key, || {
             let mut boxes: Vec<Box<dyn AudioOutput>> = Vec::with_capacity(effective_outputs.len());
             for (i, cfg) in effective_outputs.iter().enumerate() {
-                match Self::create_output(format, cfg, resampler_quality) {
+                match Self::create_output(format, cfg, resampler_quality, buffer_time_ms) {
                     Ok(b) => boxes.push(b),
                     Err(e) => {
                         if i == 0 {
@@ -897,8 +911,9 @@ impl PlaybackEngine {
         format: rmpd_core::song::AudioFormat,
         cfg: &OutputConfig,
         quality: ResamplerQuality,
+        buffer_time_ms: u32,
     ) -> Result<Box<dyn AudioOutput>> {
-        crate::output_registry::create_output(format, quality, cfg)
+        crate::output_registry::create_output(format, quality, cfg, buffer_time_ms)
     }
 
     fn compute_gain_scale(
@@ -997,6 +1012,9 @@ impl PlaybackEngine {
         let mut dop_i32_buffer = Vec::new();
         let mut total_dsd_bytes: u64 = 0;
         let dsd_bytes_per_second = (dsd_sample_rate / 8) as u64 * channels as u64;
+        // Track whether pause() has been called so we only call it once on
+        // entry (matching the multi_paused pattern in the PCM path).
+        let mut dsd_paused = false;
 
         while !stop_flag.load(Ordering::Acquire) {
             // Check for commands
@@ -1020,11 +1038,15 @@ impl PlaybackEngine {
             let current_state = PlayerState::from_atomic(atomic_state.load(Ordering::Acquire));
 
             if current_state == PlayerState::Pause {
-                output.pause()?;
+                if !dsd_paused {
+                    output.pause()?;
+                    dsd_paused = true;
+                }
                 thread::sleep(StdDuration::from_millis(100));
                 continue;
-            } else if current_state == PlayerState::Play && output.is_paused() {
+            } else if dsd_paused {
                 output.resume()?;
+                dsd_paused = false;
             }
 
             // Read raw DSD data

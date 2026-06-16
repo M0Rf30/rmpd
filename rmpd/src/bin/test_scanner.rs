@@ -16,7 +16,7 @@ fn main() -> anyhow::Result<()> {
 
     // Create event bus and scanner
     let event_bus = EventBus::new();
-    let scanner = Scanner::new(event_bus);
+    let scanner = Scanner::new(event_bus, false);
 
     // Scan music directory
     let music_dir = std::env::args().nth(1).unwrap_or_else(|| {

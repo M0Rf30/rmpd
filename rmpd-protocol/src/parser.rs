@@ -833,108 +833,20 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
             Ok(Command::Rescan { path })
         }
         "find" => {
-            let tag = parse_quoted_or_unquoted.parse_next(input)?;
-            let _ = space0.parse_next(input)?;
-
-            // Check if this is a filter expression (starts with '(')
-            if tag.starts_with('(') {
-                // Filter expression — also parse any trailing sort/window.
-                let (sort, window) = parse_sort_window(input)?;
-                Ok(Command::Find {
-                    filters: vec![(tag, String::new())],
-                    sort,
-                    window,
-                })
-            } else {
-                // Traditional syntax: tag value [tag value ...] [sort TAG] [window START:END]
-                let mut filters = Vec::new();
-                let value = parse_quoted_or_unquoted.parse_next(input)?;
-                filters.push((tag, value));
-
-                // Parse additional tag-value pairs until we hit sort/window keywords
-                loop {
-                    let _ = space0.parse_next(input)?;
-                    if input.is_empty() {
-                        break;
-                    }
-
-                    let saved_input = *input;
-                    let next_token = match opt(parse_quoted_or_unquoted).parse_next(input)? {
-                        Some(t) if !t.is_empty() => t,
-                        _ => break,
-                    };
-
-                    // Check for sort or window keywords
-                    if next_token == "sort" || next_token == "window" {
-                        *input = saved_input;
-                        break;
-                    }
-
-                    let _ = space0.parse_next(input)?;
-                    let next_value = parse_quoted_or_unquoted.parse_next(input)?;
-                    filters.push((next_token, next_value));
-                }
-
-                let (sort, window) = parse_sort_window(input)?;
-
-                Ok(Command::Find {
-                    filters,
-                    sort,
-                    window,
-                })
-            }
+            let (filters, sort, window) = parse_find_search_filters(input)?;
+            Ok(Command::Find {
+                filters,
+                sort,
+                window,
+            })
         }
         "search" => {
-            let tag = parse_quoted_or_unquoted.parse_next(input)?;
-            let _ = space0.parse_next(input)?;
-
-            // Check if this is a filter expression (starts with '(')
-            if tag.starts_with('(') {
-                // Filter expression — also parse any trailing sort/window.
-                let (sort, window) = parse_sort_window(input)?;
-                Ok(Command::Search {
-                    filters: vec![(tag, String::new())],
-                    sort,
-                    window,
-                })
-            } else {
-                // Traditional syntax: tag value [tag value ...] [sort TAG] [window START:END]
-                let mut filters = Vec::new();
-                let value = parse_quoted_or_unquoted.parse_next(input)?;
-                filters.push((tag, value));
-
-                // Parse additional tag-value pairs until we hit sort/window keywords
-                loop {
-                    let _ = space0.parse_next(input)?;
-                    if input.is_empty() {
-                        break;
-                    }
-
-                    let saved_input = *input;
-                    let next_token = match opt(parse_quoted_or_unquoted).parse_next(input)? {
-                        Some(t) if !t.is_empty() => t,
-                        _ => break,
-                    };
-
-                    // Check for sort or window keywords
-                    if next_token == "sort" || next_token == "window" {
-                        *input = saved_input;
-                        break;
-                    }
-
-                    let _ = space0.parse_next(input)?;
-                    let next_value = parse_quoted_or_unquoted.parse_next(input)?;
-                    filters.push((next_token, next_value));
-                }
-
-                let (sort, window) = parse_sort_window(input)?;
-
-                Ok(Command::Search {
-                    filters,
-                    sort,
-                    window,
-                })
-            }
+            let (filters, sort, window) = parse_find_search_filters(input)?;
+            Ok(Command::Search {
+                filters,
+                sort,
+                window,
+            })
         }
         "list" => {
             let tag = parse_quoted_or_unquoted.parse_next(input)?;
@@ -1387,15 +1299,20 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
                 "find" => {
                     let name = parse_quoted_or_unquoted.parse_next(input)?;
                     let _ = space0.parse_next(input)?;
-                    // MPD supports optional comparison: [eq|ne|lt|gt|lte|gte VALUE]
+                    // Optional filter: [eq|ne|lt|gt|contains VALUE]
+                    // Known operators are encoded as "op\x00val" in the value field
+                    // so the handler can decode them without a Command enum change.
                     let first = opt(parse_quoted_or_unquoted).parse_next(input)?;
                     let _ = space0.parse_next(input)?;
                     let second = opt(parse_quoted_or_unquoted).parse_next(input)?;
                     let value = match (first, second) {
-                        (Some(op), Some(val)) => {
-                            let _ = op;
-                            Some(val)
+                        (Some(op), Some(val))
+                            if matches!(op.as_str(), "eq" | "ne" | "lt" | "gt" | "contains") =>
+                        {
+                            // Encode operator+value; handler decodes on '\x00' boundary.
+                            Some(format!("{op}\x00{val}"))
                         }
+                        (Some(_), Some(val)) => Some(val),
                         (Some(v), None) => Some(v),
                         (None, _) => None,
                     };
@@ -1692,6 +1609,49 @@ fn range_parts(s: &str) -> Option<(u32, u32)> {
             Some((start, start.saturating_add(1)))
         }
     }
+}
+
+/// Parse the filters, optional `sort TAG`, and optional `window START:END` for
+/// the `find` and `search` commands. The two commands are syntactically
+/// identical; the caller wraps the result in `Command::Find` or `Command::Search`.
+fn parse_find_search_filters(
+    input: &mut &str,
+) -> PResult<(Vec<(String, String)>, Option<String>, Option<(u32, u32)>)> {
+    let tag = parse_quoted_or_unquoted.parse_next(input)?;
+    let _ = space0.parse_next(input)?;
+
+    let filters = if tag.starts_with('(') {
+        // Filter expression: the whole (…) expression is a single filter token.
+        vec![(tag, String::new())]
+    } else {
+        // Traditional syntax: tag value [tag value ...] [sort TAG] [window START:END]
+        let mut filters = Vec::new();
+        let value = parse_quoted_or_unquoted.parse_next(input)?;
+        filters.push((tag, value));
+
+        loop {
+            let _ = space0.parse_next(input)?;
+            if input.is_empty() {
+                break;
+            }
+            let saved_input = *input;
+            let next_token = match opt(parse_quoted_or_unquoted).parse_next(input)? {
+                Some(t) if !t.is_empty() => t,
+                _ => break,
+            };
+            if next_token == "sort" || next_token == "window" {
+                *input = saved_input;
+                break;
+            }
+            let _ = space0.parse_next(input)?;
+            let next_value = parse_quoted_or_unquoted.parse_next(input)?;
+            filters.push((next_token, next_value));
+        }
+        filters
+    };
+
+    let (sort, window) = parse_sort_window(input)?;
+    Ok((filters, sort, window))
 }
 
 /// Parse optional trailing `sort TAG` and `window START:END` clauses

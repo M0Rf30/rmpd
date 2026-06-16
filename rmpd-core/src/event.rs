@@ -45,17 +45,6 @@ pub enum Event {
     // Output events
     OutputsChanged,
 
-    // Connection events
-    ClientConnected(u64),
-    ClientDisconnected(u64),
-
-    // Plugin events
-    PluginLoaded(String),
-    PluginUnloaded(String),
-
-    // Partition events
-    PartitionChanged(String),
-
     // Filesystem watcher events
     FilesystemWatchStarted,
     FilesystemWatchStopped,
@@ -108,7 +97,6 @@ impl Event {
                 &[Subsystem::Database]
             }
             Event::OutputsChanged => &[Subsystem::Output],
-            Event::PartitionChanged(_) => &[Subsystem::Partition],
             Event::FilesystemWatchStarted | Event::FilesystemWatchStopped => &[],
             _ => &[],
         }

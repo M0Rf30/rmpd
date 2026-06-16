@@ -17,12 +17,14 @@ use rmpd_core::song::AudioFormat;
 pub type OutputFactory =
     fn(AudioFormat, ResamplerQuality, &OutputConfig) -> Result<Box<dyn AudioOutput>>;
 
+// cpal_factory is kept for the OutputPlugins table but is not used by
+// create_output (which routes cpal directly to carry buffer_time_ms).
 fn cpal_factory(
     format: AudioFormat,
     quality: ResamplerQuality,
     _cfg: &OutputConfig,
 ) -> Result<Box<dyn AudioOutput>> {
-    Ok(Box::new(CpalOutput::new(format, quality)?))
+    Ok(Box::new(CpalOutput::new(format, quality, 500)?))
 }
 
 fn null_factory(
@@ -75,7 +77,7 @@ fn jack_factory(
     _quality: ResamplerQuality,
     _cfg: &OutputConfig,
 ) -> Result<Box<dyn AudioOutput>> {
-    Ok(Box::new(CpalOutput::new_jack(format)?))
+    Ok(Box::new(CpalOutput::new_jack(format, 500)?))
 }
 
 #[cfg(all(feature = "asio", target_os = "windows"))]
@@ -84,7 +86,7 @@ fn asio_factory(
     _quality: ResamplerQuality,
     _cfg: &OutputConfig,
 ) -> Result<Box<dyn AudioOutput>> {
-    Ok(Box::new(CpalOutput::new_asio(format)?))
+    Ok(Box::new(CpalOutput::new_asio(format, 500)?))
 }
 
 fn httpd_factory(
@@ -113,8 +115,20 @@ pub fn create_output(
     format: AudioFormat,
     quality: ResamplerQuality,
     cfg: &OutputConfig,
+    buffer_time_ms: u32,
 ) -> Result<Box<dyn AudioOutput>> {
     let type_lower = cfg.output_type.to_lowercase();
+    // Route cpal-family types directly so buffer_time_ms is forwarded.
+    match type_lower.as_str() {
+        "cpal" | "default" => {
+            return Ok(Box::new(CpalOutput::new(format, quality, buffer_time_ms)?));
+        }
+        #[cfg(feature = "jack")]
+        "jack" => return Ok(Box::new(CpalOutput::new_jack(format, buffer_time_ms)?)),
+        #[cfg(all(feature = "asio", target_os = "windows"))]
+        "asio" => return Ok(Box::new(CpalOutput::new_asio(format, buffer_time_ms)?)),
+        _ => {}
+    }
     OUTPUT_PLUGINS
         .iter()
         .find(|(name, _)| *name == type_lower)

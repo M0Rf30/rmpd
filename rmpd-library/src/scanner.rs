@@ -32,13 +32,15 @@ struct ExtractedMetadata {
 pub struct Scanner {
     event_bus: EventBus,
     music_directory: Option<Utf8PathBuf>,
+    follow_symlinks: bool,
 }
 
 impl Scanner {
-    pub fn new(event_bus: EventBus) -> Self {
+    pub fn new(event_bus: EventBus, follow_symlinks: bool) -> Self {
         Self {
             event_bus,
             music_directory: None,
+            follow_symlinks,
         }
     }
 
@@ -46,12 +48,11 @@ impl Scanner {
     ///
     /// `scan_directory` uses this instead of inline struct construction so that if
     /// `Scanner` gains new fields in the future only this one place needs updating.
-    /// `new`'s signature is intentionally left unchanged to avoid breaking callers in
-    /// other crates; callers that need a music directory should use this builder.
     pub fn with_music_dir(&self, dir: Utf8PathBuf) -> Self {
         Self {
             event_bus: self.event_bus.clone(),
             music_directory: Some(dir),
+            follow_symlinks: self.follow_symlinks,
         }
     }
 
@@ -200,6 +201,20 @@ impl Scanner {
                 && file_name.starts_with('.')
             {
                 continue;
+            }
+
+            // When follow_symlinks is disabled, skip any entry that is itself a
+            // symlink (DirEntry::file_type does not follow symlinks on Linux).
+            if !self.follow_symlinks {
+                match entry.file_type() {
+                    Ok(ft) if ft.is_symlink() => continue,
+                    Err(e) => {
+                        warn!("failed to get file type for {:?}: {}", entry_path, e);
+                        stats.errors += 1;
+                        continue;
+                    }
+                    _ => {}
+                }
             }
 
             let metadata = match entry.metadata() {

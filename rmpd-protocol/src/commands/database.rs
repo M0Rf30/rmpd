@@ -39,23 +39,24 @@ fn get_tag_value<'a>(song: &'a rmpd_core::song::Song, tag: &str) -> std::borrow:
     Cow::Borrowed(song.tag_with_fallback(tag).unwrap_or_default())
 }
 
-pub async fn handle_find_command(
+async fn handle_find_search_core(
     state: &AppState,
     filters: &[(String, String)],
     sort: Option<&str>,
     window: Option<(u32, u32)>,
+    case_sensitive: bool,
 ) -> String {
-    let db = match open_db(state, "find") {
+    let cmd = if case_sensitive { "find" } else { "search" };
+    let db = match open_db(state, cmd) {
         Ok(d) => d,
         Err(e) => return e,
     };
 
-    let mut songs = match helpers::resolve_filters(&db, filters, "find", true) {
+    let mut songs = match helpers::resolve_filters(&db, filters, cmd, case_sensitive) {
         Ok(s) => s,
         Err(e) => return e,
     };
 
-    // Apply sorting if requested
     if let Some(sort_tag) = sort {
         songs.sort_by(|a, b| {
             let a_val = get_tag_value(a, sort_tag);
@@ -65,12 +66,20 @@ pub async fn handle_find_command(
     }
 
     let filtered = apply_range(&songs, window);
-
     let mut resp = ResponseBuilder::new();
     for song in filtered {
         resp.song(song, None, None);
     }
     resp.ok()
+}
+
+pub async fn handle_find_command(
+    state: &AppState,
+    filters: &[(String, String)],
+    sort: Option<&str>,
+    window: Option<(u32, u32)>,
+) -> String {
+    handle_find_search_core(state, filters, sort, window, true).await
 }
 
 pub async fn handle_search_command(
@@ -79,32 +88,7 @@ pub async fn handle_search_command(
     sort: Option<&str>,
     window: Option<(u32, u32)>,
 ) -> String {
-    let db = match open_db(state, "search") {
-        Ok(d) => d,
-        Err(e) => return e,
-    };
-
-    let mut songs = match helpers::resolve_filters(&db, filters, "search", false) {
-        Ok(s) => s,
-        Err(e) => return e,
-    };
-
-    // Apply sorting if requested
-    if let Some(sort_tag) = sort {
-        songs.sort_by(|a, b| {
-            let a_val = get_tag_value(a, sort_tag);
-            let b_val = get_tag_value(b, sort_tag);
-            a_val.cmp(&b_val)
-        });
-    }
-
-    let filtered = apply_range(&songs, window);
-
-    let mut resp = ResponseBuilder::new();
-    for song in filtered {
-        resp.song(song, None, None);
-    }
-    resp.ok()
+    handle_find_search_core(state, filters, sort, window, false).await
 }
 
 pub async fn handle_list_command(

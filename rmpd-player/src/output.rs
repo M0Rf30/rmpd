@@ -16,10 +16,16 @@ pub struct CpalOutput {
     config: StreamConfig,
     pause_state: PauseState,
     resampler: Option<StreamResampler>,
+    /// Output buffer time in milliseconds; sizes the sync-channel depth.
+    buffer_time_ms: u32,
 }
 
 impl CpalOutput {
-    pub fn new(format: AudioFormat, quality: ResamplerQuality) -> Result<Self> {
+    pub fn new(
+        format: AudioFormat,
+        quality: ResamplerQuality,
+        buffer_time_ms: u32,
+    ) -> Result<Self> {
         let device_config = CpalDeviceConfig::new(format.sample_rate, format.channels as u16)?;
 
         // If the device could not take the requested rate, CpalDeviceConfig
@@ -58,6 +64,7 @@ impl CpalOutput {
             config: device_config.config,
             pause_state: PauseState::new(),
             resampler,
+            buffer_time_ms,
         })
     }
 
@@ -73,7 +80,7 @@ impl CpalOutput {
     }
 
     #[cfg(feature = "jack")]
-    pub fn new_jack(format: AudioFormat) -> Result<Self> {
+    pub fn new_jack(format: AudioFormat, buffer_time_ms: u32) -> Result<Self> {
         let device_config = CpalDeviceConfig::new_jack(format.sample_rate, format.channels as u16)?;
         Ok(Self {
             device: device_config.device,
@@ -82,11 +89,12 @@ impl CpalOutput {
             config: device_config.config,
             pause_state: PauseState::new(),
             resampler: None,
+            buffer_time_ms,
         })
     }
 
     #[cfg(all(feature = "asio", target_os = "windows"))]
-    pub fn new_asio(format: AudioFormat) -> Result<Self> {
+    pub fn new_asio(format: AudioFormat, buffer_time_ms: u32) -> Result<Self> {
         let device_config = CpalDeviceConfig::new_asio(format.sample_rate, format.channels as u16)?;
         Ok(Self {
             device: device_config.device,
@@ -95,6 +103,7 @@ impl CpalOutput {
             config: device_config.config,
             pause_state: PauseState::new(),
             resampler: None,
+            buffer_time_ms,
         })
     }
 
@@ -110,7 +119,22 @@ impl CpalOutput {
         };
         let sample_format = device_config.find_pcm_format()?;
 
-        let (tx, rx) = sync_channel::<Vec<f32>>(32);
+        // Compute channel depth from buffer_time_ms.  Each chunk sent over the
+        // channel holds ~4096 samples across all channels (the engine's decode
+        // loop writes BUFFER_SIZE = 4096 samples per iteration).  We divide the
+        // desired buffer by the chunk size and clamp to a minimum of 4 so the
+        // device callback never starves on a cold start.
+        const SAMPLES_PER_CHUNK: u64 = 4096;
+        let channel_depth = if self.buffer_time_ms == 0 {
+            32 // safe default if somehow zero
+        } else {
+            let samples_needed = (self.buffer_time_ms as u64
+                * self.config.sample_rate as u64
+                * self.config.channels as u64)
+                / 1000;
+            samples_needed.div_ceil(SAMPLES_PER_CHUNK).max(4) as usize
+        };
+        let (tx, rx) = sync_channel::<Vec<f32>>(channel_depth);
 
         let stream = match sample_format {
             SampleFormat::F32 => {
