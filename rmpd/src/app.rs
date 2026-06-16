@@ -22,6 +22,20 @@ pub async fn run(bind_address: String, config: Config) -> Result<()> {
     state.set_sources(source_registry);
     state.set_password(config.network.password.clone());
     state.set_follow_symlinks(config.general.follow_symlinks);
+    if !config
+        .general
+        .filesystem_charset
+        .eq_ignore_ascii_case("UTF-8")
+        && !config
+            .general
+            .filesystem_charset
+            .eq_ignore_ascii_case("UTF8")
+    {
+        warn!(
+            "filesystem_charset = {:?} is not supported; rmpd operates in UTF-8 only and ignores it",
+            config.general.filesystem_charset
+        );
+    }
 
     // Apply audio settings from config to the player.
     // - resampler quality: used only when the device can't play a rate natively.
@@ -247,6 +261,11 @@ async fn restore_state(
     }
 
     // Restore playlist
+    // The saved current position indexes the ORIGINAL playlist; songs missing
+    // from the DB are skipped below, so this is shifted left as we go to keep
+    // pointing at the right song.
+    let mut resume_position = saved_state.current_position;
+
     if !saved_state.playlist_paths.is_empty() {
         info!(
             "restoring playlist with {} songs",
@@ -257,12 +276,20 @@ async fn restore_state(
             let mut queue = state.queue.write().await;
             let mut missing = 0usize;
 
-            for path in &saved_state.playlist_paths {
+            for (orig_idx, path) in saved_state.playlist_paths.iter().enumerate() {
                 // Try to find song in database
                 if let Ok(Some(song)) = db.get_song_by_path(path) {
                     queue.add(song);
                 } else {
                     missing += 1;
+                    // A missing song shifts every later song left; shift the
+                    // resume position too (or onto the next survivor if the
+                    // current song itself is the one missing).
+                    if let Some(pos) = resume_position.as_mut()
+                        && (orig_idx as u32) < *pos
+                    {
+                        *pos -= 1;
+                    }
                 }
             }
 
@@ -283,7 +310,7 @@ async fn restore_state(
     }
 
     // Restore current song position and potentially resume playback
-    if let Some(position) = saved_state.current_position {
+    if let Some(position) = resume_position {
         let queue = state.queue.read().await;
         if let Some(item) = queue.get(position) {
             let song = (*item.song).clone();
