@@ -232,6 +232,7 @@ See [CI.md](CI.md) for detailed CI/CD documentation.
   - Crossfade and MixRamp transitions
   - ReplayGain support
   - Internet radio: HTTP(S) streaming input with Shoutcast/Icecast (ICY) "now playing" metadata
+  - `httpd` output streams to browsers (`HTTP/1.0`) and to Shoutcast/Icecast clients (`ICY 200 OK` greeting + interleaved ICY `StreamTitle` metadata)
 
 - **Library Management**
   - Filesystem scanning
@@ -259,7 +260,7 @@ See [CI.md](CI.md) for detailed CI/CD documentation.
 ### In Progress 🚧
 
 - Compressed stream encoders (FLAC / Opus / Vorbis) for the `httpd` output
-- Network storage backends (SMB / NFS) and a Shoutcast v1 (`ICY 200 OK`) greeting for the `httpd` output (which currently serves `HTTP/1.0`; consuming Shoutcast/Icecast ICY streams already works)
+- Network storage backends (SMB / NFS)
 
 ## Compatibility
 
