@@ -85,9 +85,9 @@ fn default_env_filter(level: &str) -> tracing_subscriber::EnvFilter {
         tracing_subscriber::EnvFilter::new(format!(
             "{level},\
              lofty=error,\
-             symphonia=warn,symphonia_core=warn,symphonia_bundle_mp3=warn,\
-             symphonia_format_isomp4=warn,symphonia_format_ogg=warn,\
-             symphonia_codec_vorbis=warn,symphonia_metadata=warn,\
+             symphonia=error,symphonia_core=error,symphonia_bundle_mp3=error,\
+             symphonia_format_isomp4=error,symphonia_format_ogg=error,\
+             symphonia_codec_vorbis=error,symphonia_metadata=error,\
              cpal=warn,zbus=warn"
         ))
     })
