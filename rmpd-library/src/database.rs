@@ -20,6 +20,30 @@ fn icu_cmp_opt(col: &CollatorBorrowed<'_>, a: Option<&str>, b: Option<&str>) -> 
     }
 }
 
+/// Sort comparator matching MPD's song_cmp: Album (ICU, None-first) → Disc → Track → Filename (ICU).
+/// Extracted so both `list_directory` and `walk_dir` share the same closure body.
+fn song_cmp(a: &Song, b: &Song, col: &CollatorBorrowed<'_>) -> Ordering {
+    let album_ord = icu_cmp_opt(col, a.tag("album"), b.tag("album"));
+    if album_ord != Ordering::Equal {
+        return album_ord;
+    }
+    let disc_a: u32 = a.tag("disc").and_then(|v| v.parse().ok()).unwrap_or(0);
+    let disc_b: u32 = b.tag("disc").and_then(|v| v.parse().ok()).unwrap_or(0);
+    let disc_ord = disc_a.cmp(&disc_b);
+    if disc_ord != Ordering::Equal {
+        return disc_ord;
+    }
+    let track_a: u32 = a.tag("track").and_then(|v| v.parse().ok()).unwrap_or(0);
+    let track_b: u32 = b.tag("track").and_then(|v| v.parse().ok()).unwrap_or(0);
+    let track_ord = track_a.cmp(&track_b);
+    if track_ord != Ordering::Equal {
+        return track_ord;
+    }
+    let a_name = a.path.file_name().unwrap_or(a.path.as_str());
+    let b_name = b.path.file_name().unwrap_or(b.path.as_str());
+    col.compare(a_name, b_name)
+}
+
 /// An entry yielded during a recursive directory walk.
 pub enum WalkEntry<'a> {
     /// A song file.
@@ -29,6 +53,8 @@ pub enum WalkEntry<'a> {
 }
 
 /// SELECT columns for song audio properties (no tags — those come from song_tags).
+/// NOTE: `concat!()` only accepts string literals, not named `const` variables, so
+/// `format!("{SONG_COLUMNS} ...")` is the correct form for all queries using this list.
 const SONG_COLUMNS: &str = "id, path, duration, sample_rate, channels, bits_per_sample, bitrate,
      replay_gain_track_gain, replay_gain_track_peak,
      replay_gain_album_gain, replay_gain_album_peak,
@@ -599,7 +625,8 @@ impl Database {
 
         // Insert or update the song row (audio properties only).
         // On conflict (same path): update audio props and last_modified, but preserve added_at.
-        self.conn.execute(
+        // RETURNING id avoids the extra SELECT query (SQLite >=3.43, already required).
+        let song_id: u64 = self.conn.query_row(
             "INSERT INTO songs (
                 path, directory_id, mtime, duration,
                 sample_rate, channels, bits_per_sample, bitrate,
@@ -619,7 +646,8 @@ impl Database {
                 replay_gain_track_peak = excluded.replay_gain_track_peak,
                 replay_gain_album_gain = excluded.replay_gain_album_gain,
                 replay_gain_album_peak = excluded.replay_gain_album_peak,
-                last_modified = excluded.mtime",
+                last_modified = excluded.mtime
+            RETURNING id",
             params![
                 song.path.as_str(),
                 dir_id,
@@ -634,13 +662,6 @@ impl Database {
                 song.replay_gain_album_gain,
                 song.replay_gain_album_peak,
             ],
-        )?;
-
-        // Use a SELECT to reliably get the song id regardless of insert vs upsert.
-        // last_insert_rowid() is unreliable for ON CONFLICT DO UPDATE in a fresh connection.
-        let song_id: u64 = self.conn.query_row(
-            "SELECT id FROM songs WHERE path = ?1",
-            params![song.path.as_str()],
             |row| row.get::<_, i64>(0),
         )? as u64;
 
@@ -712,9 +733,7 @@ impl Database {
             .map(|r| r.map_err(Into::into))
             .collect();
         let mut songs = songs?;
-        for song in &mut songs {
-            song.tags = self.load_tags_for_song(song.id)?;
-        }
+        self.load_tags_for_songs(&mut songs)?;
         Ok(songs)
     }
 
@@ -743,16 +762,14 @@ impl Database {
     /// Get all database statistics in a single query.
     /// Returns (songs, artists, albums, playtime_secs, last_update).
     pub fn get_stats(&self) -> Result<(u32, u32, u32, u64, i64)> {
-        let song_count: u32 = self
-            .conn
-            .query_row("SELECT COUNT(*) FROM songs", [], |row| row.get(0))?;
+        // One pass over the songs table: count, playtime, and last_update together.
+        let (song_count, playtime, last_update): (u32, f64, i64) = self.conn.query_row(
+            "SELECT COUNT(*), COALESCE(SUM(duration), 0.0), COALESCE(MAX(added_at), 0) FROM songs",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
         let artists: u32 = self.count_artists()?;
         let albums: u32 = self.count_albums()?;
-        let (playtime, last_update): (f64, i64) = self.conn.query_row(
-            "SELECT COALESCE(SUM(duration), 0), COALESCE(MAX(added_at), 0) FROM songs",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )?;
         Ok((
             song_count,
             artists,
@@ -797,22 +814,19 @@ impl Database {
         Ok(self.conn.last_insert_rowid())
     }
 
-    /// Escape FTS5 query to handle special characters and reserved words
+    /// Escape FTS5 query by wrapping the whole input in double quotes so FTS5 treats it as
+    /// a phrase. Embedded `"` are escaped as `""` per SQLite FTS5 rules. This prevents
+    /// operator injection for inputs like `"Rock AND Roll"` where the old word-boundary
+    /// check missed operators embedded in multi-word strings.
     fn escape_fts_query(query: &str) -> String {
-        let reserved_words = ["AND", "OR", "NOT", "NEAR"];
-        let query_upper = query.to_uppercase();
-
-        let needs_escaping = query.contains('"')
-            || query.contains('\'')
-            || query.contains('(')
-            || query.contains(')')
-            || reserved_words.iter().any(|&word| query_upper == word);
-
-        if needs_escaping {
-            format!("\"{}\"", query.replace('"', "\"\""))
-        } else {
-            query.to_string()
-        }
+        // Quote the query as a phrase so embedded boolean operators
+        // (AND/OR/NOT/NEAR) are treated literally, while preserving a trailing
+        // `*` (FTS5 prefix search) OUTSIDE the quotes. Embedded quotes doubled.
+        let (body, suffix) = match query.strip_suffix('*') {
+            Some(stripped) => (stripped, "*"),
+            None => (query, ""),
+        };
+        format!("\"{}\"{}", body.replace('"', "\"\""), suffix)
     }
 
     pub fn search_songs(&self, query: &str) -> Result<Vec<Song>> {
@@ -830,46 +844,6 @@ impl Database {
             .collect::<std::result::Result<Vec<_>, _>>()?;
         self.load_tags_for_songs(&mut songs)?;
         Ok(songs)
-    }
-
-    pub fn list_artists(&self) -> Result<Vec<String>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT DISTINCT value FROM song_tags WHERE tag = 'artist' AND value != '' ORDER BY value COLLATE NOCASE",
-        )?;
-        let artists = stmt
-            .query_map([], |row| row.get(0))?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(artists)
-    }
-
-    pub fn list_albums(&self) -> Result<Vec<String>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT DISTINCT value FROM song_tags WHERE tag = 'album' AND value != '' ORDER BY value COLLATE NOCASE",
-        )?;
-        let albums = stmt
-            .query_map([], |row| row.get(0))?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(albums)
-    }
-
-    pub fn list_genres(&self) -> Result<Vec<String>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT DISTINCT value FROM song_tags WHERE tag = 'genre' AND value != '' ORDER BY value COLLATE NOCASE",
-        )?;
-        let genres = stmt
-            .query_map([], |row| row.get(0))?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(genres)
-    }
-
-    pub fn list_album_artists(&self) -> Result<Vec<String>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT DISTINCT value FROM song_tags WHERE tag = 'albumartist' AND value != '' ORDER BY value COLLATE NOCASE",
-        )?;
-        let album_artists = stmt
-            .query_map([], |row| row.get(0))?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(album_artists)
     }
 
     /// List unique values for any tag, with MPD-style fallback.
@@ -981,14 +955,11 @@ impl Database {
     }
 
     /// Get all songs from the database.
+    /// Thin delegator to [`list_all_songs`]; kept because callers in rmpd-protocol use
+    /// this name. The previously-duplicated body has been removed.
+    #[inline]
     pub fn get_all_songs(&self) -> Result<Vec<Song>> {
-        let sql = format!("SELECT {SONG_COLUMNS} FROM songs ORDER BY path");
-        let mut stmt = self.conn.prepare(&sql)?;
-        let mut songs: Vec<Song> = stmt
-            .query_map([], song_from_row)?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        self.load_tags_for_songs(&mut songs)?;
-        Ok(songs)
+        self.list_all_songs()
     }
 
     pub fn find_songs(&self, tag: &str, value: &str) -> Result<Vec<Song>> {
@@ -1203,7 +1174,8 @@ impl Database {
         let leaf_dir_id = parent_id;
 
         // Upsert the song row with the source column set.
-        self.conn.execute(
+        // RETURNING id avoids the extra SELECT (SQLite >=3.43).
+        let song_id: i64 = self.conn.query_row(
             "INSERT INTO songs (
                 path, directory_id, mtime, duration,
                 sample_rate, channels, bits_per_sample, bitrate,
@@ -1224,7 +1196,8 @@ impl Database {
                 replay_gain_album_gain = excluded.replay_gain_album_gain,
                 replay_gain_album_peak = excluded.replay_gain_album_peak,
                 last_modified = excluded.mtime,
-                source = excluded.source",
+                source = excluded.source
+            RETURNING id",
             params![
                 song.path.as_str(),
                 leaf_dir_id,
@@ -1240,11 +1213,6 @@ impl Database {
                 song.replay_gain_album_peak,
                 source_token,
             ],
-        )?;
-
-        let song_id: i64 = self.conn.query_row(
-            "SELECT id FROM songs WHERE path = ?1",
-            params![song.path.as_str()],
             |row| row.get(0),
         )?;
 
@@ -1275,13 +1243,13 @@ impl Database {
     }
 
     // Artwork methods
-    pub fn get_artwork(&self, path: &str, picture_type: &str) -> Result<Option<Vec<u8>>> {
+    pub fn get_artwork(&self, path: &str, picture_type: &str) -> Result<Option<(Vec<u8>, String)>> {
         Ok(self
             .conn
             .query_row(
-                "SELECT data FROM artwork WHERE song_path = ?1 AND picture_type = ?2",
+                "SELECT data, mime_type FROM artwork WHERE song_path = ?1 AND picture_type = ?2",
                 params![path, picture_type],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()?)
     }
@@ -1303,12 +1271,11 @@ impl Database {
     }
 
     pub fn has_artwork(&self, path: &str, picture_type: &str) -> Result<bool> {
-        let count: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM artwork WHERE song_path = ?1 AND picture_type = ?2",
+        Ok(self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM artwork WHERE song_path = ?1 AND picture_type = ?2)",
             params![path, picture_type],
             |row| row.get(0),
-        )?;
-        Ok(count > 0)
+        )?)
     }
 
     /// List directory contents (songs + subdirectories)
@@ -1356,27 +1323,7 @@ impl Database {
         // Sort to match MPD's song_cmp: Album (ICU) -> Disc -> Track -> Filename (ICU)
         let col = CollatorBorrowed::try_new(CollatorPreferences::default(), Default::default())
             .map_err(|e| RmpdError::Library(format!("ICU collator unavailable: {e}")))?;
-        songs.sort_by(|a, b| {
-            let album_ord = icu_cmp_opt(&col, a.tag("album"), b.tag("album"));
-            if album_ord != Ordering::Equal {
-                return album_ord;
-            }
-            let disc_a: u32 = a.tag("disc").and_then(|v| v.parse().ok()).unwrap_or(0);
-            let disc_b: u32 = b.tag("disc").and_then(|v| v.parse().ok()).unwrap_or(0);
-            let disc_ord = disc_a.cmp(&disc_b);
-            if disc_ord != Ordering::Equal {
-                return disc_ord;
-            }
-            let track_a: u32 = a.tag("track").and_then(|v| v.parse().ok()).unwrap_or(0);
-            let track_b: u32 = b.tag("track").and_then(|v| v.parse().ok()).unwrap_or(0);
-            let track_ord = track_a.cmp(&track_b);
-            if track_ord != Ordering::Equal {
-                return track_ord;
-            }
-            let a_name = a.path.file_name().unwrap_or(a.path.as_str());
-            let b_name = b.path.file_name().unwrap_or(b.path.as_str());
-            col.compare(a_name, b_name)
-        });
+        songs.sort_by(|a, b| song_cmp(a, b, &col));
 
         Ok(DirectoryListing { directories, songs })
     }
@@ -1450,13 +1397,18 @@ impl Database {
         if !path.is_empty() && path != "/" && dir_id.is_none() {
             return Err(RmpdError::Library("No such directory".to_string()));
         }
-        self.walk_dir(dir_id, visitor)
+        // Build the ICU collator once here; walk_dir passes it down to avoid
+        // recreating it on every recursive directory visit.
+        let col = CollatorBorrowed::try_new(CollatorPreferences::default(), Default::default())
+            .map_err(|e| RmpdError::Library(format!("ICU collator unavailable: {e}")))?;
+        self.walk_dir(dir_id, visitor, &col)
     }
 
     fn walk_dir(
         &self,
         dir_id: Option<i64>,
         visitor: &mut impl FnMut(WalkEntry<'_>) -> Result<()>,
+        col: &CollatorBorrowed<'_>,
     ) -> Result<()> {
         let id = match dir_id {
             Some(id) => id,
@@ -1472,29 +1424,7 @@ impl Database {
         self.load_tags_for_songs(&mut songs)?;
 
         // Sort to match MPD's song_cmp: (album NULL-first, disc, track, filename)
-        let col = CollatorBorrowed::try_new(CollatorPreferences::default(), Default::default())
-            .map_err(|e| RmpdError::Library(format!("ICU collator unavailable: {e}")))?;
-        songs.sort_by(|a, b| {
-            let album_ord = icu_cmp_opt(&col, a.tag("album"), b.tag("album"));
-            if album_ord != Ordering::Equal {
-                return album_ord;
-            }
-            let disc_a: u32 = a.tag("disc").and_then(|v| v.parse().ok()).unwrap_or(0);
-            let disc_b: u32 = b.tag("disc").and_then(|v| v.parse().ok()).unwrap_or(0);
-            let disc_ord = disc_a.cmp(&disc_b);
-            if disc_ord != Ordering::Equal {
-                return disc_ord;
-            }
-            let track_a: u32 = a.tag("track").and_then(|v| v.parse().ok()).unwrap_or(0);
-            let track_b: u32 = b.tag("track").and_then(|v| v.parse().ok()).unwrap_or(0);
-            let track_ord = track_a.cmp(&track_b);
-            if track_ord != Ordering::Equal {
-                return track_ord;
-            }
-            let a_name = a.path.file_name().unwrap_or(a.path.as_str());
-            let b_name = b.path.file_name().unwrap_or(b.path.as_str());
-            col.compare(a_name, b_name)
-        });
+        songs.sort_by(|a, b| song_cmp(a, b, col));
 
         for song in &songs {
             visitor(WalkEntry::Song(song))?;
@@ -1512,7 +1442,7 @@ impl Database {
 
         for (child_id, child_path, child_mtime) in &subdirs {
             visitor(WalkEntry::Directory(child_path.as_str(), *child_mtime))?;
-            self.walk_dir(Some(*child_id), visitor)?;
+            self.walk_dir(Some(*child_id), visitor, col)?;
         }
 
         Ok(())
@@ -1520,13 +1450,9 @@ impl Database {
 
     /// Save current queue as a playlist
     pub fn save_playlist(&self, name: &str, songs: &[Song]) -> Result<()> {
-        self.conn.execute(
-            "INSERT OR REPLACE INTO playlists (name, mtime) VALUES (?1, strftime('%s', 'now'))",
-            params![name],
-        )?;
-
+        // Upsert the playlist row and return its (possibly new) id via RETURNING.
         let playlist_id: i64 = self.conn.query_row(
-            "SELECT id FROM playlists WHERE name = ?1",
+            "INSERT OR REPLACE INTO playlists (name, mtime) VALUES (?1, strftime('%s', 'now')) RETURNING id",
             params![name],
             |row| row.get(0),
         )?;
@@ -1591,11 +1517,6 @@ impl Database {
         Ok(playlists)
     }
 
-    /// Get songs in a playlist
-    pub fn get_playlist_songs(&self, name: &str) -> Result<Vec<Song>> {
-        self.load_playlist(name)
-    }
-
     /// Delete a playlist
     pub fn delete_playlist(&self, name: &str) -> Result<()> {
         let affected = self
@@ -1623,8 +1544,14 @@ impl Database {
     pub fn playlist_add(&self, name: &str, uri: &str) -> Result<()> {
         let playlist_id = get_playlist_id(&self.conn, name)?;
 
-        let song = self
-            .get_song_by_path(uri)?
+        let song_id: i64 = self
+            .conn
+            .query_row(
+                "SELECT id FROM songs WHERE path = ?1",
+                params![uri],
+                |row| row.get(0),
+            )
+            .optional()?
             .ok_or_else(|| RmpdError::Library(format!("Song not found: {uri}")))?;
 
         let next_pos: i64 = self.conn.query_row(
@@ -1635,7 +1562,7 @@ impl Database {
 
         self.conn.execute(
             "INSERT INTO playlist_items (playlist_id, position, song_id, uri) VALUES (?1, ?2, ?3, ?4)",
-            params![playlist_id, next_pos, song.id as i64, uri],
+            params![playlist_id, next_pos, song_id, uri],
         )?;
 
         self.conn.execute(

@@ -8,7 +8,7 @@ fn main() {
     let files: Vec<String> = std::env::args().skip(1).collect();
     if files.is_empty() {
         eprintln!("usage: test_extract <audio-file> [<audio-file> ...]");
-        std::process::exit(2);
+        return;
     }
 
     for arg in files {

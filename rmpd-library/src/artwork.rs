@@ -8,6 +8,27 @@ use crate::database::Database;
 
 const MAX_ARTWORK_SIZE: usize = 5 * 1024 * 1024; // 5MB
 
+fn infer_mime(data: &[u8]) -> &'static str {
+    if data.starts_with(b"\xFF\xD8\xFF") {
+        "image/jpeg"
+    } else if data.starts_with(b"\x89PNG\r\n\x1a\n") {
+        "image/png"
+    } else if data.starts_with(b"GIF8") {
+        "image/gif"
+    } else if data.len() > 12 && &data[0..4] == b"RIFF" && &data[8..12] == b"WEBP" {
+        "image/webp"
+    } else {
+        "application/octet-stream"
+    }
+}
+
+fn sha256_hex(data: &[u8]) -> String {
+    Sha256::digest(data)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
 #[derive(Debug)]
 pub struct AlbumArtExtractor {
     db: Database,
@@ -21,10 +42,14 @@ impl AlbumArtExtractor {
     /// Extract album art from a file and cache it
     /// `cache_key`: relative path for cache lookup (e.g., "01.m4a")
     /// `file_path`: absolute path for file reading (e.g., "/home/user/Music/01.m4a")
-    pub fn extract_and_cache(&self, cache_key: &str, file_path: &str) -> Result<Option<Vec<u8>>> {
+    pub fn extract_and_cache(
+        &self,
+        cache_key: &str,
+        file_path: &str,
+    ) -> Result<Option<(Vec<u8>, String)>> {
         // Check cache first using relative path as key
-        if let Some(data) = self.db.get_artwork(cache_key, "front")? {
-            return Ok(Some(data));
+        if let Some((data, mime)) = self.db.get_artwork(cache_key, "front")? {
+            return Ok(Some((data, mime)));
         }
 
         // Not in cache, extract from file using absolute path
@@ -55,32 +80,19 @@ impl AlbumArtExtractor {
                 )));
             }
 
-            // Calculate hash for deduplication
-            let mut hasher = Sha256::new();
-            hasher.update(data);
-            let hash = hasher
-                .finalize()
-                .iter()
-                .map(|b| format!("{:02x}", b))
-                .collect::<String>();
+            let hash = sha256_hex(data);
 
-            // Get MIME type
-            let mime_type = pic.mime_type().map(|m| m.to_string()).unwrap_or_else(|| {
-                // Try to infer from data
-                if data.starts_with(b"\xFF\xD8\xFF") {
-                    "image/jpeg".to_owned()
-                } else if data.starts_with(b"\x89PNG\r\n\x1a\n") {
-                    "image/png".to_owned()
-                } else {
-                    "application/octet-stream".to_owned()
-                }
-            });
+            // Get MIME type from tag, fall back to magic-byte inference
+            let mime_type = pic
+                .mime_type()
+                .map(|m| m.to_string())
+                .unwrap_or_else(|| infer_mime(data).to_owned());
 
             // Store in cache using relative path as key
             self.db
                 .store_artwork(cache_key, "front", &mime_type, data, &hash)?;
 
-            Ok(Some(data.to_vec()))
+            Ok(Some((data.to_vec(), mime_type)))
         } else {
             Ok(None)
         }
@@ -101,24 +113,8 @@ impl AlbumArtExtractor {
                 MAX_ARTWORK_SIZE
             )));
         }
-        let mime_type = if data.starts_with(b"\xFF\xD8\xFF") {
-            "image/jpeg"
-        } else if data.starts_with(b"\x89PNG\r\n\x1a\n") {
-            "image/png"
-        } else if data.starts_with(b"GIF8") {
-            "image/gif"
-        } else if data.len() > 12 && &data[0..4] == b"RIFF" && &data[8..12] == b"WEBP" {
-            "image/webp"
-        } else {
-            "application/octet-stream"
-        };
-        let mut hasher = Sha256::new();
-        hasher.update(data);
-        let hash = hasher
-            .finalize()
-            .iter()
-            .map(|b| format!("{:02x}", b))
-            .collect::<String>();
+        let mime_type = infer_mime(data);
+        let hash = sha256_hex(data);
         self.db
             .store_artwork(cache_key, "front", mime_type, data, &hash)
     }
@@ -138,18 +134,16 @@ impl AlbumArtExtractor {
         file_path: &str,
         offset: usize,
     ) -> Result<Option<ArtworkData>> {
-        let data = match self.extract_and_cache(cache_key, file_path)? {
-            Some(data) => data,
+        let (data, stored_mime) = match self.extract_and_cache(cache_key, file_path)? {
+            Some(result) => result,
             None => return Ok(None),
         };
 
-        // Infer MIME type from data
-        let mime_type = if data.starts_with(b"\xFF\xD8\xFF") {
-            "image/jpeg"
-        } else if data.starts_with(b"\x89PNG\r\n\x1a\n") {
-            "image/png"
+        // Use the stored MIME type; fall back to magic-byte inference only when empty.
+        let mime_type = if stored_mime.is_empty() {
+            infer_mime(&data).to_owned()
         } else {
-            "application/octet-stream"
+            stored_mime
         };
 
         // Handle offset for chunked transfer
@@ -166,37 +160,10 @@ impl AlbumArtExtractor {
         };
 
         Ok(Some(ArtworkData {
-            mime_type: mime_type.to_owned(),
+            mime_type,
             total_size: data.len(),
             data: chunk,
         }))
-    }
-
-    /// Extract all picture types from a file
-    pub fn extract_all_pictures(&self, path: &str) -> Result<Vec<ExtractedPicture>> {
-        let file_path = Path::new(path);
-        let tagged_file = lofty::read_from_path(file_path)
-            .map_err(|e| RmpdError::Library(format!("Failed to read file: {e}")))?;
-
-        let mut pictures = Vec::new();
-
-        if let Some(primary_tag) = tagged_file.primary_tag() {
-            for pic in primary_tag.pictures() {
-                let pic_type = picture_type_to_string(pic.pic_type());
-                let mime_type = pic
-                    .mime_type()
-                    .map(|m| m.to_string())
-                    .unwrap_or_else(|| "application/octet-stream".to_owned());
-
-                pictures.push(ExtractedPicture {
-                    picture_type: pic_type,
-                    mime_type,
-                    data: pic.data().to_vec(),
-                });
-            }
-        }
-
-        Ok(pictures)
     }
 }
 
@@ -207,14 +174,7 @@ pub struct ArtworkData {
     pub data: Vec<u8>,
 }
 
-#[derive(Debug)]
-pub struct ExtractedPicture {
-    pub picture_type: String,
-    pub mime_type: String,
-    pub data: Vec<u8>,
-}
-
-fn picture_type_to_string(pic_type: PictureType) -> String {
+pub(crate) fn picture_type_to_string(pic_type: PictureType) -> String {
     match pic_type {
         PictureType::CoverFront => "front",
         PictureType::CoverBack => "back",

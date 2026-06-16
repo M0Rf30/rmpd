@@ -3,7 +3,7 @@
 use crate::response::ResponseBuilder;
 use crate::state::AppState;
 
-use super::utils::ACK_ERROR_SYSTEM;
+use super::utils::ACK_ERROR_NO_EXIST;
 
 /// Reconcile the engine's active output set after an enabled-flag change.
 /// Feeds the engine ALL enabled outputs; if none are enabled, stops playback.
@@ -62,7 +62,12 @@ pub async fn handle_enableoutput_command(state: &AppState, id: u32) -> String {
         reconcile_active_output(state).await;
         ResponseBuilder::new().ok()
     } else {
-        ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "enableoutput", "No such audio output")
+        ResponseBuilder::error(
+            ACK_ERROR_NO_EXIST,
+            0,
+            "enableoutput",
+            "No such audio output",
+        )
     }
 }
 
@@ -84,7 +89,12 @@ pub async fn handle_disableoutput_command(state: &AppState, id: u32) -> String {
         reconcile_active_output(state).await;
         ResponseBuilder::new().ok()
     } else {
-        ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "disableoutput", "No such audio output")
+        ResponseBuilder::error(
+            ACK_ERROR_NO_EXIST,
+            0,
+            "disableoutput",
+            "No such audio output",
+        )
     }
 }
 
@@ -106,7 +116,12 @@ pub async fn handle_toggleoutput_command(state: &AppState, id: u32) -> String {
         reconcile_active_output(state).await;
         ResponseBuilder::new().ok()
     } else {
-        ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "toggleoutput", "No such audio output")
+        ResponseBuilder::error(
+            ACK_ERROR_NO_EXIST,
+            0,
+            "toggleoutput",
+            "No such audio output",
+        )
     }
 }
 
@@ -127,6 +142,6 @@ pub async fn handle_outputset_command(
             .emit(rmpd_core::event::Event::OutputsChanged);
         ResponseBuilder::new().ok()
     } else {
-        ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "outputset", "No such audio output")
+        ResponseBuilder::error(ACK_ERROR_NO_EXIST, 0, "outputset", "No such audio output")
     }
 }

@@ -13,7 +13,7 @@
 //! Note: Command handlers still need updating to use partition context
 
 use super::utils::{
-    ACK_ERROR_ARG, ACK_ERROR_EXIST, ACK_ERROR_NO_EXIST, ACK_ERROR_SYSTEM, ACK_ERROR_UNKNOWN,
+    ACK_ERROR_ARG, ACK_ERROR_EXIST, ACK_ERROR_NO_EXIST, ACK_ERROR_SYS, ACK_ERROR_UNKNOWN,
 };
 use super::{AppState, ResponseBuilder};
 use crate::connection::ConnectionState;
@@ -37,7 +37,7 @@ pub async fn handle_partition_command(
         Some(m) => m,
         None => {
             return ResponseBuilder::error(
-                ACK_ERROR_SYSTEM,
+                ACK_ERROR_SYS,
                 0,
                 "partition",
                 "Partition support not initialized",
@@ -237,7 +237,7 @@ pub async fn handle_moveoutput_command(
     let (output_id, current_partition) = match output {
         Some(o) => (o.id, o.partition.clone()),
         None => {
-            return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "moveoutput", "No such output");
+            return ResponseBuilder::error(ACK_ERROR_NO_EXIST, 0, "moveoutput", "No such output");
         }
     };
 
@@ -296,7 +296,7 @@ pub async fn handle_moveoutput_command(
             ResponseBuilder::new().ok()
         }
         Err(e) => ResponseBuilder::error(
-            ACK_ERROR_SYSTEM,
+            ACK_ERROR_SYS,
             0,
             "moveoutput",
             &format!("Output move failed: {}", e),

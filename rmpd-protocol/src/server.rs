@@ -4,7 +4,7 @@ use tokio::net::{TcpListener, TcpStream, UnixStream};
 use tokio::sync::broadcast;
 use tracing::{debug, error, info};
 
-use crate::commands::utils::{ACK_ERROR_ARG, ACK_ERROR_UNKNOWN};
+use crate::commands::utils::{ACK_ERROR_ARG, ACK_ERROR_PERMISSION, ACK_ERROR_UNKNOWN};
 use crate::commands::{
     connection, database, fingerprint, messaging, options, outputs, partition, playback, playlists,
     queue, reflection, stickers, storage,
@@ -531,7 +531,7 @@ async fn handle_command(
     if !conn_state.has_permission(required) {
         let name = cmd.command_name();
         return Response::Text(ResponseBuilder::error(
-            ACK_ERROR_ARG,
+            ACK_ERROR_PERMISSION,
             0,
             name,
             &format!("you don't have permission for \"{}\"", name),

@@ -2,12 +2,9 @@ use lofty::prelude::*;
 use lofty::probe::Probe;
 
 fn main() {
-    let path = match std::env::args().nth(1) {
-        Some(p) => p,
-        None => {
-            eprintln!("usage: test_m4a_artwork <path-to-audio-file>");
-            std::process::exit(2);
-        }
+    let Some(path) = std::env::args().nth(1) else {
+        eprintln!("usage: test_m4a_artwork <path-to-audio-file>");
+        return;
     };
 
     println!("Testing M4A artwork extraction from: {}", path);

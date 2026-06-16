@@ -21,8 +21,6 @@ pub const ACK_ERROR_PLAYLIST_LOAD: i32 = 53;
 pub const ACK_ERROR_UPDATE_ALREADY: i32 = 54;
 pub const ACK_ERROR_PLAYER_SYNC: i32 = 55;
 pub const ACK_ERROR_EXIST: i32 = 56;
-/// Alias kept for backward compat within rmpd (maps to ACK_ERROR_NO_EXIST = 50)
-pub const ACK_ERROR_SYSTEM: i32 = ACK_ERROR_NO_EXIST;
 
 /// Borrow a pooled database connection, returning an error response string on
 /// failure. Reuses connections from the shared pool instead of opening a fresh
@@ -32,15 +30,10 @@ pub fn open_db(
     command: &str,
 ) -> Result<rmpd_library::Database, String> {
     let pool = state.db_pool.as_ref().ok_or_else(|| {
-        ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, command, "database not configured")
+        ResponseBuilder::error(ACK_ERROR_SYS, 0, command, "database not configured")
     })?;
     rmpd_library::Database::from_pool(pool).map_err(|e| {
-        ResponseBuilder::error(
-            ACK_ERROR_SYSTEM,
-            0,
-            command,
-            &format!("database error: {e}"),
-        )
+        ResponseBuilder::error(ACK_ERROR_SYS, 0, command, &format!("database error: {e}"))
     })
 }
 

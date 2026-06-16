@@ -1,8 +1,6 @@
 //! Shared `pub(crate)` helpers for protocol command handlers.
 
-use crate::commands::utils::{
-    ACK_ERROR_ARG, ACK_ERROR_SYSTEM, build_and_filter, build_search_filter,
-};
+use crate::commands::utils::{ACK_ERROR_ARG, ACK_ERROR_SYS, build_and_filter, build_search_filter};
 use crate::response::ResponseBuilder;
 use crate::state::AppState;
 use rmpd_core::event::Event;
@@ -112,7 +110,7 @@ pub(crate) fn resolve_filters(
     if filters[0].0.starts_with('(') {
         match rmpd_core::filter::FilterExpression::parse(&filters[0].0) {
             Ok(filter) => db.find_songs_filter(&filter).map_err(|e| {
-                ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, command, &format!("query error: {e}"))
+                ResponseBuilder::error(ACK_ERROR_SYS, 0, command, &format!("query error: {e}"))
             }),
             Err(e) => Err(ResponseBuilder::error(
                 ACK_ERROR_ARG,
@@ -124,28 +122,18 @@ pub(crate) fn resolve_filters(
     } else if filters.len() == 1 {
         if case_sensitive {
             db.find_songs(&filters[0].0, &filters[0].1).map_err(|e| {
-                ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, command, &format!("query error: {e}"))
+                ResponseBuilder::error(ACK_ERROR_SYS, 0, command, &format!("query error: {e}"))
             })
         } else {
             let tag = &filters[0].0;
             let value = &filters[0].1;
             if tag.eq_ignore_ascii_case("any") {
                 db.search_songs(value).map_err(|e| {
-                    ResponseBuilder::error(
-                        ACK_ERROR_SYSTEM,
-                        0,
-                        command,
-                        &format!("search error: {e}"),
-                    )
+                    ResponseBuilder::error(ACK_ERROR_SYS, 0, command, &format!("search error: {e}"))
                 })
             } else {
                 db.search_songs_by_tag(tag, value).map_err(|e| {
-                    ResponseBuilder::error(
-                        ACK_ERROR_SYSTEM,
-                        0,
-                        command,
-                        &format!("query error: {e}"),
-                    )
+                    ResponseBuilder::error(ACK_ERROR_SYS, 0, command, &format!("query error: {e}"))
                 })
             }
         }
@@ -156,7 +144,7 @@ pub(crate) fn resolve_filters(
             build_search_filter(filters)
         };
         db.find_songs_filter(&expr).map_err(|e| {
-            ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, command, &format!("query error: {e}"))
+            ResponseBuilder::error(ACK_ERROR_SYS, 0, command, &format!("query error: {e}"))
         })
     }
 }

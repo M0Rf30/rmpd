@@ -42,21 +42,30 @@ impl Scanner {
         }
     }
 
+    /// Returns a copy of this scanner with `music_directory` set to `dir`.
+    ///
+    /// `scan_directory` uses this instead of inline struct construction so that if
+    /// `Scanner` gains new fields in the future only this one place needs updating.
+    /// `new`'s signature is intentionally left unchanged to avoid breaking callers in
+    /// other crates; callers that need a music directory should use this builder.
+    pub fn with_music_dir(&self, dir: Utf8PathBuf) -> Self {
+        Self {
+            event_bus: self.event_bus.clone(),
+            music_directory: Some(dir),
+        }
+    }
+
     pub fn scan_directory(&self, db: &Database, root_path: &Path) -> Result<ScanStats> {
         info!("starting music library scan: {}", root_path.display());
         self.event_bus.emit(Event::DatabaseUpdateStarted);
 
         let mut stats = ScanStats::default();
 
-        // Store music directory for relative path conversion
+        // Build a scanner variant that knows the music directory so that make_relative_path
+        // can strip the root prefix from absolute paths during the scan.
         let music_dir = Utf8PathBuf::try_from(root_path.to_path_buf())
             .map_err(|_| RmpdError::Library("Music directory path is not valid UTF-8".into()))?;
-
-        // Create a scanner with music_directory set
-        let scanner_with_dir = Scanner {
-            event_bus: self.event_bus.clone(),
-            music_directory: Some(music_dir),
-        };
+        let scanner_with_dir = self.with_music_dir(music_dir);
 
         scanner_with_dir.scan_recursive(db, root_path, &mut stats)?;
 

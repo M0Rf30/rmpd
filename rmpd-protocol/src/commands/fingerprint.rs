@@ -1,5 +1,5 @@
 use super::ResponseBuilder;
-use super::utils::{ACK_ERROR_SYSTEM, ACK_ERROR_UNKNOWN};
+use super::utils::{ACK_ERROR_NO_EXIST, ACK_ERROR_SYS, ACK_ERROR_UNKNOWN};
 use crate::state::AppState;
 use rmpd_library::Fingerprinter;
 use std::path::PathBuf;
@@ -29,7 +29,7 @@ pub async fn handle_getfingerprint_command(state: &AppState, uri: &str) -> Strin
     // Check if file exists
     if !path.exists() {
         return ResponseBuilder::error(
-            ACK_ERROR_SYSTEM,
+            ACK_ERROR_NO_EXIST,
             0,
             "getfingerprint",
             &format!("File not found: {uri}"),
@@ -58,7 +58,7 @@ pub async fn handle_getfingerprint_command(state: &AppState, uri: &str) -> Strin
         Err(_) => {
             error!("fingerprinting task panicked");
             ResponseBuilder::error(
-                ACK_ERROR_SYSTEM,
+                ACK_ERROR_SYS,
                 0,
                 "getfingerprint",
                 "Fingerprinting task panicked",

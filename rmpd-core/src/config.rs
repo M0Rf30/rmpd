@@ -104,6 +104,21 @@ pub struct OutputConfig {
     pub settings: toml::Table,
 }
 
+/// Look up a string-valued setting from a flattened TOML settings table,
+/// trimmed and non-empty. Booleans/integers are stringified (for keys like
+/// `dop`, `max_bitrate`). Returns `None` when absent or empty.
+fn setting_str(table: &toml::Table, key: &str) -> Option<String> {
+    match table.get(key) {
+        Some(toml::Value::String(s)) => {
+            let t = s.trim();
+            (!t.is_empty()).then(|| t.to_owned())
+        }
+        Some(toml::Value::Boolean(b)) => Some(b.to_string()),
+        Some(toml::Value::Integer(i)) => Some(i.to_string()),
+        _ => None,
+    }
+}
+
 impl OutputConfig {
     /// A synthesized default output (system audio via cpal). Used when no
     /// `[[output]]` blocks are configured.
@@ -122,15 +137,7 @@ impl OutputConfig {
     /// `dop`). Returns `None` when absent or empty.
     #[must_use]
     pub fn setting_str(&self, key: &str) -> Option<String> {
-        match self.settings.get(key) {
-            Some(toml::Value::String(s)) => {
-                let t = s.trim();
-                (!t.is_empty()).then(|| t.to_owned())
-            }
-            Some(toml::Value::Boolean(b)) => Some(b.to_string()),
-            Some(toml::Value::Integer(i)) => Some(i.to_string()),
-            _ => None,
-        }
+        setting_str(&self.settings, key)
     }
 }
 
@@ -162,15 +169,7 @@ impl SourceConfig {
     /// `max_bitrate`). Returns `None` when absent or empty.
     #[must_use]
     pub fn setting_str(&self, key: &str) -> Option<String> {
-        match self.settings.get(key) {
-            Some(toml::Value::String(s)) => {
-                let t = s.trim();
-                (!t.is_empty()).then(|| t.to_owned())
-            }
-            Some(toml::Value::Boolean(b)) => Some(b.to_string()),
-            Some(toml::Value::Integer(i)) => Some(i.to_string()),
-            _ => None,
-        }
+        setting_str(&self.settings, key)
     }
 }
 
@@ -211,6 +210,32 @@ pub enum ReplayGainMode {
     Track,
     Album,
     Auto,
+}
+
+impl ReplayGainMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Track => "track",
+            Self::Album => "album",
+            Self::Auto => "auto",
+        }
+    }
+
+    pub fn parse_mode(s: &str) -> Self {
+        match s {
+            "track" => Self::Track,
+            "album" => Self::Album,
+            "auto" => Self::Auto,
+            _ => Self::Off,
+        }
+    }
+}
+
+impl std::fmt::Display for ReplayGainMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]

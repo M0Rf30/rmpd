@@ -28,8 +28,8 @@ fn strip_music_dir_prefix<'a>(path: &'a str, music_dir: Option<&str>) -> &'a str
 }
 
 use super::utils::{
-    ACK_ERROR_ARG, ACK_ERROR_SYSTEM, apply_range, build_and_filter, format_iso8601_timestamp,
-    open_db,
+    ACK_ERROR_ARG, ACK_ERROR_NO_EXIST, ACK_ERROR_SYS, apply_range, build_and_filter,
+    format_iso8601_timestamp, open_db,
 };
 
 /// Helper function to get tag value with MPD-style fallback.
@@ -130,7 +130,7 @@ pub async fn handle_list_command(
                         Ok(s) => s,
                         Err(e) => {
                             return ResponseBuilder::error(
-                                ACK_ERROR_SYSTEM,
+                                ACK_ERROR_SYS,
                                 0,
                                 "list",
                                 &format!("query error: {e}"),
@@ -151,7 +151,7 @@ pub async fn handle_list_command(
                     Ok(s) => s,
                     Err(e) => {
                         return ResponseBuilder::error(
-                            ACK_ERROR_SYSTEM,
+                            ACK_ERROR_SYS,
                             0,
                             "list",
                             &format!("query error: {e}"),
@@ -166,7 +166,7 @@ pub async fn handle_list_command(
                 Ok(s) => s,
                 Err(e) => {
                     return ResponseBuilder::error(
-                        ACK_ERROR_SYSTEM,
+                        ACK_ERROR_SYS,
                         0,
                         "list",
                         &format!("query error: {e}"),
@@ -241,7 +241,7 @@ pub async fn handle_list_command(
                     }
                     Err(e) => {
                         return ResponseBuilder::error(
-                            ACK_ERROR_SYSTEM,
+                            ACK_ERROR_SYS,
                             0,
                             "list",
                             &format!("query error: {e}"),
@@ -263,7 +263,7 @@ pub async fn handle_list_command(
                 Ok(v) => v,
                 Err(e) => {
                     return ResponseBuilder::error(
-                        ACK_ERROR_SYSTEM,
+                        ACK_ERROR_SYS,
                         0,
                         "list",
                         &format!("query error: {e}"),
@@ -326,7 +326,7 @@ pub async fn handle_count_command(
             Ok(s) => s,
             Err(e) => {
                 return ResponseBuilder::error(
-                    ACK_ERROR_SYSTEM,
+                    ACK_ERROR_SYS,
                     0,
                     "count",
                     &format!("query error: {e}"),
@@ -340,7 +340,7 @@ pub async fn handle_count_command(
                 Ok(s) => s,
                 Err(e) => {
                     return ResponseBuilder::error(
-                        ACK_ERROR_SYSTEM,
+                        ACK_ERROR_SYS,
                         0,
                         "count",
                         &format!("query error: {e}"),
@@ -361,7 +361,7 @@ pub async fn handle_count_command(
             Ok(s) => s,
             Err(e) => {
                 return ResponseBuilder::error(
-                    ACK_ERROR_SYSTEM,
+                    ACK_ERROR_SYS,
                     0,
                     "count",
                     &format!("query error: {e}"),
@@ -374,7 +374,7 @@ pub async fn handle_count_command(
             Ok(s) => s,
             Err(e) => {
                 return ResponseBuilder::error(
-                    ACK_ERROR_SYSTEM,
+                    ACK_ERROR_SYS,
                     0,
                     "count",
                     &format!("query error: {e}"),
@@ -427,11 +427,11 @@ pub async fn handle_count_command(
 
 pub async fn handle_update_command(state: &AppState, _path: Option<&str>) -> String {
     if state.db_path.is_none() {
-        return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "update", "database not configured");
+        return ResponseBuilder::error(ACK_ERROR_SYS, 0, "update", "database not configured");
     }
     if state.music_dir.is_none() {
         return ResponseBuilder::error(
-            ACK_ERROR_SYSTEM,
+            ACK_ERROR_SYS,
             0,
             "update",
             "music directory not configured",
@@ -706,7 +706,7 @@ pub async fn handle_lsinfo_command(state: &AppState, path: Option<&str>) -> Stri
             // Strip the "Library error: " prefix that RmpdError::Library adds
             let msg = e.to_string();
             let msg = msg.strip_prefix("Library error: ").unwrap_or(&msg);
-            ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "lsinfo", msg)
+            ResponseBuilder::error(ACK_ERROR_SYS, 0, "lsinfo", msg)
         }
     }
 }
@@ -752,7 +752,7 @@ pub async fn handle_listall_command(state: &AppState, path: Option<&str>) -> Str
         Err(e) => {
             let msg = e.to_string();
             let msg = msg.strip_prefix("Library error: ").unwrap_or(&msg);
-            ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "listall", msg)
+            ResponseBuilder::error(ACK_ERROR_SYS, 0, "listall", msg)
         }
     }
 }
@@ -806,7 +806,7 @@ pub async fn handle_listallinfo_command(state: &AppState, path: Option<&str>) ->
         Err(e) => {
             let msg = e.to_string();
             let msg = msg.strip_prefix("Library error: ").unwrap_or(&msg);
-            ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "listallinfo", msg)
+            ResponseBuilder::error(ACK_ERROR_SYS, 0, "listallinfo", msg)
         }
     }
 }
@@ -823,7 +823,7 @@ pub async fn handle_searchadd_command(state: &AppState, tag: &str, value: &str) 
             Ok(s) => s,
             Err(e) => {
                 return ResponseBuilder::error(
-                    ACK_ERROR_SYSTEM,
+                    ACK_ERROR_SYS,
                     0,
                     "searchadd",
                     &format!("search error: {e}"),
@@ -835,7 +835,7 @@ pub async fn handle_searchadd_command(state: &AppState, tag: &str, value: &str) 
             Ok(s) => s,
             Err(e) => {
                 return ResponseBuilder::error(
-                    ACK_ERROR_SYSTEM,
+                    ACK_ERROR_SYS,
                     0,
                     "searchadd",
                     &format!("query error: {e}"),
@@ -864,7 +864,7 @@ pub async fn handle_findadd_command(state: &AppState, tag: &str, value: &str) ->
             Ok(s) => s,
             Err(e) => {
                 return ResponseBuilder::error(
-                    ACK_ERROR_SYSTEM,
+                    ACK_ERROR_SYS,
                     0,
                     "findadd",
                     &format!("search error: {e}"),
@@ -876,7 +876,7 @@ pub async fn handle_findadd_command(state: &AppState, tag: &str, value: &str) ->
             Ok(s) => s,
             Err(e) => {
                 return ResponseBuilder::error(
-                    ACK_ERROR_SYSTEM,
+                    ACK_ERROR_SYS,
                     0,
                     "findadd",
                     &format!("query error: {e}"),
@@ -1004,7 +1004,7 @@ pub async fn handle_listfiles_command(state: &AppState, uri: Option<&str>) -> St
             }
             resp.ok()
         }
-        Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "listfiles", &format!("Error: {e}")),
+        Err(e) => ResponseBuilder::error(ACK_ERROR_SYS, 0, "listfiles", &format!("Error: {e}")),
     }
 }
 
@@ -1027,7 +1027,7 @@ pub async fn handle_searchcount_command(
         Ok(s) => s,
         Err(e) => {
             return ResponseBuilder::error(
-                ACK_ERROR_SYSTEM,
+                ACK_ERROR_SYS,
                 0,
                 "searchcount",
                 &format!("query error: {e}"),
@@ -1074,43 +1074,6 @@ pub async fn handle_searchcount_command(
     resp.ok()
 }
 
-/// Generate chromaprint fingerprint for audio file
-///
-/// IMPLEMENTATION NOTE:
-/// Chromaprint support requires:
-/// 1. chromaprint-sys-next crate (Rust bindings to libchromaprint)
-/// 2. System libchromaprint library installed (apt-get install libchromaprint-dev)
-/// 3. Audio decoding to PCM samples (integrate with decoder.rs)
-/// 4. Generate fingerprint from PCM data
-/// 5. Return base64-encoded fingerprint string
-///
-/// This is a stub implementation that validates the file exists but
-/// returns "not available" until full chromaprint integration is added.
-pub async fn handle_getfingerprint_command(state: &AppState, uri: &str) -> String {
-    // Resolve the file path
-    let file_path = if uri.starts_with('/') {
-        uri.to_string()
-    } else {
-        match &state.music_dir {
-            Some(music_dir) => format!("{music_dir}/{uri}"),
-            None => uri.to_string(),
-        }
-    };
-
-    // Check if file exists
-    if !std::path::Path::new(&file_path).exists() {
-        return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "getfingerprint", "No such file");
-    }
-
-    // Chromaprint library not yet integrated
-    ResponseBuilder::error(
-        ACK_ERROR_SYSTEM,
-        0,
-        "getfingerprint",
-        "chromaprint not available",
-    )
-}
-
 /// Read file metadata comments
 ///
 /// Reads raw key-value pairs directly from the audio file (not from the DB).
@@ -1136,7 +1099,7 @@ pub async fn handle_readcomments_command(state: &AppState, uri: &str) -> String 
 
     let path = Utf8PathBuf::from(&abs_path);
     if !path.exists() {
-        return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "readcomments", "No such song");
+        return ResponseBuilder::error(ACK_ERROR_NO_EXIST, 0, "readcomments", "No such song");
     }
 
     match MetadataExtractor::read_raw_comments(&path) {
@@ -1159,7 +1122,7 @@ pub async fn handle_readcomments_command(state: &AppState, uri: &str) -> String 
         }
         Err(e) => {
             error!("readcomments error for {uri}: {e}");
-            ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "readcomments", "No such song")
+            ResponseBuilder::error(ACK_ERROR_SYS, 0, "readcomments", "No such song")
         }
     }
 }

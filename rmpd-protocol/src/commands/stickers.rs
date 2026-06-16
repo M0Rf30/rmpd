@@ -7,7 +7,7 @@
 use crate::response::ResponseBuilder;
 use crate::state::AppState;
 
-use super::utils::{ACK_ERROR_SYSTEM, open_db};
+use super::utils::{ACK_ERROR_NO_EXIST, ACK_ERROR_SYS, open_db};
 
 fn get_sticker_i32(db: &rmpd_library::Database, uri: &str, name: &str) -> i32 {
     db.get_sticker(uri, name)
@@ -25,8 +25,10 @@ pub async fn handle_sticker_get_command(state: &AppState, uri: &str, name: &str)
 
     // Check song exists (MPD validates URI before sticker lookup)
     match db.get_song_by_path(uri) {
-        Ok(None) => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "sticker", "No such song"),
-        Err(_) => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "sticker", "No such song"),
+        Ok(None) => {
+            return ResponseBuilder::error(ACK_ERROR_NO_EXIST, 0, "sticker", "No such song");
+        }
+        Err(_) => return ResponseBuilder::error(ACK_ERROR_SYS, 0, "sticker", "No such song"),
         Ok(Some(_)) => {}
     }
 
@@ -37,12 +39,12 @@ pub async fn handle_sticker_get_command(state: &AppState, uri: &str, name: &str)
             resp.ok()
         }
         Ok(None) => ResponseBuilder::error(
-            ACK_ERROR_SYSTEM,
+            ACK_ERROR_NO_EXIST,
             0,
             "sticker",
             &format!("no such sticker: {:?}", name),
         ),
-        Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "sticker", &format!("Error: {e}")),
+        Err(e) => ResponseBuilder::error(ACK_ERROR_SYS, 0, "sticker", &format!("Error: {e}")),
     }
 }
 
@@ -59,14 +61,16 @@ pub async fn handle_sticker_set_command(
 
     // Check song exists
     match db.get_song_by_path(uri) {
-        Ok(None) => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "sticker", "No such song"),
-        Err(_) => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "sticker", "No such song"),
+        Ok(None) => {
+            return ResponseBuilder::error(ACK_ERROR_NO_EXIST, 0, "sticker", "No such song");
+        }
+        Err(_) => return ResponseBuilder::error(ACK_ERROR_SYS, 0, "sticker", "No such song"),
         Ok(Some(_)) => {}
     }
 
     match db.set_sticker(uri, name, value) {
         Ok(_) => ResponseBuilder::new().ok(),
-        Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "sticker", &format!("Error: {e}")),
+        Err(e) => ResponseBuilder::error(ACK_ERROR_SYS, 0, "sticker", &format!("Error: {e}")),
     }
 }
 
@@ -82,8 +86,10 @@ pub async fn handle_sticker_delete_command(
 
     // Check song exists
     match db.get_song_by_path(uri) {
-        Ok(None) => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "sticker", "No such song"),
-        Err(_) => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "sticker", "No such song"),
+        Ok(None) => {
+            return ResponseBuilder::error(ACK_ERROR_NO_EXIST, 0, "sticker", "No such song");
+        }
+        Err(_) => return ResponseBuilder::error(ACK_ERROR_SYS, 0, "sticker", "No such song"),
         Ok(Some(_)) => {}
     }
 
@@ -92,19 +98,14 @@ pub async fn handle_sticker_delete_command(
         match db.get_sticker(uri, sticker_name) {
             Ok(None) => {
                 return ResponseBuilder::error(
-                    ACK_ERROR_SYSTEM,
+                    ACK_ERROR_NO_EXIST,
                     0,
                     "sticker",
                     &format!("no such sticker: {:?}", sticker_name),
                 );
             }
             Err(e) => {
-                return ResponseBuilder::error(
-                    ACK_ERROR_SYSTEM,
-                    0,
-                    "sticker",
-                    &format!("Error: {e}"),
-                );
+                return ResponseBuilder::error(ACK_ERROR_SYS, 0, "sticker", &format!("Error: {e}"));
             }
             Ok(Some(_)) => {}
         }
@@ -112,7 +113,7 @@ pub async fn handle_sticker_delete_command(
 
     match db.delete_sticker(uri, name) {
         Ok(_) => ResponseBuilder::new().ok(),
-        Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "sticker", &format!("Error: {e}")),
+        Err(e) => ResponseBuilder::error(ACK_ERROR_SYS, 0, "sticker", &format!("Error: {e}")),
     }
 }
 
@@ -124,8 +125,10 @@ pub async fn handle_sticker_list_command(state: &AppState, uri: &str) -> String 
 
     // Check song exists
     match db.get_song_by_path(uri) {
-        Ok(None) => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "sticker", "No such song"),
-        Err(_) => return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "sticker", "No such song"),
+        Ok(None) => {
+            return ResponseBuilder::error(ACK_ERROR_NO_EXIST, 0, "sticker", "No such song");
+        }
+        Err(_) => return ResponseBuilder::error(ACK_ERROR_SYS, 0, "sticker", "No such song"),
         Ok(Some(_)) => {}
     }
 
@@ -137,7 +140,7 @@ pub async fn handle_sticker_list_command(state: &AppState, uri: &str) -> String 
             }
             resp.ok()
         }
-        Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "sticker", &format!("Error: {e}")),
+        Err(e) => ResponseBuilder::error(ACK_ERROR_SYS, 0, "sticker", &format!("Error: {e}")),
     }
 }
 
@@ -161,7 +164,7 @@ pub async fn handle_sticker_find_command(
             }
             resp.ok()
         }
-        Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "sticker", &format!("Error: {e}")),
+        Err(e) => ResponseBuilder::error(ACK_ERROR_SYS, 0, "sticker", &format!("Error: {e}")),
     }
 }
 
@@ -187,7 +190,7 @@ pub async fn handle_sticker_inc_command(
             resp.field("sticker", format!("{name}={new_value}"));
             resp.ok()
         }
-        Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "sticker", &format!("Error: {e}")),
+        Err(e) => ResponseBuilder::error(ACK_ERROR_SYS, 0, "sticker", &format!("Error: {e}")),
     }
 }
 
@@ -213,7 +216,7 @@ pub async fn handle_sticker_dec_command(
             resp.field("sticker", format!("{name}={new_value}"));
             resp.ok()
         }
-        Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "sticker", &format!("Error: {e}")),
+        Err(e) => ResponseBuilder::error(ACK_ERROR_SYS, 0, "sticker", &format!("Error: {e}")),
     }
 }
 

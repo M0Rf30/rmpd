@@ -1,10 +1,10 @@
+use crate::artwork::picture_type_to_string;
 use camino::Utf8PathBuf;
 use lofty::config::ParseOptions;
 use lofty::flac::FlacFile;
 use lofty::mp4::{AtomData, AtomIdent, Mp4File};
 use lofty::mpeg::MpegFile;
 use lofty::ogg::{OpusFile, VorbisFile};
-use lofty::picture::PictureType;
 use lofty::prelude::*;
 use lofty::probe::Probe;
 use lofty::tag::ItemKey;
@@ -15,6 +15,14 @@ use rmpd_core::time::system_time_to_unix_secs;
 use std::fs;
 use std::io::BufReader;
 use std::time::SystemTime;
+
+/// Collect Vorbis comment key/value pairs into owned `(key, value)` tuples.
+fn collect_vorbis_pairs(comments: &lofty::ogg::VorbisComments) -> Vec<(String, String)> {
+    comments
+        .items()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect()
+}
 
 fn is_bogus_dsf_comment(s: &str) -> bool {
     let trimmed = s.trim();
@@ -315,34 +323,8 @@ impl MetadataExtractor {
 
         if let Some(tag) = tag {
             for picture in tag.pictures() {
-                let picture_type = match picture.pic_type() {
-                    PictureType::Other => "Other",
-                    PictureType::Icon => "Icon",
-                    PictureType::OtherIcon => "OtherIcon",
-                    PictureType::CoverFront => "Front",
-                    PictureType::CoverBack => "Back",
-                    PictureType::Leaflet => "Leaflet",
-                    PictureType::Media => "Media",
-                    PictureType::LeadArtist => "LeadArtist",
-                    PictureType::Artist => "Artist",
-                    PictureType::Conductor => "Conductor",
-                    PictureType::Band => "Band",
-                    PictureType::Composer => "Composer",
-                    PictureType::Lyricist => "Lyricist",
-                    PictureType::RecordingLocation => "RecordingLocation",
-                    PictureType::DuringRecording => "DuringRecording",
-                    PictureType::DuringPerformance => "DuringPerformance",
-                    PictureType::ScreenCapture => "ScreenCapture",
-                    PictureType::BrightFish => "BrightFish",
-                    PictureType::Illustration => "Illustration",
-                    PictureType::BandLogo => "BandLogo",
-                    PictureType::PublisherLogo => "PublisherLogo",
-                    PictureType::Undefined(_) => "Undefined",
-                    _ => "Other",
-                };
-
                 artworks.push(Artwork {
-                    picture_type: picture_type.to_string(),
+                    picture_type: picture_type_to_string(picture.pic_type()),
                     mime_type: picture
                         .mime_type()
                         .map(|m| m.to_string())
@@ -403,13 +385,10 @@ impl MetadataExtractor {
         let mut reader = BufReader::new(file);
         let flac = FlacFile::read_from(&mut reader, ParseOptions::default())
             .map_err(|e| RmpdError::Library(format!("Failed to read FLAC: {e}")))?;
-        let mut pairs = Vec::new();
-        if let Some(vorbis) = flac.vorbis_comments() {
-            for (key, value) in vorbis.items() {
-                pairs.push((key.to_string(), value.to_string()));
-            }
-        }
-        Ok(pairs)
+        Ok(flac
+            .vorbis_comments()
+            .map(collect_vorbis_pairs)
+            .unwrap_or_default())
     }
 
     fn read_vorbis_comments_from_ogg(path: &Utf8PathBuf) -> Result<Vec<(String, String)>> {
@@ -418,11 +397,7 @@ impl MetadataExtractor {
         let mut reader = BufReader::new(file);
         let ogg = VorbisFile::read_from(&mut reader, ParseOptions::default())
             .map_err(|e| RmpdError::Library(format!("Failed to read OGG: {e}")))?;
-        let mut pairs = Vec::new();
-        for (key, value) in ogg.vorbis_comments().items() {
-            pairs.push((key.to_string(), value.to_string()));
-        }
-        Ok(pairs)
+        Ok(collect_vorbis_pairs(ogg.vorbis_comments()))
     }
 
     fn read_vorbis_comments_from_opus(path: &Utf8PathBuf) -> Result<Vec<(String, String)>> {
@@ -431,11 +406,7 @@ impl MetadataExtractor {
         let mut reader = BufReader::new(file);
         let opus = OpusFile::read_from(&mut reader, ParseOptions::default())
             .map_err(|e| RmpdError::Library(format!("Failed to read Opus: {e}")))?;
-        let mut pairs = Vec::new();
-        for (key, value) in opus.vorbis_comments().items() {
-            pairs.push((key.to_string(), value.to_string()));
-        }
-        Ok(pairs)
+        Ok(collect_vorbis_pairs(opus.vorbis_comments()))
     }
 
     fn read_comments_from_id3v2(path: &Utf8PathBuf) -> Result<Vec<(String, String)>> {
