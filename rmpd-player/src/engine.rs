@@ -210,6 +210,9 @@ impl PlaybackEngine {
 
         // Update current song - clone the song from Arc
         *self.current_song.lock() = Some((*playback_song.song).clone());
+        crate::httpd_output::set_now_playing(Some(crate::httpd_output::now_playing_label(
+            &*playback_song.song,
+        )));
 
         // Reset stop flag
         self.stop_flag.store(false, Ordering::Release);
@@ -323,6 +326,7 @@ impl PlaybackEngine {
         self.output_slot.clear();
         // Emit event to notify clients (external stop)
         self.event_bus.emit(Event::SongChanged(None));
+        crate::httpd_output::set_now_playing(None);
         Ok(())
     }
 
@@ -922,6 +926,15 @@ impl PlaybackEngine {
                         last_stream_title = title.clone();
                         event_bus.emit(Event::StreamTitleChanged(title));
                     }
+                    // Feed the live title to httpd ICY output: prefer the upstream
+                    // ICY stream title for internet radio; fall back to song tags.
+                    let now = decoder.stream_title().or_else(|| {
+                        current_song
+                            .lock()
+                            .as_ref()
+                            .map(crate::httpd_output::now_playing_label)
+                    });
+                    crate::httpd_output::set_now_playing(now);
                 }
             }
             // 'buf exited normally (in-thread advance) → 'song loops with the new decoder
