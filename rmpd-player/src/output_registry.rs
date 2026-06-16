@@ -119,6 +119,19 @@ pub fn create_output(
     dsd_target_rate: Option<u32>,
 ) -> Result<Box<dyn AudioOutput>> {
     let type_lower = cfg.output_type.to_lowercase();
+    // When the native PipeWire backend isn't compiled in, route a
+    // `type = "pipewire"` output through the default cpal device so the config
+    // still plays.
+    #[cfg(not(feature = "pipewire"))]
+    let type_lower = if type_lower == "pipewire" {
+        tracing::debug!(
+            "pipewire feature not built; routing output \"{}\" via the default cpal device",
+            cfg.name
+        );
+        "default".to_owned()
+    } else {
+        type_lower
+    };
     // Route cpal-family types directly so buffer_time_ms is forwarded.
     match type_lower.as_str() {
         "cpal" | "default" => {
@@ -127,6 +140,16 @@ pub fn create_output(
                 None => CpalOutput::new(format, quality, buffer_time_ms)?,
             };
             return Ok(Box::new(out));
+        }
+        #[cfg(feature = "pipewire")]
+        "pipewire" => {
+            // PipeWire owns the graph rate: we open at the decoded rate and let
+            // it follow/resample, so `dsd_target_rate` is intentionally ignored.
+            return Ok(Box::new(crate::pipewire_output::PipeWireOutput::new(
+                format,
+                cfg,
+                buffer_time_ms,
+            )?));
         }
         #[cfg(feature = "jack")]
         "jack" => return Ok(Box::new(CpalOutput::new_jack(format, buffer_time_ms)?)),

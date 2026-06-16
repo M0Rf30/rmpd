@@ -108,6 +108,11 @@ type = "cpal"          # system audio via cpal (ALSA / PulseAudio / PipeWire hos
 enabled = true
 
 [[output]]
+name = "PipeWire"      # native pipewire-rs client; follows the graph rate (build with --features pipewire)
+type = "pipewire"
+enabled = false
+
+[[output]]
 name = "HTTP Stream"   # listen on http://<host>:8000 — play in a browser or another MPD
 type = "httpd"
 enabled = false

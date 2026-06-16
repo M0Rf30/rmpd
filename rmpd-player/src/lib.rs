@@ -17,6 +17,8 @@ pub mod output;
 pub mod output_registry;
 pub mod output_slot;
 pub mod pipe_output;
+#[cfg(feature = "pipewire")]
+pub mod pipewire_output;
 pub mod recorder_output;
 pub mod resampler;
 
@@ -33,5 +35,7 @@ pub use httpd_output::HttpdOutput;
 pub use multi_output::MultiOutput;
 pub use null_output::NullOutput;
 pub use output::CpalOutput;
+#[cfg(feature = "pipewire")]
+pub use pipewire_output::PipeWireOutput;
 pub use output_registry::{OUTPUT_PLUGINS, create_output};
 pub use output_slot::{OutputKey, OutputSlot};

@@ -11,10 +11,11 @@ repository.workspace = true
 ignored = ["thiserror"]
 
 [features]
-# Enable PipeWire audio backend. Requires bindgen at build time (slow).
 asio = ["cpal/asio"]
 jack = ["cpal/jack"]
-pipewire = ["cpal/pipewire"]
+# Enable the native PipeWire audio backend. Requires bindgen at build time
+# (slow): the pipewire-sys crate generates libpipewire/libspa bindings via clang.
+pipewire = ["dep:pipewire"]
 
 [dependencies]
 rmpd-core = { workspace = true, features = ["player-errors"] }
@@ -27,6 +28,7 @@ thiserror.workspace = true
 tracing.workspace = true
 parking_lot.workspace = true
 rmpd-stream.workspace = true
+pipewire = { version = "0.9", optional = true }
 
 [dev-dependencies]
 rmpd-core = { workspace = true, features = ["test-utils"] }

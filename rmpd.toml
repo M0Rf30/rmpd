@@ -64,6 +64,15 @@ enabled = true
 # enabled = true
 # device = "hw:CARD=1,DEV=0"
 # dop = "yes"
+#
+# # Native PipeWire client output: opens the stream at the decoded rate and lets
+# # PipeWire follow/own the graph rate (no rmpd-side downsample, no double
+# # resample). Build with `cargo build --features pipewire`. Falls back to the
+# # cpal path automatically if the feature isn't compiled in.
+# [[output]]
+# name = "PipeWire"
+# type = "pipewire"
+# enabled = true
 
 [decoder]
 enabled = ["symphonia"]
