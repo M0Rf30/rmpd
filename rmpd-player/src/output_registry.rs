@@ -116,12 +116,17 @@ pub fn create_output(
     quality: ResamplerQuality,
     cfg: &OutputConfig,
     buffer_time_ms: u32,
+    dsd_target_rate: Option<u32>,
 ) -> Result<Box<dyn AudioOutput>> {
     let type_lower = cfg.output_type.to_lowercase();
     // Route cpal-family types directly so buffer_time_ms is forwarded.
     match type_lower.as_str() {
         "cpal" | "default" => {
-            return Ok(Box::new(CpalOutput::new(format, quality, buffer_time_ms)?));
+            let out = match dsd_target_rate {
+                Some(rate) => CpalOutput::with_target_rate(format, quality, buffer_time_ms, rate)?,
+                None => CpalOutput::new(format, quality, buffer_time_ms)?,
+            };
+            return Ok(Box::new(out));
         }
         #[cfg(feature = "jack")]
         "jack" => return Ok(Box::new(CpalOutput::new_jack(format, buffer_time_ms)?)),

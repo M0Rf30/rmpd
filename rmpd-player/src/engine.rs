@@ -52,6 +52,15 @@ fn select_dsd_pcm_rate(device_rate: u32, supports_rate: impl Fn(u32) -> bool) ->
         .unwrap_or(88200)
 }
 
+/// The device rate the cpal output should open at for a DSD-to-PCM stream
+/// decoded at `decode_rate` on a device whose native rate is `device_rate`.
+/// Returns `Some(device_rate)` when they differ (so rmpd resamples to the
+/// device's native rate instead of letting a sound server resample the
+/// advertised — but not natively run — decode rate), else `None`.
+fn dsd_output_target_rate(decode_rate: u32, device_rate: u32) -> Option<u32> {
+    (decode_rate != device_rate).then_some(device_rate)
+}
+
 /// Commands that can be sent to the playback thread
 enum PlaybackCommand {
     Seek(f64),
@@ -398,6 +407,12 @@ impl PlaybackEngine {
         // Open decoder (pass-through mode by default)
         let mut decoder = SymphoniaDecoder::open(path)?;
 
+        // Overrides the cpal stream rate for DSD-to-PCM: drives the device at
+        // its native rate and lets rmpd's own StreamResampler bridge the gap,
+        // avoiding a sound-server resample that causes underruns and leaves
+        // DSD ultrasonic shaped noise in-band.
+        let mut dsd_target_rate: Option<u32> = None;
+
         // DSD: native DoP playback is opt-in (RMPD_DOP=1); default is PCM.
         if decoder.is_dsd() {
             // DoP (1-bit DSD over PCM) only produces sound on a DoP-capable DAC
@@ -451,9 +466,11 @@ impl PlaybackEngine {
 
             decoder.enable_pcm_conversion(decode_rate)?;
             info!(
-                "DSD-to-PCM conversion enabled at {} Hz (device {} Hz)",
+                "DSD-to-PCM conversion enabled at {} Hz (device {} Hz); \
+                 cpal stream will open at device-native rate",
                 decode_rate, device_rate
             );
+            dsd_target_rate = dsd_output_target_rate(decode_rate, device_rate);
         }
 
         // Standard PCM playback (works for all formats including DSD with PCM conversion)
@@ -491,7 +508,13 @@ impl PlaybackEngine {
         let multi = output_slot.acquire(key, || {
             let mut boxes: Vec<Box<dyn AudioOutput>> = Vec::with_capacity(effective_outputs.len());
             for (i, cfg) in effective_outputs.iter().enumerate() {
-                match Self::create_output(format, cfg, resampler_quality, buffer_time_ms) {
+                match Self::create_output(
+                    format,
+                    cfg,
+                    resampler_quality,
+                    buffer_time_ms,
+                    dsd_target_rate,
+                ) {
                     Ok(b) => boxes.push(b),
                     Err(e) => {
                         if i == 0 {
@@ -912,8 +935,9 @@ impl PlaybackEngine {
         cfg: &OutputConfig,
         quality: ResamplerQuality,
         buffer_time_ms: u32,
+        dsd_target_rate: Option<u32>,
     ) -> Result<Box<dyn AudioOutput>> {
-        crate::output_registry::create_output(format, quality, cfg, buffer_time_ms)
+        crate::output_registry::create_output(format, quality, cfg, buffer_time_ms, dsd_target_rate)
     }
 
     fn compute_gain_scale(
@@ -1140,6 +1164,31 @@ mod tests {
     #[test]
     fn no_support_info_falls_back_to_default() {
         let rate = select_dsd_pcm_rate(48000, |_| false);
+        assert_eq!(rate, 88200);
+    }
+
+    // ── dsd_output_target_rate tests ─────────────────────────────────────────
+
+    #[test]
+    fn dsd_output_target_rate_differs_returns_device_rate() {
+        // Bug scenario: DSD decoded at 88200 Hz, device natively 48000 Hz.
+        // rmpd must open cpal at 48000 and resample internally, not let
+        // PipeWire resample the advertised-but-non-native 88200 Hz stream.
+        assert_eq!(dsd_output_target_rate(88200, 48000), Some(48000));
+    }
+
+    #[test]
+    fn dsd_output_target_rate_same_returns_none() {
+        // Device natively 44100 Hz, decode rate 44100 Hz: no extra resample needed.
+        assert_eq!(dsd_output_target_rate(44100, 44100), None);
+    }
+
+    #[test]
+    fn select_dsd_pcm_rate_unchanged_by_output_fix() {
+        // Decode-rate selection is not affected by the output-rate fix.
+        // A PipeWire-like device at 48000 Hz that advertises 88200 Hz support
+        // should still decode to 88200 Hz; only the cpal stream opens at 48000.
+        let rate = select_dsd_pcm_rate(48000, |r| r == 88200);
         assert_eq!(rate, 88200);
     }
 }

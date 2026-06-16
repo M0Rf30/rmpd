@@ -26,7 +26,31 @@ impl CpalOutput {
         quality: ResamplerQuality,
         buffer_time_ms: u32,
     ) -> Result<Self> {
-        let device_config = CpalDeviceConfig::new(format.sample_rate, format.channels as u16)?;
+        Self::build(format, quality, buffer_time_ms, format.sample_rate)
+    }
+
+    /// Open the cpal stream at `target_device_rate` instead of
+    /// `format.sample_rate`. The built-in resampler bridges the gap when they
+    /// differ. Used by the DSD-to-PCM path to drive cpal at the device's native
+    /// rate (e.g. 48000 Hz) rather than an advertised-but-resampled rate
+    /// (e.g. 88200 Hz on a PipeWire 48 kHz graph), which prevents buffer
+    /// underruns and keeps DSD ultrasonic shaped noise out of the audible band.
+    pub fn with_target_rate(
+        format: AudioFormat,
+        quality: ResamplerQuality,
+        buffer_time_ms: u32,
+        target_device_rate: u32,
+    ) -> Result<Self> {
+        Self::build(format, quality, buffer_time_ms, target_device_rate)
+    }
+
+    fn build(
+        format: AudioFormat,
+        quality: ResamplerQuality,
+        buffer_time_ms: u32,
+        requested_device_rate: u32,
+    ) -> Result<Self> {
+        let device_config = CpalDeviceConfig::new(requested_device_rate, format.channels as u16)?;
 
         // If the device could not take the requested rate, CpalDeviceConfig
         // selected a supported one; resample to bridge the difference so the
