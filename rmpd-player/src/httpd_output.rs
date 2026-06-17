@@ -371,6 +371,7 @@ impl AudioOutput for HttpdOutput {
 mod tests {
     use super::*;
     use std::io::Read;
+    use std::time::Instant;
 
     fn make_pcm_output(port: u16) -> HttpdOutput {
         let format = AudioFormat {
@@ -389,6 +390,48 @@ mod tests {
             bound: None,
             pause_state: PauseState::new(),
         }
+    }
+
+    /// Block until at least `want` clients are registered with `output`, or a
+    /// generous deadline elapses. The accept thread registers a client only
+    /// after it has written that client's greeting header, so once this returns
+    /// the connection is guaranteed ready to receive audio from `write`.
+    /// Replaces a fixed sleep that can be too short under CI load.
+    fn wait_for_clients(output: &HttpdOutput, want: usize) {
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_secs(5) {
+            if output.clients.lock().len() >= want {
+                return;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    /// Read from `client` until `done(&buf)` holds or a deadline elapses,
+    /// returning everything accumulated. The greeting header and the audio
+    /// pushed by a later `write` can arrive in separate TCP segments, so a
+    /// single `read` may observe only the header — loop until the data lands.
+    fn read_until(client: &mut TcpStream, mut done: impl FnMut(&[u8]) -> bool) -> Vec<u8> {
+        let start = Instant::now();
+        let mut buf = Vec::new();
+        let mut tmp = [0u8; 4096];
+        while start.elapsed() < Duration::from_secs(2) {
+            match client.read(&mut tmp) {
+                Ok(0) => break,
+                Ok(n) => {
+                    buf.extend_from_slice(&tmp[..n]);
+                    if done(&buf) {
+                        break;
+                    }
+                }
+                Err(_) => {
+                    if done(&buf) {
+                        break;
+                    }
+                }
+            }
+        }
+        buf
     }
 
     // ── ICY block builder ──────────────────────────────────────────────────────
@@ -449,19 +492,22 @@ mod tests {
             .set_read_timeout(Some(Duration::from_millis(500)))
             .unwrap();
 
-        // Allow the accept thread to accept the connection, write the HTTP
-        // response header, and push the stream into `clients`.
-        thread::sleep(Duration::from_millis(80));
+        // Wait until the accept thread has written the greeting and registered
+        // the client, so the audio write below is guaranteed to reach it.
+        wait_for_clients(&output, 1);
 
         // Now push a PCM chunk; `clients` contains our stream.
         output.write(&[0.5_f32; 8]).expect("write failed");
 
-        // Read everything the server has pushed so far.
-        let mut buf = vec![0u8; 512];
-        let n = client.read(&mut buf).unwrap_or(0);
+        // Read until audio bytes appear after the HTTP header (header and audio
+        // may arrive in separate TCP segments).
+        let received = read_until(&mut client, |b| {
+            b.windows(4)
+                .position(|w| w == b"\r\n\r\n")
+                .is_some_and(|h| h + 4 < b.len())
+        });
+        let n = received.len();
         assert!(n > 0, "no data received from httpd output");
-
-        let received = &buf[..n];
 
         // Must begin with the HTTP response line.
         assert!(
@@ -497,16 +543,15 @@ mod tests {
         client
             .set_read_timeout(Some(Duration::from_millis(100)))
             .unwrap();
-        thread::sleep(Duration::from_millis(80));
+        wait_for_clients(&output, 1);
 
         output.pause().unwrap();
         output.write(&[0.5_f32; 16]).unwrap();
 
         // The client should receive the HTTP header but no audio bytes after it,
-        // since the write was skipped.
-        let mut buf = vec![0u8; 512];
-        let n = client.read(&mut buf).unwrap_or(0);
-        let received = &buf[..n];
+        // since the write was skipped. Read until the header terminator arrives.
+        let received = read_until(&mut client, |b| b.windows(4).any(|w| w == b"\r\n\r\n"));
+        let n = received.len();
         // HTTP header must be there (sent on connect, before pause).
         assert!(received.starts_with(b"HTTP/1.0 200"));
         // But there must be nothing after \r\n\r\n.
@@ -536,12 +581,11 @@ mod tests {
             .set_read_timeout(Some(Duration::from_millis(500)))
             .unwrap();
 
-        thread::sleep(Duration::from_millis(80));
+        wait_for_clients(&output, 1);
         output.write(&[0.0_f32; 8]).unwrap();
 
-        let mut buf = vec![0u8; 512];
-        let n = icy_client.read(&mut buf).unwrap_or(0);
-        let received = &buf[..n];
+        // Read until the ICY greeting terminator arrives.
+        let received = read_until(&mut icy_client, |b| b.windows(4).any(|w| w == b"\r\n\r\n"));
 
         assert!(
             received.starts_with(b"ICY 200 OK"),
@@ -573,12 +617,11 @@ mod tests {
             .set_read_timeout(Some(Duration::from_millis(500)))
             .unwrap();
 
-        thread::sleep(Duration::from_millis(80));
+        wait_for_clients(&output, 1);
         output.write(&[0.0_f32; 8]).unwrap();
 
-        let mut buf = vec![0u8; 512];
-        let n = plain_client.read(&mut buf).unwrap_or(0);
-        let received = &buf[..n];
+        // Read until the HTTP greeting terminator arrives.
+        let received = read_until(&mut plain_client, |b| b.windows(4).any(|w| w == b"\r\n\r\n"));
 
         assert!(
             received.starts_with(b"HTTP/1.0 200"),
@@ -610,7 +653,7 @@ mod tests {
             .set_read_timeout(Some(Duration::from_millis(500)))
             .unwrap();
 
-        thread::sleep(Duration::from_millis(80));
+        wait_for_clients(&output, 1);
 
         // Set a title before writing audio.
         set_now_playing(Some("Test Artist - Test Song".to_owned()));
@@ -619,18 +662,21 @@ mod tests {
         // After exactly one metaint block the server emits a metadata block.
         output.write(&vec![0.0_f32; 8000]).unwrap();
 
-        // Give the kernel a moment to flush the send buffer.
-        thread::sleep(Duration::from_millis(20));
-
-        // Drain all available data within the read timeout.
-        let mut received = Vec::new();
-        let mut tmp = [0u8; 65536];
-        loop {
-            match icy_client.read(&mut tmp) {
-                Ok(n) if n > 0 => received.extend_from_slice(&tmp[..n]),
-                _ => break, // timeout or EOF
+        // Drain until the metadata block past the first metaint boundary is
+        // fully buffered: HTTP header + ICY_METAINT audio bytes + the length
+        // byte and its payload. Stops as soon as the whole block has landed.
+        let received = read_until(&mut icy_client, |b| {
+            match b.windows(4).position(|w| w == b"\r\n\r\n") {
+                Some(h) => {
+                    let meta = h + 4 + ICY_METAINT;
+                    meta < b.len() && {
+                        let runs = b[meta] as usize;
+                        runs > 0 && b.len() >= meta + 1 + runs * 16
+                    }
+                }
+                None => false,
             }
-        }
+        });
 
         // Locate the ICY response terminator.
         let header_end = received

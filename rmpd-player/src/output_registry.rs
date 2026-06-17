@@ -122,7 +122,7 @@ pub fn create_output(
     // When the native PipeWire backend isn't compiled in, route a
     // `type = "pipewire"` output through the default cpal device so the config
     // still plays.
-    #[cfg(not(feature = "pipewire"))]
+    #[cfg(not(all(feature = "pipewire", target_os = "linux")))]
     let type_lower = if type_lower == "pipewire" {
         tracing::debug!(
             "pipewire feature not built; routing output \"{}\" via the default cpal device",
@@ -141,7 +141,7 @@ pub fn create_output(
             };
             return Ok(Box::new(out));
         }
-        #[cfg(feature = "pipewire")]
+        #[cfg(all(feature = "pipewire", target_os = "linux"))]
         "pipewire" => {
             // PipeWire owns the graph rate: we open at the decoded rate and let
             // it follow/resample, so `dsd_target_rate` is intentionally ignored.

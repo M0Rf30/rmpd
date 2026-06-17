@@ -28,6 +28,11 @@ thiserror.workspace = true
 tracing.workspace = true
 parking_lot.workspace = true
 rmpd-stream.workspace = true
+
+# PipeWire is a Linux-only audio backend; gate the optional dependency to Linux
+# targets so `--all-features` builds on macOS/Windows don't require the system
+# libpipewire/libspa libraries.
+[target.'cfg(target_os = "linux")'.dependencies]
 pipewire = { version = "0.9", optional = true }
 
 [dev-dependencies]
