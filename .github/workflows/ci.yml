@@ -62,7 +62,7 @@ jobs:
 
       - name: Install system dependencies (macOS)
         if: runner.os == 'macOS'
-        run: brew install jack
+        run: brew install jack berkeley-db@5
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@master
