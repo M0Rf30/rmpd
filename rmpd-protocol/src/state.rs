@@ -18,7 +18,9 @@ pub struct OutputInfo {
     pub name: String,
     pub plugin: String,
     pub enabled: bool,
-    pub partition: Option<String>, // Which partition owns this output
+    pub partition: Option<String>,
+    pub config: Option<rmpd_core::config::OutputConfig>,
+    pub attributes: std::collections::HashMap<String, String>,
 }
 
 /// Shared application state
@@ -42,6 +44,14 @@ pub struct AppState {
     pub shutdown_tx: Option<broadcast::Sender<()>>,
     pub disable_actual_mount: bool,
     pub password: Option<String>,
+    /// Music-source registry built from `[[source]]` config blocks.
+    pub sources: std::sync::Arc<rmpd_source::SourceRegistry>,
+    /// Latest ICY "now playing" title for a remote stream (None when not
+    /// streaming or no metadata has arrived). Injected into `currentsong`.
+    pub stream_title: Arc<RwLock<Option<String>>>,
+    /// Whether to follow symlinks when scanning the music directory.
+    /// Mirrors `general.follow_symlinks` from the config file.
+    pub follow_symlinks: bool,
 }
 
 impl fmt::Debug for AppState {
@@ -68,13 +78,14 @@ impl AppState {
         ));
         let engine = PlaybackEngine::new(event_bus.clone(), status.clone(), atomic_state.clone());
 
-        // Create default output
         let default_output = OutputInfo {
             id: 0,
             name: "Default Output".to_string(),
             plugin: "cpal".to_string(),
             enabled: true,
             partition: Some("default".to_string()),
+            config: Some(rmpd_core::config::OutputConfig::cpal_default()),
+            attributes: std::collections::HashMap::new(),
         };
 
         // Initialize discovery service (may fail if mDNS not available)
@@ -124,6 +135,9 @@ impl AppState {
                 .map(|v| v == "1" || v.to_lowercase() == "true")
                 .unwrap_or(false),
             password: None,
+            stream_title: Arc::new(RwLock::new(None)),
+            sources: std::sync::Arc::new(rmpd_source::SourceRegistry::from_config(&[])),
+            follow_symlinks: false,
         }
     }
 
@@ -148,6 +162,16 @@ impl AppState {
         self.password = password;
     }
 
+    /// Set the music-source registry. Call at startup after building the
+    /// registry from `[[source]]` config blocks.
+    pub fn set_sources(&mut self, sources: std::sync::Arc<rmpd_source::SourceRegistry>) {
+        self.sources = sources;
+    }
+
+    pub fn set_follow_symlinks(&mut self, v: bool) {
+        self.follow_symlinks = v;
+    }
+
     pub fn advertise_mdns(&self, port: u16) {
         if let Some(ref discovery) = self.discovery
             && let Err(e) = discovery.advertise(port)
@@ -169,12 +193,13 @@ impl AppState {
             return;
         };
         let event_bus = self.event_bus.clone();
+        let follow_symlinks = self.follow_symlinks;
 
         tokio::task::spawn_blocking(move || {
             tracing::info!("starting library update");
             match rmpd_library::Database::open(&db_path) {
                 Ok(db) => {
-                    let scanner = rmpd_library::Scanner::new(event_bus.clone());
+                    let scanner = rmpd_library::Scanner::new(event_bus.clone(), follow_symlinks);
                     match scanner.scan_directory(&db, std::path::Path::new(&music_dir)) {
                         Ok(stats) => tracing::info!(
                             "library scan complete: {} scanned, {} added, {} updated, {} errors",
@@ -189,6 +214,102 @@ impl AppState {
                 Err(e) => tracing::error!("failed to open database for update: {}", e),
             }
         });
+    }
+
+    /// Spawn a background source sync for every enabled music source.
+    ///
+    /// Each source is pinged first; on success the catalog is synced into the
+    /// database via `rmpd_source::sync_source`. Sources that fail ping are
+    /// skipped (cached rows are kept intact). Emits `DatabaseUpdateStarted` /
+    /// `DatabaseUpdateFinished` idle events so waiting clients wake up.
+    /// Does nothing when no sources are configured or the database is absent.
+    pub fn spawn_source_sync(&self) {
+        let db_path = match self.db_path.clone() {
+            Some(p) => p,
+            None => return,
+        };
+        let sources = self.sources.clone();
+        if sources.is_empty() {
+            return;
+        }
+        let event_bus = self.event_bus.clone();
+
+        tokio::spawn(async move {
+            event_bus.emit(rmpd_core::event::Event::DatabaseUpdateStarted);
+            for source in sources.iter() {
+                let scheme = source.scheme().to_owned();
+                let name = source.name().to_owned();
+                match source.ping().await {
+                    Ok(()) => {
+                        tracing::info!("syncing music source '{}://{}'", scheme, name);
+                        match rmpd_source::sync_source(source, &db_path).await {
+                            Ok(count) => {
+                                tracing::info!(
+                                    "music source '{}://{}' synced {} songs",
+                                    scheme,
+                                    name,
+                                    count
+                                );
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    "music source '{}://{}' sync error: {}",
+                                    scheme,
+                                    name,
+                                    e
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "music source '{}://{}' ping failed, skipping sync: {}",
+                            scheme,
+                            name,
+                            e
+                        );
+                    }
+                }
+            }
+            event_bus.emit(rmpd_core::event::Event::DatabaseUpdateFinished);
+        });
+    }
+
+    pub async fn set_outputs_from_config(
+        &self,
+        outputs: &[rmpd_core::config::OutputConfig],
+        default_name: &str,
+    ) {
+        let built: Vec<OutputInfo> = if outputs.is_empty() {
+            vec![OutputInfo {
+                id: 0,
+                name: if default_name.is_empty() || default_name == "default" {
+                    "Default Output".to_string()
+                } else {
+                    default_name.to_string()
+                },
+                plugin: "cpal".to_string(),
+                enabled: true,
+                partition: Some("default".to_string()),
+                config: Some(rmpd_core::config::OutputConfig::cpal_default()),
+                attributes: std::collections::HashMap::new(),
+            }]
+        } else {
+            outputs
+                .iter()
+                .enumerate()
+                .map(|(i, c)| OutputInfo {
+                    id: i as u32,
+                    name: c.name.clone(),
+                    plugin: c.output_type.clone(),
+                    enabled: c.enabled,
+                    partition: Some("default".to_string()),
+                    config: Some(c.clone()),
+                    attributes: std::collections::HashMap::new(),
+                })
+                .collect()
+        };
+        *self.outputs.write().await = built;
     }
 }
 

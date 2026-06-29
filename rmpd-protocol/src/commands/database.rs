@@ -1,6 +1,6 @@
 //! Database and library browsing command handlers
 
-use tracing::{error, info};
+use tracing::{debug, error};
 
 use crate::helpers;
 use crate::response::{Response, ResponseBuilder};
@@ -28,8 +28,8 @@ fn strip_music_dir_prefix<'a>(path: &'a str, music_dir: Option<&str>) -> &'a str
 }
 
 use super::utils::{
-    ACK_ERROR_ARG, ACK_ERROR_SYSTEM, apply_range, build_and_filter, format_iso8601_timestamp,
-    open_db,
+    ACK_ERROR_ARG, ACK_ERROR_NO_EXIST, ACK_ERROR_SYS, apply_range, build_and_filter,
+    format_iso8601_timestamp, open_db,
 };
 
 /// Helper function to get tag value with MPD-style fallback.
@@ -39,23 +39,24 @@ fn get_tag_value<'a>(song: &'a rmpd_core::song::Song, tag: &str) -> std::borrow:
     Cow::Borrowed(song.tag_with_fallback(tag).unwrap_or_default())
 }
 
-pub async fn handle_find_command(
+async fn handle_find_search_core(
     state: &AppState,
     filters: &[(String, String)],
     sort: Option<&str>,
     window: Option<(u32, u32)>,
+    case_sensitive: bool,
 ) -> String {
-    let db = match open_db(state, "find") {
+    let cmd = if case_sensitive { "find" } else { "search" };
+    let db = match open_db(state, cmd) {
         Ok(d) => d,
         Err(e) => return e,
     };
 
-    let mut songs = match helpers::resolve_filters(&db, filters, "find", true) {
+    let mut songs = match helpers::resolve_filters(&db, filters, cmd, case_sensitive) {
         Ok(s) => s,
         Err(e) => return e,
     };
 
-    // Apply sorting if requested
     if let Some(sort_tag) = sort {
         songs.sort_by(|a, b| {
             let a_val = get_tag_value(a, sort_tag);
@@ -65,12 +66,20 @@ pub async fn handle_find_command(
     }
 
     let filtered = apply_range(&songs, window);
-
     let mut resp = ResponseBuilder::new();
     for song in filtered {
         resp.song(song, None, None);
     }
     resp.ok()
+}
+
+pub async fn handle_find_command(
+    state: &AppState,
+    filters: &[(String, String)],
+    sort: Option<&str>,
+    window: Option<(u32, u32)>,
+) -> String {
+    handle_find_search_core(state, filters, sort, window, true).await
 }
 
 pub async fn handle_search_command(
@@ -79,32 +88,7 @@ pub async fn handle_search_command(
     sort: Option<&str>,
     window: Option<(u32, u32)>,
 ) -> String {
-    let db = match open_db(state, "search") {
-        Ok(d) => d,
-        Err(e) => return e,
-    };
-
-    let mut songs = match helpers::resolve_filters(&db, filters, "search", false) {
-        Ok(s) => s,
-        Err(e) => return e,
-    };
-
-    // Apply sorting if requested
-    if let Some(sort_tag) = sort {
-        songs.sort_by(|a, b| {
-            let a_val = get_tag_value(a, sort_tag);
-            let b_val = get_tag_value(b, sort_tag);
-            a_val.cmp(&b_val)
-        });
-    }
-
-    let filtered = apply_range(&songs, window);
-
-    let mut resp = ResponseBuilder::new();
-    for song in filtered {
-        resp.song(song, None, None);
-    }
-    resp.ok()
+    handle_find_search_core(state, filters, sort, window, false).await
 }
 
 pub async fn handle_list_command(
@@ -130,7 +114,7 @@ pub async fn handle_list_command(
                         Ok(s) => s,
                         Err(e) => {
                             return ResponseBuilder::error(
-                                ACK_ERROR_SYSTEM,
+                                ACK_ERROR_SYS,
                                 0,
                                 "list",
                                 &format!("query error: {e}"),
@@ -151,7 +135,7 @@ pub async fn handle_list_command(
                     Ok(s) => s,
                     Err(e) => {
                         return ResponseBuilder::error(
-                            ACK_ERROR_SYSTEM,
+                            ACK_ERROR_SYS,
                             0,
                             "list",
                             &format!("query error: {e}"),
@@ -166,7 +150,7 @@ pub async fn handle_list_command(
                 Ok(s) => s,
                 Err(e) => {
                     return ResponseBuilder::error(
-                        ACK_ERROR_SYSTEM,
+                        ACK_ERROR_SYS,
                         0,
                         "list",
                         &format!("query error: {e}"),
@@ -241,7 +225,7 @@ pub async fn handle_list_command(
                     }
                     Err(e) => {
                         return ResponseBuilder::error(
-                            ACK_ERROR_SYSTEM,
+                            ACK_ERROR_SYS,
                             0,
                             "list",
                             &format!("query error: {e}"),
@@ -263,7 +247,7 @@ pub async fn handle_list_command(
                 Ok(v) => v,
                 Err(e) => {
                     return ResponseBuilder::error(
-                        ACK_ERROR_SYSTEM,
+                        ACK_ERROR_SYS,
                         0,
                         "list",
                         &format!("query error: {e}"),
@@ -326,7 +310,7 @@ pub async fn handle_count_command(
             Ok(s) => s,
             Err(e) => {
                 return ResponseBuilder::error(
-                    ACK_ERROR_SYSTEM,
+                    ACK_ERROR_SYS,
                     0,
                     "count",
                     &format!("query error: {e}"),
@@ -340,7 +324,7 @@ pub async fn handle_count_command(
                 Ok(s) => s,
                 Err(e) => {
                     return ResponseBuilder::error(
-                        ACK_ERROR_SYSTEM,
+                        ACK_ERROR_SYS,
                         0,
                         "count",
                         &format!("query error: {e}"),
@@ -361,7 +345,7 @@ pub async fn handle_count_command(
             Ok(s) => s,
             Err(e) => {
                 return ResponseBuilder::error(
-                    ACK_ERROR_SYSTEM,
+                    ACK_ERROR_SYS,
                     0,
                     "count",
                     &format!("query error: {e}"),
@@ -374,7 +358,7 @@ pub async fn handle_count_command(
             Ok(s) => s,
             Err(e) => {
                 return ResponseBuilder::error(
-                    ACK_ERROR_SYSTEM,
+                    ACK_ERROR_SYS,
                     0,
                     "count",
                     &format!("query error: {e}"),
@@ -427,11 +411,11 @@ pub async fn handle_count_command(
 
 pub async fn handle_update_command(state: &AppState, _path: Option<&str>) -> String {
     if state.db_path.is_none() {
-        return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "update", "database not configured");
+        return ResponseBuilder::error(ACK_ERROR_SYS, 0, "update", "database not configured");
     }
     if state.music_dir.is_none() {
         return ResponseBuilder::error(
-            ACK_ERROR_SYSTEM,
+            ACK_ERROR_SYS,
             0,
             "update",
             "music directory not configured",
@@ -440,6 +424,8 @@ pub async fn handle_update_command(state: &AppState, _path: Option<&str>) -> Str
 
     // Spawn the background scan (shared with auto-update on startup).
     state.spawn_library_update();
+    // Also sync enabled music sources.
+    state.spawn_source_sync();
 
     // Return update job ID
     let mut resp = ResponseBuilder::new();
@@ -448,12 +434,33 @@ pub async fn handle_update_command(state: &AppState, _path: Option<&str>) -> Str
 }
 
 pub async fn handle_albumart_command(state: &AppState, uri: &str, offset: usize) -> Response {
-    info!("albumart command: uri=[{}], offset={}", uri, offset);
+    debug!("albumart command: uri=[{}], offset={}", uri, offset);
 
     let db = match open_db(state, "albumart") {
         Ok(d) => d,
         Err(e) => return Response::Text(e),
     };
+
+    // Source-backed mount-style paths (e.g. `alarm-music/…`): artwork is fetched
+    // from the source server (once) and cached locally — never read from a file.
+    if state.sources.owns_path(uri) {
+        let extractor = rmpd_library::AlbumArtExtractor::new(db);
+        if !extractor.is_cached(uri)
+            && let Ok(Some(bytes)) = state.sources.cover_art(uri).await
+        {
+            let _ = extractor.cache_external(uri, &bytes);
+        }
+        return match extractor.get_artwork(uri, "", offset) {
+            Ok(Some(artwork)) => {
+                let mut resp = ResponseBuilder::new();
+                resp.field("size", artwork.total_size);
+                resp.field("type", &artwork.mime_type);
+                resp.binary_field("binary", &artwork.data);
+                Response::Binary(resp.to_binary_response())
+            }
+            _ => Response::Text(ResponseBuilder::error(50, 0, "albumart", "No file exists")),
+        };
+    }
 
     // Resolve relative path to absolute path
     let absolute_path = if uri.starts_with('/') {
@@ -504,6 +511,27 @@ pub async fn handle_readpicture_command(state: &AppState, uri: &str, offset: usi
         Ok(d) => d,
         Err(e) => return Response::Text(e),
     };
+
+    // Source-backed mount-style paths: serve the cached server cover art; "no
+    // art" is an empty OK (matching readpicture semantics), not an error.
+    if state.sources.owns_path(uri) {
+        let extractor = rmpd_library::AlbumArtExtractor::new(db);
+        if !extractor.is_cached(uri)
+            && let Ok(Some(bytes)) = state.sources.cover_art(uri).await
+        {
+            let _ = extractor.cache_external(uri, &bytes);
+        }
+        return match extractor.get_artwork(uri, "", offset) {
+            Ok(Some(artwork)) => {
+                let mut resp = ResponseBuilder::new();
+                resp.field("size", artwork.total_size);
+                resp.field("type", &artwork.mime_type);
+                resp.binary_field("binary", &artwork.data);
+                Response::Binary(resp.to_binary_response())
+            }
+            _ => Response::Text(ResponseBuilder::new().ok()),
+        };
+    }
 
     let absolute_path = if uri.starts_with('/') {
         uri.to_string()
@@ -556,7 +584,20 @@ pub async fn handle_currentsong_command(state: &AppState) -> String {
         && let Some(item) = queue.get(current.position)
     {
         let mut resp = ResponseBuilder::new();
-        resp.song(&item.song, Some(current.position), Some(current.id));
+        // For remote streams, surface the live ICY "now playing" title as Title.
+        if rmpd_core::path::is_uri(item.song.path.as_str())
+            && let Some(title) = state.stream_title.read().await.clone()
+        {
+            let mut song = (*item.song).clone();
+            if let Some(slot) = song.tags.iter_mut().find(|(k, _)| k == "title") {
+                slot.1 = title;
+            } else {
+                song.tags.push((std::borrow::Cow::Borrowed("title"), title));
+            }
+            resp.song(&song, Some(current.position), Some(current.id));
+        } else {
+            resp.song(&item.song, Some(current.position), Some(current.id));
+        }
         return resp.ok();
     }
 
@@ -649,7 +690,7 @@ pub async fn handle_lsinfo_command(state: &AppState, path: Option<&str>) -> Stri
             // Strip the "Library error: " prefix that RmpdError::Library adds
             let msg = e.to_string();
             let msg = msg.strip_prefix("Library error: ").unwrap_or(&msg);
-            ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "lsinfo", msg)
+            ResponseBuilder::error(ACK_ERROR_SYS, 0, "lsinfo", msg)
         }
     }
 }
@@ -695,7 +736,7 @@ pub async fn handle_listall_command(state: &AppState, path: Option<&str>) -> Str
         Err(e) => {
             let msg = e.to_string();
             let msg = msg.strip_prefix("Library error: ").unwrap_or(&msg);
-            ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "listall", msg)
+            ResponseBuilder::error(ACK_ERROR_SYS, 0, "listall", msg)
         }
     }
 }
@@ -749,7 +790,7 @@ pub async fn handle_listallinfo_command(state: &AppState, path: Option<&str>) ->
         Err(e) => {
             let msg = e.to_string();
             let msg = msg.strip_prefix("Library error: ").unwrap_or(&msg);
-            ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "listallinfo", msg)
+            ResponseBuilder::error(ACK_ERROR_SYS, 0, "listallinfo", msg)
         }
     }
 }
@@ -766,7 +807,7 @@ pub async fn handle_searchadd_command(state: &AppState, tag: &str, value: &str) 
             Ok(s) => s,
             Err(e) => {
                 return ResponseBuilder::error(
-                    ACK_ERROR_SYSTEM,
+                    ACK_ERROR_SYS,
                     0,
                     "searchadd",
                     &format!("search error: {e}"),
@@ -778,7 +819,7 @@ pub async fn handle_searchadd_command(state: &AppState, tag: &str, value: &str) 
             Ok(s) => s,
             Err(e) => {
                 return ResponseBuilder::error(
-                    ACK_ERROR_SYSTEM,
+                    ACK_ERROR_SYS,
                     0,
                     "searchadd",
                     &format!("query error: {e}"),
@@ -807,7 +848,7 @@ pub async fn handle_findadd_command(state: &AppState, tag: &str, value: &str) ->
             Ok(s) => s,
             Err(e) => {
                 return ResponseBuilder::error(
-                    ACK_ERROR_SYSTEM,
+                    ACK_ERROR_SYS,
                     0,
                     "findadd",
                     &format!("search error: {e}"),
@@ -819,7 +860,7 @@ pub async fn handle_findadd_command(state: &AppState, tag: &str, value: &str) ->
             Ok(s) => s,
             Err(e) => {
                 return ResponseBuilder::error(
-                    ACK_ERROR_SYSTEM,
+                    ACK_ERROR_SYS,
                     0,
                     "findadd",
                     &format!("query error: {e}"),
@@ -947,7 +988,7 @@ pub async fn handle_listfiles_command(state: &AppState, uri: Option<&str>) -> St
             }
             resp.ok()
         }
-        Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "listfiles", &format!("Error: {e}")),
+        Err(e) => ResponseBuilder::error(ACK_ERROR_SYS, 0, "listfiles", &format!("Error: {e}")),
     }
 }
 
@@ -970,7 +1011,7 @@ pub async fn handle_searchcount_command(
         Ok(s) => s,
         Err(e) => {
             return ResponseBuilder::error(
-                ACK_ERROR_SYSTEM,
+                ACK_ERROR_SYS,
                 0,
                 "searchcount",
                 &format!("query error: {e}"),
@@ -1017,43 +1058,6 @@ pub async fn handle_searchcount_command(
     resp.ok()
 }
 
-/// Generate chromaprint fingerprint for audio file
-///
-/// IMPLEMENTATION NOTE:
-/// Chromaprint support requires:
-/// 1. chromaprint-sys-next crate (Rust bindings to libchromaprint)
-/// 2. System libchromaprint library installed (apt-get install libchromaprint-dev)
-/// 3. Audio decoding to PCM samples (integrate with decoder.rs)
-/// 4. Generate fingerprint from PCM data
-/// 5. Return base64-encoded fingerprint string
-///
-/// This is a stub implementation that validates the file exists but
-/// returns "not available" until full chromaprint integration is added.
-pub async fn handle_getfingerprint_command(state: &AppState, uri: &str) -> String {
-    // Resolve the file path
-    let file_path = if uri.starts_with('/') {
-        uri.to_string()
-    } else {
-        match &state.music_dir {
-            Some(music_dir) => format!("{music_dir}/{uri}"),
-            None => uri.to_string(),
-        }
-    };
-
-    // Check if file exists
-    if !std::path::Path::new(&file_path).exists() {
-        return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "getfingerprint", "No such file");
-    }
-
-    // Chromaprint library not yet integrated
-    ResponseBuilder::error(
-        ACK_ERROR_SYSTEM,
-        0,
-        "getfingerprint",
-        "chromaprint not available",
-    )
-}
-
 /// Read file metadata comments
 ///
 /// Reads raw key-value pairs directly from the audio file (not from the DB).
@@ -1061,6 +1065,12 @@ pub async fn handle_getfingerprint_command(state: &AppState, uri: &str) -> Strin
 pub async fn handle_readcomments_command(state: &AppState, uri: &str) -> String {
     use camino::Utf8PathBuf;
     use rmpd_library::MetadataExtractor;
+
+    // Source-backed (remote) songs have no local file to read tags from; running
+    // lofty on a mount-style path would fail. readcomments returns an empty OK.
+    if state.sources.owns_path(uri) {
+        return ResponseBuilder::new().ok();
+    }
 
     // Resolve absolute path from music_dir + relative URI
     let abs_path = if let Some(music_dir) = &state.music_dir {
@@ -1073,7 +1083,7 @@ pub async fn handle_readcomments_command(state: &AppState, uri: &str) -> String 
 
     let path = Utf8PathBuf::from(&abs_path);
     if !path.exists() {
-        return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "readcomments", "No such song");
+        return ResponseBuilder::error(ACK_ERROR_NO_EXIST, 0, "readcomments", "No such song");
     }
 
     match MetadataExtractor::read_raw_comments(&path) {
@@ -1096,7 +1106,7 @@ pub async fn handle_readcomments_command(state: &AppState, uri: &str) -> String 
         }
         Err(e) => {
             error!("readcomments error for {uri}: {e}");
-            ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "readcomments", "No such song")
+            ResponseBuilder::error(ACK_ERROR_SYS, 0, "readcomments", "No such song")
         }
     }
 }

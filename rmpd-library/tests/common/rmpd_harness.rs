@@ -45,12 +45,12 @@ impl RmpdTestHarness {
 
     /// List all artists in the database
     pub fn list_artists(&self) -> Result<Vec<String>> {
-        self.database.list_artists()
+        self.database.list_tag_values("artist")
     }
 
     /// List all albums in the database
     pub fn list_albums(&self) -> Result<Vec<String>> {
-        self.database.list_albums()
+        self.database.list_tag_values("album")
     }
 
     /// Find songs by artist
@@ -100,7 +100,10 @@ impl RmpdTestHarness {
 
     /// Get artwork data
     pub fn get_artwork(&self, path: &str, picture_type: &str) -> Result<Option<Vec<u8>>> {
-        self.database.get_artwork(path, picture_type)
+        Ok(self
+            .database
+            .get_artwork(path, picture_type)?
+            .map(|(data, _mime)| data))
     }
 
     /// Extract artwork from a file

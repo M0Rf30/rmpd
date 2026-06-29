@@ -279,3 +279,51 @@ impl Default for ResponseBuilder {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rmpd_core::song::Song;
+
+    /// A synced source song carrying sample-rate / bit-depth / channel-count,
+    /// shaped like `map_song`'s output.
+    fn source_song() -> Song {
+        Song {
+            id: 0,
+            path: "alarm-music/Artist/Album/song-1.flac".into(),
+            duration: Some(std::time::Duration::from_secs(240)),
+            sample_rate: Some(48_000),
+            channels: Some(2),
+            bits_per_sample: Some(24),
+            bitrate: Some(960),
+            replay_gain_track_gain: None,
+            replay_gain_track_peak: None,
+            replay_gain_album_gain: None,
+            replay_gain_album_peak: None,
+            added_at: 0,
+            last_modified: 0,
+            tags: vec![(
+                rmpd_core::song::intern_tag_key("title"),
+                "Echoes".to_string(),
+            )],
+        }
+    }
+
+    /// The source song emits the MPD `Format: <rate>:<bits>:<channels>` line,
+    /// and its mount-style `file` path keeps the codec-revealing `.flac` suffix.
+    #[test]
+    fn source_song_emits_format_line_and_keeps_extension() {
+        let mut rb = ResponseBuilder::new();
+        rb.song(&source_song(), None, None);
+        let out = rb.ok();
+
+        assert!(
+            out.contains("Format: 48000:24:2"),
+            "expected 'Format: 48000:24:2' in response, got:\n{out}"
+        );
+        assert!(
+            out.contains("file: alarm-music/Artist/Album/song-1.flac"),
+            "expected mount-style file line with .flac extension, got:\n{out}"
+        );
+    }
+}

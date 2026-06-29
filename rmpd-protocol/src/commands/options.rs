@@ -3,7 +3,15 @@
 use crate::response::ResponseBuilder;
 use crate::state::AppState;
 
-use super::utils::{ACK_ERROR_ARG, ACK_ERROR_SYSTEM};
+use super::utils::{ACK_ERROR_ARG, ACK_ERROR_SYS};
+
+/// Notify idle clients (subsystem `options`) and MPRIS that a playback option
+/// changed (repeat/random/single/consume/crossfade/mixramp/replaygain).
+fn notify_options(state: &AppState) {
+    state
+        .event_bus
+        .emit(rmpd_core::event::Event::QueueOptionsChanged);
+}
 
 pub async fn handle_setvol_command(state: &AppState, volume: u8) -> String {
     match state.engine.write().await.set_volume(volume).await {
@@ -12,9 +20,7 @@ pub async fn handle_setvol_command(state: &AppState, volume: u8) -> String {
             status.volume = volume;
             ResponseBuilder::new().ok()
         }
-        Err(e) => {
-            ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "setvol", &format!("Volume error: {e}"))
-        }
+        Err(e) => ResponseBuilder::error(ACK_ERROR_SYS, 0, "setvol", &format!("Volume error: {e}")),
     }
 }
 
@@ -27,19 +33,19 @@ pub async fn handle_volume_command(state: &AppState, change: i32) -> String {
             state.status.write().await.volume = new_vol;
             ResponseBuilder::new().ok()
         }
-        Err(e) => {
-            ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "volume", &format!("Volume error: {e}"))
-        }
+        Err(e) => ResponseBuilder::error(ACK_ERROR_SYS, 0, "volume", &format!("Volume error: {e}")),
     }
 }
 
 pub async fn handle_repeat_command(state: &AppState, enabled: bool) -> String {
     state.status.write().await.repeat = enabled;
+    notify_options(state);
     ResponseBuilder::new().ok()
 }
 
 pub async fn handle_random_command(state: &AppState, enabled: bool) -> String {
     state.status.write().await.random = enabled;
+    notify_options(state);
     ResponseBuilder::new().ok()
 }
 
@@ -58,6 +64,7 @@ pub async fn handle_single_command(state: &AppState, mode: &str) -> String {
         }
     };
     state.status.write().await.single = single_mode;
+    notify_options(state);
     ResponseBuilder::new().ok()
 }
 
@@ -76,23 +83,36 @@ pub async fn handle_consume_command(state: &AppState, mode: &str) -> String {
         }
     };
     state.status.write().await.consume = consume_mode;
+    notify_options(state);
     ResponseBuilder::new().ok()
 }
 
 pub async fn handle_crossfade_command(state: &AppState, seconds: u32) -> String {
     state.status.write().await.crossfade = seconds;
+    state.engine.write().await.set_crossfade(seconds);
+    notify_options(state);
     ResponseBuilder::new().ok()
 }
 
 pub async fn handle_mixrampdb_command(state: &AppState, decibels: f32) -> String {
-    let mut status = state.status.write().await;
-    status.mixramp_db = decibels;
+    let delay = {
+        let mut status = state.status.write().await;
+        status.mixramp_db = decibels;
+        status.mixramp_delay
+    };
+    state.engine.write().await.set_mixramp(decibels, delay);
+    notify_options(state);
     ResponseBuilder::new().ok()
 }
 
 pub async fn handle_mixrampdelay_command(state: &AppState, seconds: f32) -> String {
-    let mut status = state.status.write().await;
-    status.mixramp_delay = seconds;
+    let db = {
+        let mut status = state.status.write().await;
+        status.mixramp_delay = seconds;
+        status.mixramp_db
+    };
+    state.engine.write().await.set_mixramp(db, seconds);
+    notify_options(state);
     ResponseBuilder::new().ok()
 }
 
@@ -101,6 +121,7 @@ pub async fn handle_replaygain_mode_command(state: &AppState, mode: &str) -> Str
         "off" | "track" | "album" | "auto" => {
             state.status.write().await.replay_gain_mode =
                 rmpd_core::state::ReplayGainMode::parse_mode(mode);
+            notify_options(state);
             ResponseBuilder::new().ok()
         }
         _ => ResponseBuilder::error(

@@ -2,6 +2,7 @@ use rmpd_core::config::Config;
 use rmpd_core::error::Result;
 use rmpd_core::state::PlayerState;
 use rmpd_protocol::{AppState, MpdServer, StateFile};
+use std::sync::Arc;
 use tokio::signal;
 use tracing::{error, info, warn};
 
@@ -15,7 +16,26 @@ pub async fn run(bind_address: String, config: Config) -> Result<()> {
     let mut state = AppState::with_all_paths(db_path.clone(), music_dir.clone(), playlist_dir);
 
     // Configure password authentication if set in config.
+
+    // Build music-source registry from [[source]] config blocks.
+    let source_registry = Arc::new(rmpd_source::SourceRegistry::from_config(&config.source));
+    state.set_sources(source_registry);
     state.set_password(config.network.password.clone());
+    state.set_follow_symlinks(config.general.follow_symlinks);
+    if !config
+        .general
+        .filesystem_charset
+        .eq_ignore_ascii_case("UTF-8")
+        && !config
+            .general
+            .filesystem_charset
+            .eq_ignore_ascii_case("UTF8")
+    {
+        warn!(
+            "filesystem_charset = {:?} is not supported; rmpd operates in UTF-8 only and ignores it",
+            config.general.filesystem_charset
+        );
+    }
 
     // Apply audio settings from config to the player.
     // - resampler quality: used only when the device can't play a rate natively.
@@ -26,8 +46,36 @@ pub async fn run(bind_address: String, config: Config) -> Result<()> {
         let mut engine = state.engine.write().await;
         engine.set_resampler_quality(config.audio.resampler_quality);
         engine.set_dop_mode(config.dop_mode());
+        engine.set_replay_gain(
+            config.audio.replay_gain,
+            config.audio.replay_gain_preamp,
+            config.audio.replay_gain_missing_preamp,
+        );
+        engine.set_volume_normalization(config.audio.volume_normalization);
+        engine.set_crossfade(config.audio.crossfade as u32);
+        engine.set_mixramp(config.audio.mixramp_db, config.audio.mixramp_delay);
+        engine.set_buffer_time(config.audio.buffer_time);
+        engine.set_outputs({
+            let enabled: Vec<rmpd_core::config::OutputConfig> = config
+                .output
+                .iter()
+                .filter(|o| o.enabled)
+                .cloned()
+                .collect();
+            if enabled.is_empty() {
+                vec![rmpd_core::config::OutputConfig::cpal_default()]
+            } else {
+                enabled
+            }
+        });
     }
     rmpd_player::set_output_device(config.output_device());
+
+    // Build the protocol-visible output list from the [[output]] config blocks
+    // so `outputs`/`enableoutput`/`disableoutput` report the real configuration.
+    state
+        .set_outputs_from_config(&config.output, &config.audio.default_output)
+        .await;
 
     // Load state from file if it exists
     let state_file = StateFile::new(state_file_path.clone());
@@ -76,6 +124,12 @@ pub async fn run(bind_address: String, config: Config) -> Result<()> {
     if config.database.auto_update {
         info!("auto-update enabled: scanning music directory");
         state.spawn_library_update();
+    }
+
+    // Sync enabled music sources (ping first; unreachable sources are skipped).
+    if !state.sources.is_empty() {
+        info!("syncing music source catalogs");
+        state.spawn_source_sync();
     }
 
     // Start the filesystem watcher so the database stays in sync with on-disk
@@ -175,7 +229,43 @@ async fn restore_state(
         status.replay_gain_mode = saved_state.replay_gain_mode;
     }
 
+    // Keep the engine's crossfade + MixRamp settings in sync with restored state.
+    {
+        let mut engine = state.engine.write().await;
+        engine.set_crossfade(saved_state.crossfade);
+        engine.set_mixramp(saved_state.mixramp_db, saved_state.mixramp_delay);
+    }
+
+    // Restore per-output enabled state, then point the engine at the first
+    // still-enabled output.
+    if !saved_state.disabled_outputs.is_empty() {
+        let mut outputs = state.outputs.write().await;
+        for out in outputs.iter_mut() {
+            if saved_state.disabled_outputs.iter().any(|n| n == &out.name) {
+                out.enabled = false;
+            }
+        }
+    }
+    {
+        let enabled: Vec<rmpd_core::config::OutputConfig> = {
+            let outputs = state.outputs.read().await;
+            outputs
+                .iter()
+                .filter(|o| o.enabled)
+                .filter_map(|o| o.config.clone())
+                .collect()
+        };
+        if !enabled.is_empty() {
+            state.engine.write().await.set_outputs(enabled);
+        }
+    }
+
     // Restore playlist
+    // The saved current position indexes the ORIGINAL playlist; songs missing
+    // from the DB are skipped below, so this is shifted left as we go to keep
+    // pointing at the right song.
+    let mut resume_position = saved_state.current_position;
+
     if !saved_state.playlist_paths.is_empty() {
         info!(
             "restoring playlist with {} songs",
@@ -184,14 +274,30 @@ async fn restore_state(
 
         if let Ok(db) = rmpd_library::Database::open(db_path) {
             let mut queue = state.queue.write().await;
+            let mut missing = 0usize;
 
-            for path in &saved_state.playlist_paths {
+            for (orig_idx, path) in saved_state.playlist_paths.iter().enumerate() {
                 // Try to find song in database
                 if let Ok(Some(song)) = db.get_song_by_path(path) {
                     queue.add(song);
                 } else {
-                    warn!("song not found in database: {}", path);
+                    missing += 1;
+                    // A missing song shifts every later song left; shift the
+                    // resume position too (or onto the next survivor if the
+                    // current song itself is the one missing).
+                    if let Some(pos) = resume_position.as_mut()
+                        && (orig_idx as u32) < *pos
+                    {
+                        *pos -= 1;
+                    }
                 }
+            }
+
+            if missing > 0 {
+                warn!(
+                    "{missing} of {} restored songs not found in database (skipped)",
+                    saved_state.playlist_paths.len()
+                );
             }
 
             let playlist_len = queue.len() as u32;
@@ -204,11 +310,12 @@ async fn restore_state(
     }
 
     // Restore current song position and potentially resume playback
-    if let Some(position) = saved_state.current_position {
+    if let Some(position) = resume_position {
         let queue = state.queue.read().await;
         if let Some(item) = queue.get(position) {
             let song = (*item.song).clone();
             let song_id = item.id;
+            let range = item.range;
             drop(queue);
 
             // Check if we should auto-resume playback
@@ -221,10 +328,21 @@ async fn restore_state(
                         position, play_state
                     );
 
-                    let playback_song = rmpd_protocol::commands::utils::prepare_song_for_playback(
-                        &song,
-                        Some(music_dir),
-                    );
+                    let playback_song =
+                        match rmpd_protocol::commands::utils::prepare_song_for_playback(
+                            &song,
+                            Some(music_dir),
+                            range,
+                            &state.sources,
+                        )
+                        .await
+                        {
+                            Ok(ps) => ps,
+                            Err(e) => {
+                                warn!("failed to resolve song during state restore: {}", e);
+                                return;
+                            }
+                        };
 
                     // Set current song immediately
                     let mut status = state.status.write().await;
@@ -278,9 +396,17 @@ async fn restore_state(
 async fn save_state_on_shutdown(state: &AppState, state_file_path: &str) {
     let status = state.status.read().await;
     let queue = state.queue.read().await;
+    let disabled_outputs: Vec<String> = state
+        .outputs
+        .read()
+        .await
+        .iter()
+        .filter(|o| !o.enabled)
+        .map(|o| o.name.clone())
+        .collect();
 
     let state_file = StateFile::new(state_file_path.to_string());
-    if let Err(e) = state_file.save(&status, &queue).await {
+    if let Err(e) = state_file.save(&status, &queue, &disabled_outputs).await {
         error!("failed to save state: {}", e);
     }
 }

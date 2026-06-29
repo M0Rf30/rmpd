@@ -17,9 +17,9 @@
 - 🔌 **Extensible** - Plugin system for decoders, outputs, and inputs
 - 🎧 **High-Quality Audio** - DSD support, ReplayGain, gapless playback, crossfade
 - 🎼 **Format Support** - FLAC, MP3, Ogg Vorbis, WAV, AAC, DSD (DoP and native)
-- 🏠 **Multi-Room Ready** - Snapcast integration for synchronized playback
+- 🏠 **Multi-Room** - Plays to all enabled outputs at once; stream over HTTP (`httpd` output) or feed an external Snapcast server via FIFO
 - 🖥️ **Desktop Integration** - Native MPRIS D-Bus interface (media keys, `playerctl`, GNOME/KDE) plus mDNS auto-discovery
-- 📱 **Multi-Protocol** - MPD and OpenSubsonic support (planned)
+- 🌐 **Remote Libraries** - Browse and stream from OpenSubsonic servers (Navidrome, Airsonic, gonic) as a music source, built behind the `subsonic` Cargo feature
 - ⚡ **Efficient** - Runs on everything from Raspberry Pi to high-end servers
 
 ## Architecture
@@ -73,6 +73,11 @@ mpc update
 # Add and play music
 mpc add /
 mpc play
+
+# Play internet radio (any HTTP/HTTPS stream URL)
+mpc add https://stream.example/radio.mp3
+mpc play
+mpc current   # shows the live ICY "now playing" title for streams
 ```
 
 ## Configuration
@@ -98,19 +103,60 @@ replay_gain = "auto"
 buffer_time = 500
 
 [[output]]
-name = "ALSA Output"
-type = "alsa"
+name = "Local Audio"
+type = "cpal"          # system audio via cpal (ALSA / PulseAudio / PipeWire host)
 enabled = true
-device = "default"
 
 [[output]]
-name = "Snapcast Output"
-type = "snapcast"
+name = "PipeWire"      # native pipewire-rs client; follows the graph rate (build with --features pipewire)
+type = "pipewire"
 enabled = false
-fifo_path = "/tmp/snapfifo"
+
+[[output]]
+name = "HTTP Stream"   # listen on http://<host>:8000 — play in a browser or another MPD
+type = "httpd"
+enabled = false
+port = 8000
+encoder = "wav"        # "wav" or "pcm"
+
+[[output]]
+name = "Snapcast FIFO" # feed an external snapserver for synchronized multi-room
+type = "fifo"
+enabled = false
+path = "/tmp/snapfifo"
 ```
 
 See [rmpd.toml](rmpd.toml) for a complete configuration example.
+
+### Music Sources (OpenSubsonic)
+
+rmpd can aggregate a remote [OpenSubsonic](https://opensubsonic.netlify.app/)
+server (Navidrome, Airsonic, gonic, …) into its library as a *music source*.
+The remote catalog is synced into the database at startup and on `update`, and
+tracks stream on demand through the same HTTP path used for internet radio — so
+any MPD client browses and plays them like local files (under mount-style paths
+such as `home/Artist/Album/<id>.flac`, where the source name is the mount point).
+
+Build with the `subsonic` feature, then add one or more `[[source]]` blocks:
+
+```bash
+cargo build --release --features subsonic
+```
+
+```toml
+[[source]]
+name = "home"                      # becomes the mount point (top-level directory)
+type = "subsonic"
+enabled = true
+url = "https://music.example.com"
+username = "alice"
+password = "secret"                # or use `api_key = "..."` instead
+# max_bitrate = 320                 # optional server-side transcode cap (kbps)
+# format = "mp3"                    # optional transcode target ("raw" = no transcode)
+```
+
+Credentials are never written to logs. An unreachable server is skipped at
+startup without aborting (previously-synced tracks remain browsable).
 
 ## Desktop Integration (MPRIS)
 
@@ -141,6 +187,7 @@ rmpd includes comprehensive DSD support:
 - DoP (DSD over PCM) for wider DAC compatibility
 - Native DSD playback for compatible hardware
 - Automatic format detection and conversion
+- DSD-to-PCM fallback decodes to a 44.1 kHz-family rate and resamples to the output device's native rate using the configured `resampler_quality`, so a sound server (e.g. PipeWire) never resamples internally — avoiding underruns and keeping DSD's ultrasonic noise out of the audible band
 
 ## Development
 
@@ -187,7 +234,10 @@ See [CI.md](CI.md) for detailed CI/CD documentation.
   - High-rate DSD support (DSD128, DSD256+)
   - Multiple output types (ALSA, PulseAudio, PipeWire)
   - Gapless playback
+  - Crossfade and MixRamp transitions
   - ReplayGain support
+  - Internet radio: HTTP(S) streaming input with Shoutcast/Icecast (ICY) "now playing" metadata
+  - `httpd` output streams to browsers (`HTTP/1.0`) and to Shoutcast/Icecast clients (`ICY 200 OK` greeting + interleaved ICY `StreamTitle` metadata)
 
 - **Library Management**
   - Filesystem scanning
@@ -201,7 +251,7 @@ See [CI.md](CI.md) for detailed CI/CD documentation.
   - Queue management (add, delete, move, shuffle)
   - Database queries (find, search, list)
   - Status and statistics
-  - Playlist management
+  - Playlist management (`.m3u`, `.pls`, XSPF/ASX; `.cue` sheets expand into range-restricted virtual tracks)
   - Output control
 
 - **Desktop Integration**
@@ -209,13 +259,13 @@ See [CI.md](CI.md) for detailed CI/CD documentation.
   - Media keys, `playerctl`, and GNOME/KDE media controls
   - mDNS/Zeroconf service advertisement for client auto-discovery
 
+- **Remote Libraries**
+  - OpenSubsonic music sources (Navidrome, Airsonic, gonic) via the `subsonic` Cargo feature
+
 ### In Progress 🚧
 
-- Advanced playback features (crossfade, MixRamp)
-- Plugin system
-- Snapcast integration
-- Complete MPD protocol coverage
-- OpenSubsonic support
+- Compressed stream encoders (FLAC / Opus / Vorbis) for the `httpd` output
+- Network storage backends (SMB / NFS)
 
 ## Compatibility
 
@@ -230,7 +280,15 @@ See [CI.md](CI.md) for detailed CI/CD documentation.
 
 ### Multi-Room Audio
 
-- 🚧 **Snapcast** - Synchronous multi-room playback (integration in progress)
+rmpd plays to **all enabled outputs simultaneously**, so local audio and a
+network stream can run at once. Two routes to networked/multi-room playback:
+
+- **HTTP streaming** — enable a `type = "httpd"` output (default port 8000) and
+  point any browser, phone, or another MPD/VLC at `http://<host>:8000`. Works
+  today, no extra daemon required (`encoder = "wav"` or `"pcm"`).
+- **Snapcast (synchronized)** — enable a `type = "fifo"` output writing to
+  `/tmp/snapfifo` and run an external [Snapcast](https://github.com/badaix/snapcast)
+  `snapserver` reading that FIFO for sample-accurate multi-room sync.
 
 ## Performance
 

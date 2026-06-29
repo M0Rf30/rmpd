@@ -51,7 +51,7 @@ pub fn derive_command_metadata(input: TokenStream) -> TokenStream {
                 continue;
             }
 
-            attr.parse_nested_meta(|meta| {
+            if let Err(e) = attr.parse_nested_meta(|meta| {
                 if meta.path.is_ident("name") {
                     let value = meta.value()?;
                     let lit: Lit = value.parse()?;
@@ -74,10 +74,9 @@ pub fn derive_command_metadata(input: TokenStream) -> TokenStream {
                     );
                 }
                 Ok(())
-            })
-            .unwrap_or_else(|e| {
-                panic!("{}", e);
-            });
+            }) {
+                return e.to_compile_error().into();
+            }
         }
 
         let cmd_name = match cmd_name {

@@ -1,11 +1,13 @@
 # rmpd configuration file
 
 [general]
-music_directory = "/home/gianluca/Musica"
-playlist_directory = "/home/gianluca/.config/rmpd/playlists"
-db_file = "/home/gianluca/.config/rmpd/database.db"
-state_file = "/home/gianluca/.config/rmpd/state"
-log_level = "debug"
+# Path to your music library (required; "~" is expanded).
+music_directory = "~/Music"
+# The following default to your XDG config dir (~/.config/rmpd/…) when omitted:
+# playlist_directory = "~/.config/rmpd/playlists"
+# db_file = "~/.config/rmpd/database.db"
+# state_file = "~/.config/rmpd/state"
+log_level = "info"
 follow_symlinks = false
 filesystem_charset = "UTF-8"
 
@@ -21,16 +23,23 @@ mpris = true
 [audio]
 default_output = "default"
 buffer_time = 500
-# Sample-rate conversion quality, used only when the output device cannot play a
-# stream's native rate. One of: sinc_best, sinc_medium, sinc_fast, linear.
+# Sample-rate conversion quality, used whenever the output device cannot play a
+# stream's native rate — including DSD-to-PCM conversion, which decodes DSD to a
+# 44.1 kHz-family rate and then resamples here to the device's native rate
+# (rather than letting a sound server like PipeWire resample, which can underrun
+# and leave DSD ultrasonic noise in-band). One of: sinc_best, sinc_medium, sinc_fast, linear.
 resampler_quality = "sinc_medium"
 # DSD over PCM (DoP) for DSD files. "no" = always convert to PCM (default,
 # works on any DAC); "yes" = always send native DSD via DoP (needs a DoP DAC on
 # a bit-perfect path — set `device` below); "auto" = DoP only when `device` is
 # set. The RMPD_DOP env var overrides this.
 dop = "no"
-# Output device id (ALSA PCM name). Empty/unset = system default (PipeWire).
-# Set a raw `hw:` device for bit-perfect DoP, bypassing PipeWire's resampling.
+# Output device id (ALSA PCM name). Empty/unset = system default (PipeWire),
+# whose graph rate (often 48 kHz) is used for PCM and DSD-to-PCM — rmpd does NOT
+# auto-open your DAC at its native rate in that case. Set a raw `hw:` device for
+# bit-perfect DoP and for native-rate DSD-to-PCM (e.g. 88.2 kHz), bypassing
+# PipeWire's resampling: when the configured device natively supports the
+# decoded rate, rmpd opens it directly with no resampling.
 # Discover ids with: cargo run -p rmpd-player --example list_devices
 # (or set RMPD_LIST_DEVICES=1). The RMPD_AUDIO_DEVICE env var overrides this.
 # device = "hw:CARD=1,DEV=0"
@@ -55,20 +64,41 @@ enabled = true
 # enabled = true
 # device = "hw:CARD=1,DEV=0"
 # dop = "yes"
+#
+# # Native PipeWire client output: opens the stream at the decoded rate and lets
+# # PipeWire follow/own the graph rate (no rmpd-side downsample, no double
+# # resample). Build with `cargo build --features pipewire`. Falls back to the
+# # cpal path automatically if the feature isn't compiled in.
+# [[output]]
+# name = "PipeWire"
+# type = "pipewire"
+# enabled = true
 
 [decoder]
 enabled = ["symphonia"]
-
-[plugins]
-plugin_dirs = [
-    "/home/gianluca/.config/rmpd/plugins",
-    "/usr/lib/rmpd/plugins",
-]
-enabled = []
-disabled = []
 
 [database]
 auto_update = true
 filesystem_watch = true
 cache_size = 64
 fts_enabled = true
+
+# ── Music Sources ────────────────────────────────────────────────────────────
+# Remote catalogs are declared as [[source]] blocks. Each enabled source is
+# synced into rmpd's SQLite index under a mount-style virtual path of the form
+# <name>/<Artist>/<Album>/<remote-id>.<ext> (browsable like a local folder).
+#
+# Example: OpenSubsonic-compatible server (Navidrome, Jellyfin, Airsonic …)
+# Uncomment and fill in your server details to activate.
+#
+# [[source]]
+# name = "home"           # label; becomes the top-level mount directory in paths
+# type = "subsonic"       # backend type; "subsonic" requires the subsonic feature
+# enabled = false         # set to true to activate
+# url = "https://music.example.com"
+# username = "alice"
+# password = "s3cr3t"
+# # Optional: cap streaming bitrate (kbps). 0 or absent = server default.
+# # max_bitrate = 320
+# # Optional: preferred transcoding format ("raw" = original, "mp3", "opus", …).
+# # format = "raw"

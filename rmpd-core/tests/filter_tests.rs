@@ -68,8 +68,8 @@ fn test_regex_operator() {
     let expr = FilterExpression::parse("(artist =~ 'Radio.*')").unwrap();
     let (sql, params) = expr.to_sql();
 
-    assert!(sql.contains("LIKE"));
-    assert_eq!(params, vec!["Radio%"]);
+    assert!(sql.contains("REGEXP"));
+    assert_eq!(params, vec!["Radio.*"]);
 }
 
 #[test]
@@ -77,8 +77,8 @@ fn test_not_regex_operator() {
     let expr = FilterExpression::parse("(artist !~ 'Unknown.*')").unwrap();
     let (sql, params) = expr.to_sql();
 
-    assert!(sql.contains("NOT LIKE"));
-    assert_eq!(params, vec!["Unknown%"]);
+    assert!(sql.contains("NOT REGEXP"));
+    assert_eq!(params, vec!["Unknown.*"]);
 }
 
 #[test]

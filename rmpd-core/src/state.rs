@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
+pub use crate::config::ReplayGainMode;
 use crate::song::AudioFormat;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -9,41 +10,6 @@ pub enum PlayerState {
     Stop,
     Play,
     Pause,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ReplayGainMode {
-    #[default]
-    Off,
-    Track,
-    Album,
-    Auto,
-}
-
-impl ReplayGainMode {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Off => "off",
-            Self::Track => "track",
-            Self::Album => "album",
-            Self::Auto => "auto",
-        }
-    }
-
-    pub fn parse_mode(s: &str) -> Self {
-        match s {
-            "track" => Self::Track,
-            "album" => Self::Album,
-            "auto" => Self::Auto,
-            _ => Self::Off,
-        }
-    }
-}
-
-impl std::fmt::Display for ReplayGainMode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
 }
 
 impl PlayerState {

@@ -14,36 +14,45 @@ pub enum Event {
     VolumeChanged(u8),
     BitrateChanged(Option<u32>), // Instantaneous bitrate in kbps (for VBR files)
     SongFinished,
+    /// The engine advanced to the look-ahead (next) song in-thread — gaplessly
+    /// or via crossfade — instead of stopping. The protocol promotes its fed
+    /// "next" to current and feeds the following song.
+    AdvancedToNext,
+    /// A remote stream's ICY "now playing" title changed. Carries the new
+    /// title (None clears it). Notifies the `player` subsystem so idle clients
+    /// re-query `currentsong`.
+    StreamTitleChanged(Option<String>),
 
     // Queue events
     QueueChanged,
     QueueOptionsChanged,
 
+    // Stored playlist events
+    /// The set or contents of on-disk stored playlists changed (save, rm,
+    /// rename, playlistadd, playlistdelete, playlistclear, playlistmove,
+    /// searchaddpl). Notifies the `stored_playlist` idle subsystem so clients
+    /// re-query `listplaylists` / `listplaylistinfo`.
+    StoredPlaylistChanged,
+
     // Database events
     DatabaseUpdateStarted,
-    DatabaseUpdateProgress { scanned: u32, total: u32 },
+    DatabaseUpdateProgress {
+        scanned: u32,
+        total: u32,
+    },
     DatabaseUpdateFinished,
 
     // Output events
     OutputsChanged,
-
-    // Connection events
-    ClientConnected(u64),
-    ClientDisconnected(u64),
-
-    // Plugin events
-    PluginLoaded(String),
-    PluginUnloaded(String),
-
-    // Partition events
-    PartitionChanged(String),
 
     // Filesystem watcher events
     FilesystemWatchStarted,
     FilesystemWatchStopped,
     SongAdded(Song),
     SongUpdated(Song),
-    SongDeleted { path: String },
+    SongDeleted {
+        path: String,
+    },
 }
 
 /// Maps to MPD's idle subsystems
@@ -70,14 +79,16 @@ impl Event {
         match self {
             // Only notify idle for significant player events (state/song changes)
             // NOT for position/bitrate changes - those are too frequent and should be polled
-            Event::PlayerStateChanged(_) | Event::SongChanged(_) | Event::SongFinished => {
-                &[Subsystem::Player]
-            }
+            Event::PlayerStateChanged(_)
+            | Event::SongChanged(_)
+            | Event::SongFinished
+            | Event::StreamTitleChanged(_) => &[Subsystem::Player],
             // Position and bitrate changes are internal - don't notify idle
             Event::PositionChanged(_) | Event::BitrateChanged(_) => &[],
             Event::VolumeChanged(_) => &[Subsystem::Mixer],
             Event::QueueChanged => &[Subsystem::Playlist],
             Event::QueueOptionsChanged => &[Subsystem::Options],
+            Event::StoredPlaylistChanged => &[Subsystem::StoredPlaylist],
             Event::DatabaseUpdateStarted | Event::DatabaseUpdateProgress { .. } => {
                 &[Subsystem::Update]
             }
@@ -86,7 +97,6 @@ impl Event {
                 &[Subsystem::Database]
             }
             Event::OutputsChanged => &[Subsystem::Output],
-            Event::PartitionChanged(_) => &[Subsystem::Partition],
             Event::FilesystemWatchStarted | Event::FilesystemWatchStopped => &[],
             _ => &[],
         }

@@ -19,14 +19,15 @@ name = "rmpd"
 path = "src/main.rs"
 
 [features]
-# Enable PipeWire audio backend. Requires bindgen at build time (slow).
 pipewire = ["rmpd-player/pipewire"]
+subsonic = ["rmpd-source/subsonic"]
 
 [dependencies]
 rmpd-core.workspace = true
 rmpd-protocol.workspace = true
 rmpd-player.workspace = true
 rmpd-library.workspace = true
+rmpd-source.workspace = true
 
 tokio.workspace = true
 anyhow.workspace = true

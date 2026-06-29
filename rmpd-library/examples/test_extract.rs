@@ -1,52 +1,37 @@
 use camino::Utf8PathBuf;
 use rmpd_library::metadata::MetadataExtractor;
 
+/// Manual helper: extract and print metadata for one or more audio files.
+///
+/// Usage: `cargo run -p rmpd-library --example test_extract -- <file> [<file> ...]`
 fn main() {
-    // Test with DSD file
-    let dsd_path = Utf8PathBuf::from("/home/gianluca/Musica/Back in N.Y.C..dsf");
-    println!("Testing DSD extraction from: {}", dsd_path);
-    match MetadataExtractor::extract_from_file(&dsd_path) {
-        Ok(song) => {
-            println!("\nExtracted DSD metadata:");
-            println!("  Title: {:?}", song.tag("title"));
-            println!("  Artist: {:?}", song.tag("artist"));
-            println!("  Album: {:?}", song.tag("album"));
-            println!("  Date: {:?}", song.tag("date"));
-            println!("  Genre: {:?}", song.tag("genre"));
-            println!("  Sample Rate: {:?}", song.sample_rate);
-            println!("  Channels: {:?}", song.channels);
-            println!("  Bits Per Sample: {:?}", song.bits_per_sample);
-            println!("  Duration: {:?}", song.duration);
-            println!(
-                "  MusicBrainz TrackID: {:?}",
-                song.tag("musicbrainz_trackid")
-            );
-        }
-        Err(e) => {
-            eprintln!("Error extracting DSD metadata: {}", e);
-        }
+    let files: Vec<String> = std::env::args().skip(1).collect();
+    if files.is_empty() {
+        eprintln!("usage: test_extract <audio-file> [<audio-file> ...]");
+        return;
     }
 
-    println!("\n---\n");
-
-    // Test with MP3 file
-    let mp3_path = Utf8PathBuf::from(
-        "/home/gianluca/Musica/Amon Tobin/Supermodified/01 Amon Tobin - Get Your Snack On.mp3",
-    );
-    println!("Testing MP3 extraction from: {}", mp3_path);
-    match MetadataExtractor::extract_from_file(&mp3_path) {
-        Ok(song) => {
-            println!("\nExtracted MP3 metadata:");
-            println!("  Title: {:?}", song.tag("title"));
-            println!("  Artist: {:?}", song.tag("artist"));
-            println!("  Album: {:?}", song.tag("album"));
-            println!(
-                "  MusicBrainz TrackID: {:?}",
-                song.tag("musicbrainz_trackid")
-            );
+    for arg in files {
+        let path = Utf8PathBuf::from(&arg);
+        println!("Testing extraction from: {path}");
+        match MetadataExtractor::extract_from_file(&path) {
+            Ok(song) => {
+                println!("  Title: {:?}", song.tag("title"));
+                println!("  Artist: {:?}", song.tag("artist"));
+                println!("  Album: {:?}", song.tag("album"));
+                println!("  Date: {:?}", song.tag("date"));
+                println!("  Genre: {:?}", song.tag("genre"));
+                println!("  Sample Rate: {:?}", song.sample_rate);
+                println!("  Channels: {:?}", song.channels);
+                println!("  Bits Per Sample: {:?}", song.bits_per_sample);
+                println!("  Duration: {:?}", song.duration);
+                println!(
+                    "  MusicBrainz TrackID: {:?}",
+                    song.tag("musicbrainz_trackid")
+                );
+            }
+            Err(e) => eprintln!("  Error extracting metadata: {e}"),
         }
-        Err(e) => {
-            eprintln!("Error extracting MP3 metadata: {}", e);
-        }
+        println!("\n---\n");
     }
 }

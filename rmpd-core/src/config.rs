@@ -11,9 +11,9 @@ pub struct Config {
     #[serde(default)]
     pub output: Vec<OutputConfig>,
     #[serde(default)]
-    pub decoder: DecoderConfig,
+    pub source: Vec<SourceConfig>,
     #[serde(default)]
-    pub plugins: PluginConfig,
+    pub decoder: DecoderConfig,
     #[serde(default)]
     pub database: DatabaseConfig,
 }
@@ -104,20 +104,79 @@ pub struct OutputConfig {
     pub settings: toml::Table,
 }
 
+/// Look up a string-valued setting from a flattened TOML settings table,
+/// trimmed and non-empty. Booleans/integers are stringified (for keys like
+/// `dop`, `max_bitrate`). Returns `None` when absent or empty.
+fn setting_str(table: &toml::Table, key: &str) -> Option<String> {
+    match table.get(key) {
+        Some(toml::Value::String(s)) => {
+            let t = s.trim();
+            (!t.is_empty()).then(|| t.to_owned())
+        }
+        Some(toml::Value::Boolean(b)) => Some(b.to_string()),
+        Some(toml::Value::Integer(i)) => Some(i.to_string()),
+        _ => None,
+    }
+}
+
+impl OutputConfig {
+    /// A synthesized default output (system audio via cpal). Used when no
+    /// `[[output]]` blocks are configured.
+    #[must_use]
+    pub fn cpal_default() -> Self {
+        Self {
+            name: "Default Output".to_owned(),
+            output_type: "cpal".to_owned(),
+            enabled: true,
+            settings: toml::Table::new(),
+        }
+    }
+
+    /// Look up a string-valued setting from the flattened `[[output]]` table,
+    /// trimmed and non-empty. Booleans/integers are stringified (for keys like
+    /// `dop`). Returns `None` when absent or empty.
+    #[must_use]
+    pub fn setting_str(&self, key: &str) -> Option<String> {
+        setting_str(&self.settings, key)
+    }
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+pub struct SourceConfig {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub source_type: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(flatten)]
+    pub settings: toml::Table,
+}
+
+impl std::fmt::Debug for SourceConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SourceConfig")
+            .field("name", &self.name)
+            .field("source_type", &self.source_type)
+            .field("enabled", &self.enabled)
+            .field("settings", &"<redacted>")
+            .finish()
+    }
+}
+
+impl SourceConfig {
+    /// Look up a string-valued setting from the flattened `[[source]]` table,
+    /// trimmed and non-empty. Booleans/integers are stringified (for keys like
+    /// `max_bitrate`). Returns `None` when absent or empty.
+    #[must_use]
+    pub fn setting_str(&self, key: &str) -> Option<String> {
+        setting_str(&self.settings, key)
+    }
+}
+
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
 pub struct DecoderConfig {
     #[serde(default = "default_enabled_decoders")]
     pub enabled: Vec<String>,
-}
-
-#[derive(Debug, Default, Clone, Deserialize, Serialize)]
-pub struct PluginConfig {
-    #[serde(default = "default_plugin_dirs")]
-    pub plugin_dirs: Vec<Utf8PathBuf>,
-    #[serde(default)]
-    pub enabled: Vec<String>,
-    #[serde(default)]
-    pub disabled: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
@@ -153,6 +212,32 @@ pub enum ReplayGainMode {
     Auto,
 }
 
+impl ReplayGainMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Track => "track",
+            Self::Album => "album",
+            Self::Auto => "auto",
+        }
+    }
+
+    pub fn parse_mode(s: &str) -> Self {
+        match s {
+            "track" => Self::Track,
+            "album" => Self::Album,
+            "auto" => Self::Auto,
+            _ => Self::Off,
+        }
+    }
+}
+
+impl std::fmt::Display for ReplayGainMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ResamplerQuality {
@@ -179,6 +264,13 @@ pub enum DopMode {
 }
 
 // Default value functions
+fn default_music_dir() -> Utf8PathBuf {
+    // Honor $XDG_MUSIC_DIR (e.g. ~/Musica) when set, else fall back to ~/Music.
+    dirs::audio_dir()
+        .and_then(|p| Utf8PathBuf::try_from(p).ok())
+        .unwrap_or_else(|| Utf8PathBuf::from("~/Music"))
+}
+
 fn default_playlist_dir() -> Utf8PathBuf {
     dirs::config_dir()
         .map(|p| p.join("rmpd/playlists"))
@@ -244,17 +336,6 @@ fn default_enabled_decoders() -> Vec<String> {
     vec!["symphonia".to_owned()]
 }
 
-fn default_plugin_dirs() -> Vec<Utf8PathBuf> {
-    let mut dirs = Vec::new();
-    if let Some(config_dir) = dirs::config_dir()
-        && let Ok(path) = Utf8PathBuf::try_from(config_dir.join("rmpd/plugins"))
-    {
-        dirs.push(path);
-    }
-    dirs.push(Utf8PathBuf::from("/usr/lib/rmpd/plugins"));
-    dirs
-}
-
 fn default_cache_size() -> usize {
     64
 }
@@ -273,6 +354,7 @@ impl Config {
             .map_err(|e| RmpdError::Config(format!("Failed to parse config: {e}")))?;
 
         config.expand_paths();
+        config.ensure_directories();
         config.validate()?;
         Ok(config)
     }
@@ -363,6 +445,26 @@ impl Config {
         self.general.state_file = expand_tilde(&self.general.state_file);
     }
 
+    /// Create the directories referenced by the config entries if they do not
+    /// already exist. This covers the `playlist_directory` itself and the
+    /// parent directories of `db_file` and `state_file`. The `music_directory`
+    /// is intentionally left to `validate`, since it must be supplied by the
+    /// user rather than created automatically.
+    fn ensure_directories(&self) {
+        let mut dirs: Vec<&camino::Utf8Path> = vec![self.general.playlist_directory.as_path()];
+        dirs.extend(self.general.db_file.parent());
+        dirs.extend(self.general.state_file.parent());
+
+        for dir in dirs {
+            if dir.as_str().is_empty() || dir.exists() {
+                continue;
+            }
+            if let Err(e) = std::fs::create_dir_all(dir) {
+                tracing::warn!("failed to create directory {dir}: {e}");
+            }
+        }
+    }
+
     fn validate(&self) -> Result<()> {
         if !self.general.music_directory.exists() {
             return Err(RmpdError::Config(format!(
@@ -378,7 +480,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             general: GeneralConfig {
-                music_directory: Utf8PathBuf::from("~/Music"),
+                music_directory: default_music_dir(),
                 playlist_directory: default_playlist_dir(),
                 db_file: default_db_file(),
                 state_file: default_state_file(),
@@ -412,8 +514,8 @@ impl Default for Config {
                 restore_paused: false,
             },
             output: vec![],
+            source: Vec::new(),
             decoder: DecoderConfig::default(),
-            plugins: PluginConfig::default(),
             database: DatabaseConfig::default(),
         }
     }
@@ -469,5 +571,112 @@ mod tests {
         c.output.push(output_block(false));
         assert_eq!(c.dop_mode(), DopMode::No);
         assert_eq!(c.output_device(), None);
+    }
+
+    #[test]
+    fn ensure_directories_creates_configured_dirs() {
+        let base = std::env::temp_dir().join(format!("rmpd-cfgtest-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let base = Utf8PathBuf::try_from(base).unwrap();
+
+        // music_directory must already exist (validate requires it).
+        let music = base.join("music");
+        std::fs::create_dir_all(&music).unwrap();
+
+        let mut c = Config::default();
+        c.general.music_directory = music;
+        c.general.playlist_directory = base.join("playlists");
+        c.general.db_file = base.join("state/rmpd.db");
+        c.general.state_file = base.join("run/state");
+
+        assert!(!c.general.playlist_directory.exists());
+        c.ensure_directories();
+
+        assert!(c.general.playlist_directory.exists());
+        assert!(c.general.db_file.parent().unwrap().exists());
+        assert!(c.general.state_file.parent().unwrap().exists());
+        assert!(c.validate().is_ok());
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn source_config_deserializes_from_toml() {
+        let toml_str = r#"
+[[source]]
+name = "home"
+type = "subsonic"
+url = "https://music.example.com"
+username = "alice"
+password = "hunter2"
+max_bitrate = 320
+"#;
+        let sources: Vec<SourceConfig> = toml::from_str::<toml::Value>(toml_str)
+            .unwrap()
+            .get("source")
+            .unwrap()
+            .clone()
+            .try_into()
+            .unwrap();
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].name, "home");
+        assert_eq!(sources[0].source_type, "subsonic");
+        assert!(sources[0].enabled, "enabled defaults to true");
+        assert_eq!(
+            sources[0].setting_str("url").as_deref(),
+            Some("https://music.example.com")
+        );
+        assert_eq!(
+            sources[0].setting_str("max_bitrate").as_deref(),
+            Some("320")
+        );
+    }
+
+    #[test]
+    fn absent_source_section_yields_empty_vec() {
+        // Config::default() must produce an empty source vec.
+        let c = Config::default();
+        assert!(c.source.is_empty());
+
+        // Deserializing a TOML snippet with no [[source]] key also gives empty.
+        #[derive(serde::Deserialize)]
+        struct Wrapper {
+            #[serde(default)]
+            source: Vec<SourceConfig>,
+        }
+        let w: Wrapper =
+            toml::from_str("[dummy]\nx = 1\n").unwrap_or(Wrapper { source: Vec::new() });
+        assert!(w.source.is_empty());
+    }
+
+    #[test]
+    fn source_config_debug_redacts_settings() {
+        let mut settings = toml::Table::new();
+        settings.insert(
+            "password".to_owned(),
+            toml::Value::String("hunter2".to_owned()),
+        );
+        settings.insert(
+            "url".to_owned(),
+            toml::Value::String("https://music.example.com".to_owned()),
+        );
+        let sc = SourceConfig {
+            name: "home".to_owned(),
+            source_type: "subsonic".to_owned(),
+            enabled: true,
+            settings,
+        };
+        let debug_str = format!("{sc:?}");
+        assert!(
+            !debug_str.contains("hunter2"),
+            "debug output must not expose credential: got {debug_str}"
+        );
+        assert!(
+            debug_str.contains("redacted"),
+            "debug output must say <redacted>: got {debug_str}"
+        );
+        assert!(debug_str.contains("home"));
+        assert!(debug_str.contains("subsonic"));
     }
 }

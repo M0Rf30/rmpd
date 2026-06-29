@@ -513,7 +513,7 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
             Ok(Command::SeekId { id, time })
         }
         "seekcur" => {
-            let time_str = take_till(0.., |c: char| c.is_whitespace()).parse_next(input)?;
+            let time_str = parse_quoted_or_unquoted.parse_next(input)?;
             let (time, relative) = if time_str.starts_with('+') || time_str.starts_with('-') {
                 (
                     time_str
@@ -534,7 +534,7 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
         "add" => {
             let uri = parse_quoted_or_unquoted.parse_next(input)?;
             let _ = space0.parse_next(input)?;
-            let position = opt(parse_u32).parse_next(input)?;
+            let position = opt(parse_u32_or_quoted).parse_next(input)?;
             Ok(Command::Add { uri, position })
         }
         "addid" => {
@@ -555,7 +555,7 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
         "move" => {
             let from = parse_move_from.parse_next(input)?;
             let _ = space0.parse_next(input)?;
-            let to = parse_u32.parse_next(input)?;
+            let to = parse_u32_or_quoted.parse_next(input)?;
             Ok(Command::Move { from, to })
         }
         "moveid" => {
@@ -589,7 +589,7 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
             Ok(Command::PlaylistInfo { range })
         }
         "playlistid" => {
-            let id = opt(parse_u32).parse_next(input)?;
+            let id = opt(parse_u32_or_quoted).parse_next(input)?;
             Ok(Command::PlaylistId { id })
         }
         "playlist" => Ok(Command::Playlist),
@@ -710,7 +710,7 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
             Ok(Command::Password { password })
         }
         "binarylimit" => {
-            let size = parse_u32.parse_next(input)?;
+            let size = parse_u32_or_quoted.parse_next(input)?;
             Ok(Command::BinaryLimit { size })
         }
         "protocol" => {
@@ -718,11 +718,10 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
             if input.is_empty() {
                 Ok(Command::Protocol { subcommand: None })
             } else {
-                let subcommand_str =
-                    take_while(1.., |c: char| c.is_ascii_alphabetic()).parse_next(input)?;
+                let subcommand_str = parse_quoted_or_unquoted.parse_next(input)?;
                 let _ = space0.parse_next(input)?;
 
-                match subcommand_str {
+                match subcommand_str.as_str() {
                     "all" => Ok(Command::Protocol {
                         subcommand: Some(ProtocolSubcommand::All),
                     }),
@@ -756,7 +755,7 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
                     }
                     _ => Ok(Command::UnknownSubcmd(
                         "protocol".to_string(),
-                        subcommand_str.to_string(),
+                        subcommand_str,
                     )),
                 }
             }
@@ -834,166 +833,20 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
             Ok(Command::Rescan { path })
         }
         "find" => {
-            let tag = parse_quoted_or_unquoted.parse_next(input)?;
-            let _ = space0.parse_next(input)?;
-
-            // Check if this is a filter expression (starts with '(')
-            if tag.starts_with('(') {
-                // Filter expression - treat as single filter
-                Ok(Command::Find {
-                    filters: vec![(tag, String::new())],
-                    sort: None,
-                    window: None,
-                })
-            } else {
-                // Traditional syntax: tag value [tag value ...] [sort TAG] [window START:END]
-                let mut filters = Vec::new();
-                let value = parse_quoted_or_unquoted.parse_next(input)?;
-                filters.push((tag, value));
-
-                // Parse additional tag-value pairs until we hit sort/window keywords
-                loop {
-                    let _ = space0.parse_next(input)?;
-                    if input.is_empty() {
-                        break;
-                    }
-
-                    let saved_input = *input;
-                    let next_token = match opt(parse_quoted_or_unquoted).parse_next(input)? {
-                        Some(t) if !t.is_empty() => t,
-                        _ => break,
-                    };
-
-                    // Check for sort or window keywords
-                    if next_token == "sort" || next_token == "window" {
-                        *input = saved_input;
-                        break;
-                    }
-
-                    let _ = space0.parse_next(input)?;
-                    let next_value = parse_quoted_or_unquoted.parse_next(input)?;
-                    filters.push((next_token, next_value));
-                }
-
-                // Parse optional sort and window
-                let mut sort = None;
-                let mut window = None;
-
-                loop {
-                    let _ = space0.parse_next(input)?;
-                    if input.is_empty() {
-                        break;
-                    }
-
-                    let saved_input = *input;
-                    let keyword = match opt(parse_quoted_or_unquoted).parse_next(input)? {
-                        Some(k) => k,
-                        None => break,
-                    };
-
-                    match keyword.as_str() {
-                        "sort" => {
-                            let _ = space0.parse_next(input)?;
-                            sort = Some(parse_quoted_or_unquoted.parse_next(input)?);
-                        }
-                        "window" => {
-                            let _ = space0.parse_next(input)?;
-                            window = Some(parse_range.parse_next(input)?);
-                        }
-                        _ => {
-                            *input = saved_input;
-                            break;
-                        }
-                    }
-                }
-
-                Ok(Command::Find {
-                    filters,
-                    sort,
-                    window,
-                })
-            }
+            let (filters, sort, window) = parse_find_search_filters(input)?;
+            Ok(Command::Find {
+                filters,
+                sort,
+                window,
+            })
         }
         "search" => {
-            let tag = parse_quoted_or_unquoted.parse_next(input)?;
-            let _ = space0.parse_next(input)?;
-
-            // Check if this is a filter expression (starts with '(')
-            if tag.starts_with('(') {
-                // Filter expression - treat as single filter
-                Ok(Command::Search {
-                    filters: vec![(tag, String::new())],
-                    sort: None,
-                    window: None,
-                })
-            } else {
-                // Traditional syntax: tag value [tag value ...] [sort TAG] [window START:END]
-                let mut filters = Vec::new();
-                let value = parse_quoted_or_unquoted.parse_next(input)?;
-                filters.push((tag, value));
-
-                // Parse additional tag-value pairs until we hit sort/window keywords
-                loop {
-                    let _ = space0.parse_next(input)?;
-                    if input.is_empty() {
-                        break;
-                    }
-
-                    let saved_input = *input;
-                    let next_token = match opt(parse_quoted_or_unquoted).parse_next(input)? {
-                        Some(t) if !t.is_empty() => t,
-                        _ => break,
-                    };
-
-                    // Check for sort or window keywords
-                    if next_token == "sort" || next_token == "window" {
-                        *input = saved_input;
-                        break;
-                    }
-
-                    let _ = space0.parse_next(input)?;
-                    let next_value = parse_quoted_or_unquoted.parse_next(input)?;
-                    filters.push((next_token, next_value));
-                }
-
-                // Parse optional sort and window
-                let mut sort = None;
-                let mut window = None;
-
-                loop {
-                    let _ = space0.parse_next(input)?;
-                    if input.is_empty() {
-                        break;
-                    }
-
-                    let saved_input = *input;
-                    let keyword = match opt(parse_quoted_or_unquoted).parse_next(input)? {
-                        Some(k) => k,
-                        None => break,
-                    };
-
-                    match keyword.as_str() {
-                        "sort" => {
-                            let _ = space0.parse_next(input)?;
-                            sort = Some(parse_quoted_or_unquoted.parse_next(input)?);
-                        }
-                        "window" => {
-                            let _ = space0.parse_next(input)?;
-                            window = Some(parse_range.parse_next(input)?);
-                        }
-                        _ => {
-                            *input = saved_input;
-                            break;
-                        }
-                    }
-                }
-
-                Ok(Command::Search {
-                    filters,
-                    sort,
-                    window,
-                })
-            }
+            let (filters, sort, window) = parse_find_search_filters(input)?;
+            Ok(Command::Search {
+                filters,
+                sort,
+                window,
+            })
         }
         "list" => {
             let tag = parse_quoted_or_unquoted.parse_next(input)?;
@@ -1420,55 +1273,56 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
         }
         // Stickers
         "sticker" => {
-            let operation = parse_string.parse_next(input)?;
+            let operation = parse_quoted_or_unquoted.parse_next(input)?;
             let _ = space0.parse_next(input)?;
-            let _type_str = parse_string.parse_next(input)?; // "song" for now
+            let _type_str = parse_quoted_or_unquoted.parse_next(input)?; // "song" for now
             let _ = space0.parse_next(input)?;
             let uri = parse_quoted_or_unquoted.parse_next(input)?;
             let _ = space0.parse_next(input)?;
 
             match operation.as_str() {
                 "get" => {
-                    let name = parse_string.parse_next(input)?;
+                    let name = parse_quoted_or_unquoted.parse_next(input)?;
                     Ok(Command::StickerGet { uri, name })
                 }
                 "set" => {
-                    let name = parse_string.parse_next(input)?;
+                    let name = parse_quoted_or_unquoted.parse_next(input)?;
                     let _ = space0.parse_next(input)?;
                     let value = parse_quoted_or_unquoted.parse_next(input)?;
                     Ok(Command::StickerSet { uri, name, value })
                 }
                 "delete" => {
-                    let name = opt(parse_string).parse_next(input)?;
+                    let name = opt(parse_quoted_or_unquoted).parse_next(input)?;
                     Ok(Command::StickerDelete { uri, name })
                 }
                 "list" => Ok(Command::StickerList { uri }),
                 "find" => {
-                    let name = parse_string.parse_next(input)?;
+                    let name = parse_quoted_or_unquoted.parse_next(input)?;
                     let _ = space0.parse_next(input)?;
-                    // MPD supports optional comparison: [eq|ne|lt|gt|lte|gte VALUE]
-                    // Parse up to two more optional tokens (operator and value)
+                    // Optional filter: [eq|ne|lt|gt|contains VALUE]
+                    // Known operators are encoded as "op\x00val" in the value field
+                    // so the handler can decode them without a Command enum change.
                     let first = opt(parse_quoted_or_unquoted).parse_next(input)?;
                     let _ = space0.parse_next(input)?;
                     let second = opt(parse_quoted_or_unquoted).parse_next(input)?;
-                    // If two tokens: first is operator, second is comparison value
-                    // If one token: it is the sticker value filter
                     let value = match (first, second) {
-                        (Some(op), Some(val)) => {
-                            // operator + value form — store value, ignore op for now
-                            let _ = op;
-                            Some(val)
+                        (Some(op), Some(val))
+                            if matches!(op.as_str(), "eq" | "ne" | "lt" | "gt" | "contains") =>
+                        {
+                            // Encode operator+value; handler decodes on '\x00' boundary.
+                            Some(format!("{op}\x00{val}"))
                         }
+                        (Some(_), Some(val)) => Some(val),
                         (Some(v), None) => Some(v),
                         (None, _) => None,
                     };
                     Ok(Command::StickerFind { uri, name, value })
                 }
                 "inc" => {
-                    let name = parse_string.parse_next(input)?;
+                    let name = parse_quoted_or_unquoted.parse_next(input)?;
                     let _ = space0.parse_next(input)?;
                     let delta = opt(|input: &mut &str| {
-                        parse_string
+                        parse_quoted_or_unquoted
                             .parse_next(input)?
                             .parse::<i32>()
                             .map_err(|_| ErrMode::Cut(ContextError::default()))
@@ -1477,10 +1331,10 @@ fn command_parser(input: &mut &str) -> PResult<Command> {
                     Ok(Command::StickerInc { uri, name, delta })
                 }
                 "dec" => {
-                    let name = parse_string.parse_next(input)?;
+                    let name = parse_quoted_or_unquoted.parse_next(input)?;
                     let _ = space0.parse_next(input)?;
                     let delta = opt(|input: &mut &str| {
-                        parse_string
+                        parse_quoted_or_unquoted
                             .parse_next(input)?
                             .parse::<i32>()
                             .map_err(|_| ErrMode::Cut(ContextError::default()))
@@ -1676,56 +1530,162 @@ fn parse_u8(input: &mut &str) -> PResult<u8> {
         .map_err(|_| ErrMode::Cut(ContextError::default()))
 }
 
+/// Parse a range argument (quote-aware): `START:END`, `START:`, or a bare
+/// `NUM` (single position → `[NUM, NUM+1)`). libmpdclient quotes every
+/// argument, so the whole token may arrive as `"5:10"`.
 fn parse_range(input: &mut &str) -> PResult<(u32, u32)> {
-    // Parse MPD range syntax:
-    //   "START:END"  — range [START, END)
-    //   "START:"     — open-ended range [START, ...)
-    //   "NUM"        — single position (equivalent to NUM:NUM+1)
-    let start = parse_u32.parse_next(input)?;
-    if input.starts_with(':') {
-        let _ = winnow::token::one_of(':').parse_next(input)?;
-        let end = opt(parse_u32).parse_next(input)?;
-        Ok((start, end.unwrap_or(u32::MAX)))
-    } else {
-        Ok((start, start + 1))
-    }
+    let tok = parse_quoted_or_unquoted.parse_next(input)?;
+    range_parts(&tok).ok_or(ErrMode::Backtrack(ContextError::default()))
 }
 
 /// Parse a range that requires a colon (for commands where a bare number
 /// is ambiguous with a following positional argument, e.g. `load`).
 fn parse_colon_range(input: &mut &str) -> PResult<(u32, u32)> {
-    let start = parse_u32.parse_next(input)?;
-    let _ = winnow::token::one_of(':').parse_next(input)?;
-    let end = opt(parse_u32).parse_next(input)?;
-    Ok((start, end.unwrap_or(u32::MAX)))
+    let tok = parse_quoted_or_unquoted.parse_next(input)?;
+    if !tok.contains(':') {
+        return Err(ErrMode::Backtrack(ContextError::default()));
+    }
+    range_parts(&tok).ok_or(ErrMode::Backtrack(ContextError::default()))
 }
 
 fn parse_delete_target(input: &mut &str) -> PResult<DeleteTarget> {
-    // Try to parse as range first (e.g., "5:10")
-    let start = parse_u32.parse_next(input)?;
-
-    // Check if there's a colon for range syntax
-    if input.starts_with(':') {
-        let _ = winnow::token::one_of(':').parse_next(input)?;
-        let end = parse_u32.parse_next(input)?;
-        Ok(DeleteTarget::Range(start, end))
-    } else {
-        Ok(DeleteTarget::Position(start))
+    let tok = parse_quoted_or_unquoted.parse_next(input)?;
+    match tok.split_once(':') {
+        Some((a, b)) => {
+            let start = a
+                .parse()
+                .map_err(|_| ErrMode::Cut(ContextError::default()))?;
+            let end = b
+                .parse()
+                .map_err(|_| ErrMode::Cut(ContextError::default()))?;
+            Ok(DeleteTarget::Range(start, end))
+        }
+        None => {
+            let pos = tok
+                .parse()
+                .map_err(|_| ErrMode::Cut(ContextError::default()))?;
+            Ok(DeleteTarget::Position(pos))
+        }
     }
 }
 
 fn parse_move_from(input: &mut &str) -> PResult<MoveFrom> {
-    // Try to parse as range first (e.g., "5:10")
-    let start = parse_u32.parse_next(input)?;
-
-    // Check if there's a colon for range syntax
-    if input.starts_with(':') {
-        let _ = winnow::token::one_of(':').parse_next(input)?;
-        let end = parse_u32.parse_next(input)?;
-        Ok(MoveFrom::Range(start, end))
-    } else {
-        Ok(MoveFrom::Position(start))
+    let tok = parse_quoted_or_unquoted.parse_next(input)?;
+    match tok.split_once(':') {
+        Some((a, b)) => {
+            let start = a
+                .parse()
+                .map_err(|_| ErrMode::Cut(ContextError::default()))?;
+            let end = b
+                .parse()
+                .map_err(|_| ErrMode::Cut(ContextError::default()))?;
+            Ok(MoveFrom::Range(start, end))
+        }
+        None => {
+            let pos = tok
+                .parse()
+                .map_err(|_| ErrMode::Cut(ContextError::default()))?;
+            Ok(MoveFrom::Position(pos))
+        }
     }
+}
+
+/// Parse the content of a range token (`"START:END"`, `"START:"`, or bare
+/// `"NUM"`) into a half-open `[start, end)` pair. A bare number yields
+/// `[NUM, NUM+1)`. Returns `None` on malformed input.
+fn range_parts(s: &str) -> Option<(u32, u32)> {
+    match s.split_once(':') {
+        Some((a, b)) => {
+            let start: u32 = a.parse().ok()?;
+            let end = if b.is_empty() {
+                u32::MAX
+            } else {
+                b.parse().ok()?
+            };
+            Some((start, end))
+        }
+        None => {
+            let start: u32 = s.parse().ok()?;
+            Some((start, start.saturating_add(1)))
+        }
+    }
+}
+
+/// Parse the filters, optional `sort TAG`, and optional `window START:END` for
+/// the `find` and `search` commands. The two commands are syntactically
+/// identical; the caller wraps the result in `Command::Find` or `Command::Search`.
+fn parse_find_search_filters(
+    input: &mut &str,
+) -> PResult<(Vec<(String, String)>, Option<String>, Option<(u32, u32)>)> {
+    let tag = parse_quoted_or_unquoted.parse_next(input)?;
+    let _ = space0.parse_next(input)?;
+
+    let filters = if tag.starts_with('(') {
+        // Filter expression: the whole (…) expression is a single filter token.
+        vec![(tag, String::new())]
+    } else {
+        // Traditional syntax: tag value [tag value ...] [sort TAG] [window START:END]
+        let mut filters = Vec::new();
+        let value = parse_quoted_or_unquoted.parse_next(input)?;
+        filters.push((tag, value));
+
+        loop {
+            let _ = space0.parse_next(input)?;
+            if input.is_empty() {
+                break;
+            }
+            let saved_input = *input;
+            let next_token = match opt(parse_quoted_or_unquoted).parse_next(input)? {
+                Some(t) if !t.is_empty() => t,
+                _ => break,
+            };
+            if next_token == "sort" || next_token == "window" {
+                *input = saved_input;
+                break;
+            }
+            let _ = space0.parse_next(input)?;
+            let next_value = parse_quoted_or_unquoted.parse_next(input)?;
+            filters.push((next_token, next_value));
+        }
+        filters
+    };
+
+    let (sort, window) = parse_sort_window(input)?;
+    Ok((filters, sort, window))
+}
+
+/// Parse optional trailing `sort TAG` and `window START:END` clauses
+/// (quote-aware, any order) shared by `find`/`search`. Stops at end of input
+/// or an unrecognised keyword (which it leaves unconsumed).
+fn parse_sort_window(input: &mut &str) -> PResult<(Option<String>, Option<(u32, u32)>)> {
+    let mut sort = None;
+    let mut window = None;
+    loop {
+        let _ = space0.parse_next(input)?;
+        if input.is_empty() {
+            break;
+        }
+        let saved_input = *input;
+        let keyword = match opt(parse_quoted_or_unquoted).parse_next(input)? {
+            Some(k) if !k.is_empty() => k,
+            _ => break,
+        };
+        match keyword.as_str() {
+            "sort" => {
+                let _ = space0.parse_next(input)?;
+                sort = Some(parse_quoted_or_unquoted.parse_next(input)?);
+            }
+            "window" => {
+                let _ = space0.parse_next(input)?;
+                window = Some(parse_range.parse_next(input)?);
+            }
+            _ => {
+                *input = saved_input;
+                break;
+            }
+        }
+    }
+    Ok((sort, window))
 }
 
 fn parse_f64(input: &mut &str) -> PResult<f64> {
@@ -2028,6 +1988,145 @@ mod tests {
                     ("album".to_string(), "Master of Puppets".to_string())
                 ],
                 group: None
+            }
+        );
+    }
+
+    // libmpdclient (used by mympd, mpc, ncmpcpp, …) quotes *every* command
+    // argument, and MPD's tokenizer accepts quoted or unquoted uniformly. These
+    // guard the two commands whose parsers were not quote-aware, which broke the
+    // mympd connect handshake with a spurious "wrong number of arguments".
+    #[test]
+    fn test_binarylimit_accepts_quoted_argument() {
+        assert_eq!(
+            parse_command("binarylimit 8192").unwrap(),
+            Command::BinaryLimit { size: 8192 }
+        );
+        assert_eq!(
+            parse_command("binarylimit \"8192\"").unwrap(),
+            Command::BinaryLimit { size: 8192 }
+        );
+    }
+
+    #[test]
+    fn test_protocol_accepts_quoted_subcommand_and_features() {
+        // Bare (legacy) forms still parse.
+        assert_eq!(
+            parse_command("protocol").unwrap(),
+            Command::Protocol { subcommand: None }
+        );
+        assert_eq!(
+            parse_command("protocol available").unwrap(),
+            Command::Protocol {
+                subcommand: Some(ProtocolSubcommand::Available)
+            }
+        );
+        // Quoted subcommand (what libmpdclient actually sends).
+        assert_eq!(
+            parse_command("protocol \"available\"").unwrap(),
+            Command::Protocol {
+                subcommand: Some(ProtocolSubcommand::Available)
+            }
+        );
+        assert_eq!(
+            parse_command("protocol \"enable\" \"hide_playlists_in_root\"").unwrap(),
+            Command::Protocol {
+                subcommand: Some(ProtocolSubcommand::Enable {
+                    features: vec!["hide_playlists_in_root".to_string()]
+                })
+            }
+        );
+    }
+    #[test]
+    fn test_quoted_arguments_libmpdclient() {
+        // libmpdclient (used by mympd, etc.) quotes EVERY argument, including
+        // numbers, ranges, positions and filter expressions. All must parse.
+        assert_eq!(
+            parse_command("playlistinfo \"5:10\"").unwrap(),
+            Command::PlaylistInfo {
+                range: Some((5, 10))
+            }
+        );
+        assert_eq!(
+            parse_command("playlistinfo \"5\"").unwrap(),
+            Command::PlaylistInfo {
+                range: Some((5, 6))
+            }
+        );
+        assert_eq!(
+            parse_command("playlistid \"3\"").unwrap(),
+            Command::PlaylistId { id: Some(3) }
+        );
+        assert!(matches!(
+            parse_command("delete \"5:10\"").unwrap(),
+            Command::Delete {
+                target: DeleteTarget::Range(5, 10)
+            }
+        ));
+        assert!(matches!(
+            parse_command("delete \"5\"").unwrap(),
+            Command::Delete {
+                target: DeleteTarget::Position(5)
+            }
+        ));
+        assert!(matches!(
+            parse_command("move \"5:10\" \"2\"").unwrap(),
+            Command::Move {
+                from: MoveFrom::Range(5, 10),
+                to: 2
+            }
+        ));
+        assert_eq!(
+            parse_command("seekcur \"123.5\"").unwrap(),
+            Command::SeekCur {
+                time: 123.5,
+                relative: false
+            }
+        );
+        assert_eq!(
+            parse_command("seekcur \"+10\"").unwrap(),
+            Command::SeekCur {
+                time: 10.0,
+                relative: true
+            }
+        );
+        // find/search with a quoted window, including the (expression) form
+        assert_eq!(
+            parse_command("find \"artist\" \"Metallica\" window \"0:10\"").unwrap(),
+            Command::Find {
+                filters: vec![("artist".to_string(), "Metallica".to_string())],
+                sort: None,
+                window: Some((0, 10)),
+            }
+        );
+        assert_eq!(
+            parse_command("search \"(Album == \\\"x\\\")\" window \"0:100\"").unwrap(),
+            Command::Search {
+                filters: vec![("(Album == \"x\")".to_string(), String::new())],
+                sort: None,
+                window: Some((0, 100)),
+            }
+        );
+        // sticker: libmpdclient quotes the subcommand and type too
+        assert_eq!(
+            parse_command("sticker \"list\" \"song\" \"foo/bar.flac\"").unwrap(),
+            Command::StickerList {
+                uri: "foo/bar.flac".to_string()
+            }
+        );
+        assert_eq!(
+            parse_command("sticker \"set\" \"song\" \"foo.flac\" \"rating\" \"10\"").unwrap(),
+            Command::StickerSet {
+                uri: "foo.flac".to_string(),
+                name: "rating".to_string(),
+                value: "10".to_string(),
+            }
+        );
+        assert_eq!(
+            parse_command("sticker \"get\" \"song\" \"foo.flac\" \"rating\"").unwrap(),
+            Command::StickerGet {
+                uri: "foo.flac".to_string(),
+                name: "rating".to_string(),
             }
         );
     }

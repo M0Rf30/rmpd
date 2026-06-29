@@ -32,13 +32,27 @@ struct ExtractedMetadata {
 pub struct Scanner {
     event_bus: EventBus,
     music_directory: Option<Utf8PathBuf>,
+    follow_symlinks: bool,
 }
 
 impl Scanner {
-    pub fn new(event_bus: EventBus) -> Self {
+    pub fn new(event_bus: EventBus, follow_symlinks: bool) -> Self {
         Self {
             event_bus,
             music_directory: None,
+            follow_symlinks,
+        }
+    }
+
+    /// Returns a copy of this scanner with `music_directory` set to `dir`.
+    ///
+    /// `scan_directory` uses this instead of inline struct construction so that if
+    /// `Scanner` gains new fields in the future only this one place needs updating.
+    pub fn with_music_dir(&self, dir: Utf8PathBuf) -> Self {
+        Self {
+            event_bus: self.event_bus.clone(),
+            music_directory: Some(dir),
+            follow_symlinks: self.follow_symlinks,
         }
     }
 
@@ -48,15 +62,11 @@ impl Scanner {
 
         let mut stats = ScanStats::default();
 
-        // Store music directory for relative path conversion
+        // Build a scanner variant that knows the music directory so that make_relative_path
+        // can strip the root prefix from absolute paths during the scan.
         let music_dir = Utf8PathBuf::try_from(root_path.to_path_buf())
             .map_err(|_| RmpdError::Library("Music directory path is not valid UTF-8".into()))?;
-
-        // Create a scanner with music_directory set
-        let scanner_with_dir = Scanner {
-            event_bus: self.event_bus.clone(),
-            music_directory: Some(music_dir),
-        };
+        let scanner_with_dir = self.with_music_dir(music_dir);
 
         scanner_with_dir.scan_recursive(db, root_path, &mut stats)?;
 
@@ -84,6 +94,13 @@ impl Scanner {
     }
 
     fn scan_recursive(&self, db: &Database, path: &Path, stats: &mut ScanStats) -> Result<()> {
+        // SOURCE ISOLATION: this scan only processes local filesystem files and
+        // only calls `db.add_song()` (which never sets `source`). Any future
+        // reconcile/prune step that deletes songs no longer on disk MUST use
+        // `Database::delete_song_by_path` (which is guarded with `AND source IS NULL`)
+        // or an equivalent query with a `WHERE source IS NULL` predicate to avoid
+        // evicting remote catalog rows inserted by `Database::add_source_song`.
+
         // Step 1: Collect all audio files and their metadata (sequential directory walk)
         let mut files_to_process = Vec::new();
         self.collect_audio_files(db, path, &mut files_to_process, stats)?;
@@ -184,6 +201,20 @@ impl Scanner {
                 && file_name.starts_with('.')
             {
                 continue;
+            }
+
+            // When follow_symlinks is disabled, skip any entry that is itself a
+            // symlink (DirEntry::file_type does not follow symlinks on Linux).
+            if !self.follow_symlinks {
+                match entry.file_type() {
+                    Ok(ft) if ft.is_symlink() => continue,
+                    Err(e) => {
+                        warn!("failed to get file type for {:?}: {}", entry_path, e);
+                        stats.errors += 1;
+                        continue;
+                    }
+                    _ => {}
+                }
             }
 
             let metadata = match entry.metadata() {

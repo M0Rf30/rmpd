@@ -8,13 +8,15 @@ use crate::response::ResponseBuilder;
 use crate::state::AppState;
 
 use super::utils::{
-    ACK_ERROR_ARG, ACK_ERROR_NO_EXIST, ACK_ERROR_SYSTEM, add_queue_item_metadata, apply_range,
+    ACK_ERROR_ARG, ACK_ERROR_NO_EXIST, ACK_ERROR_SYS, add_queue_item_metadata, apply_range,
     open_db, prepare_song_for_playback, update_next_song,
 };
 
 pub async fn handle_add_command(state: &AppState, uri: &str, position: Option<u32>) -> String {
     debug!("add command received with URI: [{}]", uri);
-    // Handle URI schemes
+    // A `<scheme>://` URI is a network stream (radio): validate the scheme and
+    // add a synthetic stream song. Mount-style source paths and local paths have
+    // no `://`, so they skip this block and fall through to the DB lookup below.
     if let Some(scheme_end) = uri.find("://") {
         let scheme = &uri[..scheme_end];
         if !helpers::is_known_uri_scheme(scheme) {
@@ -37,15 +39,10 @@ pub async fn handle_add_command(state: &AppState, uri: &str, position: Option<u3
     let song = match db.get_song_by_path(uri) {
         Ok(Some(s)) => s,
         Ok(None) => {
-            return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "add", "No such directory");
+            return ResponseBuilder::error(ACK_ERROR_NO_EXIST, 0, "add", "No such directory");
         }
         Err(e) => {
-            return ResponseBuilder::error(
-                ACK_ERROR_SYSTEM,
-                0,
-                "add",
-                &format!("query error: {e}"),
-            );
+            return ResponseBuilder::error(ACK_ERROR_SYS, 0, "add", &format!("query error: {e}"));
         }
     };
 
@@ -119,7 +116,9 @@ pub async fn handle_addid_command(state: &AppState, uri: &str, position: Option<
         "addid command received with URI: [{}], position: {:?}",
         uri, position
     );
-    // Handle URI schemes
+    // A `<scheme>://` URI is a network stream (radio): validate the scheme and
+    // add a synthetic stream song. Mount-style source paths and local paths have
+    // no `://`, so they skip this block and fall through to the DB lookup below.
     if let Some(scheme_end) = uri.find("://") {
         let scheme = &uri[..scheme_end];
         if !helpers::is_known_uri_scheme(scheme) {
@@ -142,15 +141,10 @@ pub async fn handle_addid_command(state: &AppState, uri: &str, position: Option<
     let song = match db.get_song_by_path(uri) {
         Ok(Some(s)) => s,
         Ok(None) => {
-            return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "addid", "No such song");
+            return ResponseBuilder::error(ACK_ERROR_NO_EXIST, 0, "addid", "No such song");
         }
         Err(e) => {
-            return ResponseBuilder::error(
-                ACK_ERROR_SYSTEM,
-                0,
-                "addid",
-                &format!("query error: {e}"),
-            );
+            return ResponseBuilder::error(ACK_ERROR_SYS, 0, "addid", &format!("query error: {e}"));
         }
     };
 
@@ -168,7 +162,7 @@ pub async fn handle_deleteid_command(state: &AppState, id: u32) -> String {
         helpers::update_playlist_version(state).await;
         ResponseBuilder::new().ok()
     } else {
-        ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "deleteid", "No such song")
+        ResponseBuilder::error(ACK_ERROR_NO_EXIST, 0, "deleteid", "No such song")
     }
 }
 
@@ -177,7 +171,7 @@ pub async fn handle_moveid_command(state: &AppState, id: u32, to: u32) -> String
         helpers::update_playlist_version(state).await;
         ResponseBuilder::new().ok()
     } else {
-        ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "moveid", "No such song")
+        ResponseBuilder::error(ACK_ERROR_NO_EXIST, 0, "moveid", "No such song")
     }
 }
 
@@ -272,7 +266,7 @@ pub async fn handle_swapid_command(state: &AppState, id1: u32, id2: u32) -> Stri
         helpers::update_playlist_version(state).await;
         ResponseBuilder::new().ok()
     } else {
-        ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "swapid", "No such song")
+        ResponseBuilder::error(ACK_ERROR_NO_EXIST, 0, "swapid", "No such song")
     }
 }
 
@@ -296,7 +290,7 @@ pub async fn handle_playlistid_command(state: &AppState, id: Option<u32>) -> Str
             resp.song(&item.song, Some(item.position), Some(item.id));
             add_queue_item_metadata(&mut resp, item);
         } else {
-            return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "playlistid", "No such song");
+            return ResponseBuilder::error(ACK_ERROR_NO_EXIST, 0, "playlistid", "No such song");
         }
     } else {
         // Get all songs with IDs
@@ -333,9 +327,27 @@ pub async fn handle_playid_command(state: &AppState, id: Option<u32>) -> String 
         if let Some(item) = queue.get_by_id(song_id) {
             let song = (*item.song).clone();
             let position = item.position;
+            let range = item.range;
             drop(queue);
 
-            let playback_song = prepare_song_for_playback(&song, state.music_dir.as_deref());
+            let playback_song = match prepare_song_for_playback(
+                &song,
+                state.music_dir.as_deref(),
+                range,
+                &state.sources,
+            )
+            .await
+            {
+                Ok(ps) => ps,
+                Err(e) => {
+                    return ResponseBuilder::error(
+                        ACK_ERROR_NO_EXIST,
+                        0,
+                        "playid",
+                        &format!("Cannot resolve song: {}", e),
+                    );
+                }
+            };
 
             match state.engine.write().await.play(playback_song).await {
                 Ok(_) => {
@@ -369,14 +381,14 @@ pub async fn handle_playid_command(state: &AppState, id: Option<u32>) -> String 
                     ResponseBuilder::new().ok()
                 }
                 Err(e) => ResponseBuilder::error(
-                    ACK_ERROR_SYSTEM,
+                    ACK_ERROR_SYS,
                     0,
                     "playid",
                     &format!("Playback error: {e}"),
                 ),
             }
         } else {
-            ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "playid", "No such song")
+            ResponseBuilder::error(ACK_ERROR_NO_EXIST, 0, "playid", "No such song")
         }
     } else {
         // Resume playback (same as play with no args)
@@ -463,7 +475,7 @@ pub async fn handle_addtagid_command(state: &AppState, id: u32, tag: &str, _valu
     // Check song exists
     let queue = state.queue.read().await;
     if queue.get_by_id(id).is_none() {
-        return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "addtagid", "No such song");
+        return ResponseBuilder::error(ACK_ERROR_NO_EXIST, 0, "addtagid", "No such song");
     }
     drop(queue);
 
@@ -493,7 +505,7 @@ pub async fn handle_cleartagid_command(state: &AppState, id: u32, tag: Option<&s
     // Check song exists
     let queue = state.queue.read().await;
     if queue.get_by_id(id).is_none() {
-        return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "cleartagid", "No such song");
+        return ResponseBuilder::error(ACK_ERROR_NO_EXIST, 0, "cleartagid", "No such song");
     }
     drop(queue);
 

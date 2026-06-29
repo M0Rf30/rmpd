@@ -16,12 +16,13 @@ fn main() -> anyhow::Result<()> {
 
     // Create event bus and scanner
     let event_bus = EventBus::new();
-    let scanner = Scanner::new(event_bus);
+    let scanner = Scanner::new(event_bus, false);
 
     // Scan music directory
-    let music_dir = std::env::args()
-        .nth(1)
-        .unwrap_or_else(|| "/home/gianluca/Music".to_string());
+    let music_dir = std::env::args().nth(1).unwrap_or_else(|| {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        format!("{home}/Music")
+    });
 
     println!("Scanning: {music_dir}");
 

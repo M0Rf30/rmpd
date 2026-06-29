@@ -31,21 +31,32 @@ pub struct SymphoniaDecoder {
     channel_data_layout: Option<ChannelDataLayout>,
     bit_order: Option<BitOrder>,
     uses_pcm_conversion: bool,
+    /// ICY "now playing" title handle when decoding a remote stream.
+    stream_title: Option<rmpd_stream::TitleHandle>,
 }
 
 impl SymphoniaDecoder {
     pub fn open(path: &Path) -> Result<Self> {
-        // Open the media source
-        let file = std::fs::File::open(path)
-            .map_err(|e| RmpdError::Player(format!("Failed to open file: {e}")))?;
-
-        let mss = MediaSourceStream::new(Box::new(file), Default::default());
-
-        // Create a hint to help the format registry guess the format
+        // Open the media source: a remote stream URL or a local file.
         let mut hint = Hint::new();
-        if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-            hint.with_extension(ext);
-        }
+        let stream_title;
+        let mss = if let Some(url) = path.to_str().filter(|s| rmpd_stream::is_http_uri(s)) {
+            let source = rmpd_stream::HttpSource::connect(url)
+                .map_err(|e| RmpdError::Player(format!("Failed to open stream: {e}")))?;
+            stream_title = Some(source.title_handle());
+            if let Some(ext) = url_extension(url) {
+                hint.with_extension(ext);
+            }
+            MediaSourceStream::new(Box::new(source), Default::default())
+        } else {
+            let file = std::fs::File::open(path)
+                .map_err(|e| RmpdError::Player(format!("Failed to open file: {e}")))?;
+            stream_title = None;
+            if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                hint.with_extension(ext);
+            }
+            MediaSourceStream::new(Box::new(file), Default::default())
+        };
 
         // Probe the media source
         let reader = symphonia::default::get_probe()
@@ -114,7 +125,16 @@ impl SymphoniaDecoder {
             channel_data_layout,
             bit_order,
             uses_pcm_conversion: false,
+            stream_title,
         })
+    }
+
+    /// The current ICY "now playing" title for a remote stream, if any has
+    /// been received. Returns `None` for local files or before the first
+    /// metadata block arrives.
+    #[must_use]
+    pub fn stream_title(&self) -> Option<String> {
+        self.stream_title.as_ref().and_then(|h| h.lock().clone())
     }
 
     /// Check if this is a DSD file
@@ -360,9 +380,91 @@ impl SymphoniaDecoder {
 }
 
 /// Trait for audio decoders
-pub trait Decoder {
+pub trait Decoder: Send {
     fn read(&mut self, buffer: &mut [f32]) -> Result<usize>;
     fn seek(&mut self, position: f64) -> Result<()>;
     fn format(&self) -> AudioFormat;
     fn duration(&self) -> Option<f64>;
+}
+
+impl Decoder for SymphoniaDecoder {
+    fn read(&mut self, buffer: &mut [f32]) -> Result<usize> {
+        self.read(buffer)
+    }
+    fn seek(&mut self, position: f64) -> Result<()> {
+        self.seek(position)
+    }
+    fn format(&self) -> AudioFormat {
+        self.format()
+    }
+    fn duration(&self) -> Option<f64> {
+        self.duration()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Decoder plugin SPI (MPD-style DecoderPlugin registry)
+// ---------------------------------------------------------------------------
+
+/// A decoder plugin descriptor: how to recognise files it can decode.
+pub struct DecoderPlugin {
+    pub name: &'static str,
+    pub suffixes: &'static [&'static str],
+    pub mime_types: &'static [&'static str],
+}
+
+/// The Symphonia-backed decoder handles all of rmpd's supported formats.
+pub static SYMPHONIA_DECODER: DecoderPlugin = DecoderPlugin {
+    name: "symphonia",
+    suffixes: &[
+        "flac", "mp3", "ogg", "oga", "opus", "wav", "wave", "aiff", "aif", "m4a", "mp4", "aac",
+        "alac", "ape", "wv", "mpc", "dsf", "dff", "webm", "mka", "caf",
+    ],
+    mime_types: &[
+        "audio/flac",
+        "audio/mpeg",
+        "audio/ogg",
+        "audio/opus",
+        "audio/wav",
+        "audio/x-wav",
+        "audio/aac",
+        "audio/mp4",
+        "audio/x-ape",
+        "audio/x-wavpack",
+        "audio/x-dsd",
+    ],
+};
+
+/// All compiled-in decoder plugins (compile-time registry, MPD-style).
+pub static DECODER_PLUGINS: &[&DecoderPlugin] = &[&SYMPHONIA_DECODER];
+
+/// Find a decoder plugin that lists `suffix` (case-insensitive, no leading dot).
+#[must_use]
+pub fn decoder_for_suffix(suffix: &str) -> Option<&'static DecoderPlugin> {
+    let s = suffix.trim_start_matches('.').to_ascii_lowercase();
+    DECODER_PLUGINS
+        .iter()
+        .copied()
+        .find(|p| p.suffixes.iter().any(|x| *x == s))
+}
+
+/// Whether any compiled-in decoder supports `suffix`.
+#[must_use]
+pub fn is_supported_suffix(suffix: &str) -> bool {
+    decoder_for_suffix(suffix).is_some()
+}
+
+/// Extract a file extension from a stream URL's path component (ignoring any
+/// query string or fragment), e.g. `http://h/x/song.mp3?b=1` → `Some("mp3")`.
+/// Returns `None` when the path has no extension (common for radio streams,
+/// where Symphonia falls back to content-based probing).
+fn url_extension(url: &str) -> Option<&str> {
+    let after_scheme = url.split("://").nth(1)?;
+    let path = after_scheme.split(['?', '#']).next()?.rsplit('/').next()?;
+    let (_, ext) = path.rsplit_once('.')?;
+    if ext.is_empty() || ext.contains('/') {
+        None
+    } else {
+        Some(ext)
+    }
 }

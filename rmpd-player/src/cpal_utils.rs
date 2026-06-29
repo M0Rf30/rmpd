@@ -372,7 +372,10 @@ impl CpalDeviceConfig {
         self.find_format_with_preference(preferences, "DoP")
     }
 
-    /// Find format matching the given preferences
+    /// Find format matching the given preferences, always choosing the
+    /// highest-preference format the device supports regardless of enumeration
+    /// order. Tracks the best preference index seen so far and upgrades
+    /// `found_format` whenever a higher-priority (lower index) format appears.
     fn find_format_with_preference(
         &mut self,
         preferences: &[SampleFormat],
@@ -383,57 +386,49 @@ impl CpalDeviceConfig {
             .supported_output_configs()
             .map_err(|e| RmpdError::Player(format!("Failed to get supported configs: {e}")))?;
 
-        let mut found_format = None;
-        tracing::info!(
+        let mut found_format: Option<SampleFormat> = None;
+        // Sentinel: preferences.len() means "no match yet"; lower index = higher priority.
+        let mut best_idx: usize = preferences.len();
+
+        tracing::debug!(
             "searching for suitable {} format at {:?} Hz",
             format_type,
             self.config.sample_rate
         );
 
-        // Iterate through supported configs
         for config in supported_configs {
             let sample_format = config.sample_format();
             let min_rate = config.min_sample_rate();
             let max_rate = config.max_sample_rate();
 
-            // Check if our sample rate is supported
             if self.config.sample_rate >= min_rate && self.config.sample_rate <= max_rate {
-                // Check each preference in order
+                // Walk the preference list to find this format's rank.
                 for (i, &preferred_format) in preferences.iter().enumerate() {
-                    if sample_format == preferred_format {
-                        // If this is the first preference, use it immediately
-                        if i == 0 {
-                            found_format = Some(sample_format);
-                            tracing::info!(
-                                "found preferred format: {:?} at {:?}-{:?} Hz",
-                                sample_format,
-                                min_rate,
-                                max_rate
-                            );
-                            break;
-                        }
-                        // Otherwise, only use if we haven't found a better one yet
-                        else if found_format.is_none() {
-                            found_format = Some(sample_format);
-                            tracing::info!(
-                                "found fallback format: {:?} at {:?}-{:?} Hz",
-                                sample_format,
-                                min_rate,
-                                max_rate
-                            );
-                        }
+                    if sample_format == preferred_format && i < best_idx {
+                        // Higher-priority (or first) match — upgrade.
+                        found_format = Some(sample_format);
+                        best_idx = i;
+                        tracing::debug!(
+                            "found {} format (preference {}): {:?} at {:?}-{:?} Hz",
+                            format_type,
+                            i,
+                            sample_format,
+                            min_rate,
+                            max_rate
+                        );
+                        break; // no need to check lower-priority preferences for this config
                     }
                 }
 
-                // If we found the top preference, stop searching
-                if found_format == Some(preferences[0]) {
+                // Top preference found — stop searching device configs entirely.
+                if best_idx == 0 {
                     break;
                 }
             }
         }
 
         let format = found_format.unwrap_or(preferences[0]);
-        tracing::info!("using sample format: {:?}", format);
+        tracing::debug!("using {} sample format: {:?}", format_type, format);
 
         self.sample_format = format;
         Ok(format)

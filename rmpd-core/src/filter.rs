@@ -125,8 +125,8 @@ fn op_to_sql(op: &CompareOp, value: &str) -> (&'static str, String) {
     match op {
         CompareOp::Equal => ("=", value.to_string()),
         CompareOp::NotEqual => ("!=", value.to_string()),
-        CompareOp::Regex => ("LIKE", value.replace(".*", "%").replace('.', "_")),
-        CompareOp::NotRegex => ("NOT LIKE", value.replace(".*", "%").replace('.', "_")),
+        CompareOp::Regex => ("REGEXP", value.to_string()),
+        CompareOp::NotRegex => ("NOT REGEXP", value.to_string()),
         CompareOp::Less => ("<", value.to_string()),
         CompareOp::Greater => (">", value.to_string()),
         CompareOp::LessEqual => ("<=", value.to_string()),
@@ -373,8 +373,9 @@ mod tests {
     fn test_regex() {
         let expr = FilterExpression::parse("((Artist =~ 'Radio.*'))").unwrap();
         let (sql, params) = expr.to_sql();
-        assert!(sql.contains("LIKE"));
-        assert_eq!(params, vec!["Radio%"]);
+        assert!(sql.contains("REGEXP"), "SQL should contain REGEXP: {sql}");
+        assert!(!sql.contains("LIKE"), "SQL must not contain LIKE: {sql}");
+        assert_eq!(params, vec!["Radio.*"]);
     }
 
     #[test]

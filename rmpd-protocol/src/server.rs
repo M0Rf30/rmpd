@@ -4,7 +4,7 @@ use tokio::net::{TcpListener, TcpStream, UnixStream};
 use tokio::sync::broadcast;
 use tracing::{debug, error, info};
 
-use crate::commands::utils::{ACK_ERROR_ARG, ACK_ERROR_UNKNOWN};
+use crate::commands::utils::{ACK_ERROR_ARG, ACK_ERROR_PERMISSION, ACK_ERROR_UNKNOWN};
 use crate::commands::{
     connection, database, fingerprint, messaging, options, outputs, partition, playback, playlists,
     queue, reflection, stickers, storage,
@@ -117,7 +117,7 @@ impl MpdServer {
                             let state = self.state.clone();
                             tokio::spawn(async move {
                                 if let Err(e) = handle_client(stream, state).await {
-                                    error!("client error: {}", e);
+                                    log_client_error("client", &e);
                                 }
                             });
                         }
@@ -138,7 +138,7 @@ impl MpdServer {
                             let state = self.state.clone();
                             tokio::spawn(async move {
                                 if let Err(e) = handle_unix_client(stream, state).await {
-                                    error!("unix client error: {}", e);
+                                    log_client_error("unix client", &e);
                                 }
                             });
                         }
@@ -162,6 +162,29 @@ impl MpdServer {
 
         info!("server shutdown complete");
         Ok(())
+    }
+}
+
+/// Log an error from a client connection. A client closing its socket
+/// (connection reset / broken pipe / EOF) is routine for MPD clients, so those
+/// are logged at debug; anything else is a genuine error.
+fn log_client_error(kind: &str, e: &rmpd_core::error::RmpdError) {
+    use std::io::ErrorKind;
+    let benign = matches!(
+        e,
+        rmpd_core::error::RmpdError::Io(io)
+            if matches!(
+                io.kind(),
+                ErrorKind::ConnectionReset
+                    | ErrorKind::ConnectionAborted
+                    | ErrorKind::BrokenPipe
+                    | ErrorKind::UnexpectedEof
+            )
+    );
+    if benign {
+        debug!("{kind} disconnected: {e}");
+    } else {
+        error!("{kind} error: {e}");
     }
 }
 
@@ -508,7 +531,7 @@ async fn handle_command(
     if !conn_state.has_permission(required) {
         let name = cmd.command_name();
         return Response::Text(ResponseBuilder::error(
-            ACK_ERROR_ARG,
+            ACK_ERROR_PERMISSION,
             0,
             name,
             &format!("you don't have permission for \"{}\"", name),

@@ -1,0 +1,29 @@
+[package]
+name = "rmpd-source"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+subsonic = ["dep:opensubsonic", "dep:reqwest", "dep:futures"]
+
+[dependencies]
+rmpd-core.workspace = true
+rmpd-plugin.workspace = true
+rmpd-library.workspace = true
+async-trait.workspace = true
+camino.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+opensubsonic = { git = "https://github.com/M0Rf30/opensubsonic-rs", rev = "b1f1e24d25d1fd0c350e8ff247b4850d93e7a382", optional = true }
+reqwest = { workspace = true, optional = true }
+futures = { version = "0.3", optional = true }
+
+[dev-dependencies]
+toml.workspace = true
+serde_json = "1"

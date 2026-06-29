@@ -8,7 +8,7 @@
 //! - mount/unmount/listmounts: ✅ Tier 1 (tracking) + Tier 2 (actual mounting) implemented
 
 use super::ResponseBuilder;
-use super::utils::ACK_ERROR_SYSTEM;
+use super::utils::ACK_ERROR_SYS;
 use crate::state::AppState;
 use rmpd_core::storage::platform::get_default_backend;
 use std::path::PathBuf;
@@ -39,7 +39,7 @@ pub async fn handle_mount_command(state: &AppState, path: &str, uri: &str) -> St
         Some(dir) => dir,
         None => {
             return ResponseBuilder::error(
-                ACK_ERROR_SYSTEM,
+                ACK_ERROR_SYS,
                 0,
                 "mount",
                 "Music directory not configured",
@@ -96,11 +96,11 @@ pub async fn handle_mount_command(state: &AppState, path: &str, uri: &str) -> St
             }
             Ok(Err(e)) => {
                 tracing::error!("mount failed: {}", e);
-                ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "mount", &format!("Mount failed: {e}"))
+                ResponseBuilder::error(ACK_ERROR_SYS, 0, "mount", &format!("Mount failed: {e}"))
             }
             Err(_) => {
                 tracing::error!("mount task panicked");
-                ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "mount", "Mount task panicked")
+                ResponseBuilder::error(ACK_ERROR_SYS, 0, "mount", "Mount task panicked")
             }
         }
     } else {
@@ -112,7 +112,7 @@ pub async fn handle_mount_command(state: &AppState, path: &str, uri: &str) -> St
         {
             Ok(_) => ResponseBuilder::new().ok(),
             Err(e) => ResponseBuilder::error(
-                ACK_ERROR_SYSTEM,
+                ACK_ERROR_SYS,
                 0,
                 "mount",
                 &format!("Mount registration failed: {e}"),
@@ -133,7 +133,7 @@ pub async fn handle_unmount_command(state: &AppState, path: &str) -> String {
         Some(dir) => dir,
         None => {
             return ResponseBuilder::error(
-                ACK_ERROR_SYSTEM,
+                ACK_ERROR_SYS,
                 0,
                 "unmount",
                 "Music directory not configured",
@@ -171,28 +171,20 @@ pub async fn handle_unmount_command(state: &AppState, path: &str) -> String {
                 tracing::error!("unmount failed: {}", e);
                 // Still try to remove from registry
                 let _ = state.mount_registry.unmount(path).await;
-                ResponseBuilder::error(
-                    ACK_ERROR_SYSTEM,
-                    0,
-                    "unmount",
-                    &format!("Unmount failed: {e}"),
-                )
+                ResponseBuilder::error(ACK_ERROR_SYS, 0, "unmount", &format!("Unmount failed: {e}"))
             }
             Err(_) => {
                 tracing::error!("unmount task panicked");
-                ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "unmount", "Unmount task panicked")
+                ResponseBuilder::error(ACK_ERROR_SYS, 0, "unmount", "Unmount task panicked")
             }
         }
     } else {
         // Tier 1: Only remove from registry
         match state.mount_registry.unmount(path).await {
             Ok(_) => ResponseBuilder::new().ok(),
-            Err(e) => ResponseBuilder::error(
-                ACK_ERROR_SYSTEM,
-                0,
-                "unmount",
-                &format!("Unmount failed: {e}"),
-            ),
+            Err(e) => {
+                ResponseBuilder::error(ACK_ERROR_SYS, 0, "unmount", &format!("Unmount failed: {e}"))
+            }
         }
     }
 }

@@ -7,8 +7,8 @@ use crate::response::ResponseBuilder;
 use crate::state::AppState;
 
 use super::utils::{
-    ACK_ERROR_ARG, ACK_ERROR_PLAYER_SYNC, ACK_ERROR_SYSTEM, prepare_song_for_playback,
-    update_next_song,
+    ACK_ERROR_ARG, ACK_ERROR_NO_EXIST, ACK_ERROR_PLAYER_SYNC, ACK_ERROR_SYS,
+    prepare_song_for_playback, update_next_song,
 };
 
 pub async fn handle_play_command(state: &AppState, position: Option<u32>) -> String {
@@ -38,9 +38,26 @@ pub async fn handle_play_command(state: &AppState, position: Option<u32>) -> Str
         }
     };
 
+    // Honor a per-item playback range (CUE virtual track / rangeid).
+    let range = actual_position
+        .and_then(|(p, _)| queue.get(p))
+        .and_then(|it| it.range);
     drop(queue);
 
-    let playback_song = prepare_song_for_playback(&song, state.music_dir.as_deref());
+    let playback_song =
+        match prepare_song_for_playback(&song, state.music_dir.as_deref(), range, &state.sources)
+            .await
+        {
+            Ok(ps) => ps,
+            Err(e) => {
+                return ResponseBuilder::error(
+                    ACK_ERROR_NO_EXIST,
+                    0,
+                    "play",
+                    &format!("Cannot resolve song: {}", e),
+                );
+            }
+        };
 
     match state.engine.write().await.play(playback_song).await {
         Ok(_) => {
@@ -71,9 +88,7 @@ pub async fn handle_play_command(state: &AppState, position: Option<u32>) -> Str
 
             ResponseBuilder::new().ok()
         }
-        Err(e) => {
-            ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "play", &format!("Playback error: {e}"))
-        }
+        Err(e) => ResponseBuilder::error(ACK_ERROR_SYS, 0, "play", &format!("Playback error: {e}")),
     }
 }
 
@@ -118,7 +133,7 @@ pub async fn handle_pause_command(state: &AppState, pause_state: Option<bool>) -
         }
         Err(e) => {
             error!("pause failed: {}", e);
-            ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "pause", &format!("Pause error: {e}"))
+            ResponseBuilder::error(ACK_ERROR_SYS, 0, "pause", &format!("Pause error: {e}"))
         }
     }
 }
@@ -135,7 +150,7 @@ pub async fn handle_stop_command(state: &AppState) -> String {
 
             ResponseBuilder::new().ok()
         }
-        Err(e) => ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "stop", &format!("Stop error: {e}")),
+        Err(e) => ResponseBuilder::error(ACK_ERROR_SYS, 0, "stop", &format!("Stop error: {e}")),
     }
 }
 
@@ -154,10 +169,28 @@ pub async fn handle_next_command(state: &AppState) -> String {
     if let Some(item) = queue.get(next_pos) {
         let song = (*item.song).clone();
         let item_id = item.id;
+        let range = item.range;
         drop(queue);
         drop(status);
 
-        let playback_song = prepare_song_for_playback(&song, state.music_dir.as_deref());
+        let playback_song = match prepare_song_for_playback(
+            &song,
+            state.music_dir.as_deref(),
+            range,
+            &state.sources,
+        )
+        .await
+        {
+            Ok(ps) => ps,
+            Err(e) => {
+                return ResponseBuilder::error(
+                    ACK_ERROR_NO_EXIST,
+                    0,
+                    "next",
+                    &format!("Cannot resolve song: {}", e),
+                );
+            }
+        };
 
         match state.engine.write().await.play(playback_song).await {
             Ok(_) => {
@@ -173,7 +206,7 @@ pub async fn handle_next_command(state: &AppState) -> String {
                 ResponseBuilder::new().ok()
             }
             Err(e) => {
-                ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "next", &format!("Playback error: {e}"))
+                ResponseBuilder::error(ACK_ERROR_SYS, 0, "next", &format!("Playback error: {e}"))
             }
         }
     } else {
@@ -202,10 +235,28 @@ pub async fn handle_previous_command(state: &AppState) -> String {
     if let Some(item) = queue.get(prev_pos) {
         let song = (*item.song).clone();
         let item_id = item.id;
+        let range = item.range;
         drop(queue);
         drop(status);
 
-        let playback_song = prepare_song_for_playback(&song, state.music_dir.as_deref());
+        let playback_song = match prepare_song_for_playback(
+            &song,
+            state.music_dir.as_deref(),
+            range,
+            &state.sources,
+        )
+        .await
+        {
+            Ok(ps) => ps,
+            Err(e) => {
+                return ResponseBuilder::error(
+                    ACK_ERROR_NO_EXIST,
+                    0,
+                    "previous",
+                    &format!("Cannot resolve song: {}", e),
+                );
+            }
+        };
 
         match state.engine.write().await.play(playback_song).await {
             Ok(_) => {
@@ -221,7 +272,7 @@ pub async fn handle_previous_command(state: &AppState) -> String {
                 ResponseBuilder::new().ok()
             }
             Err(e) => ResponseBuilder::error(
-                ACK_ERROR_SYSTEM,
+                ACK_ERROR_SYS,
                 0,
                 "previous",
                 &format!("Playback error: {e}"),
@@ -256,7 +307,7 @@ pub async fn handle_seek_command(state: &AppState, position: u32, time: f64) -> 
                 ResponseBuilder::new().ok()
             }
             Err(e) => {
-                ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "seek", &format!("Seek failed: {e}"))
+                ResponseBuilder::error(ACK_ERROR_SYS, 0, "seek", &format!("Seek failed: {e}"))
             }
         }
     } else {
@@ -275,7 +326,7 @@ pub async fn handle_seekid_command(state: &AppState, id: u32, time: f64) -> Stri
             let is_current = status.current_song.map(|c| c.id == id).unwrap_or(false);
             (pos, is_current)
         } else {
-            return ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "seekid", "No such song");
+            return ResponseBuilder::error(ACK_ERROR_NO_EXIST, 0, "seekid", "No such song");
         }
     };
 
@@ -286,7 +337,7 @@ pub async fn handle_seekid_command(state: &AppState, id: u32, time: f64) -> Stri
                 ResponseBuilder::new().ok()
             }
             Err(e) => {
-                ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "seekid", &format!("Seek failed: {e}"))
+                ResponseBuilder::error(ACK_ERROR_SYS, 0, "seekid", &format!("Seek failed: {e}"))
             }
         }
     } else {
@@ -323,7 +374,7 @@ pub async fn handle_seekcur_command(state: &AppState, time: f64, relative: bool)
                 ResponseBuilder::new().ok()
             }
             Err(e) => {
-                ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "seekcur", &format!("Seek failed: {e}"))
+                ResponseBuilder::error(ACK_ERROR_SYS, 0, "seekcur", &format!("Seek failed: {e}"))
             }
         }
     } else {

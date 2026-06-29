@@ -3,7 +3,25 @@
 use crate::response::ResponseBuilder;
 use crate::state::AppState;
 
-use super::utils::ACK_ERROR_SYSTEM;
+use super::utils::ACK_ERROR_NO_EXIST;
+
+/// Reconcile the engine's active output set after an enabled-flag change.
+/// Feeds the engine ALL enabled outputs; if none are enabled, stops playback.
+async fn reconcile_active_output(state: &AppState) {
+    let enabled: Vec<rmpd_core::config::OutputConfig> = {
+        let outputs = state.outputs.read().await;
+        outputs
+            .iter()
+            .filter(|o| o.enabled)
+            .filter_map(|o| o.config.clone())
+            .collect()
+    };
+    if enabled.is_empty() {
+        let _ = state.engine.write().await.stop().await;
+    } else {
+        state.engine.write().await.set_outputs(enabled);
+    }
+}
 
 pub async fn handle_outputs_command(state: &AppState) -> String {
     let outputs = state.outputs.read().await;
@@ -14,6 +32,9 @@ pub async fn handle_outputs_command(state: &AppState) -> String {
         resp.field("outputname", &output.name);
         resp.field("plugin", &output.plugin);
         resp.field("outputenabled", if output.enabled { "1" } else { "0" });
+        for (key, value) in &output.attributes {
+            resp.field("attribute", format!("{key}={value}"));
+        }
         // Add blank line between outputs, but not after the last one
         if i < outputs.len() - 1 {
             resp.blank_line();
@@ -24,59 +45,103 @@ pub async fn handle_outputs_command(state: &AppState) -> String {
 }
 
 pub async fn handle_enableoutput_command(state: &AppState, id: u32) -> String {
-    let mut outputs = state.outputs.write().await;
+    let found = {
+        let mut outputs = state.outputs.write().await;
+        if let Some(output) = outputs.iter_mut().find(|o| o.id == id) {
+            output.enabled = true;
+            true
+        } else {
+            false
+        }
+    };
 
-    if let Some(output) = outputs.iter_mut().find(|o| o.id == id) {
-        output.enabled = true;
+    if found {
         state
             .event_bus
             .emit(rmpd_core::event::Event::OutputsChanged);
+        reconcile_active_output(state).await;
         ResponseBuilder::new().ok()
     } else {
-        ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "enableoutput", "No such audio output")
+        ResponseBuilder::error(
+            ACK_ERROR_NO_EXIST,
+            0,
+            "enableoutput",
+            "No such audio output",
+        )
     }
 }
 
 pub async fn handle_disableoutput_command(state: &AppState, id: u32) -> String {
-    let mut outputs = state.outputs.write().await;
+    let found = {
+        let mut outputs = state.outputs.write().await;
+        if let Some(output) = outputs.iter_mut().find(|o| o.id == id) {
+            output.enabled = false;
+            true
+        } else {
+            false
+        }
+    };
 
-    if let Some(output) = outputs.iter_mut().find(|o| o.id == id) {
-        output.enabled = false;
+    if found {
         state
             .event_bus
             .emit(rmpd_core::event::Event::OutputsChanged);
+        reconcile_active_output(state).await;
         ResponseBuilder::new().ok()
     } else {
-        ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "disableoutput", "No such audio output")
+        ResponseBuilder::error(
+            ACK_ERROR_NO_EXIST,
+            0,
+            "disableoutput",
+            "No such audio output",
+        )
     }
 }
 
 pub async fn handle_toggleoutput_command(state: &AppState, id: u32) -> String {
-    let mut outputs = state.outputs.write().await;
+    let found = {
+        let mut outputs = state.outputs.write().await;
+        if let Some(output) = outputs.iter_mut().find(|o| o.id == id) {
+            output.enabled = !output.enabled;
+            true
+        } else {
+            false
+        }
+    };
 
-    if let Some(output) = outputs.iter_mut().find(|o| o.id == id) {
-        output.enabled = !output.enabled;
+    if found {
         state
             .event_bus
             .emit(rmpd_core::event::Event::OutputsChanged);
+        reconcile_active_output(state).await;
         ResponseBuilder::new().ok()
     } else {
-        ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "toggleoutput", "No such audio output")
+        ResponseBuilder::error(
+            ACK_ERROR_NO_EXIST,
+            0,
+            "toggleoutput",
+            "No such audio output",
+        )
     }
 }
 
 pub async fn handle_outputset_command(
     state: &AppState,
     id: u32,
-    _name: &str,
-    _value: &str,
+    name: &str,
+    value: &str,
 ) -> String {
-    // Verify output exists
-    let outputs = state.outputs.read().await;
-    if outputs.iter().any(|o| o.id == id) {
-        // MPD silently accepts outputset even for unsupported attributes
+    let mut outputs = state.outputs.write().await;
+    if let Some(output) = outputs.iter_mut().find(|o| o.id == id) {
+        output
+            .attributes
+            .insert(name.to_string(), value.to_string());
+        drop(outputs);
+        state
+            .event_bus
+            .emit(rmpd_core::event::Event::OutputsChanged);
         ResponseBuilder::new().ok()
     } else {
-        ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, "outputset", "No such audio output")
+        ResponseBuilder::error(ACK_ERROR_NO_EXIST, 0, "outputset", "No such audio output")
     }
 }

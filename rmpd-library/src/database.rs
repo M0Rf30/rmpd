@@ -4,7 +4,7 @@ use rmpd_core::error::{Result, RmpdError};
 use rmpd_core::song::{Song, intern_tag_key};
 use rmpd_core::tag::tag_fallback_chain;
 use rmpd_core::time::system_time_to_unix_secs;
-use rusqlite::{Connection, OptionalExtension, Row, params};
+use rusqlite::{Connection, OptionalExtension, Row, functions::FunctionFlags, params};
 use std::cmp::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
@@ -20,6 +20,30 @@ fn icu_cmp_opt(col: &CollatorBorrowed<'_>, a: Option<&str>, b: Option<&str>) -> 
     }
 }
 
+/// Sort comparator matching MPD's song_cmp: Album (ICU, None-first) → Disc → Track → Filename (ICU).
+/// Extracted so both `list_directory` and `walk_dir` share the same closure body.
+fn song_cmp(a: &Song, b: &Song, col: &CollatorBorrowed<'_>) -> Ordering {
+    let album_ord = icu_cmp_opt(col, a.tag("album"), b.tag("album"));
+    if album_ord != Ordering::Equal {
+        return album_ord;
+    }
+    let disc_a: u32 = a.tag("disc").and_then(|v| v.parse().ok()).unwrap_or(0);
+    let disc_b: u32 = b.tag("disc").and_then(|v| v.parse().ok()).unwrap_or(0);
+    let disc_ord = disc_a.cmp(&disc_b);
+    if disc_ord != Ordering::Equal {
+        return disc_ord;
+    }
+    let track_a: u32 = a.tag("track").and_then(|v| v.parse().ok()).unwrap_or(0);
+    let track_b: u32 = b.tag("track").and_then(|v| v.parse().ok()).unwrap_or(0);
+    let track_ord = track_a.cmp(&track_b);
+    if track_ord != Ordering::Equal {
+        return track_ord;
+    }
+    let a_name = a.path.file_name().unwrap_or(a.path.as_str());
+    let b_name = b.path.file_name().unwrap_or(b.path.as_str());
+    col.compare(a_name, b_name)
+}
+
 /// An entry yielded during a recursive directory walk.
 pub enum WalkEntry<'a> {
     /// A song file.
@@ -29,6 +53,8 @@ pub enum WalkEntry<'a> {
 }
 
 /// SELECT columns for song audio properties (no tags — those come from song_tags).
+/// NOTE: `concat!()` only accepts string literals, not named `const` variables, so
+/// `format!("{SONG_COLUMNS} ...")` is the correct form for all queries using this list.
 const SONG_COLUMNS: &str = "id, path, duration, sample_rate, channels, bits_per_sample, bitrate,
      replay_gain_track_gain, replay_gain_track_peak,
      replay_gain_album_gain, replay_gain_album_peak,
@@ -40,6 +66,27 @@ const SONG_COLUMNS_ALIASED: &str =
      s.replay_gain_track_gain, s.replay_gain_track_peak,
      s.replay_gain_album_gain, s.replay_gain_album_peak,
      s.added_at, s.last_modified";
+
+/// FTS5 full-text index over song tags. Contentless (`content=''`) — sync is
+/// maintained manually by `update_fts_for_song` and the `songs_fts_delete`
+/// trigger. `contentless_delete=1` (SQLite >= 3.43) is REQUIRED: it lets a row
+/// be removed with a plain `DELETE` on its rowid. Without it, a contentless 'delete' must
+/// repeat the originally-indexed column values; supplying empty strings writes
+/// bad tombstones that corrupt the index (surfacing later as "database disk
+/// image is malformed" when a row DELETE fires the trigger).
+const SONGS_FTS_CREATE_SQL: &str = "
+    CREATE VIRTUAL TABLE IF NOT EXISTS songs_fts USING fts5(
+        title, artist, album, album_artist, genre, composer,
+        content='', contentless_delete=1
+    )";
+
+/// Trigger that removes a song's FTS row when the song row is deleted. With
+/// `contentless_delete=1` the row is removed by a plain `DELETE` on its rowid
+/// (the special 'delete' insert command is rejected on such tables).
+const SONGS_FTS_DELETE_TRIGGER_SQL: &str = "
+    CREATE TRIGGER IF NOT EXISTS songs_fts_delete AFTER DELETE ON songs BEGIN
+        DELETE FROM songs_fts WHERE rowid = old.id;
+    END";
 
 /// Construct a Song (without tags) from a database row.
 /// Tags are loaded separately via `load_tags_for_songs`.
@@ -81,6 +128,18 @@ fn open_connection(path: &str) -> Result<Connection> {
     conn.busy_timeout(Duration::from_secs(5))?;
     conn.execute_batch(
         "PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON;",
+    )?;
+    conn.create_scalar_function(
+        "regexp",
+        2,
+        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
+        |ctx| {
+            let pattern: String = ctx.get(0)?;
+            let text: String = ctx.get(1)?;
+            let re = regex::Regex::new(&pattern)
+                .map_err(|e| rusqlite::Error::UserFunctionError(Box::new(e)))?;
+            Ok(re.is_match(&text))
+        },
     )?;
     Ok(conn)
 }
@@ -201,6 +260,9 @@ impl Database {
     /// Perform schema migrations for existing databases.
     /// Currently handles:
     ///   v1→v2: Remove UNIQUE(song_id, tag, value) from song_tags to allow duplicate tag values
+    ///   v2→v3: Add songs.source column for remote catalog origin
+    ///   v3→v4: Recreate songs_fts with contentless_delete=1 (fixes FTS index
+    ///          corruption triggered by row deletes such as clear_source)
     fn migrate_schema(&self) -> Result<()> {
         // Check if song_tags already exists with the old UNIQUE constraint.
         // We detect this by looking at sqlite_master for the table definition.
@@ -237,6 +299,68 @@ impl Database {
             }
         }
 
+        // v2→v3: add songs.source for remote catalog origin (NULL = local, non-NULL = "<scheme>:<name>").
+        // Guard: only run ALTER when the songs table exists (it may not on a fresh DB where
+        // migrate_schema runs before init_schema). On fresh DBs init_schema creates the column.
+        let songs_table_exists: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='songs'",
+            [],
+            |r| r.get(0),
+        )?;
+        if songs_table_exists > 0 {
+            let has_source: i64 = self.conn.query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('songs') WHERE name='source'",
+                [],
+                |r| r.get(0),
+            )?;
+            if has_source == 0 {
+                self.conn
+                    .execute("ALTER TABLE songs ADD COLUMN source TEXT", [])?;
+            }
+        }
+
+        // v3→v4: songs_fts must be declared with contentless_delete=1 (SQLite >= 3.43)
+        // so its delete trigger and re-index path can delete by rowid alone. Pre-fix DBs
+        // created the contentless table without that option and maintained it with
+        // empty-string 'delete' commands that write bad tombstones and corrupt the index
+        // — surfacing only as "database disk image is malformed" when a later row DELETE
+        // fires the trigger (e.g. clear_source). Detect the old definition (its stored SQL
+        // lacks "contentless_delete"); drop the index + trigger, recreate both with the
+        // new form, and rebuild the index from song_tags. Wrapped in a transaction so an
+        // interrupted migration rolls back and re-runs on the next open instead of leaving
+        // a silently-incomplete index the guard would not retry.
+        let fts_sql: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='songs_fts'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(sql) = fts_sql
+            && !sql.contains("contentless_delete")
+        {
+            self.conn.execute_batch(
+                "BEGIN;
+                 DROP TRIGGER IF EXISTS songs_fts_delete;
+                 DROP TABLE IF EXISTS songs_fts;",
+            )?;
+            self.conn.execute(SONGS_FTS_CREATE_SQL, [])?;
+            self.conn.execute(SONGS_FTS_DELETE_TRIGGER_SQL, [])?;
+            // Rebuild from song_tags: re-run the canonical per-song FTS insert for
+            // every song. The table is freshly empty, so each insert's rowid-only
+            // pre-delete is a harmless no-op.
+            let ids: Vec<i64> = {
+                let mut stmt = self.conn.prepare("SELECT id FROM songs")?;
+                stmt.query_map([], |row| row.get(0))?
+                    .collect::<std::result::Result<Vec<_>, _>>()?
+            };
+            for id in ids {
+                self.update_fts_for_song(id as u64)?;
+            }
+            self.conn.execute_batch("COMMIT;")?;
+        }
+
         Ok(())
     }
 
@@ -259,6 +383,7 @@ impl Database {
                 replay_gain_album_peak REAL,
                 added_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
                 last_modified INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+                source TEXT,
                 FOREIGN KEY (directory_id) REFERENCES directories(id)
             )",
             [],
@@ -359,14 +484,8 @@ impl Database {
             [],
         )?;
 
-        // Full-text search using FTS5 (content-less — we manage sync manually)
-        self.conn.execute(
-            "CREATE VIRTUAL TABLE IF NOT EXISTS songs_fts USING fts5(
-                title, artist, album, album_artist, genre, composer,
-                content=''
-            )",
-            [],
-        )?;
+        // Full-text search index over song tags. See SONGS_FTS_CREATE_SQL.
+        self.conn.execute(SONGS_FTS_CREATE_SQL, [])?;
 
         // Indexes on song_tags
         self.conn.execute(
@@ -400,14 +519,8 @@ impl Database {
             [],
         )?;
 
-        // FTS delete trigger — clean up FTS when songs are deleted
-        self.conn.execute(
-            "CREATE TRIGGER IF NOT EXISTS songs_fts_delete AFTER DELETE ON songs BEGIN
-                INSERT INTO songs_fts(songs_fts, rowid, title, artist, album, album_artist, genre, composer)
-                VALUES ('delete', old.id, '', '', '', '', '', '');
-            END",
-            [],
-        )?;
+        // Keep the FTS index in sync on song deletes. See SONGS_FTS_DELETE_TRIGGER_SQL.
+        self.conn.execute(SONGS_FTS_DELETE_TRIGGER_SQL, [])?;
 
         Ok(())
     }
@@ -492,12 +605,14 @@ impl Database {
             }
         }
 
-        // Delete old FTS entry if it exists, then insert new one
+        // Remove any prior FTS entry for this rowid, then insert the current tags.
+        // contentless_delete=1 tables are deleted with a plain DELETE by rowid (the
+        // 'delete' insert command is rejected); deleting a not-yet-indexed rowid is a
+        // clean no-op, so this also covers the brand-new-song case.
         self.conn.execute(
-            "INSERT INTO songs_fts(songs_fts, rowid, title, artist, album, album_artist, genre, composer)
-             VALUES ('delete', ?1, '', '', '', '', '', '')",
+            "DELETE FROM songs_fts WHERE rowid = ?1",
             params![song_id as i64],
-        ).ok(); // ignore error if entry doesn't exist
+        )?;
 
         self.conn.execute(
             "INSERT INTO songs_fts(rowid, title, artist, album, album_artist, genre, composer)
@@ -522,7 +637,8 @@ impl Database {
 
         // Insert or update the song row (audio properties only).
         // On conflict (same path): update audio props and last_modified, but preserve added_at.
-        self.conn.execute(
+        // RETURNING id avoids the extra SELECT query (SQLite >=3.43, already required).
+        let song_id: u64 = self.conn.query_row(
             "INSERT INTO songs (
                 path, directory_id, mtime, duration,
                 sample_rate, channels, bits_per_sample, bitrate,
@@ -542,7 +658,8 @@ impl Database {
                 replay_gain_track_peak = excluded.replay_gain_track_peak,
                 replay_gain_album_gain = excluded.replay_gain_album_gain,
                 replay_gain_album_peak = excluded.replay_gain_album_peak,
-                last_modified = excluded.mtime",
+                last_modified = excluded.mtime
+            RETURNING id",
             params![
                 song.path.as_str(),
                 dir_id,
@@ -557,13 +674,6 @@ impl Database {
                 song.replay_gain_album_gain,
                 song.replay_gain_album_peak,
             ],
-        )?;
-
-        // Use a SELECT to reliably get the song id regardless of insert vs upsert.
-        // last_insert_rowid() is unreliable for ON CONFLICT DO UPDATE in a fresh connection.
-        let song_id: u64 = self.conn.query_row(
-            "SELECT id FROM songs WHERE path = ?1",
-            params![song.path.as_str()],
             |row| row.get::<_, i64>(0),
         )? as u64;
 
@@ -635,9 +745,7 @@ impl Database {
             .map(|r| r.map_err(Into::into))
             .collect();
         let mut songs = songs?;
-        for song in &mut songs {
-            song.tags = self.load_tags_for_song(song.id)?;
-        }
+        self.load_tags_for_songs(&mut songs)?;
         Ok(songs)
     }
 
@@ -666,16 +774,14 @@ impl Database {
     /// Get all database statistics in a single query.
     /// Returns (songs, artists, albums, playtime_secs, last_update).
     pub fn get_stats(&self) -> Result<(u32, u32, u32, u64, i64)> {
-        let song_count: u32 = self
-            .conn
-            .query_row("SELECT COUNT(*) FROM songs", [], |row| row.get(0))?;
+        // One pass over the songs table: count, playtime, and last_update together.
+        let (song_count, playtime, last_update): (u32, f64, i64) = self.conn.query_row(
+            "SELECT COUNT(*), COALESCE(SUM(duration), 0.0), COALESCE(MAX(added_at), 0) FROM songs",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
         let artists: u32 = self.count_artists()?;
         let albums: u32 = self.count_albums()?;
-        let (playtime, last_update): (f64, i64) = self.conn.query_row(
-            "SELECT COALESCE(SUM(duration), 0), COALESCE(MAX(added_at), 0) FROM songs",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )?;
         Ok((
             song_count,
             artists,
@@ -720,22 +826,19 @@ impl Database {
         Ok(self.conn.last_insert_rowid())
     }
 
-    /// Escape FTS5 query to handle special characters and reserved words
+    /// Escape FTS5 query by wrapping the whole input in double quotes so FTS5 treats it as
+    /// a phrase. Embedded `"` are escaped as `""` per SQLite FTS5 rules. This prevents
+    /// operator injection for inputs like `"Rock AND Roll"` where the old word-boundary
+    /// check missed operators embedded in multi-word strings.
     fn escape_fts_query(query: &str) -> String {
-        let reserved_words = ["AND", "OR", "NOT", "NEAR"];
-        let query_upper = query.to_uppercase();
-
-        let needs_escaping = query.contains('"')
-            || query.contains('\'')
-            || query.contains('(')
-            || query.contains(')')
-            || reserved_words.iter().any(|&word| query_upper == word);
-
-        if needs_escaping {
-            format!("\"{}\"", query.replace('"', "\"\""))
-        } else {
-            query.to_string()
-        }
+        // Quote the query as a phrase so embedded boolean operators
+        // (AND/OR/NOT/NEAR) are treated literally, while preserving a trailing
+        // `*` (FTS5 prefix search) OUTSIDE the quotes. Embedded quotes doubled.
+        let (body, suffix) = match query.strip_suffix('*') {
+            Some(stripped) => (stripped, "*"),
+            None => (query, ""),
+        };
+        format!("\"{}\"{}", body.replace('"', "\"\""), suffix)
     }
 
     pub fn search_songs(&self, query: &str) -> Result<Vec<Song>> {
@@ -753,46 +856,6 @@ impl Database {
             .collect::<std::result::Result<Vec<_>, _>>()?;
         self.load_tags_for_songs(&mut songs)?;
         Ok(songs)
-    }
-
-    pub fn list_artists(&self) -> Result<Vec<String>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT DISTINCT value FROM song_tags WHERE tag = 'artist' AND value != '' ORDER BY value COLLATE NOCASE",
-        )?;
-        let artists = stmt
-            .query_map([], |row| row.get(0))?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(artists)
-    }
-
-    pub fn list_albums(&self) -> Result<Vec<String>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT DISTINCT value FROM song_tags WHERE tag = 'album' AND value != '' ORDER BY value COLLATE NOCASE",
-        )?;
-        let albums = stmt
-            .query_map([], |row| row.get(0))?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(albums)
-    }
-
-    pub fn list_genres(&self) -> Result<Vec<String>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT DISTINCT value FROM song_tags WHERE tag = 'genre' AND value != '' ORDER BY value COLLATE NOCASE",
-        )?;
-        let genres = stmt
-            .query_map([], |row| row.get(0))?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(genres)
-    }
-
-    pub fn list_album_artists(&self) -> Result<Vec<String>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT DISTINCT value FROM song_tags WHERE tag = 'albumartist' AND value != '' ORDER BY value COLLATE NOCASE",
-        )?;
-        let album_artists = stmt
-            .query_map([], |row| row.get(0))?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(album_artists)
     }
 
     /// List unique values for any tag, with MPD-style fallback.
@@ -904,14 +967,11 @@ impl Database {
     }
 
     /// Get all songs from the database.
+    /// Thin delegator to [`Self::list_all_songs`]; kept because callers in rmpd-protocol use
+    /// this name. The previously-duplicated body has been removed.
+    #[inline]
     pub fn get_all_songs(&self) -> Result<Vec<Song>> {
-        let sql = format!("SELECT {SONG_COLUMNS} FROM songs ORDER BY path");
-        let mut stmt = self.conn.prepare(&sql)?;
-        let mut songs: Vec<Song> = stmt
-            .query_map([], song_from_row)?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        self.load_tags_for_songs(&mut songs)?;
-        Ok(songs)
+        self.list_all_songs()
     }
 
     pub fn find_songs(&self, tag: &str, value: &str) -> Result<Vec<Song>> {
@@ -1038,19 +1098,170 @@ impl Database {
     }
 
     pub fn delete_song_by_path(&self, path: &str) -> Result<()> {
-        self.conn
-            .execute("DELETE FROM songs WHERE path = ?1", params![path])?;
+        self.conn.execute(
+            "DELETE FROM songs WHERE path = ?1 AND source IS NULL",
+            params![path],
+        )?;
         Ok(())
     }
 
+    /// Ensure the root directory (path="", parent_id=NULL) exists and return its id.
+    /// Local scans create this automatically via `get_or_create_directory`; this
+    /// method creates it on first use in a remote-only deployment.
+    fn ensure_root_dir(&self) -> Result<i64> {
+        if let Some(id) = self
+            .conn
+            .query_row(
+                "SELECT id FROM directories WHERE parent_id IS NULL LIMIT 1",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+        {
+            return Ok(id);
+        }
+        let mtime = system_time_to_unix_secs(SystemTime::now());
+        self.conn.execute(
+            "INSERT INTO directories (path, parent_id, mtime) VALUES ('', NULL, ?1)",
+            params![mtime],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Get or create a directory row with an explicit parent_id.
+    /// Used by `add_source_song` to build virtual path chains without going through
+    /// `get_or_create_directory`, which mis-handles `://` authority segments.
+    fn get_or_create_dir_with_parent(&self, path: &str, parent_id: i64) -> Result<i64> {
+        if let Some(id) = self
+            .conn
+            .query_row(
+                "SELECT id FROM directories WHERE path = ?1",
+                params![path],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+        {
+            return Ok(id);
+        }
+        let mtime = system_time_to_unix_secs(SystemTime::now());
+        self.conn.execute(
+            "INSERT INTO directories (path, parent_id, mtime) VALUES (?1, ?2, ?3)",
+            params![path, parent_id, mtime],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Insert or update a song from a remote music source.
+    ///
+    /// Like `add_song` but (a) sets `source = source_token` on the row so local
+    /// filesystem scans never touch it, and (b) builds the synthetic directory
+    /// chain from the mount-style virtual path explicitly (one row per segment),
+    /// setting the song's `directory_id` to the leaf directory.
+    ///
+    /// The virtual path convention is mount-style `<name>/<seg>.../<leaf>` (no
+    /// `scheme://`): the first segment is the mount point shown at the library
+    /// root, and the final segment is the song leaf (`<id>[.<suffix>]`).
+    pub fn add_source_song(&self, song: &Song, source_token: &str) -> Result<i64> {
+        // Mount-style virtual path: "<name>/<seg>/.../<leaf>" (no scheme://).
+        // The first segment is the mount point (a child of root); every segment
+        // except the final leaf forms the synthetic browse-directory chain, with
+        // each directory's `path` being the segments joined so far.
+        let path_str = song.path.as_str();
+        let segments: Vec<&str> = path_str.split('/').collect();
+
+        let root_id = self.ensure_root_dir()?;
+        let mut parent_id = root_id;
+        let mut current_path = String::new();
+        // All segments except the final leaf are directories.
+        let dir_count = segments.len().saturating_sub(1);
+        for seg in &segments[..dir_count] {
+            if current_path.is_empty() {
+                current_path.push_str(seg);
+            } else {
+                current_path.push('/');
+                current_path.push_str(seg);
+            }
+            parent_id = self.get_or_create_dir_with_parent(&current_path, parent_id)?;
+        }
+        let leaf_dir_id = parent_id;
+
+        // Upsert the song row with the source column set.
+        // RETURNING id avoids the extra SELECT (SQLite >=3.43).
+        let song_id: i64 = self.conn.query_row(
+            "INSERT INTO songs (
+                path, directory_id, mtime, duration,
+                sample_rate, channels, bits_per_sample, bitrate,
+                replay_gain_track_gain, replay_gain_track_peak,
+                replay_gain_album_gain, replay_gain_album_peak,
+                last_modified, source
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?3, ?13)
+            ON CONFLICT(path) DO UPDATE SET
+                directory_id = excluded.directory_id,
+                mtime = excluded.mtime,
+                duration = excluded.duration,
+                sample_rate = excluded.sample_rate,
+                channels = excluded.channels,
+                bits_per_sample = excluded.bits_per_sample,
+                bitrate = excluded.bitrate,
+                replay_gain_track_gain = excluded.replay_gain_track_gain,
+                replay_gain_track_peak = excluded.replay_gain_track_peak,
+                replay_gain_album_gain = excluded.replay_gain_album_gain,
+                replay_gain_album_peak = excluded.replay_gain_album_peak,
+                last_modified = excluded.mtime,
+                source = excluded.source
+            RETURNING id",
+            params![
+                song.path.as_str(),
+                leaf_dir_id,
+                song.last_modified,
+                song.duration.map(|d| d.as_secs_f64()),
+                song.sample_rate,
+                song.channels,
+                song.bits_per_sample,
+                song.bitrate,
+                song.replay_gain_track_gain,
+                song.replay_gain_track_peak,
+                song.replay_gain_album_gain,
+                song.replay_gain_album_peak,
+                source_token,
+            ],
+            |row| row.get(0),
+        )?;
+
+        // Refresh tags (same as add_song).
+        self.conn
+            .execute("DELETE FROM song_tags WHERE song_id = ?1", params![song_id])?;
+        let mut tag_stmt = self
+            .conn
+            .prepare("INSERT INTO song_tags (song_id, tag, value) VALUES (?1, ?2, ?3)")?;
+        for (tag, value) in &song.tags {
+            tag_stmt.execute(params![song_id, tag.as_ref(), value])?;
+        }
+        self.update_fts_for_song(song_id as u64)?;
+
+        Ok(song_id)
+    }
+
+    /// Delete all songs belonging to `source_token` (format `"<scheme>:<name>"`).
+    ///
+    /// `ON DELETE CASCADE` removes the associated `song_tags` and `artwork` rows.
+    /// Returns the number of songs deleted. Used for atomic resync: call
+    /// `clear_source` then repopulate with `add_source_song` inside a transaction.
+    pub fn clear_source(&self, source_token: &str) -> Result<usize> {
+        let count = self
+            .conn
+            .execute("DELETE FROM songs WHERE source = ?1", params![source_token])?;
+        Ok(count)
+    }
+
     // Artwork methods
-    pub fn get_artwork(&self, path: &str, picture_type: &str) -> Result<Option<Vec<u8>>> {
+    pub fn get_artwork(&self, path: &str, picture_type: &str) -> Result<Option<(Vec<u8>, String)>> {
         Ok(self
             .conn
             .query_row(
-                "SELECT data FROM artwork WHERE song_path = ?1 AND picture_type = ?2",
+                "SELECT data, mime_type FROM artwork WHERE song_path = ?1 AND picture_type = ?2",
                 params![path, picture_type],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()?)
     }
@@ -1072,12 +1283,11 @@ impl Database {
     }
 
     pub fn has_artwork(&self, path: &str, picture_type: &str) -> Result<bool> {
-        let count: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM artwork WHERE song_path = ?1 AND picture_type = ?2",
+        Ok(self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM artwork WHERE song_path = ?1 AND picture_type = ?2)",
             params![path, picture_type],
             |row| row.get(0),
-        )?;
-        Ok(count > 0)
+        )?)
     }
 
     /// List directory contents (songs + subdirectories)
@@ -1125,27 +1335,7 @@ impl Database {
         // Sort to match MPD's song_cmp: Album (ICU) -> Disc -> Track -> Filename (ICU)
         let col = CollatorBorrowed::try_new(CollatorPreferences::default(), Default::default())
             .map_err(|e| RmpdError::Library(format!("ICU collator unavailable: {e}")))?;
-        songs.sort_by(|a, b| {
-            let album_ord = icu_cmp_opt(&col, a.tag("album"), b.tag("album"));
-            if album_ord != Ordering::Equal {
-                return album_ord;
-            }
-            let disc_a: u32 = a.tag("disc").and_then(|v| v.parse().ok()).unwrap_or(0);
-            let disc_b: u32 = b.tag("disc").and_then(|v| v.parse().ok()).unwrap_or(0);
-            let disc_ord = disc_a.cmp(&disc_b);
-            if disc_ord != Ordering::Equal {
-                return disc_ord;
-            }
-            let track_a: u32 = a.tag("track").and_then(|v| v.parse().ok()).unwrap_or(0);
-            let track_b: u32 = b.tag("track").and_then(|v| v.parse().ok()).unwrap_or(0);
-            let track_ord = track_a.cmp(&track_b);
-            if track_ord != Ordering::Equal {
-                return track_ord;
-            }
-            let a_name = a.path.file_name().unwrap_or(a.path.as_str());
-            let b_name = b.path.file_name().unwrap_or(b.path.as_str());
-            col.compare(a_name, b_name)
-        });
+        songs.sort_by(|a, b| song_cmp(a, b, &col));
 
         Ok(DirectoryListing { directories, songs })
     }
@@ -1219,13 +1409,18 @@ impl Database {
         if !path.is_empty() && path != "/" && dir_id.is_none() {
             return Err(RmpdError::Library("No such directory".to_string()));
         }
-        self.walk_dir(dir_id, visitor)
+        // Build the ICU collator once here; walk_dir passes it down to avoid
+        // recreating it on every recursive directory visit.
+        let col = CollatorBorrowed::try_new(CollatorPreferences::default(), Default::default())
+            .map_err(|e| RmpdError::Library(format!("ICU collator unavailable: {e}")))?;
+        self.walk_dir(dir_id, visitor, &col)
     }
 
     fn walk_dir(
         &self,
         dir_id: Option<i64>,
         visitor: &mut impl FnMut(WalkEntry<'_>) -> Result<()>,
+        col: &CollatorBorrowed<'_>,
     ) -> Result<()> {
         let id = match dir_id {
             Some(id) => id,
@@ -1241,29 +1436,7 @@ impl Database {
         self.load_tags_for_songs(&mut songs)?;
 
         // Sort to match MPD's song_cmp: (album NULL-first, disc, track, filename)
-        let col = CollatorBorrowed::try_new(CollatorPreferences::default(), Default::default())
-            .map_err(|e| RmpdError::Library(format!("ICU collator unavailable: {e}")))?;
-        songs.sort_by(|a, b| {
-            let album_ord = icu_cmp_opt(&col, a.tag("album"), b.tag("album"));
-            if album_ord != Ordering::Equal {
-                return album_ord;
-            }
-            let disc_a: u32 = a.tag("disc").and_then(|v| v.parse().ok()).unwrap_or(0);
-            let disc_b: u32 = b.tag("disc").and_then(|v| v.parse().ok()).unwrap_or(0);
-            let disc_ord = disc_a.cmp(&disc_b);
-            if disc_ord != Ordering::Equal {
-                return disc_ord;
-            }
-            let track_a: u32 = a.tag("track").and_then(|v| v.parse().ok()).unwrap_or(0);
-            let track_b: u32 = b.tag("track").and_then(|v| v.parse().ok()).unwrap_or(0);
-            let track_ord = track_a.cmp(&track_b);
-            if track_ord != Ordering::Equal {
-                return track_ord;
-            }
-            let a_name = a.path.file_name().unwrap_or(a.path.as_str());
-            let b_name = b.path.file_name().unwrap_or(b.path.as_str());
-            col.compare(a_name, b_name)
-        });
+        songs.sort_by(|a, b| song_cmp(a, b, col));
 
         for song in &songs {
             visitor(WalkEntry::Song(song))?;
@@ -1281,7 +1454,7 @@ impl Database {
 
         for (child_id, child_path, child_mtime) in &subdirs {
             visitor(WalkEntry::Directory(child_path.as_str(), *child_mtime))?;
-            self.walk_dir(Some(*child_id), visitor)?;
+            self.walk_dir(Some(*child_id), visitor, col)?;
         }
 
         Ok(())
@@ -1289,13 +1462,9 @@ impl Database {
 
     /// Save current queue as a playlist
     pub fn save_playlist(&self, name: &str, songs: &[Song]) -> Result<()> {
-        self.conn.execute(
-            "INSERT OR REPLACE INTO playlists (name, mtime) VALUES (?1, strftime('%s', 'now'))",
-            params![name],
-        )?;
-
+        // Upsert the playlist row and return its (possibly new) id via RETURNING.
         let playlist_id: i64 = self.conn.query_row(
-            "SELECT id FROM playlists WHERE name = ?1",
+            "INSERT OR REPLACE INTO playlists (name, mtime) VALUES (?1, strftime('%s', 'now')) RETURNING id",
             params![name],
             |row| row.get(0),
         )?;
@@ -1360,11 +1529,6 @@ impl Database {
         Ok(playlists)
     }
 
-    /// Get songs in a playlist
-    pub fn get_playlist_songs(&self, name: &str) -> Result<Vec<Song>> {
-        self.load_playlist(name)
-    }
-
     /// Delete a playlist
     pub fn delete_playlist(&self, name: &str) -> Result<()> {
         let affected = self
@@ -1392,8 +1556,14 @@ impl Database {
     pub fn playlist_add(&self, name: &str, uri: &str) -> Result<()> {
         let playlist_id = get_playlist_id(&self.conn, name)?;
 
-        let song = self
-            .get_song_by_path(uri)?
+        let song_id: i64 = self
+            .conn
+            .query_row(
+                "SELECT id FROM songs WHERE path = ?1",
+                params![uri],
+                |row| row.get(0),
+            )
+            .optional()?
             .ok_or_else(|| RmpdError::Library(format!("Song not found: {uri}")))?;
 
         let next_pos: i64 = self.conn.query_row(
@@ -1404,7 +1574,7 @@ impl Database {
 
         self.conn.execute(
             "INSERT INTO playlist_items (playlist_id, position, song_id, uri) VALUES (?1, ?2, ?3, ?4)",
-            params![playlist_id, next_pos, song.id as i64, uri],
+            params![playlist_id, next_pos, song_id, uri],
         )?;
 
         self.conn.execute(

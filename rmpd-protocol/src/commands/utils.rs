@@ -21,8 +21,6 @@ pub const ACK_ERROR_PLAYLIST_LOAD: i32 = 53;
 pub const ACK_ERROR_UPDATE_ALREADY: i32 = 54;
 pub const ACK_ERROR_PLAYER_SYNC: i32 = 55;
 pub const ACK_ERROR_EXIST: i32 = 56;
-/// Alias kept for backward compat within rmpd (maps to ACK_ERROR_NO_EXIST = 50)
-pub const ACK_ERROR_SYSTEM: i32 = ACK_ERROR_NO_EXIST;
 
 /// Borrow a pooled database connection, returning an error response string on
 /// failure. Reuses connections from the shared pool instead of opening a fresh
@@ -32,15 +30,10 @@ pub fn open_db(
     command: &str,
 ) -> Result<rmpd_library::Database, String> {
     let pool = state.db_pool.as_ref().ok_or_else(|| {
-        ResponseBuilder::error(ACK_ERROR_SYSTEM, 0, command, "database not configured")
+        ResponseBuilder::error(ACK_ERROR_SYS, 0, command, "database not configured")
     })?;
     rmpd_library::Database::from_pool(pool).map_err(|e| {
-        ResponseBuilder::error(
-            ACK_ERROR_SYSTEM,
-            0,
-            command,
-            &format!("database error: {e}"),
-        )
+        ResponseBuilder::error(ACK_ERROR_SYS, 0, command, &format!("database error: {e}"))
     })
 }
 
@@ -136,18 +129,47 @@ pub fn update_next_song(
             });
 }
 
-/// Prepare a song for playback by resolving its path to an absolute path.
-/// Returns a PlaybackSong that shares the song via Arc and includes the resolved path.
-pub fn prepare_song_for_playback(
+/// Prepare a song for playback by resolving its path.
+///
+/// When `song.path` is a mount-style virtual path owned by a live music source
+/// (e.g. `alarm-music/Artist/Album/<id>.flac`), the path is resolved to a
+/// directly-playable `http(s)://` stream URL via the source registry. All other
+/// paths (local files or plain `http(s)://` radio streams) are left unchanged.
+///
+/// Returns a `PlaybackSong` with the resolved path and an optional playback
+/// range (CUE virtual tracks / `rangeid`).  Errors when the owning source
+/// cannot resolve the URI (unreachable server, unknown id).
+pub async fn prepare_song_for_playback(
     song: &rmpd_core::song::Song,
     music_dir: Option<&str>,
-) -> rmpd_core::playback::PlaybackSong {
+    range: Option<(f64, f64)>,
+    sources: &std::sync::Arc<rmpd_source::SourceRegistry>,
+) -> Result<rmpd_core::playback::PlaybackSong, rmpd_source::SourceError> {
     use std::sync::Arc;
-    let resolved_path = resolve_path(song.path.as_str(), music_dir).into();
-    rmpd_core::playback::PlaybackSong {
+    let path = song.path.as_str();
+    // Mount-style source paths (e.g. `alarm-music/Artist/Album/id.flac`) are
+    // owned by a live source and resolve to a real `http(s)://` stream URL.
+    // Everything else — local relative/absolute paths and plain radio URIs —
+    // passes through `resolve_path` unchanged.
+    let resolved_path: String = if sources.owns_path(path) {
+        // Spawn the resolution onto a Tokio task so the non-Sync async_trait
+        // future does not poison the outer future with a non-Sync bound
+        // (required by the MPRIS interface).
+        let sources = sources.clone();
+        let path = path.to_owned();
+        tokio::spawn(async move { sources.resolve_stream_uri(&path).await })
+            .await
+            .map_err(|e| {
+                rmpd_source::SourceError::Protocol(format!("resolve task panicked: {e}"))
+            })?? // JoinError then SourceError
+    } else {
+        resolve_path(path, music_dir)
+    };
+    Ok(rmpd_core::playback::PlaybackSong {
         song: Arc::new(song.clone()),
-        resolved_path,
-    }
+        resolved_path: resolved_path.into(),
+        range,
+    })
 }
 
 pub use rmpd_core::path::resolve_path;
