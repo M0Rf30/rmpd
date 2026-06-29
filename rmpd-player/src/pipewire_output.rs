@@ -97,7 +97,8 @@ impl PipeWireOutput {
         // Terminate signal (Send) kept here; Receiver moves into the loop thread.
         let (term_tx, term_rx) = pw::channel::channel::<()>();
         // One-shot startup result so we can report connection failures.
-        let (startup_tx, startup_rx) = std::sync::mpsc::channel::<std::result::Result<(), String>>();
+        let (startup_tx, startup_rx) =
+            std::sync::mpsc::channel::<std::result::Result<(), String>>();
 
         let node_name = self.node_name.clone();
 
@@ -119,8 +120,10 @@ impl PipeWireOutput {
                 }
 
                 pw::init();
-                let mainloop =
-                    bail!(pw::main_loop::MainLoopRc::new(None), "create pipewire main loop");
+                let mainloop = bail!(
+                    pw::main_loop::MainLoopRc::new(None),
+                    "create pipewire main loop"
+                );
                 let context = bail!(
                     pw::context::ContextRc::new(&mainloop, None),
                     "create pipewire context"

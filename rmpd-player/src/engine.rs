@@ -62,7 +62,11 @@ fn select_dsd_pcm_rate(device_rate: u32, supports_rate: impl Fn(u32) -> bool) ->
 /// resamples to the device's native rate itself, rather than letting a sound
 /// server (e.g. PipeWire) resample a rate it merely advertises — which underruns
 /// and leaves DSD ultrasonic noise in-band.
-fn dsd_output_target_rate(decode_rate: u32, device_rate: u32, native_decode_ok: bool) -> Option<u32> {
+fn dsd_output_target_rate(
+    decode_rate: u32,
+    device_rate: u32,
+    native_decode_ok: bool,
+) -> Option<u32> {
     if native_decode_ok || decode_rate == device_rate {
         None
     } else {

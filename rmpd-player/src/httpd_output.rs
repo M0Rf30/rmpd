@@ -300,8 +300,7 @@ impl AudioOutput for HttpdOutput {
 
                         let head: &str = if wants_meta { &icy_head } else { &http_head };
                         let ok = stream.write_all(head.as_bytes()).is_ok()
-                            && (header_bytes.is_empty()
-                                || stream.write_all(&header_bytes).is_ok());
+                            && (header_bytes.is_empty() || stream.write_all(&header_bytes).is_ok());
                         if ok {
                             // Clear the read timeout; set a short write timeout so
                             // a slow client cannot block the audio write path.
@@ -309,8 +308,7 @@ impl AudioOutput for HttpdOutput {
                             let _ = stream.set_write_timeout(Some(Duration::from_millis(200)));
                             // The encoder header (e.g. WAV) is part of the ICY audio
                             // body and counts toward the first metaint boundary.
-                            let bytes_since_meta =
-                                if wants_meta { header_bytes.len() } else { 0 };
+                            let bytes_since_meta = if wants_meta { header_bytes.len() } else { 0 };
                             clients.lock().push(HttpdClient {
                                 stream,
                                 wants_meta,
@@ -446,7 +444,11 @@ mod tests {
         let block = icy_meta_block(Some("X"));
         let runs = block[0] as usize;
         assert!(runs > 0, "runs must be non-zero for a title");
-        assert_eq!(block.len(), 1 + runs * 16, "block length must be 1 + runs*16");
+        assert_eq!(
+            block.len(),
+            1 + runs * 16,
+            "block length must be 1 + runs*16"
+        );
         // Payload must decode back to the original title.
         let title = rmpd_stream::parse_stream_title(&block[1..]);
         assert_eq!(title.as_deref(), Some("X"));
@@ -610,9 +612,7 @@ mod tests {
         thread::sleep(Duration::from_millis(30));
 
         let mut plain_client = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
-        plain_client
-            .write_all(b"GET / HTTP/1.0\r\n\r\n")
-            .unwrap();
+        plain_client.write_all(b"GET / HTTP/1.0\r\n\r\n").unwrap();
         plain_client
             .set_read_timeout(Some(Duration::from_millis(500)))
             .unwrap();
@@ -621,7 +621,9 @@ mod tests {
         output.write(&[0.0_f32; 8]).unwrap();
 
         // Read until the HTTP greeting terminator arrives.
-        let received = read_until(&mut plain_client, |b| b.windows(4).any(|w| w == b"\r\n\r\n"));
+        let received = read_until(&mut plain_client, |b| {
+            b.windows(4).any(|w| w == b"\r\n\r\n")
+        });
 
         assert!(
             received.starts_with(b"HTTP/1.0 200"),
@@ -704,8 +706,7 @@ mod tests {
             "metadata block payload truncated"
         );
 
-        let title =
-            rmpd_stream::parse_stream_title(&received[payload_start..payload_end]);
+        let title = rmpd_stream::parse_stream_title(&received[payload_start..payload_end]);
         assert_eq!(
             title.as_deref(),
             Some("Test Artist - Test Song"),

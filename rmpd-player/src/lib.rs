@@ -35,7 +35,7 @@ pub use httpd_output::HttpdOutput;
 pub use multi_output::MultiOutput;
 pub use null_output::NullOutput;
 pub use output::CpalOutput;
-#[cfg(all(feature = "pipewire", target_os = "linux"))]
-pub use pipewire_output::PipeWireOutput;
 pub use output_registry::{OUTPUT_PLUGINS, create_output};
 pub use output_slot::{OutputKey, OutputSlot};
+#[cfg(all(feature = "pipewire", target_os = "linux"))]
+pub use pipewire_output::PipeWireOutput;
