@@ -224,7 +224,7 @@ impl PlaybackEngine {
         // Update current song - clone the song from Arc
         *self.current_song.lock() = Some((*playback_song.song).clone());
         crate::httpd_output::set_now_playing(Some(crate::httpd_output::now_playing_label(
-            &*playback_song.song,
+            &playback_song.song,
         )));
 
         // Reset stop flag

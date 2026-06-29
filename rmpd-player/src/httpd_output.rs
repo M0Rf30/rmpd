@@ -212,10 +212,11 @@ fn has_icy_metadata(request: &[u8]) -> bool {
     };
     for line in text.lines() {
         // "icy-metadata" is 12 ASCII chars; check prefix length first.
-        if line.len() > 12 && line[..12].eq_ignore_ascii_case("icy-metadata") {
-            if let Some(rest) = line[12..].strip_prefix(':') {
-                return rest.trim() == "1";
-            }
+        if line.len() > 12
+            && line[..12].eq_ignore_ascii_case("icy-metadata")
+            && let Some(rest) = line[12..].strip_prefix(':')
+        {
+            return rest.trim() == "1";
         }
     }
     false
