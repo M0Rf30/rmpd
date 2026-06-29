@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 
 /// An in-place DSP stage over interleaved f32 samples.
 ///
-/// The slice passed to [`apply`] is the same length in and out; the filter
+/// The slice passed to [`Self::apply`] is the same length in and out; the filter
 /// mutates it in place.
 pub trait AudioFilter: Send {
     /// Human-readable name used for logging / debug.

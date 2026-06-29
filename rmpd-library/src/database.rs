@@ -967,7 +967,7 @@ impl Database {
     }
 
     /// Get all songs from the database.
-    /// Thin delegator to [`list_all_songs`]; kept because callers in rmpd-protocol use
+    /// Thin delegator to [`Self::list_all_songs`]; kept because callers in rmpd-protocol use
     /// this name. The previously-duplicated body has been removed.
     #[inline]
     pub fn get_all_songs(&self) -> Result<Vec<Song>> {

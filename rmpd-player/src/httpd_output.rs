@@ -6,7 +6,7 @@
 //! real time.  Uses only `std::net` — no async runtime.
 //!
 //! Clients that send `Icy-MetaData: 1` receive a Shoutcast v1 greeting and
-//! interleaved ICY metadata blocks every [`ICY_METAINT`] audio bytes.
+//! interleaved ICY metadata blocks every `ICY_METAINT` audio bytes.
 
 use crate::audio_output::{AudioOutput, PauseState};
 use crate::encoder::{Encoder, PcmEncoder, WavEncoder};
