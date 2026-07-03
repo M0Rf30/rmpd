@@ -2,6 +2,6 @@ c98e3c36acb04d52721855fdc6170049  usr/bin/rmpd
 8f7e936283c69394dc7728effbe23966  usr/lib/systemd/system/rmpd.service
 cd02e80f3d0075f48c53ee56a525b3fe  usr/share/doc/rmpd/CI.md.gz
 94c8cf11ee36659ed4bff2a0b3aaf017  usr/share/doc/rmpd/README.md.gz
-cf2f281950e16160105860ec74d26c66  usr/share/doc/rmpd/changelog.Debian.gz
+ccd00d12b2d664e15f862dbdcfc11a3b  usr/share/doc/rmpd/changelog.gz
 be1f3e09575e27fd05315e237cc098f2  usr/share/doc/rmpd/copyright
 9ab1c8c16a46aacdfbbbf86c1c913eea  usr/share/man/man1/rmpd.1.gz

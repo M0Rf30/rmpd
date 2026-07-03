@@ -1,4 +1,4 @@
-rmpd (0.5.0-2) unstable; urgency=medium
+rmpd (0.5.0+native1) unstable; urgency=medium
 
   * Add Debian packaging scaffold for building a binary package with
     `dpkg-buildpackage`/`sbuild`.

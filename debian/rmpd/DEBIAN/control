@@ -1,5 +1,5 @@
 Package: rmpd
-Version: 0.5.0-2
+Version: 0.5.0+native1
 Architecture: arm64
 Maintainer: ibiscum <>
 Installed-Size: 16651
