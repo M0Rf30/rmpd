@@ -1,0 +1,24 @@
+rmpd (0.5.0-2) unstable; urgency=medium
+
+  * Add Debian packaging scaffold for building a binary package with
+    `dpkg-buildpackage`/`sbuild`.
+  * Add debhelper metadata, systemd service integration, maintainer scripts,
+    and a system-wide `/etc/rmpd/rmpd.toml` sample configuration.
+  * Add a root `build.sh` wrapper modeled on `ibiscum/acr` for `sbuild`
+    builds.
+
+ -- ibiscum <>  Sat, 04 Jul 2026 00:43:07 +0200
+
+rmpd (0.5.0-1) unstable; urgency=medium
+
+  * Pin rusqlite to 0.39.0 so cargo no longer resolves to 0.40.x,
+    which currently fails to build on stable Rust because of upstream
+    cfg_select! usage.
+  * Add TCP-level parser regression coverage for quoted libmpdclient-style
+    commands, malformed quoted input, unknown protocol subcommands, and
+    command-list parse failures.
+  * Fix command-list handling so raw batch entries are buffered until
+    command_list_end, preserving earlier list_OK markers and reporting the
+    correct failing command index for parse errors.
+
+ -- ibiscum <>  Sat, 04 Jul 2026 00:08:52 +0200

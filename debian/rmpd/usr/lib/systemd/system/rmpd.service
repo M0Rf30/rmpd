@@ -1,0 +1,22 @@
+[Unit]
+Description=rmpd - Rust Music Player Daemon
+Documentation=https://github.com/M0Rf30/rmpd
+After=network.target sound.target
+
+[Service]
+Type=simple
+User=rmpd
+Group=rmpd
+SupplementaryGroups=audio
+WorkingDirectory=/var/lib/rmpd
+ExecStart=/usr/bin/rmpd --config /etc/rmpd/rmpd.toml --syslog
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/var/lib/rmpd
+
+[Install]
+WantedBy=multi-user.target

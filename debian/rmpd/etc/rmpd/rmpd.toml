@@ -1,0 +1,45 @@
+# System-wide rmpd configuration installed by the Debian package.
+
+[general]
+music_directory = "/var/lib/rmpd/music"
+playlist_directory = "/var/lib/rmpd/playlists"
+db_file = "/var/lib/rmpd/database.db"
+state_file = "/var/lib/rmpd/state"
+log_level = "info"
+follow_symlinks = false
+filesystem_charset = "UTF-8"
+
+[network]
+bind_address = "127.0.0.1"
+port = 6600
+max_connections = 100
+connection_timeout = 60
+mpris = true
+
+[audio]
+default_output = "default"
+buffer_time = 500
+resampler_quality = "sinc_medium"
+dop = "no"
+replay_gain = "off"
+replay_gain_preamp = 0.0
+replay_gain_missing_preamp = 0.0
+volume_normalization = false
+gapless = true
+crossfade = 0
+mixramp_db = -17.0
+mixramp_delay = 0.0
+
+[[output]]
+name = "Default Output"
+type = "default"
+enabled = true
+
+[decoder]
+enabled = ["symphonia"]
+
+[database]
+auto_update = true
+filesystem_watch = true
+cache_size = 64
+fts_enabled = true

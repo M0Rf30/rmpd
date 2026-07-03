@@ -1,0 +1,20 @@
+Source: rmpd
+Section: sound
+Priority: optional
+Maintainer: ibiscum <>
+Build-Depends: debhelper-compat (= 13), cargo, rustc, pkgconf, libasound2-dev, libclang-dev, cmake
+Standards-Version: 4.7.0
+Rules-Requires-Root: no
+Homepage: https://github.com/M0Rf30/rmpd
+
+Package: rmpd
+Architecture: any
+Depends: ${misc:Depends}, ${shlibs:Depends}, adduser
+Description: modern Rust Music Player Daemon implementation
+ rmpd is a modern, memory-safe music server written in Rust.
+ It aims for high compatibility with the MPD protocol while adding
+ native Rust extensibility, multi-output playback, MPRIS integration,
+ and optional remote music sources.
+ .
+ This package installs the rmpd daemon, a systemd service unit,
+ and a system-wide sample configuration at /etc/rmpd/rmpd.toml.

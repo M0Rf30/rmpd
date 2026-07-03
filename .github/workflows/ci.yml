@@ -183,6 +183,33 @@ jobs:
       - name: Check for unused dependencies
         run: cargo machete
 
+  debian-package:
+    name: Debian Package Smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install packaging dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            debhelper \
+            dpkg-dev \
+            lintian \
+            cargo \
+            rustc \
+            pkgconf \
+            libasound2-dev \
+            libclang-dev \
+            clang \
+            cmake
+
+      - name: Build Debian package
+        run: ./build.sh
+
+      - name: Run lintian
+        run: lintian ../rmpd_*_*.deb
+
   build:
     name: Build
     strategy:

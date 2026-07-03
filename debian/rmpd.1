@@ -1,0 +1,47 @@
+.TH RMPD 1 "July 2026" "rmpd 0.5.0" "User Commands"
+.SH NAME
+rmpd \- Rust Music Player Daemon
+.SH SYNOPSIS
+.B rmpd
+[\fB\-c\fR \fICONFIG\fR]
+[\fB\-b\fR \fIADDRESS\fR]
+[\fB\-p\fR \fIPORT\fR]
+[\fB\-v\fR]
+[\fB\-d\fR]
+[\fB\-\-syslog\fR]
+.SH DESCRIPTION
+.B rmpd
+is a modern Music Player Daemon implementation written in Rust.
+It provides an MPD-compatible control protocol, local library indexing,
+multiple audio output backends, and optional desktop integration through MPRIS.
+.SH OPTIONS
+.TP
+.BR \-c , " " \-\-config "=" \fICONFIG\fR
+Load configuration from the given TOML file.
+.TP
+.BR \-b , " " \-\-bind "=" \fIADDRESS\fR
+Bind the MPD TCP listener to the given IPv4 or IPv6 address.
+.TP
+.BR \-p , " " \-\-port "=" \fIPORT\fR
+Listen on the given TCP port.
+.TP
+.BR \-v , " " \-\-verbose
+Enable verbose debug logging.
+.TP
+.BR \-d , " " \-\-daemonize
+Detach into the background after startup.
+.TP
+.B \-\-syslog
+Log to journald/syslog instead of standard output.
+.SH FILES
+.TP
+.I /etc/rmpd/rmpd.toml
+System-wide configuration file installed by the Debian package.
+.TP
+.I ~/.config/rmpd/rmpd.toml
+Per-user configuration file.
+.SH SEE ALSO
+.BR mpc (1),
+.BR ncmpcpp (1)
+.SH HOMEPAGE
+https://github.com/M0Rf30/rmpd

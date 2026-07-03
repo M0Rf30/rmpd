@@ -2,4 +2,8 @@
 # Keep this file to explicitly disable Dependabot
 
 version: 2
-updates: []
+updates:
+  - package-ecosystem: "github-actions" # See documentation for possible values
+    directory: "/" # Location of package manifests
+    schedule:
+      interval: "monthly"

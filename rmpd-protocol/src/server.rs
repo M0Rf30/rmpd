@@ -252,6 +252,11 @@ async fn handle_client_inner(
 
         debug!("received command: {}", trimmed);
 
+        if batch_mode && trimmed != "command_list_end" {
+            batch_commands.push(trimmed.to_string());
+            continue;
+        }
+
         let response = match parse_command(trimmed) {
             Ok(Command::CommandListBegin) => {
                 batch_mode = true;
@@ -346,6 +351,16 @@ async fn execute_command_list(
                 // Silently ignore noidle inside command list
                 continue;
             }
+            Ok(Command::CommandListBegin)
+            | Ok(Command::CommandListOkBegin)
+            | Ok(Command::CommandListEnd) => {
+                return Response::Text(ResponseBuilder::error(
+                    5,
+                    index as i32,
+                    "command_list",
+                    "cannot be used inside a command list",
+                ));
+            }
             Ok(cmd) => {
                 let cmd_response = handle_command(cmd, state, conn_state).await;
                 // Convert response to string for batching (binary commands not allowed in batch)
@@ -400,7 +415,8 @@ async fn execute_command_list(
             }
             Err(e) => {
                 // Parse error - return ACK with index
-                return Response::Text(parse_error_to_ack(cmd_str, &e, index as i32));
+                response.push_str(&parse_error_to_ack(cmd_str, &e, index as i32));
+                return Response::Text(response);
             }
         }
     }

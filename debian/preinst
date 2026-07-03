@@ -1,0 +1,16 @@
+#!/bin/bash
+set -e
+
+if [ ! -d /etc/rmpd ]; then
+    mkdir -p /etc/rmpd
+    chmod 755 /etc/rmpd
+fi
+
+if [ ! -d /var/lib/rmpd ]; then
+    mkdir -p /var/lib/rmpd
+    chmod 755 /var/lib/rmpd
+fi
+
+#DEBHELPER#
+
+exit 0

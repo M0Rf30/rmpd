@@ -45,7 +45,7 @@ reqwest = { version = "0.13", features = ["stream"] }
 winnow = "1.0"
 
 # Database & Storage
-rusqlite = { version = "0.40", features = ["bundled"] }
+rusqlite = { version = "=0.39.0", features = ["bundled"] }
 tantivy = "0.26"
 toml = "1.1"
 parking_lot = "0.12"

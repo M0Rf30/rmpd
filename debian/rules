@@ -1,0 +1,29 @@
+#!/usr/bin/make -f
+
+export DH_VERBOSE = 1
+export CARGO_BUILD_JOBS = 1
+export CARGO_INCREMENTAL = 0
+export CARGO_TARGET_DIR = $(CURDIR)/target
+export RUST_BACKTRACE = 0
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	cargo build --release --locked -p rmpd
+
+override_dh_auto_install:
+	install -d debian/rmpd/usr/bin
+	install -d debian/rmpd/etc/rmpd
+	install -m755 target/release/rmpd debian/rmpd/usr/bin/rmpd
+	install -m644 debian/rmpd.toml debian/rmpd/etc/rmpd/rmpd.toml
+
+override_dh_auto_clean:
+	dh_auto_clean
+	rm -rf $(CURDIR)/target
+
+override_dh_installsystemd:
+	dh_installsystemd --name=rmpd --restart-after-upgrade
+
+override_dh_strip:
+	dh_strip --no-automatic-dbgsym

@@ -1,0 +1,39 @@
+#!/bin/bash
+set -e
+
+setup_user_and_dirs() {
+    if ! getent group rmpd >/dev/null; then
+        addgroup --system rmpd
+    fi
+
+    if ! getent passwd rmpd >/dev/null; then
+        adduser --system \
+            --ingroup rmpd \
+            --home /var/lib/rmpd \
+            --no-create-home \
+            --shell /usr/sbin/nologin \
+            rmpd
+    fi
+
+    if getent group audio >/dev/null; then
+        adduser rmpd audio >/dev/null || true
+    fi
+
+    mkdir -p /etc/rmpd
+    mkdir -p /var/lib/rmpd/music
+    mkdir -p /var/lib/rmpd/playlists
+    mkdir -p /var/lib/rmpd/state
+
+    chown rmpd:rmpd /var/lib/rmpd /var/lib/rmpd/music /var/lib/rmpd/playlists /var/lib/rmpd/state
+    chmod 755 /var/lib/rmpd /var/lib/rmpd/music /var/lib/rmpd/playlists /var/lib/rmpd/state
+}
+
+case "$1" in
+    configure)
+        setup_user_and_dirs
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

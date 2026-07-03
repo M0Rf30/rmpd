@@ -9,6 +9,7 @@ pub mod messaging_conformance;
 pub mod options_conformance;
 pub mod options_extended;
 pub mod output_conformance;
+pub mod parser_regressions;
 pub mod partition_conformance;
 pub mod playback_conformance;
 pub mod playback_extended;
