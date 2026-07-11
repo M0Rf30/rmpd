@@ -199,6 +199,40 @@ fn test_move_by_id() {
 }
 
 #[test]
+fn test_move_by_id_to_len_is_rejected_not_panic() {
+    let mut queue = Queue::new();
+    let id1 = queue.add(create_test_song(1, "song1"));
+    let id2 = queue.add(create_test_song(2, "song2"));
+    let id3 = queue.add(create_test_song(3, "song3"));
+
+    let len = queue.len() as u32;
+    let success = queue.move_by_id(id1, len);
+
+    assert!(!success);
+    assert_eq!(queue.len(), 3);
+    // Queue order must be unchanged.
+    assert_eq!(queue.get(0).unwrap().id, id1);
+    assert_eq!(queue.get(1).unwrap().id, id2);
+    assert_eq!(queue.get(2).unwrap().id, id3);
+}
+
+#[test]
+fn test_move_by_id_to_last_position_succeeds() {
+    let mut queue = Queue::new();
+    let id1 = queue.add(create_test_song(1, "song1"));
+    let id2 = queue.add(create_test_song(2, "song2"));
+    let id3 = queue.add(create_test_song(3, "song3"));
+
+    let last = queue.len() as u32 - 1;
+    let success = queue.move_by_id(id1, last);
+
+    assert!(success);
+    assert_eq!(queue.get(0).unwrap().id, id2);
+    assert_eq!(queue.get(1).unwrap().id, id3);
+    assert_eq!(queue.get(2).unwrap().id, id1);
+}
+
+#[test]
 fn test_queue_ids_are_unique() {
     let mut queue = Queue::new();
 

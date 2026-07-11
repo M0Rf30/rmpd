@@ -170,6 +170,12 @@ impl PipeWireOutput {
                                     for ch in 0..channel_count {
                                         let s = samples.next_sample();
                                         let off = base + ch * SIZE_F32;
+                                        // Defense-in-depth: never panic the
+                                        // realtime audio thread on a partial
+                                        // trailing frame.
+                                        if off + SIZE_F32 > slice.len() {
+                                            break;
+                                        }
                                         slice[off..off + SIZE_F32]
                                             .copy_from_slice(&s.to_le_bytes());
                                     }
