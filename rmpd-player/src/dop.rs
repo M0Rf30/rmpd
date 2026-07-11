@@ -286,9 +286,13 @@ mod tests {
     fn test_encode_truncated_last_frame_no_panic() {
         // Interleaved, 2 channels: a full frame needs channels * 2 = 4 bytes.
         // 11 bytes is one byte short of 3 full frames (12 bytes).
-        let mut encoder =
-            DopEncoder::new(2822400, 2, ChannelDataLayout::Interleaved, BitOrder::MsbFirst)
-                .unwrap();
+        let mut encoder = DopEncoder::new(
+            2822400,
+            2,
+            ChannelDataLayout::Interleaved,
+            BitOrder::MsbFirst,
+        )
+        .unwrap();
         let dsd_data = vec![0u8; 11];
         let mut output = Vec::new();
 

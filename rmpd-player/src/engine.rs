@@ -353,9 +353,16 @@ impl PlaybackEngine {
         // Clear command channel
         self.command_tx = None;
 
-        // Wait for playback thread to finish
+        // Wait for playback thread to finish. `JoinHandle::join` blocks the
+        // calling thread; run it on a blocking-pool thread so it never stalls
+        // a Tokio worker (or the `state.engine` write lock held by the async
+        // caller) for however long the decode thread takes to notice
+        // `stop_flag` and unwind. With the MultiOutput `active` flag (see
+        // multi_output.rs) clearing the queued-sample backlog immediately,
+        // this is now typically fast, but it's still a blocking syscall and
+        // must never run inline on the async runtime.
         if let Some(handle) = self.playback_thread.take() {
-            let _ = handle.join();
+            let _ = tokio::task::spawn_blocking(move || handle.join()).await;
         }
 
         // Update atomic state (caller must update status to avoid deadlock)

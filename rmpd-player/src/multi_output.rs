@@ -8,12 +8,27 @@
 //!
 //! Chunks are shared as `Arc<[f32]>` — a single ref-count bump per secondary,
 //! no deep copies.
+//!
+//! ## Pause/stop responsiveness
+//!
+//! `Pause`/`Resume`/`Stop` are queued on the SAME per-worker channel as audio
+//! chunks, so a control message can land behind up to `depth` already-queued
+//! chunks. If workers only acted on the enum message, pausing would have to
+//! wait for the worker to actually *play out* that whole backlog first (worst
+//! case, `depth` chunks at real-time pace — hundreds of ms). To keep control
+//! instantaneous, `active` is a shared atomic checked before writing every
+//! dequeued `Samples` chunk: `pause()`/`stop()`/`Drop` clear it immediately,
+//! so any already-queued chunk is discarded (not played) the moment the
+//! worker next dequeues it, draining the backlog in one recv-loop pass rather
+//! than in real time. The `Pause`/`Resume` enum messages still flow through
+//! for the hardware-level `AudioOutput::pause`/`resume` call (device state),
+//! but the audible effect no longer waits on their queue position.
 
 use crate::audio_output::AudioOutput;
 use crate::filter::{AudioFilter, VolumeFilter};
 use rmpd_core::error::{Result, RmpdError};
 use std::sync::Arc;
-use std::sync::atomic::AtomicU8;
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::mpsc::{SyncSender, sync_channel};
 use std::thread::{self, JoinHandle};
 use tracing::{debug, warn};
@@ -33,6 +48,9 @@ struct Worker {
 
 pub struct MultiOutput {
     workers: Vec<Worker>,
+    /// Shared, checked by every worker before writing a dequeued `Samples`
+    /// chunk. `false` while paused or stopping — see module docs.
+    active: Arc<AtomicBool>,
 }
 
 impl MultiOutput {
@@ -48,12 +66,14 @@ impl MultiOutput {
         depth: usize,
         volume: Arc<AtomicU8>,
     ) -> Result<Self> {
+        let active = Arc::new(AtomicBool::new(true));
         let mut workers = Vec::with_capacity(outputs.len());
 
         for (idx, mut out) in outputs.into_iter().enumerate() {
             let primary = idx == 0;
             let (tx, rx) = sync_channel::<OutputMsg>(depth);
             let vol_arc = volume.clone();
+            let worker_active = active.clone();
 
             let handle = thread::Builder::new()
                 .name(if primary {
@@ -78,6 +98,13 @@ impl MultiOutput {
                     loop {
                         match rx.recv() {
                             Ok(OutputMsg::Samples(arc)) => {
+                                if !worker_active.load(Ordering::Acquire) {
+                                    // Paused/stopping: discard rather than play out a
+                                    // chunk queued before the transition — see module
+                                    // docs. Keeps the backlog drain instantaneous
+                                    // instead of real-time-paced.
+                                    continue;
+                                }
                                 let mut buf = arc.to_vec();
                                 vol.apply(&mut buf);
                                 let _ = out.write(&buf);
@@ -113,7 +140,7 @@ impl MultiOutput {
             });
         }
 
-        Ok(MultiOutput { workers })
+        Ok(MultiOutput { workers, active })
     }
 
     /// Fan one chunk to all outputs.
@@ -135,6 +162,7 @@ impl MultiOutput {
 
     /// Pause all outputs (best-effort, non-blocking).
     pub fn pause(&self) {
+        self.active.store(false, Ordering::Release);
         for w in &self.workers {
             let _ = w.tx.try_send(OutputMsg::Pause);
         }
@@ -142,6 +170,7 @@ impl MultiOutput {
 
     /// Resume all outputs (best-effort, non-blocking).
     pub fn resume(&self) {
+        self.active.store(true, Ordering::Release);
         for w in &self.workers {
             let _ = w.tx.try_send(OutputMsg::Resume);
         }
@@ -154,6 +183,10 @@ impl MultiOutput {
     /// full if the secondary is stalled) and their threads are detached — they
     /// will exit on their own once any blocking write returns.
     pub fn stop(mut self) {
+        // Stop feeding audio to the device immediately; without this the
+        // primary worker would play out its entire backlog (up to `depth`
+        // chunks) before it even reaches the Stop message behind them.
+        self.active.store(false, Ordering::Release);
         // Send Stop: blocking for primary (ensures it is received), try for
         // secondaries (their channel may be full if they are stalled).
         for w in &self.workers {
@@ -179,6 +212,7 @@ impl MultiOutput {
 impl Drop for MultiOutput {
     fn drop(&mut self) {
         // Mirror stop() — handles may be None if stop() was already called.
+        self.active.store(false, Ordering::Release);
         for w in &self.workers {
             if w.primary {
                 let _ = w.tx.send(OutputMsg::Stop);
@@ -255,6 +289,35 @@ mod tests {
         }
     }
 
+    /// An output whose `write` takes a fixed, non-trivial time — simulates
+    /// real-time playback pacing so a test can tell "played out" apart from
+    /// "discarded".
+    struct SlowOutput {
+        count: Arc<AtomicUsize>,
+        delay: Duration,
+        state: PauseState,
+    }
+
+    impl AudioOutput for SlowOutput {
+        fn start(&mut self) -> rmpd_core::error::Result<()> {
+            Ok(())
+        }
+        fn write(&mut self, _samples: &[f32]) -> rmpd_core::error::Result<()> {
+            std::thread::sleep(self.delay);
+            self.count.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+        fn stop(&mut self) -> rmpd_core::error::Result<()> {
+            Ok(())
+        }
+        fn pause_state(&self) -> &PauseState {
+            &self.state
+        }
+        fn pause_state_mut(&mut self) -> &mut PauseState {
+            &mut self.state
+        }
+    }
+
     // ── Tests ─────────────────────────────────────────────────────────────────
 
     /// The primary output must receive every chunk even when the secondary is
@@ -301,5 +364,51 @@ mod tests {
             100,
             "primary must have received all 100 chunks"
         );
+    }
+    /// Pausing must not wait for already-queued chunks to be *played*: it
+    /// should discard them so the audible effect is near-instant instead of
+    /// paced out over `depth` chunks worth of real time.
+    #[test]
+    fn pause_discards_queued_backlog_instead_of_playing_it_out() {
+        let count = Arc::new(AtomicUsize::new(0));
+        let depth = 16;
+
+        let primary = SlowOutput {
+            count: Arc::clone(&count),
+            delay: Duration::from_millis(50),
+            state: PauseState::new(),
+        };
+
+        let multi = MultiOutput::spawn(
+            vec![Box::new(primary)],
+            depth,
+            Arc::new(std::sync::atomic::AtomicU8::new(100)),
+        )
+        .expect("spawn failed");
+
+        // Fill the channel to capacity, then pause immediately. If pause
+        // waited for the backlog to be *played*, draining `depth` chunks at
+        // 50ms each would take ~800ms.
+        let chunk: Arc<[f32]> = Arc::from(vec![0.0f32; 64].as_slice());
+        for _ in 0..depth {
+            multi
+                .write(Arc::clone(&chunk))
+                .expect("write must not fail");
+        }
+        multi.pause();
+
+        // Give the worker enough time to drain the backlog if it's discarding
+        // (near-instant) but nowhere near enough to have played it all out
+        // for real (~800ms).
+        std::thread::sleep(Duration::from_millis(150));
+
+        let played = count.load(Ordering::SeqCst);
+        assert!(
+            played < depth,
+            "pause should have discarded most of the backlog instead of playing it \
+             out (played {played} of {depth} queued chunks within 150ms at 50ms/chunk)"
+        );
+
+        multi.stop();
     }
 }
