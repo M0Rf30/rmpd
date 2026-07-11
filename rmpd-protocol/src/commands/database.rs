@@ -163,7 +163,12 @@ pub async fn handle_list_command(
                         }
                     }
                 } else {
-                    return ResponseBuilder::error(ACK_ERROR_ARG, 0, "list", "missing filter value");
+                    return ResponseBuilder::error(
+                        ACK_ERROR_ARG,
+                        0,
+                        "list",
+                        "missing filter value",
+                    );
                 }
             } else {
                 match db.get_all_songs() {
@@ -509,9 +514,7 @@ pub async fn handle_albumart_command(state: &AppState, uri: &str, offset: usize)
             }
         };
 
-        if !is_cached
-            && let Ok(Some(bytes)) = state.sources.cover_art(uri).await
-        {
+        if !is_cached && let Ok(Some(bytes)) = state.sources.cover_art(uri).await {
             let uri_owned = uri.to_string();
             return match tokio::task::spawn_blocking(move || {
                 let _ = extractor.cache_external(&uri_owned, &bytes);
@@ -526,7 +529,9 @@ pub async fn handle_albumart_command(state: &AppState, uri: &str, offset: usize)
                     resp.binary_field("binary", &artwork.data);
                     Response::Binary(resp.to_binary_response())
                 }
-                Ok(_) => Response::Text(ResponseBuilder::error(50, 0, "albumart", "No file exists")),
+                Ok(_) => {
+                    Response::Text(ResponseBuilder::error(50, 0, "albumart", "No file exists"))
+                }
                 Err(_) => Response::Text(ResponseBuilder::error(
                     ACK_ERROR_SYS,
                     0,
@@ -537,8 +542,10 @@ pub async fn handle_albumart_command(state: &AppState, uri: &str, offset: usize)
         }
 
         let uri_owned = uri.to_string();
-        return match tokio::task::spawn_blocking(move || extractor.get_artwork(&uri_owned, "", offset))
-            .await
+        return match tokio::task::spawn_blocking(move || {
+            extractor.get_artwork(&uri_owned, "", offset)
+        })
+        .await
         {
             Ok(Ok(Some(artwork))) => {
                 let mut resp = ResponseBuilder::new();
@@ -612,8 +619,7 @@ pub async fn handle_readpicture_command(state: &AppState, uri: &str, offset: usi
     // readpicture returns embedded pictures from audio files.
     // Unlike albumart: file-not-found -> "No such song", no picture -> OK (empty)
     let state_open = state.clone();
-    let db = match tokio::task::spawn_blocking(move || open_db(&state_open, "readpicture")).await
-    {
+    let db = match tokio::task::spawn_blocking(move || open_db(&state_open, "readpicture")).await {
         Ok(Ok(d)) => d,
         Ok(Err(e)) => return Response::Text(e),
         Err(_) => {
@@ -648,9 +654,7 @@ pub async fn handle_readpicture_command(state: &AppState, uri: &str, offset: usi
             }
         };
 
-        let extractor = if !is_cached
-            && let Ok(Some(bytes)) = state.sources.cover_art(uri).await
-        {
+        let extractor = if !is_cached && let Ok(Some(bytes)) = state.sources.cover_art(uri).await {
             let uri_owned = uri.to_string();
             match tokio::task::spawn_blocking(move || {
                 let _ = extractor.cache_external(&uri_owned, &bytes);
@@ -673,8 +677,10 @@ pub async fn handle_readpicture_command(state: &AppState, uri: &str, offset: usi
         };
 
         let uri_owned = uri.to_string();
-        return match tokio::task::spawn_blocking(move || extractor.get_artwork(&uri_owned, "", offset))
-            .await
+        return match tokio::task::spawn_blocking(move || {
+            extractor.get_artwork(&uri_owned, "", offset)
+        })
+        .await
         {
             Ok(Ok(Some(artwork))) => {
                 let mut resp = ResponseBuilder::new();
@@ -1007,22 +1013,18 @@ pub async fn handle_searchadd_command(state: &AppState, tag: &str, value: &str) 
         // Search for songs
         if tag_owned.eq_ignore_ascii_case("any") {
             db.search_songs(&value_owned).map_err(|e| {
-                ResponseBuilder::error(
-                    ACK_ERROR_SYS,
-                    0,
-                    "searchadd",
-                    &format!("search error: {e}"),
-                )
+                ResponseBuilder::error(ACK_ERROR_SYS, 0, "searchadd", &format!("search error: {e}"))
             })
         } else {
-            db.search_songs_by_tag(&tag_owned, &value_owned).map_err(|e| {
-                ResponseBuilder::error(
-                    ACK_ERROR_SYS,
-                    0,
-                    "searchadd",
-                    &format!("query error: {e}"),
-                )
-            })
+            db.search_songs_by_tag(&tag_owned, &value_owned)
+                .map_err(|e| {
+                    ResponseBuilder::error(
+                        ACK_ERROR_SYS,
+                        0,
+                        "searchadd",
+                        &format!("query error: {e}"),
+                    )
+                })
         }
     })
     .await
@@ -1050,21 +1052,11 @@ pub async fn handle_findadd_command(state: &AppState, tag: &str, value: &str) ->
         // findadd uses exact match (unlike searchadd which uses partial/FTS for "any")
         if tag_owned.eq_ignore_ascii_case("any") {
             db.find_songs_any(&value_owned).map_err(|e| {
-                ResponseBuilder::error(
-                    ACK_ERROR_SYS,
-                    0,
-                    "findadd",
-                    &format!("search error: {e}"),
-                )
+                ResponseBuilder::error(ACK_ERROR_SYS, 0, "findadd", &format!("search error: {e}"))
             })
         } else {
             db.find_songs(&tag_owned, &value_owned).map_err(|e| {
-                ResponseBuilder::error(
-                    ACK_ERROR_SYS,
-                    0,
-                    "findadd",
-                    &format!("query error: {e}"),
-                )
+                ResponseBuilder::error(ACK_ERROR_SYS, 0, "findadd", &format!("query error: {e}"))
             })
         }
     })

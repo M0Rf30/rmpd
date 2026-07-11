@@ -441,7 +441,12 @@ pub async fn handle_load_command(
             if start <= paths.len() {
                 paths = paths[start..end].to_vec();
             } else {
-                return Err(ResponseBuilder::error(ACK_ERROR_ARG, 0, "load", "Invalid range"));
+                return Err(ResponseBuilder::error(
+                    ACK_ERROR_ARG,
+                    0,
+                    "load",
+                    "Invalid range",
+                ));
             }
         }
 
@@ -1135,4 +1140,3 @@ pub async fn handle_playlistlength_command(state: &AppState, name: &str) -> Stri
         Err(_) => ResponseBuilder::error(ACK_ERROR_SYS, 0, "playlistlength", "internal error"),
     }
 }
-

@@ -78,8 +78,7 @@ impl FilterExpression {
                     .map(|_| "?")
                     .collect::<Vec<_>>()
                     .join(", ");
-                let tag_params: Vec<String> =
-                    fallback_tags.iter().map(|t| t.to_string()).collect();
+                let tag_params: Vec<String> = fallback_tags.iter().map(|t| t.to_string()).collect();
 
                 // MPD treats a missing tag as an empty value, so comparing a tag
                 // (or its fallback chain) against the empty string must also match
@@ -405,10 +404,7 @@ mod tests {
         let expr = FilterExpression::parse("(AlbumArtist == 'Led Zeppelin')").unwrap();
         let (sql, params) = expr.to_sql();
         assert!(sql.contains("IN"));
-        assert_eq!(
-            params,
-            vec!["albumartist", "artist", "Led Zeppelin"]
-        );
+        assert_eq!(params, vec!["albumartist", "artist", "Led Zeppelin"]);
     }
 
     #[test]

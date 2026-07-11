@@ -141,7 +141,8 @@ impl MpdServer {
         // never blocks on permit acquisition (that would stall accepting from
         // the other listener in the `select!` below) — it just drops the
         // connection immediately if none are available.
-        let connection_limiter = std::sync::Arc::new(tokio::sync::Semaphore::new(self.max_connections));
+        let connection_limiter =
+            std::sync::Arc::new(tokio::sync::Semaphore::new(self.max_connections));
         let connection_timeout = self.connection_timeout;
 
         loop {

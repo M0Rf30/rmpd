@@ -392,5 +392,7 @@ pub async fn handle_sticker_namestypes_command(state: &AppState, uri: Option<&st
         ResponseBuilder::new().ok()
     })
     .await
-    .unwrap_or_else(|_| ResponseBuilder::error(ACK_ERROR_SYS, 0, "stickernamestypes", "internal error"))
+    .unwrap_or_else(|_| {
+        ResponseBuilder::error(ACK_ERROR_SYS, 0, "stickernamestypes", "internal error")
+    })
 }
