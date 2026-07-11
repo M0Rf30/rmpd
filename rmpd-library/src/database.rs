@@ -887,15 +887,14 @@ impl Database {
             all_values.extend(primary_vals);
 
             // For each fallback level, get values for songs that don't have the primary tag
+            let mut stmt = self.conn.prepare(
+                "SELECT DISTINCT st.value FROM song_tags st
+                 WHERE st.tag = ?1
+                   AND st.song_id NOT IN (SELECT song_id FROM song_tags WHERE tag = ?2)",
+            )?;
             for fallback in &chain[1..] {
-                let sql = format!(
-                    "SELECT DISTINCT st.value FROM song_tags st
-                     WHERE st.tag = ?1
-                       AND st.song_id NOT IN (SELECT song_id FROM song_tags WHERE tag = '{primary}')"
-                );
-                let mut stmt = self.conn.prepare(&sql)?;
                 let vals: Vec<String> = stmt
-                    .query_map(params![fallback], |row| row.get(0))?
+                    .query_map(params![fallback, primary], |row| row.get(0))?
                     .collect::<std::result::Result<Vec<_>, _>>()?;
                 all_values.extend(vals);
             }

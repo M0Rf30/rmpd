@@ -6,8 +6,7 @@ fn test_simple_equality_filter() {
     let (sql, params) = expr.to_sql();
 
     assert!(sql.contains("song_tags"));
-    assert!(sql.contains("artist"));
-    assert_eq!(params, vec!["Radiohead"]);
+    assert_eq!(params, vec!["artist", "Radiohead"]);
 }
 
 #[test]
@@ -18,10 +17,10 @@ fn test_case_insensitive_tag_name() {
     let (sql1, params1) = expr1.to_sql();
     let (sql2, params2) = expr2.to_sql();
 
-    // Both should generate similar SQL (tag name should be lowercase)
-    assert!(sql1.contains("artist"));
-    assert!(sql2.contains("artist"));
+    // Both should generate identical SQL and params (tag name normalized to lowercase)
+    assert_eq!(sql1, sql2);
     assert_eq!(params1, params2);
+    assert_eq!(params1, vec!["artist", "Radiohead"]);
 }
 
 #[test]
@@ -30,8 +29,10 @@ fn test_and_combination() {
     let (sql, params) = expr.to_sql();
 
     assert!(sql.contains("AND"));
-    assert_eq!(params.len(), 2);
+    assert_eq!(params.len(), 4);
+    assert!(params.contains(&"artist".to_string()));
     assert!(params.contains(&"Radiohead".to_string()));
+    assert!(params.contains(&"genre".to_string()));
     assert!(params.contains(&"Rock".to_string()));
 }
 
@@ -41,7 +42,8 @@ fn test_or_combination() {
     let (sql, params) = expr.to_sql();
 
     assert!(sql.contains("OR"));
-    assert_eq!(params.len(), 2);
+    assert_eq!(params.len(), 4);
+    assert!(params.contains(&"artist".to_string()));
     assert!(params.contains(&"Radiohead".to_string()));
     assert!(params.contains(&"Muse".to_string()));
 }
@@ -60,7 +62,7 @@ fn test_not_equal_operator() {
     let (sql, params) = expr.to_sql();
 
     assert!(sql.contains("!="));
-    assert_eq!(params, vec!["Unknown"]);
+    assert_eq!(params, vec!["artist", "Unknown"]);
 }
 
 #[test]
@@ -69,7 +71,7 @@ fn test_regex_operator() {
     let (sql, params) = expr.to_sql();
 
     assert!(sql.contains("REGEXP"));
-    assert_eq!(params, vec!["Radio.*"]);
+    assert_eq!(params, vec!["artist", "Radio.*"]);
 }
 
 #[test]
@@ -78,7 +80,7 @@ fn test_not_regex_operator() {
     let (sql, params) = expr.to_sql();
 
     assert!(sql.contains("NOT REGEXP"));
-    assert_eq!(params, vec!["Unknown.*"]);
+    assert_eq!(params, vec!["artist", "Unknown.*"]);
 }
 
 #[test]
@@ -87,7 +89,7 @@ fn test_less_than_operator() {
     let (sql, params) = expr.to_sql();
 
     assert!(sql.contains("<"));
-    assert_eq!(params, vec!["2000"]);
+    assert_eq!(params, vec!["date", "2000"]);
 }
 
 #[test]
@@ -96,7 +98,7 @@ fn test_greater_than_operator() {
     let (sql, params) = expr.to_sql();
 
     assert!(sql.contains(">"));
-    assert_eq!(params, vec!["2000"]);
+    assert_eq!(params, vec!["date", "2000"]);
 }
 
 #[test]
@@ -105,7 +107,7 @@ fn test_less_equal_operator() {
     let (sql, params) = expr.to_sql();
 
     assert!(sql.contains("<="));
-    assert_eq!(params, vec!["2000"]);
+    assert_eq!(params, vec!["date", "2000"]);
 }
 
 #[test]
@@ -114,7 +116,7 @@ fn test_greater_equal_operator() {
     let (sql, params) = expr.to_sql();
 
     assert!(sql.contains(">="));
-    assert_eq!(params, vec!["2000"]);
+    assert_eq!(params, vec!["date", "2000"]);
 }
 
 #[test]
@@ -134,10 +136,10 @@ fn test_albumartist_fallback_chain() {
 
     // Should generate IN clause for fallback tags
     assert!(sql.contains("IN"));
-    assert!(sql.contains("albumartist"));
-    assert!(sql.contains("artist"));
-    assert_eq!(params.len(), 1);
-    assert_eq!(params[0], "Led Zeppelin");
+    assert_eq!(params.len(), 3);
+    assert_eq!(params[0], "albumartist");
+    assert_eq!(params[1], "artist");
+    assert_eq!(params[2], "Led Zeppelin");
 }
 
 #[test]
@@ -146,7 +148,7 @@ fn test_double_quoted_values() {
     let (sql, params) = expr.to_sql();
 
     assert!(sql.contains("song_tags"));
-    assert_eq!(params, vec!["Amon Tobin"]);
+    assert_eq!(params, vec!["artist", "Amon Tobin"]);
 }
 
 #[test]
@@ -155,7 +157,7 @@ fn test_escaped_quotes_in_values() {
     let (sql, params) = expr.to_sql();
 
     assert!(sql.contains("song_tags"));
-    assert_eq!(params, vec![r#"Guns "N" Roses"#]);
+    assert_eq!(params, vec!["artist", r#"Guns "N" Roses"#]);
 }
 
 #[test]
@@ -168,7 +170,7 @@ fn test_complex_nested_expression() {
 
     assert!(sql.contains("AND"));
     assert!(sql.contains("OR"));
-    assert_eq!(params.len(), 3);
+    assert_eq!(params.len(), 6);
 }
 
 #[test]
@@ -177,7 +179,7 @@ fn test_contains_operator() {
     let (sql, params) = expr.to_sql();
 
     assert!(sql.contains("LIKE"));
-    assert_eq!(params, vec!["%love%"]);
+    assert_eq!(params, vec!["title", "%love%"]);
 }
 
 #[test]
@@ -186,7 +188,7 @@ fn test_starts_with_operator() {
     let (sql, params) = expr.to_sql();
 
     assert!(sql.contains("LIKE"));
-    assert_eq!(params, vec!["The%"]);
+    assert_eq!(params, vec!["title", "The%"]);
 }
 
 #[test]
@@ -214,5 +216,5 @@ fn test_multiple_and_operators() {
     let (sql, params) = expr.to_sql();
 
     assert!(sql.contains("AND"));
-    assert_eq!(params.len(), 3);
+    assert_eq!(params.len(), 6);
 }
