@@ -3,6 +3,7 @@ use rayon::prelude::*;
 use rmpd_core::error::{Result, RmpdError};
 use rmpd_core::event::{Event, EventBus};
 use std::fs;
+use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use tracing::{debug, info, warn};
 
@@ -101,9 +102,18 @@ impl Scanner {
         // or an equivalent query with a `WHERE source IS NULL` predicate to avoid
         // evicting remote catalog rows inserted by `Database::add_source_song`.
 
-        // Step 1: Collect all audio files and their metadata (sequential directory walk)
+        // Step 1: Collect all audio files and their metadata (sequential directory walk).
+        // `visited_dirs` tracks (dev, ino) pairs already recursed into, shared across the
+        // whole tree walk, so a symlink cycle (or any other filesystem loop) can't cause
+        // unbounded recursion when `follow_symlinks` is enabled.
         let mut files_to_process = Vec::new();
-        self.collect_audio_files(db, path, &mut files_to_process, stats)?;
+        let mut visited_dirs = std::collections::HashSet::new();
+        // Seed with the root itself so a symlink cycle that loops back to the
+        // scan root (rather than to some deeper ancestor) is also detected.
+        if let Ok(root_meta) = fs::metadata(path) {
+            visited_dirs.insert((root_meta.dev(), root_meta.ino()));
+        }
+        self.collect_audio_files(db, path, &mut files_to_process, stats, &mut visited_dirs)?;
 
         // Step 2: Extract metadata in parallel
         let extracted: Vec<ExtractedMetadata> = files_to_process
@@ -180,6 +190,7 @@ impl Scanner {
         path: &Path,
         files: &mut Vec<FileInfo>,
         stats: &mut ScanStats,
+        visited_dirs: &mut std::collections::HashSet<(u64, u64)>,
     ) -> Result<()> {
         let entries = fs::read_dir(path)
             .map_err(|e| RmpdError::Library(format!("Failed to read directory: {e}")))?;
@@ -217,7 +228,16 @@ impl Scanner {
                 }
             }
 
-            let metadata = match entry.metadata() {
+            // `entry.metadata()` never traverses a symlink (it's equivalent to `lstat`), so
+            // a symlinked directory/file would otherwise be silently ignored even with
+            // `follow_symlinks` enabled. Use `fs::metadata` (which follows symlinks, i.e.
+            // `stat`) in that case so `is_dir()`/`is_file()` reflect the link's target.
+            let metadata = if self.follow_symlinks {
+                fs::metadata(&entry_path)
+            } else {
+                entry.metadata()
+            };
+            let metadata = match metadata {
                 Ok(m) => m,
                 Err(e) => {
                     warn!("failed to read metadata for {:?}: {}", entry_path, e);
@@ -227,6 +247,19 @@ impl Scanner {
             };
 
             if metadata.is_dir() {
+                // Cycle guard: skip directories we've already recursed into (identified by
+                // (dev, ino)). This catches symlink cycles (an ancestor pointing at itself
+                // or a descendant) as well as any other hard/soft-link loop, regardless of
+                // whether `follow_symlinks` is enabled.
+                let dir_key = (metadata.dev(), metadata.ino());
+                if !visited_dirs.insert(dir_key) {
+                    warn!(
+                        "skipping already-visited directory (symlink cycle?): {:?}",
+                        entry_path
+                    );
+                    continue;
+                }
+
                 // Record directory with its filesystem mtime before recursing
                 if let Ok(utf8_dir) = Utf8PathBuf::try_from(entry_path.clone())
                     && let Ok(rel_dir) = self.make_relative_path(&utf8_dir)
@@ -243,7 +276,9 @@ impl Scanner {
                     }
                 }
                 // Recurse into subdirectory
-                if let Err(e) = self.collect_audio_files(db, &entry_path, files, stats) {
+                if let Err(e) =
+                    self.collect_audio_files(db, &entry_path, files, stats, visited_dirs)
+                {
                     warn!("failed to scan directory {:?}: {}", entry_path, e);
                     stats.errors += 1;
                 }

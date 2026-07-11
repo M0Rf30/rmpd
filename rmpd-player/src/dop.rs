@@ -133,6 +133,12 @@ impl DopEncoder {
                         let dsd_offset =
                             channel_offset + (frame_idx * dsd_bytes_per_channel_per_frame);
 
+                        // Guard against a truncated trailing frame: stop
+                        // encoding rather than panic on short input.
+                        if dsd_offset + 1 >= dsd_data.len() {
+                            break;
+                        }
+
                         // Get 2 bytes of DSD data for this channel
                         let dsd_byte1 = dsd_data[dsd_offset];
                         let dsd_byte2 = dsd_data[dsd_offset + 1];
@@ -177,6 +183,12 @@ impl DopEncoder {
                         // Calculate offset in interleaved layout
                         let dsd_offset =
                             (frame_idx * self.channels + ch) * dsd_bytes_per_channel_per_frame;
+
+                        // Guard against a truncated trailing frame: stop
+                        // encoding rather than panic on short input.
+                        if dsd_offset + 1 >= dsd_data.len() {
+                            break;
+                        }
 
                         // Get 2 bytes of DSD data for this channel
                         let dsd_byte1 = dsd_data[dsd_offset];
@@ -268,5 +280,27 @@ mod tests {
         // Markers should alternate
         assert_eq!(marker1, DOP_MARKER_1);
         assert_eq!(marker2, DOP_MARKER_2);
+    }
+
+    #[test]
+    fn test_encode_truncated_last_frame_no_panic() {
+        // Interleaved, 2 channels: a full frame needs channels * 2 = 4 bytes.
+        // 11 bytes is one byte short of 3 full frames (12 bytes).
+        let mut encoder =
+            DopEncoder::new(2822400, 2, ChannelDataLayout::Interleaved, BitOrder::MsbFirst)
+                .unwrap();
+        let dsd_data = vec![0u8; 11];
+        let mut output = Vec::new();
+
+        // Must not panic on the truncated trailing data.
+        encoder.encode(&dsd_data, &mut output);
+
+        // A naive `len / bytes_per_channel_per_frame` calculation (ignoring
+        // channel count entirely) would predict 11 / 2 = 5 "frames"; only
+        // whole multi-channel frames that fully fit are actually produced.
+        let naive_frames = dsd_data.len() / 2;
+        let produced_frames = output.len() / 2; // 2 channels per frame
+        assert!(produced_frames < naive_frames);
+        assert_eq!(produced_frames, 2); // floor(11 / (2 channels * 2 bytes)) == 2
     }
 }

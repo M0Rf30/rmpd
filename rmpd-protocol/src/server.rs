@@ -18,6 +18,14 @@ use crate::state::AppState;
 /// not the rmpd software version.
 const PROTOCOL_VERSION: &str = "0.24.0";
 
+/// Default maximum number of concurrent client connections when not
+/// overridden via `with_max_connections`.
+const DEFAULT_MAX_CONNECTIONS: usize = 100;
+
+/// Default idle timeout (seconds) for a connection waiting on its next
+/// command line, when not overridden via `with_connection_timeout`.
+const DEFAULT_CONNECTION_TIMEOUT_SECS: u64 = 60;
+
 /// Convert a `parse_command` error into the correct ACK response string.
 /// Arg-count errors ("wrong number / too few arguments") → code 2;
 /// unknown-command errors → code 5.
@@ -52,6 +60,8 @@ pub struct MpdServer {
     unix_socket: Option<String>,
     state: AppState,
     shutdown_rx: broadcast::Receiver<()>,
+    max_connections: usize,
+    connection_timeout: std::time::Duration,
 }
 
 impl MpdServer {
@@ -61,6 +71,8 @@ impl MpdServer {
             unix_socket: None,
             state: AppState::new(),
             shutdown_rx,
+            max_connections: DEFAULT_MAX_CONNECTIONS,
+            connection_timeout: std::time::Duration::from_secs(DEFAULT_CONNECTION_TIMEOUT_SECS),
         }
     }
 
@@ -74,11 +86,28 @@ impl MpdServer {
             unix_socket: None,
             state,
             shutdown_rx,
+            max_connections: DEFAULT_MAX_CONNECTIONS,
+            connection_timeout: std::time::Duration::from_secs(DEFAULT_CONNECTION_TIMEOUT_SECS),
         }
     }
 
     pub fn with_unix_socket(mut self, path: Option<String>) -> Self {
         self.unix_socket = path;
+        self
+    }
+
+    /// Set the maximum number of concurrent client connections. Connections
+    /// beyond this limit are rejected (dropped) as soon as they are accepted.
+    pub fn with_max_connections(mut self, n: usize) -> Self {
+        self.max_connections = n;
+        self
+    }
+
+    /// Set the idle timeout for a connection waiting on its next command
+    /// line. A client that connects and then sends nothing is disconnected
+    /// after this duration. Does not apply while a client is in `idle` mode.
+    pub fn with_connection_timeout(mut self, d: std::time::Duration) -> Self {
+        self.connection_timeout = d;
         self
     }
 
@@ -99,13 +128,21 @@ impl MpdServer {
         info!("queue playback manager started");
 
         // Optionally bind Unix socket
-        let unix_listener = if let Some(ref path) = self.unix_socket {
+        let unix_listener = if let Some(path) = &self.unix_socket {
             // Remove stale socket file if present
             let _ = std::fs::remove_file(path);
             Some(tokio::net::UnixListener::bind(path)?)
         } else {
             None
         };
+
+        // Bounds the number of concurrently active connections. Each spawned
+        // connection task holds a permit for its lifetime; the accept loop
+        // never blocks on permit acquisition (that would stall accepting from
+        // the other listener in the `select!` below) — it just drops the
+        // connection immediately if none are available.
+        let connection_limiter = std::sync::Arc::new(tokio::sync::Semaphore::new(self.max_connections));
+        let connection_timeout = self.connection_timeout;
 
         loop {
             tokio::select! {
@@ -114,12 +151,24 @@ impl MpdServer {
                     match result {
                         Ok((stream, addr)) => {
                             debug!("new connection from {}", addr);
-                            let state = self.state.clone();
-                            tokio::spawn(async move {
-                                if let Err(e) = handle_client(stream, state).await {
-                                    log_client_error("client", &e);
+                            match connection_limiter.clone().try_acquire_owned() {
+                                Ok(permit) => {
+                                    let state = self.state.clone();
+                                    tokio::spawn(async move {
+                                        let _permit = permit;
+                                        if let Err(e) = handle_client(stream, state, connection_timeout).await {
+                                            log_client_error("client", &e);
+                                        }
+                                    });
                                 }
-                            });
+                                Err(_) => {
+                                    debug!(
+                                        "connection limit ({}) reached, dropping connection from {}",
+                                        self.max_connections, addr
+                                    );
+                                    drop(stream);
+                                }
+                            }
                         }
                         Err(e) => {
                             error!("failed to accept connection: {}", e);
@@ -127,7 +176,7 @@ impl MpdServer {
                     }
                 }
                 result = async {
-                    if let Some(ref ul) = unix_listener {
+                    if let Some(ul) = &unix_listener {
                         ul.accept().await.map(|(s, _)| s)
                     } else {
                         std::future::pending::<tokio::io::Result<tokio::net::UnixStream>>().await
@@ -135,12 +184,24 @@ impl MpdServer {
                 } => {
                     match result {
                         Ok(stream) => {
-                            let state = self.state.clone();
-                            tokio::spawn(async move {
-                                if let Err(e) = handle_unix_client(stream, state).await {
-                                    log_client_error("unix client", &e);
+                            match connection_limiter.clone().try_acquire_owned() {
+                                Ok(permit) => {
+                                    let state = self.state.clone();
+                                    tokio::spawn(async move {
+                                        let _permit = permit;
+                                        if let Err(e) = handle_unix_client(stream, state, connection_timeout).await {
+                                            log_client_error("unix client", &e);
+                                        }
+                                    });
                                 }
-                            });
+                                Err(_) => {
+                                    debug!(
+                                        "connection limit ({}) reached, dropping unix connection",
+                                        self.max_connections
+                                    );
+                                    drop(stream);
+                                }
+                            }
                         }
                         Err(e) => {
                             error!("unix accept error: {}", e);
@@ -156,7 +217,7 @@ impl MpdServer {
         }
 
         // Clean up socket file on shutdown
-        if let Some(ref path) = self.unix_socket {
+        if let Some(path) = &self.unix_socket {
             let _ = std::fs::remove_file(path);
         }
 
@@ -188,7 +249,11 @@ fn log_client_error(kind: &str, e: &rmpd_core::error::RmpdError) {
     }
 }
 
-async fn handle_client(mut stream: TcpStream, state: AppState) -> Result<()> {
+async fn handle_client(
+    mut stream: TcpStream,
+    state: AppState,
+    timeout: std::time::Duration,
+) -> Result<()> {
     // Enable TCP_NODELAY for low-latency responses (disable Nagle's algorithm)
     stream.set_nodelay(true)?;
 
@@ -198,23 +263,28 @@ async fn handle_client(mut stream: TcpStream, state: AppState) -> Result<()> {
         .await?;
 
     let (reader, writer) = stream.into_split();
-    handle_client_inner(tokio::io::BufReader::new(reader), writer, state).await
+    handle_client_inner(tokio::io::BufReader::new(reader), writer, state, timeout).await
 }
 
-async fn handle_unix_client(mut stream: UnixStream, state: AppState) -> Result<()> {
+async fn handle_unix_client(
+    mut stream: UnixStream,
+    state: AppState,
+    timeout: std::time::Duration,
+) -> Result<()> {
     // Send greeting
     stream
         .write_all(format!("OK MPD {PROTOCOL_VERSION}\n").as_bytes())
         .await?;
 
     let (reader, writer) = stream.into_split();
-    handle_client_inner(tokio::io::BufReader::new(reader), writer, state).await
+    handle_client_inner(tokio::io::BufReader::new(reader), writer, state, timeout).await
 }
 
 async fn handle_client_inner(
     mut reader: tokio::io::BufReader<impl tokio::io::AsyncRead + Unpin>,
     mut writer: impl tokio::io::AsyncWrite + Unpin,
     state: AppState,
+    timeout: std::time::Duration,
 ) -> Result<()> {
     let mut line = String::new();
 
@@ -238,7 +308,15 @@ async fn handle_client_inner(
 
     loop {
         line.clear();
-        let bytes_read = reader.read_line(&mut line).await?;
+        let bytes_read = match tokio::time::timeout(timeout, reader.read_line(&mut line)).await {
+            Ok(result) => result?,
+            Err(_elapsed) => {
+                // Idle timeout: client connected but sent nothing for
+                // `timeout`. Disconnect as if it had closed the socket.
+                debug!("connection idle for {:?}, closing", timeout);
+                break;
+            }
+        };
 
         if bytes_read == 0 {
             // Connection closed

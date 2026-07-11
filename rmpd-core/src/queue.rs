@@ -258,7 +258,7 @@ impl Queue {
 
     pub fn move_by_id(&mut self, id: u32, to: u32) -> bool {
         if let Some(from_idx) = self.items.iter().position(|i| i.id == id) {
-            if to as usize > self.items.len() {
+            if to as usize >= self.items.len() {
                 return false;
             }
             let item = self.items.remove(from_idx);

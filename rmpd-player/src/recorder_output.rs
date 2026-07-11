@@ -12,7 +12,7 @@ pub struct RecorderOutput {
     path: String,
     format: AudioFormat,
     writer: Option<BufWriter<File>>,
-    frames_written: u32,
+    frames_written: u64,
     pause_state: PauseState,
     conversion_buf: Vec<u8>,
 }
@@ -51,9 +51,27 @@ impl RecorderOutput {
         Ok(())
     }
 
-    fn finalize(path: &str, frames: u32, channels: u8) {
-        let data_bytes = frames * channels as u32 * 2;
-        let riff_size = 36 + data_bytes;
+    /// Patches the RIFF and data chunk sizes in the WAV header once recording stops.
+    ///
+    /// WAV's classic RIFF format uses 32-bit little-endian size fields, which is a hard
+    /// format limit (~4 GiB). Frame/byte counts are accumulated in `u64` to avoid silent
+    /// wraparound during long/high-rate recordings, but if the final byte count still
+    /// exceeds `u32::MAX` it is clamped (with a warning) rather than wrapped — this keeps
+    /// the header internally consistent (if truncated) instead of corrupt. A correct fix
+    /// for recordings beyond ~4 GiB of PCM data would require RF64/BWF, out of scope here.
+    fn finalize(path: &str, frames: u64, channels: u8) {
+        let data_bytes_u64 = frames * channels as u64 * 2;
+        let riff_size_u64 = 36 + data_bytes_u64;
+        let data_bytes = if data_bytes_u64 > u32::MAX as u64 {
+            tracing::warn!(
+                "recorder output: data size {data_bytes_u64} bytes exceeds WAV's 32-bit \
+                 limit; clamping header field to u32::MAX (file content is unaffected)"
+            );
+            u32::MAX
+        } else {
+            data_bytes_u64 as u32
+        };
+        let riff_size = riff_size_u64.min(u32::MAX as u64) as u32;
         if let Ok(mut f) = std::fs::OpenOptions::new().write(true).open(path) {
             let _ = f
                 .seek(SeekFrom::Start(4))
@@ -86,7 +104,7 @@ impl AudioOutput for RecorderOutput {
             conversion::samples_to_s16le_into(samples, &mut self.conversion_buf);
             w.write_all(&self.conversion_buf)
                 .map_err(|e| RmpdError::Player(format!("recorder write: {e}")))?;
-            self.frames_written += samples.len() as u32 / self.format.channels as u32;
+            self.frames_written += (samples.len() / self.format.channels as usize) as u64;
         }
         Ok(())
     }
