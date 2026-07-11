@@ -87,30 +87,37 @@ fn sticker_matches(op: StickerCmp, sticker_value: &str, cmp_value: &str) -> bool
 }
 
 pub async fn handle_sticker_get_command(state: &AppState, uri: &str, name: &str) -> String {
-    let db = match open_db(state, "sticker") {
-        Ok(d) => d,
-        Err(e) => return e,
-    };
+    let state = state.clone();
+    let uri = uri.to_string();
+    let name = name.to_string();
+    tokio::task::spawn_blocking(move || {
+        let db = match open_db(&state, "sticker") {
+            Ok(d) => d,
+            Err(e) => return e,
+        };
 
-    // Check song exists (MPD validates URI before sticker lookup)
-    if let Err(e) = require_song(&db, uri) {
-        return e;
-    }
-
-    match db.get_sticker(uri, name) {
-        Ok(Some(value)) => {
-            let mut resp = ResponseBuilder::new();
-            resp.field("sticker", format!("{name}={value}"));
-            resp.ok()
+        // Check song exists (MPD validates URI before sticker lookup)
+        if let Err(e) = require_song(&db, &uri) {
+            return e;
         }
-        Ok(None) => ResponseBuilder::error(
-            ACK_ERROR_NO_EXIST,
-            0,
-            "sticker",
-            &format!("no such sticker: {:?}", name),
-        ),
-        Err(e) => ResponseBuilder::error(ACK_ERROR_SYS, 0, "sticker", &format!("Error: {e}")),
-    }
+
+        match db.get_sticker(&uri, &name) {
+            Ok(Some(value)) => {
+                let mut resp = ResponseBuilder::new();
+                resp.field("sticker", format!("{name}={value}"));
+                resp.ok()
+            }
+            Ok(None) => ResponseBuilder::error(
+                ACK_ERROR_NO_EXIST,
+                0,
+                "sticker",
+                &format!("no such sticker: {:?}", name),
+            ),
+            Err(e) => ResponseBuilder::error(ACK_ERROR_SYS, 0, "sticker", &format!("Error: {e}")),
+        }
+    })
+    .await
+    .unwrap_or_else(|_| ResponseBuilder::error(ACK_ERROR_SYS, 0, "sticker", "internal error"))
 }
 
 pub async fn handle_sticker_set_command(
@@ -119,20 +126,28 @@ pub async fn handle_sticker_set_command(
     name: &str,
     value: &str,
 ) -> String {
-    let db = match open_db(state, "sticker") {
-        Ok(d) => d,
-        Err(e) => return e,
-    };
+    let state = state.clone();
+    let uri = uri.to_string();
+    let name = name.to_string();
+    let value = value.to_string();
+    tokio::task::spawn_blocking(move || {
+        let db = match open_db(&state, "sticker") {
+            Ok(d) => d,
+            Err(e) => return e,
+        };
 
-    // Check song exists
-    if let Err(e) = require_song(&db, uri) {
-        return e;
-    }
+        // Check song exists
+        if let Err(e) = require_song(&db, &uri) {
+            return e;
+        }
 
-    match db.set_sticker(uri, name, value) {
-        Ok(_) => ResponseBuilder::new().ok(),
-        Err(e) => ResponseBuilder::error(ACK_ERROR_SYS, 0, "sticker", &format!("Error: {e}")),
-    }
+        match db.set_sticker(&uri, &name, &value) {
+            Ok(_) => ResponseBuilder::new().ok(),
+            Err(e) => ResponseBuilder::error(ACK_ERROR_SYS, 0, "sticker", &format!("Error: {e}")),
+        }
+    })
+    .await
+    .unwrap_or_else(|_| ResponseBuilder::error(ACK_ERROR_SYS, 0, "sticker", "internal error"))
 }
 
 pub async fn handle_sticker_delete_command(
@@ -140,61 +155,80 @@ pub async fn handle_sticker_delete_command(
     uri: &str,
     name: Option<&str>,
 ) -> String {
-    let db = match open_db(state, "sticker") {
-        Ok(d) => d,
-        Err(e) => return e,
-    };
+    let state = state.clone();
+    let uri = uri.to_string();
+    let name = name.map(|s| s.to_string());
+    tokio::task::spawn_blocking(move || {
+        let name = name.as_deref();
+        let db = match open_db(&state, "sticker") {
+            Ok(d) => d,
+            Err(e) => return e,
+        };
 
-    // Check song exists
-    if let Err(e) = require_song(&db, uri) {
-        return e;
-    }
-
-    // When deleting a named sticker, check it exists first (MPD returns error if not found)
-    if let Some(sticker_name) = name {
-        match db.get_sticker(uri, sticker_name) {
-            Ok(None) => {
-                return ResponseBuilder::error(
-                    ACK_ERROR_NO_EXIST,
-                    0,
-                    "sticker",
-                    &format!("no such sticker: {:?}", sticker_name),
-                );
-            }
-            Err(e) => {
-                return ResponseBuilder::error(ACK_ERROR_SYS, 0, "sticker", &format!("Error: {e}"));
-            }
-            Ok(Some(_)) => {}
+        // Check song exists
+        if let Err(e) = require_song(&db, &uri) {
+            return e;
         }
-    }
 
-    match db.delete_sticker(uri, name) {
-        Ok(_) => ResponseBuilder::new().ok(),
-        Err(e) => ResponseBuilder::error(ACK_ERROR_SYS, 0, "sticker", &format!("Error: {e}")),
-    }
+        // When deleting a named sticker, check it exists first (MPD returns error if not found)
+        if let Some(sticker_name) = name {
+            match db.get_sticker(&uri, sticker_name) {
+                Ok(None) => {
+                    return ResponseBuilder::error(
+                        ACK_ERROR_NO_EXIST,
+                        0,
+                        "sticker",
+                        &format!("no such sticker: {:?}", sticker_name),
+                    );
+                }
+                Err(e) => {
+                    return ResponseBuilder::error(
+                        ACK_ERROR_SYS,
+                        0,
+                        "sticker",
+                        &format!("Error: {e}"),
+                    );
+                }
+                Ok(Some(_)) => {}
+            }
+        }
+
+        match db.delete_sticker(&uri, name) {
+            Ok(_) => ResponseBuilder::new().ok(),
+            Err(e) => ResponseBuilder::error(ACK_ERROR_SYS, 0, "sticker", &format!("Error: {e}")),
+        }
+    })
+    .await
+    .unwrap_or_else(|_| ResponseBuilder::error(ACK_ERROR_SYS, 0, "sticker", "internal error"))
 }
 
 pub async fn handle_sticker_list_command(state: &AppState, uri: &str) -> String {
-    let db = match open_db(state, "sticker") {
-        Ok(d) => d,
-        Err(e) => return e,
-    };
+    let state = state.clone();
+    let uri = uri.to_string();
+    tokio::task::spawn_blocking(move || {
+        let db = match open_db(&state, "sticker") {
+            Ok(d) => d,
+            Err(e) => return e,
+        };
 
-    // Check song exists
-    if let Err(e) = require_song(&db, uri) {
-        return e;
-    }
-
-    match db.list_stickers(uri) {
-        Ok(stickers) => {
-            let mut resp = ResponseBuilder::new();
-            for (name, value) in stickers {
-                resp.field("sticker", format!("{name}={value}"));
-            }
-            resp.ok()
+        // Check song exists
+        if let Err(e) = require_song(&db, &uri) {
+            return e;
         }
-        Err(e) => ResponseBuilder::error(ACK_ERROR_SYS, 0, "sticker", &format!("Error: {e}")),
-    }
+
+        match db.list_stickers(&uri) {
+            Ok(stickers) => {
+                let mut resp = ResponseBuilder::new();
+                for (name, value) in stickers {
+                    resp.field("sticker", format!("{name}={value}"));
+                }
+                resp.ok()
+            }
+            Err(e) => ResponseBuilder::error(ACK_ERROR_SYS, 0, "sticker", &format!("Error: {e}")),
+        }
+    })
+    .await
+    .unwrap_or_else(|_| ResponseBuilder::error(ACK_ERROR_SYS, 0, "sticker", "internal error"))
 }
 
 pub async fn handle_sticker_find_command(
@@ -203,47 +237,62 @@ pub async fn handle_sticker_find_command(
     name: &str,
     value: Option<&str>,
 ) -> String {
-    let db = match open_db(state, "sticker") {
-        Ok(d) => d,
-        Err(e) => return e,
-    };
+    let state = state.clone();
+    let uri = uri.to_string();
+    let name = name.to_string();
+    let value = value.map(|s| s.to_string());
+    tokio::task::spawn_blocking(move || {
+        let db = match open_db(&state, "sticker") {
+            Ok(d) => d,
+            Err(e) => return e,
+        };
 
-    let filter = decode_sticker_filter(value);
+        let filter = decode_sticker_filter(value.as_deref());
 
-    match db.find_stickers(uri, name) {
-        Ok(results) => {
-            let mut resp = ResponseBuilder::new();
-            for (file_uri, sticker_value) in &results {
-                if let Some((op, cmp_val)) = filter
-                    && !sticker_matches(op, sticker_value, cmp_val)
-                {
-                    continue;
+        match db.find_stickers(&uri, &name) {
+            Ok(results) => {
+                let mut resp = ResponseBuilder::new();
+                for (file_uri, sticker_value) in &results {
+                    if let Some((op, cmp_val)) = filter
+                        && !sticker_matches(op, sticker_value, cmp_val)
+                    {
+                        continue;
+                    }
+                    resp.field("file", file_uri);
+                    resp.field("sticker", format!("{name}={sticker_value}"));
                 }
-                resp.field("file", file_uri);
-                resp.field("sticker", format!("{name}={sticker_value}"));
+                resp.ok()
             }
-            resp.ok()
+            Err(e) => ResponseBuilder::error(ACK_ERROR_SYS, 0, "sticker", &format!("Error: {e}")),
         }
-        Err(e) => ResponseBuilder::error(ACK_ERROR_SYS, 0, "sticker", &format!("Error: {e}")),
-    }
+    })
+    .await
+    .unwrap_or_else(|_| ResponseBuilder::error(ACK_ERROR_SYS, 0, "sticker", "internal error"))
 }
 
 /// Shared core for `sticker inc` / `sticker dec`.
 /// `delta` is the signed change to apply (positive for inc, negative for dec).
 async fn adjust_sticker_value(state: &AppState, uri: &str, name: &str, delta: i32) -> String {
-    let db = match open_db(state, "sticker") {
-        Ok(d) => d,
-        Err(e) => return e,
-    };
-    let new_value = get_sticker_i32(&db, uri, name) + delta;
-    match db.set_sticker(uri, name, &new_value.to_string()) {
-        Ok(_) => {
-            let mut resp = ResponseBuilder::new();
-            resp.field("sticker", format!("{name}={new_value}"));
-            resp.ok()
+    let state = state.clone();
+    let uri = uri.to_string();
+    let name = name.to_string();
+    tokio::task::spawn_blocking(move || {
+        let db = match open_db(&state, "sticker") {
+            Ok(d) => d,
+            Err(e) => return e,
+        };
+        let new_value = get_sticker_i32(&db, &uri, &name) + delta;
+        match db.set_sticker(&uri, &name, &new_value.to_string()) {
+            Ok(_) => {
+                let mut resp = ResponseBuilder::new();
+                resp.field("sticker", format!("{name}={new_value}"));
+                resp.ok()
+            }
+            Err(e) => ResponseBuilder::error(ACK_ERROR_SYS, 0, "sticker", &format!("Error: {e}")),
         }
-        Err(e) => ResponseBuilder::error(ACK_ERROR_SYS, 0, "sticker", &format!("Error: {e}")),
-    }
+    })
+    .await
+    .unwrap_or_else(|_| ResponseBuilder::error(ACK_ERROR_SYS, 0, "sticker", "internal error"))
 }
 
 pub async fn handle_sticker_inc_command(
@@ -266,20 +315,27 @@ pub async fn handle_sticker_dec_command(
 
 pub async fn handle_sticker_names_command(state: &AppState, uri: Option<&str>) -> String {
     // List unique sticker names (optionally for specific URI)
-    if let Some(uri_str) = uri {
-        let db = match open_db(state, "stickernames") {
+    let Some(uri_str) = uri else {
+        return ResponseBuilder::new().ok();
+    };
+    let state = state.clone();
+    let uri_str = uri_str.to_string();
+    tokio::task::spawn_blocking(move || {
+        let db = match open_db(&state, "stickernames") {
             Ok(d) => d,
             Err(e) => return e,
         };
-        if let Ok(stickers) = db.list_stickers(uri_str) {
+        if let Ok(stickers) = db.list_stickers(&uri_str) {
             let mut resp = ResponseBuilder::new();
             for (name, _) in stickers {
                 resp.field("sticker", &name);
             }
             return resp.ok();
         }
-    }
-    ResponseBuilder::new().ok()
+        ResponseBuilder::new().ok()
+    })
+    .await
+    .unwrap_or_else(|_| ResponseBuilder::error(ACK_ERROR_SYS, 0, "stickernames", "internal error"))
 }
 
 pub async fn handle_sticker_types_command() -> String {
@@ -316,18 +372,25 @@ pub async fn handle_sticker_types_command() -> String {
 
 pub async fn handle_sticker_namestypes_command(state: &AppState, uri: Option<&str>) -> String {
     // List sticker names and types
-    if let Some(uri_str) = uri {
-        let db = match open_db(state, "stickernamestypes") {
+    let Some(uri_str) = uri else {
+        return ResponseBuilder::new().ok();
+    };
+    let state = state.clone();
+    let uri_str = uri_str.to_string();
+    tokio::task::spawn_blocking(move || {
+        let db = match open_db(&state, "stickernamestypes") {
             Ok(d) => d,
             Err(e) => return e,
         };
-        if let Ok(stickers) = db.list_stickers(uri_str) {
+        if let Ok(stickers) = db.list_stickers(&uri_str) {
             let mut resp = ResponseBuilder::new();
             for (name, _) in stickers {
                 resp.field("sticker", format!("{name} song"));
             }
             return resp.ok();
         }
-    }
-    ResponseBuilder::new().ok()
+        ResponseBuilder::new().ok()
+    })
+    .await
+    .unwrap_or_else(|_| ResponseBuilder::error(ACK_ERROR_SYS, 0, "stickernamestypes", "internal error"))
 }

@@ -30,20 +30,42 @@ pub async fn handle_add_command(state: &AppState, uri: &str, position: Option<u3
             return ResponseBuilder::new().ok();
         }
     }
-    // Get song from database (file:// or relative path)
-    let db = match open_db(state, "add") {
-        Ok(d) => d,
-        Err(e) => return e,
-    };
+    // Get song from database (file:// or relative path) — run the blocking
+    // DB open + query on a blocking-pool thread so it never stalls the async
+    // runtime. The closure returns either the resolved `Song` or the fully
+    // formatted error response, matching the original inline error handling.
+    let state_clone = state.clone();
+    let uri_owned = uri.to_string();
+    let song_result: Result<rmpd_core::song::Song, String> =
+        match tokio::task::spawn_blocking(move || {
+            let db = open_db(&state_clone, "add")?;
+            match db.get_song_by_path(&uri_owned) {
+                Ok(Some(s)) => Ok(s),
+                Ok(None) => Err(ResponseBuilder::error(
+                    ACK_ERROR_NO_EXIST,
+                    0,
+                    "add",
+                    "No such directory",
+                )),
+                Err(e) => Err(ResponseBuilder::error(
+                    ACK_ERROR_SYS,
+                    0,
+                    "add",
+                    &format!("query error: {e}"),
+                )),
+            }
+        })
+        .await
+        {
+            Ok(res) => res,
+            Err(_) => {
+                return ResponseBuilder::error(ACK_ERROR_SYS, 0, "add", "internal error");
+            }
+        };
 
-    let song = match db.get_song_by_path(uri) {
-        Ok(Some(s)) => s,
-        Ok(None) => {
-            return ResponseBuilder::error(ACK_ERROR_NO_EXIST, 0, "add", "No such directory");
-        }
-        Err(e) => {
-            return ResponseBuilder::error(ACK_ERROR_SYS, 0, "add", &format!("query error: {e}"));
-        }
+    let song = match song_result {
+        Ok(s) => s,
+        Err(resp) => return resp,
     };
 
     // `add` returns no Id (unlike `addid`) — MPD replies with bare OK.
@@ -133,19 +155,42 @@ pub async fn handle_addid_command(state: &AppState, uri: &str, position: Option<
             return resp.ok();
         }
     }
-    let db = match open_db(state, "addid") {
-        Ok(d) => d,
-        Err(e) => return e,
-    };
+    // Get song from database (file:// or relative path) — run the blocking
+    // DB open + query on a blocking-pool thread so it never stalls the async
+    // runtime. The closure returns either the resolved `Song` or the fully
+    // formatted error response, matching the original inline error handling.
+    let state_clone = state.clone();
+    let uri_owned = uri.to_string();
+    let song_result: Result<rmpd_core::song::Song, String> =
+        match tokio::task::spawn_blocking(move || {
+            let db = open_db(&state_clone, "addid")?;
+            match db.get_song_by_path(&uri_owned) {
+                Ok(Some(s)) => Ok(s),
+                Ok(None) => Err(ResponseBuilder::error(
+                    ACK_ERROR_NO_EXIST,
+                    0,
+                    "addid",
+                    "No such song",
+                )),
+                Err(e) => Err(ResponseBuilder::error(
+                    ACK_ERROR_SYS,
+                    0,
+                    "addid",
+                    &format!("query error: {e}"),
+                )),
+            }
+        })
+        .await
+        {
+            Ok(res) => res,
+            Err(_) => {
+                return ResponseBuilder::error(ACK_ERROR_SYS, 0, "addid", "internal error");
+            }
+        };
 
-    let song = match db.get_song_by_path(uri) {
-        Ok(Some(s)) => s,
-        Ok(None) => {
-            return ResponseBuilder::error(ACK_ERROR_NO_EXIST, 0, "addid", "No such song");
-        }
-        Err(e) => {
-            return ResponseBuilder::error(ACK_ERROR_SYS, 0, "addid", &format!("query error: {e}"));
-        }
+    let song = match song_result {
+        Ok(s) => s,
+        Err(resp) => return resp,
     };
 
     // Add to queue at specific position

@@ -1,4 +1,4 @@
-use rmpd_core::error::Result;
+use rmpd_core::error::{Result, RmpdError};
 use rmpd_core::queue::Queue;
 use rmpd_core::state::{PlayerState, PlayerStatus, ReplayGainMode};
 use std::fs;
@@ -85,10 +85,17 @@ impl StateFile {
         }
         content.push_str("playlist_end\n");
 
-        // Write to file atomically (write to temp, then rename)
-        let temp_path = format!("{}.tmp", self.path);
-        fs::write(&temp_path, content)?;
-        fs::rename(&temp_path, &self.path)?;
+        // Write to file atomically (write to temp, then rename). Runs on a
+        // blocking-pool thread since fs::write/fs::rename block the caller.
+        let path = self.path.clone();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let temp_path = format!("{path}.tmp");
+            fs::write(&temp_path, content)?;
+            fs::rename(&temp_path, &path)?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| RmpdError::Protocol(format!("spawn_blocking panicked: {e}")))??;
 
         info!("state saved to {}", self.path);
         Ok(())

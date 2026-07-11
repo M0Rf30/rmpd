@@ -79,7 +79,14 @@ pub async fn run(bind_address: String, config: Config) -> Result<()> {
 
     // Load state from file if it exists
     let state_file = StateFile::new(state_file_path.clone());
-    if let Ok(Some(saved_state)) = state_file.load() {
+    let loaded_state = match tokio::task::spawn_blocking(move || state_file.load()).await {
+        Ok(result) => result,
+        Err(e) => {
+            error!("state load task failed: {}", e);
+            Ok(None)
+        }
+    };
+    if let Ok(Some(saved_state)) = loaded_state {
         info!("restoring state from file");
         restore_state(
             &state,

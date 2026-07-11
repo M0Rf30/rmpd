@@ -70,11 +70,16 @@ impl FilterExpression {
                 }
 
                 let fallback_tags = tag_fallback_chain(&tag_lower);
-                let tag_list = fallback_tags
+                // Tag names are client-controlled (unrecognized tags pass through
+                // `tag_fallback_chain` verbatim), so they must be bound as
+                // parameters rather than interpolated into the SQL text.
+                let tag_placeholders = fallback_tags
                     .iter()
-                    .map(|t| format!("'{t}'"))
+                    .map(|_| "?")
                     .collect::<Vec<_>>()
                     .join(", ");
+                let tag_params: Vec<String> =
+                    fallback_tags.iter().map(|t| t.to_string()).collect();
 
                 // MPD treats a missing tag as an empty value, so comparing a tag
                 // (or its fallback chain) against the empty string must also match
@@ -85,21 +90,23 @@ impl FilterExpression {
                 if value.is_empty() && matches!(op, CompareOp::Equal | CompareOp::NotEqual) {
                     let has_nonempty = format!(
                         "EXISTS (SELECT 1 FROM song_tags st WHERE st.song_id = songs.id \
-                         AND st.tag IN ({tag_list}) AND st.value != '')"
+                         AND st.tag IN ({tag_placeholders}) AND st.value != '')"
                     );
                     let sql = match op {
                         CompareOp::Equal => format!("NOT {has_nonempty}"),
                         _ => has_nonempty,
                     };
-                    return (sql, vec![]);
+                    return (sql, tag_params);
                 }
 
                 let (sql_op, value_param) = op_to_sql(op, value);
                 let sql = format!(
                     "EXISTS (SELECT 1 FROM song_tags st WHERE st.song_id = songs.id \
-                     AND st.tag IN ({tag_list}) AND st.value {sql_op} ?)"
+                     AND st.tag IN ({tag_placeholders}) AND st.value {sql_op} ?)"
                 );
-                (sql, vec![value_param])
+                let mut params = tag_params;
+                params.push(value_param);
+                (sql, params)
             }
             FilterExpression::And(left, right) => {
                 let (left_sql, mut left_params) = left.to_sql();
@@ -341,8 +348,7 @@ mod tests {
         let expr = FilterExpression::parse("((Artist == 'Radiohead'))").unwrap();
         let (sql, params) = expr.to_sql();
         assert!(sql.contains("song_tags"));
-        assert!(sql.contains("artist"));
-        assert_eq!(params, vec!["Radiohead"]);
+        assert_eq!(params, vec!["artist", "Radiohead"]);
     }
 
     #[test]
@@ -350,7 +356,7 @@ mod tests {
         let expr = FilterExpression::parse("((date >= '2000') AND (genre == 'Rock'))").unwrap();
         let (sql, params) = expr.to_sql();
         assert!(sql.contains("AND"), "SQL should contain AND: {}", sql);
-        assert_eq!(params, vec!["2000", "Rock"]);
+        assert_eq!(params, vec!["date", "2000", "genre", "Rock"]);
     }
 
     #[test]
@@ -359,7 +365,7 @@ mod tests {
             FilterExpression::parse("((artist == 'Radiohead') OR (artist == 'Muse'))").unwrap();
         let (sql, params) = expr.to_sql();
         assert!(sql.contains("OR"), "SQL should contain OR: {}", sql);
-        assert_eq!(params, vec!["Radiohead", "Muse"]);
+        assert_eq!(params, vec!["artist", "Radiohead", "artist", "Muse"]);
     }
 
     #[test]
@@ -375,7 +381,7 @@ mod tests {
         let (sql, params) = expr.to_sql();
         assert!(sql.contains("REGEXP"), "SQL should contain REGEXP: {sql}");
         assert!(!sql.contains("LIKE"), "SQL must not contain LIKE: {sql}");
-        assert_eq!(params, vec!["Radio.*"]);
+        assert_eq!(params, vec!["artist", "Radio.*"]);
     }
 
     #[test]
@@ -383,7 +389,7 @@ mod tests {
         let expr = FilterExpression::parse("(Artist == \"Amon Tobin\")").unwrap();
         let (sql, params) = expr.to_sql();
         assert!(sql.contains("song_tags"));
-        assert_eq!(params, vec!["Amon Tobin"]);
+        assert_eq!(params, vec!["artist", "Amon Tobin"]);
     }
 
     #[test]
@@ -391,17 +397,18 @@ mod tests {
         let expr = FilterExpression::parse(r#"(Artist == "Guns \"N\" Roses")"#).unwrap();
         let (sql, params) = expr.to_sql();
         assert!(sql.contains("song_tags"));
-        assert_eq!(params, vec![r#"Guns "N" Roses"#]);
+        assert_eq!(params, vec!["artist", r#"Guns "N" Roses"#]);
     }
 
     #[test]
     fn test_albumartist_fallback() {
         let expr = FilterExpression::parse("(AlbumArtist == 'Led Zeppelin')").unwrap();
         let (sql, params) = expr.to_sql();
-        assert!(sql.contains("albumartist"));
-        assert!(sql.contains("artist"));
         assert!(sql.contains("IN"));
-        assert_eq!(params.len(), 1);
+        assert_eq!(
+            params,
+            vec!["albumartist", "artist", "Led Zeppelin"]
+        );
     }
 
     #[test]
@@ -425,10 +432,10 @@ mod tests {
             "expected NOT EXISTS, got: {sql}"
         );
         assert!(sql.contains("st.value != ''"), "got: {sql}");
-        assert!(sql.contains("albumartist") && sql.contains("artist"));
-        assert!(
-            params.is_empty(),
-            "empty-equality takes no bound params: {params:?}"
+        assert_eq!(
+            params,
+            vec!["albumartist", "artist"],
+            "tag names must be bound params, not inlined: {params:?}"
         );
     }
 
@@ -439,6 +446,6 @@ mod tests {
         let (sql, params) = expr.to_sql();
         assert!(sql.starts_with("EXISTS"), "expected EXISTS, got: {sql}");
         assert!(sql.contains("st.value != ''"), "got: {sql}");
-        assert!(params.is_empty());
+        assert_eq!(params, vec!["artist"]);
     }
 }
