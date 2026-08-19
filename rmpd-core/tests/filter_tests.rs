@@ -218,3 +218,41 @@ fn test_multiple_and_operators() {
     assert!(sql.contains("AND"));
     assert_eq!(params.len(), 6);
 }
+
+#[test]
+fn test_contains_escapes_percent() {
+    let expr = FilterExpression::parse("(artist contains '50%')").unwrap();
+    let (sql, params) = expr.to_sql();
+
+    assert!(sql.contains("LIKE"));
+    assert!(sql.contains("ESCAPE '\\'"), "got: {sql}");
+    assert_eq!(params, vec!["artist", "%50\\%%"]);
+}
+
+#[test]
+fn test_starts_with_escapes_underscore() {
+    let expr = FilterExpression::parse("(title starts_with 'foo_bar')").unwrap();
+    let (sql, params) = expr.to_sql();
+
+    assert!(sql.contains("LIKE"));
+    assert!(sql.contains("ESCAPE '\\'"), "got: {sql}");
+    assert_eq!(params, vec!["title", "foo\\_bar%"]);
+}
+
+#[test]
+fn test_contains_escapes_backslash() {
+    let expr = FilterExpression::parse(r"(title contains 'a\\b')").unwrap();
+    let (sql, params) = expr.to_sql();
+
+    assert!(sql.contains("ESCAPE '\\'"), "got: {sql}");
+    assert_eq!(params, vec!["title", "%a\\\\b%"]);
+}
+
+#[test]
+fn test_non_like_operators_have_no_escape_clause() {
+    let expr = FilterExpression::parse("(artist == '50%')").unwrap();
+    let (sql, params) = expr.to_sql();
+
+    assert!(!sql.contains("ESCAPE"), "got: {sql}");
+    assert_eq!(params, vec!["artist", "50%"]);
+}

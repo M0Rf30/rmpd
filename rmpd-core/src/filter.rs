@@ -66,7 +66,7 @@ impl FilterExpression {
                 // `file` tag matches against the path column directly
                 if tag_lower == "file" {
                     let (sql_op, value_param) = op_to_sql(op, value);
-                    return (format!("path {sql_op} ?"), vec![value_param]);
+                    return (format!("path {sql_op}"), vec![value_param]);
                 }
 
                 let fallback_tags = tag_fallback_chain(&tag_lower);
@@ -101,7 +101,7 @@ impl FilterExpression {
                 let (sql_op, value_param) = op_to_sql(op, value);
                 let sql = format!(
                     "EXISTS (SELECT 1 FROM song_tags st WHERE st.song_id = songs.id \
-                     AND st.tag IN ({tag_placeholders}) AND st.value {sql_op} ?)"
+                     AND st.tag IN ({tag_placeholders}) AND st.value {sql_op})"
                 );
                 let mut params = tag_params;
                 params.push(value_param);
@@ -127,18 +127,38 @@ impl FilterExpression {
     }
 }
 
+/// Backslash-escapes SQL LIKE metacharacters (`\`, `%`, `_`) in a client-supplied
+/// value so `Contains`/`StartsWith` only ever match the literal substring; the
+/// paired `ESCAPE '\'` clause on the operator makes the backslash active.
+fn escape_like_value(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for c in value.chars() {
+        if matches!(c, '\\' | '%' | '_') {
+            escaped.push('\\');
+        }
+        escaped.push(c);
+    }
+    escaped
+}
+
 fn op_to_sql(op: &CompareOp, value: &str) -> (&'static str, String) {
     match op {
-        CompareOp::Equal => ("=", value.to_string()),
-        CompareOp::NotEqual => ("!=", value.to_string()),
-        CompareOp::Regex => ("REGEXP", value.to_string()),
-        CompareOp::NotRegex => ("NOT REGEXP", value.to_string()),
-        CompareOp::Less => ("<", value.to_string()),
-        CompareOp::Greater => (">", value.to_string()),
-        CompareOp::LessEqual => ("<=", value.to_string()),
-        CompareOp::GreaterEqual => (">=", value.to_string()),
-        CompareOp::Contains => ("LIKE", format!("%{value}%")),
-        CompareOp::StartsWith => ("LIKE", format!("{value}%")),
+        CompareOp::Equal => ("= ?", value.to_string()),
+        CompareOp::NotEqual => ("!= ?", value.to_string()),
+        CompareOp::Regex => ("REGEXP ?", value.to_string()),
+        CompareOp::NotRegex => ("NOT REGEXP ?", value.to_string()),
+        CompareOp::Less => ("< ?", value.to_string()),
+        CompareOp::Greater => ("> ?", value.to_string()),
+        CompareOp::LessEqual => ("<= ?", value.to_string()),
+        CompareOp::GreaterEqual => (">= ?", value.to_string()),
+        CompareOp::Contains => (
+            "LIKE ? ESCAPE '\\'",
+            format!("%{}%", escape_like_value(value)),
+        ),
+        CompareOp::StartsWith => (
+            "LIKE ? ESCAPE '\\'",
+            format!("{}%", escape_like_value(value)),
+        ),
     }
 }
 
