@@ -3,6 +3,8 @@
 mod common;
 
 use common::TestClient;
+use rmpd_protocol::commands::playlists;
+use rmpd_protocol::state::AppState;
 
 #[test]
 fn test_listplaylists_command() {
@@ -149,4 +151,59 @@ fn test_save_replace_mode() {
     // save with replace mode
     let response = "OK\n";
     assert!(TestClient::is_ok(response));
+}
+
+/// Build an `AppState` backed by fresh temp music/playlist directories,
+/// mirroring the setup in `stored_playlist_idle.rs`.
+fn new_test_state() -> (tempfile::TempDir, AppState) {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let music = tmp.path().join("music");
+    let playlists_dir = tmp.path().join("playlists");
+    std::fs::create_dir_all(&music).unwrap();
+    std::fs::create_dir_all(&playlists_dir).unwrap();
+    let state = AppState::with_all_paths(
+        tmp.path().join("db").to_str().unwrap().to_string(),
+        music.to_str().unwrap().to_string(),
+        playlists_dir.to_str().unwrap().to_string(),
+    );
+    (tmp, state)
+}
+
+#[tokio::test]
+async fn test_playlist_name_traversal_rejected() {
+    // save/load/rm must reject a traversal name before touching the filesystem.
+    let (_tmp, state) = new_test_state();
+
+    let resp = playlists::handle_save_command(&state, "../evil", None).await;
+    assert!(
+        TestClient::is_error(&resp) && resp.contains("[2@0]"),
+        "save with traversal name must ACK [2@0], got: {resp}"
+    );
+
+    let resp = playlists::handle_load_command(&state, "../evil", None, None).await;
+    assert!(
+        TestClient::is_error(&resp) && resp.contains("[2@0]"),
+        "load with traversal name must ACK [2@0], got: {resp}"
+    );
+
+    let resp = playlists::handle_rm_command(&state, "../evil").await;
+    assert!(
+        TestClient::is_error(&resp) && resp.contains("[2@0]"),
+        "rm with traversal name must ACK [2@0], got: {resp}"
+    );
+}
+
+#[tokio::test]
+async fn test_playlist_name_normal_round_trips() {
+    // A normal name must still save and load without triggering validation.
+    let (_tmp, state) = new_test_state();
+
+    let resp = playlists::handle_save_command(&state, "My Playlist", None).await;
+    assert!(TestClient::is_ok(&resp), "save should succeed, got: {resp}");
+
+    let resp = playlists::handle_load_command(&state, "My Playlist", None, None).await;
+    assert!(TestClient::is_ok(&resp), "load should succeed, got: {resp}");
+
+    let resp = playlists::handle_rm_command(&state, "My Playlist").await;
+    assert!(TestClient::is_ok(&resp), "rm should succeed, got: {resp}");
 }

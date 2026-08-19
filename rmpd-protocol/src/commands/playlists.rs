@@ -29,6 +29,21 @@ fn notify_stored_playlist(state: &AppState) {
         .emit(rmpd_core::event::Event::StoredPlaylistChanged);
 }
 
+/// Reject playlist names that could escape `playlist_directory` or otherwise
+/// misbehave, mirroring MPD's `playlist_check_name()` (playlist_file.c).
+pub(crate) fn validate_playlist_name(name: &str) -> Result<(), String> {
+    if name.is_empty()
+        || name.contains('/')
+        || name.contains('\\')
+        || name == "."
+        || name == ".."
+        || name.chars().any(|c| c.is_control())
+    {
+        return Err("Bad playlist name".to_string());
+    }
+    Ok(())
+}
+
 /// Parse an .m3u playlist file and return the list of relative paths.
 /// Lines starting with '#' are comments and are skipped.
 fn read_m3u_playlist(playlist_dir: &str, name: &str) -> Result<Vec<String>, String> {
@@ -308,6 +323,10 @@ pub async fn handle_save_command(
 ) -> String {
     use crate::parser::SaveMode;
 
+    if let Err(e) = validate_playlist_name(name) {
+        return ResponseBuilder::error(ACK_ERROR_ARG, 0, "save", &e);
+    }
+
     let playlist_dir = match &state.playlist_dir {
         Some(d) => d.clone(),
         None => {
@@ -401,6 +420,10 @@ pub async fn handle_load_command(
     range: Option<(u32, u32)>,
     position: Option<u32>,
 ) -> String {
+    if let Err(e) = validate_playlist_name(name) {
+        return ResponseBuilder::error(ACK_ERROR_ARG, 0, "load", &e);
+    }
+
     let playlist_dir = match &state.playlist_dir {
         Some(d) => d.clone(),
         None => {
@@ -525,6 +548,10 @@ pub async fn handle_searchaddpl_command(
     tag: &str,
     value: &str,
 ) -> String {
+    if let Err(e) = validate_playlist_name(name) {
+        return ResponseBuilder::error(ACK_ERROR_ARG, 0, "searchaddpl", &e);
+    }
+
     let state = state.clone();
     let name = name.to_string();
     let tag = tag.to_string();
@@ -613,6 +640,10 @@ pub async fn handle_listplaylist_command(
     name: &str,
     range: Option<(u32, u32)>,
 ) -> String {
+    if let Err(e) = validate_playlist_name(name) {
+        return ResponseBuilder::error(ACK_ERROR_ARG, 0, "listplaylist", &e);
+    }
+
     let playlist_dir = match &state.playlist_dir {
         Some(d) => d.clone(),
         None => {
@@ -657,6 +688,10 @@ pub async fn handle_listplaylistinfo_command(
     name: &str,
     range: Option<(u32, u32)>,
 ) -> String {
+    if let Err(e) = validate_playlist_name(name) {
+        return ResponseBuilder::error(ACK_ERROR_ARG, 0, "listplaylistinfo", &e);
+    }
+
     let state = state.clone();
     let name = name.to_string();
     match tokio::task::spawn_blocking(move || {
@@ -716,6 +751,10 @@ pub async fn handle_playlistadd_command(
     uri: &str,
     position: Option<u32>,
 ) -> String {
+    if let Err(e) = validate_playlist_name(name) {
+        return ResponseBuilder::error(ACK_ERROR_ARG, 0, "playlistadd", &e);
+    }
+
     let state = state.clone();
     let name = name.to_string();
     let uri = uri.to_string();
@@ -804,6 +843,10 @@ pub async fn handle_playlistadd_command(
 }
 
 pub async fn handle_playlistclear_command(state: &AppState, name: &str) -> String {
+    if let Err(e) = validate_playlist_name(name) {
+        return ResponseBuilder::error(ACK_ERROR_ARG, 0, "playlistclear", &e);
+    }
+
     let playlist_dir = match &state.playlist_dir {
         Some(d) => d.clone(),
         None => {
@@ -845,6 +888,10 @@ pub async fn handle_playlistclear_command(state: &AppState, name: &str) -> Strin
 }
 
 pub async fn handle_playlistdelete_command(state: &AppState, name: &str, position: u32) -> String {
+    if let Err(e) = validate_playlist_name(name) {
+        return ResponseBuilder::error(ACK_ERROR_ARG, 0, "playlistdelete", &e);
+    }
+
     let playlist_dir = match &state.playlist_dir {
         Some(d) => d.clone(),
         None => {
@@ -902,6 +949,10 @@ pub async fn handle_playlistmove_command(
     from: u32,
     to: u32,
 ) -> String {
+    if let Err(e) = validate_playlist_name(name) {
+        return ResponseBuilder::error(ACK_ERROR_ARG, 0, "playlistmove", &e);
+    }
+
     let playlist_dir = match &state.playlist_dir {
         Some(d) => d.clone(),
         None => {
@@ -957,6 +1008,10 @@ pub async fn handle_playlistmove_command(
 }
 
 pub async fn handle_rm_command(state: &AppState, name: &str) -> String {
+    if let Err(e) = validate_playlist_name(name) {
+        return ResponseBuilder::error(ACK_ERROR_ARG, 0, "rm", &e);
+    }
+
     let playlist_dir = match &state.playlist_dir {
         Some(d) => d.clone(),
         None => {
@@ -991,6 +1046,13 @@ pub async fn handle_rm_command(state: &AppState, name: &str) -> String {
 }
 
 pub async fn handle_rename_command(state: &AppState, from: &str, to: &str) -> String {
+    if let Err(e) = validate_playlist_name(from) {
+        return ResponseBuilder::error(ACK_ERROR_ARG, 0, "rename", &e);
+    }
+    if let Err(e) = validate_playlist_name(to) {
+        return ResponseBuilder::error(ACK_ERROR_ARG, 0, "rename", &e);
+    }
+
     let playlist_dir = match &state.playlist_dir {
         Some(d) => d.clone(),
         None => {
@@ -1036,6 +1098,10 @@ pub async fn handle_searchplaylist_command(
     tag: &str,
     value: &str,
 ) -> String {
+    if let Err(e) = validate_playlist_name(name) {
+        return ResponseBuilder::error(ACK_ERROR_ARG, 0, "searchplaylist", &e);
+    }
+
     let state = state.clone();
     let name = name.to_string();
     let tag = tag.to_string();
@@ -1088,6 +1154,10 @@ pub async fn handle_searchplaylist_command(
 }
 
 pub async fn handle_playlistlength_command(state: &AppState, name: &str) -> String {
+    if let Err(e) = validate_playlist_name(name) {
+        return ResponseBuilder::error(ACK_ERROR_ARG, 0, "playlistlength", &e);
+    }
+
     let state = state.clone();
     let name = name.to_string();
     match tokio::task::spawn_blocking(move || {
