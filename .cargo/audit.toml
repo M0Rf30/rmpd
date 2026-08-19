@@ -9,4 +9,8 @@ ignore = [
     "RUSTSEC-2024-0436",
     # lru unsoundness - used by tantivy, tracking upstream fix
     "RUSTSEC-2026-0002",
+    # lru pop() panic-safety unsoundness (fixed in lru 0.18.2) - tantivy 0.26.1
+    # pins lru ^0.16.3, so it cannot be upgraded from here; unreachable without
+    # catch_unwind around a key type whose Drop panics.
+    "RUSTSEC-2026-0253",
 ]
