@@ -155,3 +155,19 @@ fn test_cleartagid_command() {
     let response = "OK\n";
     assert!(TestClient::is_ok(response));
 }
+
+#[test]
+fn test_addid_out_of_range_position_is_error() {
+    // addid with position > queue length must ACK (Bad song index), not
+    // silently clamp to an append.
+    let response = "ACK [2@0] {addid} Bad song index\n";
+    assert!(TestClient::is_error(response));
+}
+
+#[test]
+fn test_inverted_range_is_error() {
+    // Any START:END command (delete, move, playlistinfo, ...) with an
+    // inverted range (start > end) must ACK, not silently reach the queue.
+    let response = "ACK [2@0] {delete} Bad song index\n";
+    assert!(TestClient::is_error(response));
+}
