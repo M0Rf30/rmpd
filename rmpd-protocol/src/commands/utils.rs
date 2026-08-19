@@ -9,16 +9,7 @@ pub const ACK_ERROR_PASSWORD: i32 = 3;
 pub const ACK_ERROR_PERMISSION: i32 = 4;
 pub const ACK_ERROR_UNKNOWN: i32 = 5;
 pub const ACK_ERROR_NO_EXIST: i32 = 50;
-/// TODO: Remove when playlist size limit enforcement is implemented
-#[allow(dead_code)]
-pub const ACK_ERROR_PLAYLIST_MAX: i32 = 51;
 pub const ACK_ERROR_SYS: i32 = 52;
-/// TODO: Remove when playlist loading error handling is implemented
-#[allow(dead_code)]
-pub const ACK_ERROR_PLAYLIST_LOAD: i32 = 53;
-/// TODO: Remove when database update conflict detection is implemented
-#[allow(dead_code)]
-pub const ACK_ERROR_UPDATE_ALREADY: i32 = 54;
 pub const ACK_ERROR_PLAYER_SYNC: i32 = 55;
 pub const ACK_ERROR_EXIST: i32 = 56;
 
@@ -39,51 +30,30 @@ pub fn open_db(
 
 pub use rmpd_core::time::format_iso8601 as format_iso8601_timestamp;
 
-/// Build a FilterExpression from multiple tag/value pairs joined with AND.
-/// Panics if `filters` is empty.
-pub fn build_and_filter(filters: &[(String, String)]) -> rmpd_core::filter::FilterExpression {
-    use rmpd_core::filter::{CompareOp, FilterExpression};
-
-    let mut expr = FilterExpression::Compare {
-        tag: filters[0].0.clone(),
-        op: CompareOp::Equal,
-        value: filters[0].1.clone(),
-    };
-
-    for filter in &filters[1..] {
-        let next_expr = FilterExpression::Compare {
-            tag: filter.0.clone(),
-            op: CompareOp::Equal,
-            value: filter.1.clone(),
-        };
-        expr = FilterExpression::And(Box::new(expr), Box::new(next_expr));
-    }
-
-    expr
-}
-
 /// Build a FilterExpression from multiple tag/value pairs joined with AND,
-/// using Contains (LIKE) for case-insensitive substring matching (for `search`).
+/// using `op` as the comparison for every pair (`Equal` for exact matches,
+/// `Contains` for case-insensitive substring matching as used by `search`).
 /// Panics if `filters` is empty.
-pub fn build_search_filter(filters: &[(String, String)]) -> rmpd_core::filter::FilterExpression {
-    use rmpd_core::filter::{CompareOp, FilterExpression};
+pub fn build_filter(
+    filters: &[(String, String)],
+    op: rmpd_core::filter::CompareOp,
+) -> rmpd_core::filter::FilterExpression {
+    use rmpd_core::filter::FilterExpression;
 
-    let mut expr = FilterExpression::Compare {
+    let base = FilterExpression::Compare {
         tag: filters[0].0.clone(),
-        op: CompareOp::Contains,
+        op,
         value: filters[0].1.clone(),
     };
 
-    for filter in &filters[1..] {
+    filters[1..].iter().fold(base, |expr, filter| {
         let next_expr = FilterExpression::Compare {
             tag: filter.0.clone(),
-            op: CompareOp::Contains,
+            op,
             value: filter.1.clone(),
         };
-        expr = FilterExpression::And(Box::new(expr), Box::new(next_expr));
-    }
-
-    expr
+        FilterExpression::And(Box::new(expr), Box::new(next_expr))
+    })
 }
 
 /// Apply a range/window filter to a slice, returning the filtered sub-slice.
@@ -99,6 +69,32 @@ pub fn apply_range<T>(items: &[T], range: Option<(u32, u32)>) -> &[T] {
     } else {
         items
     }
+}
+
+/// Insert `song` into the queue at `position`, rejecting an out-of-range
+/// position instead of letting `Queue::add_at` silently clamp it to an
+/// append. Real MPD replies `Bad song index` when `position > queue length`;
+/// `position == queue length` (append) and `None` (append) still succeed.
+/// The length check and the insert share one write-lock acquisition so a
+/// concurrent `add`/`addid` can't race between "check" and "act".
+pub async fn add_at_checked(
+    state: &crate::state::AppState,
+    song: rmpd_core::song::Song,
+    position: Option<u32>,
+    command: &str,
+) -> Result<u32, String> {
+    let mut queue = state.queue.write().await;
+    if let Some(pos) = position
+        && pos as usize > queue.len()
+    {
+        return Err(ResponseBuilder::error(
+            ACK_ERROR_ARG,
+            0,
+            command,
+            "Bad song index",
+        ));
+    }
+    Ok(queue.add_at(song, position))
 }
 
 /// Append queue item metadata (priority, range) to the response.

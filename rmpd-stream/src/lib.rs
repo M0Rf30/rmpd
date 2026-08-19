@@ -49,7 +49,16 @@ impl HttpSource {
     /// the server responds with a non-success status.
     pub fn connect(url: &str) -> io::Result<Self> {
         let client = reqwest::blocking::Client::builder()
-            .timeout(None) // streams are open-ended; no overall deadline
+            // reqwest's blocking client has no dedicated "total request"
+            // timeout: `.timeout()` bounds the initial connect+headers wait
+            // *and*, per call, each subsequent `Read::read()` on the body
+            // (reqwest's blocking::Response::read wraps every read in this
+            // same deadline, resetting it each time). So this value acts as
+            // a per-read/idle deadline, not a cap on total stream duration -
+            // a server that keeps sending stays connected indefinitely; one
+            // that goes silent mid-stream is dropped within this window
+            // instead of wedging the decoder thread forever.
+            .timeout(Duration::from_secs(25))
             .connect_timeout(Duration::from_secs(15))
             .user_agent("rmpd")
             .build()

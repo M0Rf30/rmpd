@@ -77,25 +77,31 @@ pub async fn run(bind_address: String, config: Config) -> Result<()> {
         .set_outputs_from_config(&config.output, &config.audio.default_output)
         .await;
 
-    // Load state from file if it exists
+    // Load state from file if it exists. A failure here (corrupt file, or
+    // the blocking load task itself panicking) must not prevent the daemon
+    // from starting; it just means playback state is not restored. The three
+    // outcomes are handled separately so a panicking load can never
+    // masquerade as "no saved state was present".
     let state_file = StateFile::new(state_file_path.clone());
-    let loaded_state = match tokio::task::spawn_blocking(move || state_file.load()).await {
-        Ok(result) => result,
-        Err(e) => {
-            error!("state load task failed: {}", e);
-            Ok(None)
+    match tokio::task::spawn_blocking(move || state_file.load()).await {
+        Ok(Ok(Some(saved_state))) => {
+            info!("restoring state from file");
+            restore_state(
+                &state,
+                saved_state,
+                &db_path,
+                &music_dir,
+                config.audio.restore_paused,
+            )
+            .await;
         }
-    };
-    if let Ok(Some(saved_state)) = loaded_state {
-        info!("restoring state from file");
-        restore_state(
-            &state,
-            saved_state,
-            &db_path,
-            &music_dir,
-            config.audio.restore_paused,
-        )
-        .await;
+        Ok(Ok(None)) => {}
+        Ok(Err(e)) => {
+            error!("failed to load state file: {}", e);
+        }
+        Err(e) => {
+            error!("state restoration skipped: load task failed: {}", e);
+        }
     }
 
     // Create shutdown channel

@@ -28,7 +28,7 @@ fn strip_music_dir_prefix<'a>(path: &'a str, music_dir: Option<&str>) -> &'a str
 }
 
 use super::utils::{
-    ACK_ERROR_ARG, ACK_ERROR_NO_EXIST, ACK_ERROR_SYS, apply_range, build_and_filter,
+    ACK_ERROR_ARG, ACK_ERROR_NO_EXIST, ACK_ERROR_SYS, apply_range, build_filter,
     format_iso8601_timestamp, open_db,
 };
 
@@ -389,7 +389,7 @@ pub async fn handle_count_command(
                 }
             }
         } else {
-            let expr = build_and_filter(&filters);
+            let expr = build_filter(&filters, rmpd_core::filter::CompareOp::Equal);
             match db.find_songs_filter(&expr) {
                 Ok(s) => s,
                 Err(e) => {

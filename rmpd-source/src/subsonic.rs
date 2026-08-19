@@ -238,8 +238,23 @@ impl SubsonicSource {
     /// codec/format. `SourceRegistry::resolve_stream_uri` strips that extension
     /// to recover the bare id.
     fn map_song(&self, c: &opensubsonic::data::Child) -> Song {
-        let artist = c.artist.as_deref().unwrap_or("Unknown Artist");
-        let album = c.album.as_deref().unwrap_or("Unknown Album");
+        self.map_song_with_fallback(c, None, None)
+    }
+
+    /// Like [`map_song`](Self::map_song), but fills in artist/album from
+    /// `fallback_artist`/`fallback_album` when `c` omits them (some servers
+    /// only populate those on `getSong`/`search3`, not on `getAlbum`
+    /// children). Resolves the fallback inline instead of cloning `c`.
+    fn map_song_with_fallback(
+        &self,
+        c: &opensubsonic::data::Child,
+        fallback_artist: Option<&str>,
+        fallback_album: Option<&str>,
+    ) -> Song {
+        let artist_ref = c.artist.as_deref().or(fallback_artist);
+        let album_ref = c.album.as_deref().or(fallback_album);
+        let artist = artist_ref.unwrap_or("Unknown Artist");
+        let album = album_ref.unwrap_or("Unknown Album");
 
         // Leaf = raw id, plus a file extension (from the server `suffix`, or
         // derived from the MIME `content_type`) so clients can infer the codec.
@@ -260,13 +275,13 @@ impl SubsonicSource {
         // title is always present on Child
         tags.push((intern_tag_key("title"), c.title.clone()));
 
-        if let Some(a) = &c.artist {
-            tags.push((intern_tag_key("artist"), a.clone()));
+        if let Some(a) = artist_ref {
+            tags.push((intern_tag_key("artist"), a.to_owned()));
             // albumartist defaults to artist when no dedicated field is available
-            tags.push((intern_tag_key("albumartist"), a.clone()));
+            tags.push((intern_tag_key("albumartist"), a.to_owned()));
         }
-        if let Some(alb) = &c.album {
-            tags.push((intern_tag_key("album"), alb.clone()));
+        if let Some(alb) = album_ref {
+            tags.push((intern_tag_key("album"), alb.to_owned()));
         }
         if let Some(t) = c.track {
             tags.push((intern_tag_key("track"), t.to_string()));
@@ -310,14 +325,7 @@ impl SubsonicSource {
         fallback_artist: Option<&str>,
         fallback_album: Option<&str>,
     ) -> Song {
-        let mut c = c.clone();
-        if c.artist.is_none() {
-            c.artist = fallback_artist.map(str::to_owned);
-        }
-        if c.album.is_none() {
-            c.album = fallback_album.map(str::to_owned);
-        }
-        self.map_song(&c)
+        self.map_song_with_fallback(c, fallback_artist, fallback_album)
     }
 }
 
