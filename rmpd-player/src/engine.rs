@@ -620,17 +620,14 @@ impl PlaybackEngine {
                     match cmd {
                         PlaybackCommand::Seek(position) => {
                             debug!("seeking to position: {:.2}s", position);
-                            if let Err(e) = decoder.seek(position) {
-                                error!("seek failed: {}", e);
-                            } else {
-                                // Reset sample counter after seek
-                                total_samples_played =
-                                    (position * samples_per_second as f64) as u64;
-                                // Emit position change event
-                                event_bus.emit(Event::PositionChanged(
-                                    std::time::Duration::from_secs_f64(position),
-                                ));
-                            }
+                            Self::apply_seek_result(
+                                decoder.seek(position),
+                                "",
+                                position,
+                                &mut total_samples_played,
+                                samples_per_second,
+                                &event_bus,
+                            );
                         }
                     }
                 }
@@ -744,15 +741,14 @@ impl PlaybackEngine {
                                 // abandon the blend so the user hears the new
                                 // position without the incoming track underneath.
                                 if let Ok(PlaybackCommand::Seek(pos)) = command_rx.try_recv() {
-                                    if let Err(e) = decoder.seek(pos) {
-                                        error!("seek failed during crossfade: {}", e);
-                                    } else {
-                                        total_samples_played =
-                                            (pos * samples_per_second as f64) as u64;
-                                        event_bus.emit(Event::PositionChanged(
-                                            std::time::Duration::from_secs_f64(pos),
-                                        ));
-                                    }
+                                    Self::apply_seek_result(
+                                        decoder.seek(pos),
+                                        " during crossfade",
+                                        pos,
+                                        &mut total_samples_played,
+                                        samples_per_second,
+                                        &event_bus,
+                                    );
                                     // next_dec is dropped here; next_song slot is
                                     // already empty so the protocol must re-feed.
                                     break 'cf;
@@ -974,6 +970,37 @@ impl PlaybackEngine {
         }
 
         Ok(())
+    }
+
+    /// Apply a `PlaybackCommand::Seek` outcome to the running sample counter
+    /// and (re)broadcast the resulting position.
+    ///
+    /// On success, `counter` is resynchronised to `target_secs`. On failure,
+    /// `counter` is left untouched: `Decoder` exposes no position/timestamp
+    /// getter to recover the decoder's actual read position, and a failed
+    /// accurate seek can leave the underlying stream scanned past its
+    /// pre-seek location without rewinding it, so guessing a new value would
+    /// just trade one wrong position for another. Either way
+    /// `Event::PositionChanged` is (re)emitted with whatever `counter` now
+    /// says, so a client that already assumed the seek succeeded is
+    /// corrected immediately instead of drifting until the next throttled
+    /// tick.
+    fn apply_seek_result(
+        result: Result<()>,
+        log_suffix: &str,
+        target_secs: f64,
+        counter: &mut u64,
+        units_per_second: u64,
+        event_bus: &EventBus,
+    ) {
+        match result {
+            Ok(()) => *counter = (target_secs * units_per_second as f64) as u64,
+            Err(e) => error!("seek failed{log_suffix}: {e}"),
+        }
+        let elapsed = *counter as f64 / units_per_second as f64;
+        event_bus.emit(Event::PositionChanged(std::time::Duration::from_secs_f64(
+            elapsed,
+        )));
     }
 
     fn create_output(
