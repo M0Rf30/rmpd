@@ -170,7 +170,7 @@ fn sinc_params(quality: ResamplerQuality) -> SincInterpolationParameters {
     };
     SincInterpolationParameters {
         sinc_len,
-        f_cutoff: calculate_cutoff(sinc_len, window),
+        f_cutoff: Some(calculate_cutoff(sinc_len, window)),
         interpolation,
         oversampling_factor,
         window,
