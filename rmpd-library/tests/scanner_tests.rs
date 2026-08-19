@@ -62,8 +62,10 @@ fn scan_with_symlink_cycle_terminates() {
 #[tokio::test]
 async fn watcher_stores_relative_path_for_new_file() {
     let temp_dir = TempDir::new().expect("create temp dir");
-    let music_dir = temp_dir.path().join("music");
-    std::fs::create_dir(&music_dir).expect("create music dir");
+    std::fs::create_dir(temp_dir.path().join("music")).expect("create music dir");
+    // Resolve symlinks (macOS puts temp dirs behind /var -> /private/var), so the
+    // watcher's music-dir prefix matches the paths the OS reports for events.
+    let music_dir = std::fs::canonicalize(temp_dir.path().join("music")).expect("canonicalize");
 
     let db_path = temp_dir.path().join("test.db");
     let database = Database::open(db_path.to_str().unwrap()).expect("open database");
@@ -81,16 +83,24 @@ async fn watcher_stores_relative_path_for_new_file() {
         .join("tests/fixtures/samples/basic.flac");
     std::fs::copy(&fixture, music_dir.join("song.flac")).expect("copy fixture into music dir");
 
-    // Debounce window is 300ms; wait past it plus processing time.
-    tokio::time::sleep(Duration::from_millis(800)).await;
+    // Debounce is 300ms, but filesystem-event latency varies by backend
+    // (inotify vs FSEvents), so poll instead of sleeping a fixed amount.
+    let mut song = None;
+    for _ in 0..60 {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        song = db
+            .lock()
+            .await
+            .get_song_by_path("song.flac")
+            .expect("query by relative path");
+        if song.is_some() {
+            break;
+        }
+    }
 
-    let db_guard = db.lock().await;
-    let song = db_guard
-        .get_song_by_path("song.flac")
-        .expect("query by relative path")
-        .expect(
-            "watcher should store the new file under its music-dir-relative \
-             path, not the absolute path returned by extract_from_file",
-        );
+    let song = song.expect(
+        "watcher should store the new file under its music-dir-relative \
+         path, not the absolute path returned by extract_from_file",
+    );
     assert_eq!(song.path.as_str(), "song.flac");
 }
