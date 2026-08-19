@@ -1,6 +1,6 @@
 //! Shared `pub(crate)` helpers for protocol command handlers.
 
-use crate::commands::utils::{ACK_ERROR_ARG, ACK_ERROR_SYS, build_and_filter, build_search_filter};
+use crate::commands::utils::{ACK_ERROR_ARG, ACK_ERROR_SYS, build_filter};
 use crate::response::ResponseBuilder;
 use crate::state::AppState;
 use rmpd_core::event::Event;
@@ -139,9 +139,9 @@ pub(crate) fn resolve_filters(
         }
     } else {
         let expr = if case_sensitive {
-            build_and_filter(filters)
+            build_filter(filters, rmpd_core::filter::CompareOp::Equal)
         } else {
-            build_search_filter(filters)
+            build_filter(filters, rmpd_core::filter::CompareOp::Contains)
         };
         db.find_songs_filter(&expr).map_err(|e| {
             ResponseBuilder::error(ACK_ERROR_SYS, 0, command, &format!("query error: {e}"))

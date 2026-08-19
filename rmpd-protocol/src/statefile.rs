@@ -3,7 +3,7 @@ use rmpd_core::queue::Queue;
 use rmpd_core::state::{PlayerState, PlayerStatus, ReplayGainMode};
 use std::fs;
 use std::path::Path;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 /// Save and restore MPD-compatible state file
 #[derive(Debug)]
@@ -145,7 +145,10 @@ impl StateFile {
 
                     match key {
                         "sw_volume" => {
-                            state.volume = value.parse().unwrap_or(100);
+                            state.volume = value.parse().unwrap_or_else(|_| {
+                                warn!("invalid sw_volume value in state file: {value:?}");
+                                100
+                            });
                         }
                         "state" => {
                             state.state = match value {
@@ -156,10 +159,16 @@ impl StateFile {
                             };
                         }
                         "current" => {
-                            state.current_position = value.parse().ok();
+                            state.current_position = value.parse().ok().or_else(|| {
+                                warn!("invalid current value in state file: {value:?}");
+                                None
+                            });
                         }
                         "time" => {
-                            state.elapsed_seconds = value.parse().ok();
+                            state.elapsed_seconds = value.parse().ok().or_else(|| {
+                                warn!("invalid time value in state file: {value:?}");
+                                None
+                            });
                         }
                         "random" => {
                             state.random = value == "1";
@@ -182,13 +191,22 @@ impl StateFile {
                             };
                         }
                         "crossfade" => {
-                            state.crossfade = value.parse().unwrap_or(0);
+                            state.crossfade = value.parse().unwrap_or_else(|_| {
+                                warn!("invalid crossfade value in state file: {value:?}");
+                                0
+                            });
                         }
                         "mixrampdb" => {
-                            state.mixramp_db = value.parse().unwrap_or(0.0);
+                            state.mixramp_db = value.parse().unwrap_or_else(|_| {
+                                warn!("invalid mixrampdb value in state file: {value:?}");
+                                0.0
+                            });
                         }
                         "mixrampdelay" => {
-                            state.mixramp_delay = value.parse().unwrap_or(-1.0);
+                            state.mixramp_delay = value.parse().unwrap_or_else(|_| {
+                                warn!("invalid mixrampdelay value in state file: {value:?}");
+                                -1.0
+                            });
                         }
                         "replay_gain_mode" => {
                             state.replay_gain_mode = ReplayGainMode::parse_mode(value);
