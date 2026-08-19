@@ -8,8 +8,8 @@ use crate::response::ResponseBuilder;
 use crate::state::AppState;
 
 use super::utils::{
-    ACK_ERROR_ARG, ACK_ERROR_NO_EXIST, ACK_ERROR_SYS, add_queue_item_metadata, apply_range,
-    open_db, prepare_song_for_playback, update_next_song,
+    ACK_ERROR_ARG, ACK_ERROR_NO_EXIST, ACK_ERROR_SYS, add_at_checked, add_queue_item_metadata,
+    apply_range, open_db, prepare_song_for_playback, update_next_song,
 };
 
 pub async fn handle_add_command(state: &AppState, uri: &str, position: Option<u32>) -> String {
@@ -25,9 +25,13 @@ pub async fn handle_add_command(state: &AppState, uri: &str, position: Option<u3
         if scheme != "file" {
             let stream_song = helpers::create_stream_song(uri);
             // `add` returns no Id (unlike `addid`) — MPD replies with bare OK.
-            state.queue.write().await.add_at(stream_song, position);
-            helpers::update_playlist_version(state).await;
-            return ResponseBuilder::new().ok();
+            return match add_at_checked(state, stream_song, position, "add").await {
+                Ok(_) => {
+                    helpers::update_playlist_version(state).await;
+                    ResponseBuilder::new().ok()
+                }
+                Err(resp) => resp,
+            };
         }
     }
     // Get song from database (file:// or relative path) — run the blocking
@@ -69,10 +73,13 @@ pub async fn handle_add_command(state: &AppState, uri: &str, position: Option<u3
     };
 
     // `add` returns no Id (unlike `addid`) — MPD replies with bare OK.
-    state.queue.write().await.add_at(song, position);
-    helpers::update_playlist_version(state).await;
-
-    ResponseBuilder::new().ok()
+    match add_at_checked(state, song, position, "add").await {
+        Ok(_) => {
+            helpers::update_playlist_version(state).await;
+            ResponseBuilder::new().ok()
+        }
+        Err(resp) => resp,
+    }
 }
 
 pub async fn handle_clear_command(state: &AppState) -> String {
@@ -148,11 +155,15 @@ pub async fn handle_addid_command(state: &AppState, uri: &str, position: Option<
         }
         if scheme != "file" {
             let stream_song = helpers::create_stream_song(uri);
-            let id = state.queue.write().await.add_at(stream_song, position);
-            helpers::update_playlist_version(state).await;
-            let mut resp = ResponseBuilder::new();
-            resp.field("Id", id);
-            return resp.ok();
+            return match add_at_checked(state, stream_song, position, "addid").await {
+                Ok(id) => {
+                    helpers::update_playlist_version(state).await;
+                    let mut resp = ResponseBuilder::new();
+                    resp.field("Id", id);
+                    resp.ok()
+                }
+                Err(resp) => resp,
+            };
         }
     }
     // Get song from database (file:// or relative path) — run the blocking
@@ -194,12 +205,15 @@ pub async fn handle_addid_command(state: &AppState, uri: &str, position: Option<
     };
 
     // Add to queue at specific position
-    let id = state.queue.write().await.add_at(song, position);
-    helpers::update_playlist_version(state).await;
-
-    let mut resp = ResponseBuilder::new();
-    resp.field("Id", id);
-    resp.ok()
+    match add_at_checked(state, song, position, "addid").await {
+        Ok(id) => {
+            helpers::update_playlist_version(state).await;
+            let mut resp = ResponseBuilder::new();
+            resp.field("Id", id);
+            resp.ok()
+        }
+        Err(resp) => resp,
+    }
 }
 
 pub async fn handle_deleteid_command(state: &AppState, id: u32) -> String {

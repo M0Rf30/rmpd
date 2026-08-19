@@ -1535,7 +1535,9 @@ fn parse_u8(input: &mut &str) -> PResult<u8> {
 /// argument, so the whole token may arrive as `"5:10"`.
 fn parse_range(input: &mut &str) -> PResult<(u32, u32)> {
     let tok = parse_quoted_or_unquoted.parse_next(input)?;
-    range_parts(&tok).ok_or(ErrMode::Backtrack(ContextError::default()))
+    // A range token is unambiguous once present, so a malformed or inverted
+    // range must hard-fail (Cut) rather than backtrack into "no range given".
+    range_parts(&tok).ok_or(ErrMode::Cut(ContextError::default()))
 }
 
 /// Parse a range that requires a colon (for commands where a bare number
@@ -1545,19 +1547,22 @@ fn parse_colon_range(input: &mut &str) -> PResult<(u32, u32)> {
     if !tok.contains(':') {
         return Err(ErrMode::Backtrack(ContextError::default()));
     }
-    range_parts(&tok).ok_or(ErrMode::Backtrack(ContextError::default()))
+    range_parts(&tok).ok_or(ErrMode::Cut(ContextError::default()))
 }
 
 fn parse_delete_target(input: &mut &str) -> PResult<DeleteTarget> {
     let tok = parse_quoted_or_unquoted.parse_next(input)?;
     match tok.split_once(':') {
         Some((a, b)) => {
-            let start = a
+            let start: u32 = a
                 .parse()
                 .map_err(|_| ErrMode::Cut(ContextError::default()))?;
-            let end = b
+            let end: u32 = b
                 .parse()
                 .map_err(|_| ErrMode::Cut(ContextError::default()))?;
+            if start > end {
+                return Err(ErrMode::Cut(ContextError::default()));
+            }
             Ok(DeleteTarget::Range(start, end))
         }
         None => {
@@ -1573,12 +1578,15 @@ fn parse_move_from(input: &mut &str) -> PResult<MoveFrom> {
     let tok = parse_quoted_or_unquoted.parse_next(input)?;
     match tok.split_once(':') {
         Some((a, b)) => {
-            let start = a
+            let start: u32 = a
                 .parse()
                 .map_err(|_| ErrMode::Cut(ContextError::default()))?;
-            let end = b
+            let end: u32 = b
                 .parse()
                 .map_err(|_| ErrMode::Cut(ContextError::default()))?;
+            if start > end {
+                return Err(ErrMode::Cut(ContextError::default()));
+            }
             Ok(MoveFrom::Range(start, end))
         }
         None => {
@@ -1592,9 +1600,9 @@ fn parse_move_from(input: &mut &str) -> PResult<MoveFrom> {
 
 /// Parse the content of a range token (`"START:END"`, `"START:"`, or bare
 /// `"NUM"`) into a half-open `[start, end)` pair. A bare number yields
-/// `[NUM, NUM+1)`. Returns `None` on malformed input.
+/// `[NUM, NUM+1)`. Returns `None` on malformed input or when `start > end`.
 fn range_parts(s: &str) -> Option<(u32, u32)> {
-    match s.split_once(':') {
+    let (start, end) = match s.split_once(':') {
         Some((a, b)) => {
             let start: u32 = a.parse().ok()?;
             let end = if b.is_empty() {
@@ -1602,13 +1610,19 @@ fn range_parts(s: &str) -> Option<(u32, u32)> {
             } else {
                 b.parse().ok()?
             };
-            Some((start, end))
+            (start, end)
         }
         None => {
             let start: u32 = s.parse().ok()?;
-            Some((start, start.saturating_add(1)))
+            (start, start.saturating_add(1))
         }
+    };
+    // MPD rejects inverted ranges (e.g. "5:2") rather than treating them as
+    // empty or auto-swapping the bounds.
+    if start > end {
+        return None;
     }
+    Some((start, end))
 }
 
 /// Parse the filters, optional `sort TAG`, and optional `window START:END` for
@@ -2129,5 +2143,20 @@ mod tests {
                 name: "rating".to_string(),
             }
         );
+    }
+
+    #[test]
+    fn test_range_parts_rejects_inverted_range() {
+        assert_eq!(range_parts("5:2"), None);
+        assert_eq!(range_parts("2:5"), Some((2, 5)));
+        assert_eq!(range_parts("3:3"), Some((3, 3)));
+        assert_eq!(range_parts("5:"), Some((5, u32::MAX)));
+    }
+
+    #[test]
+    fn test_inverted_range_rejected_by_commands() {
+        assert!(parse_command("playlistinfo 5:2").is_err());
+        assert!(parse_command("delete 5:2").is_err());
+        assert!(parse_command("move 5:2 0").is_err());
     }
 }
