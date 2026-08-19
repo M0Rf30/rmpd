@@ -61,8 +61,15 @@ impl From<cpal::Error> for RmpdError {
 }
 
 #[cfg(feature = "library-errors")]
-impl From<lofty::error::LoftyError> for RmpdError {
-    fn from(err: lofty::error::LoftyError) -> Self {
+impl From<lofty::error::FileParseError> for RmpdError {
+    fn from(err: lofty::error::FileParseError) -> Self {
+        RmpdError::Library(err.to_string())
+    }
+}
+
+#[cfg(feature = "library-errors")]
+impl From<lofty::error::TagParseError> for RmpdError {
+    fn from(err: lofty::error::TagParseError) -> Self {
         RmpdError::Library(err.to_string())
     }
 }
