@@ -137,3 +137,17 @@ async fn rapid_connect_disconnect() {
     let resp = client.command("ping").await;
     assert_ok(&resp);
 }
+
+#[tokio::test]
+async fn oversized_line_is_rejected_or_closed() {
+    let (_server, mut client) = setup().await;
+    // Larger than MPD's 64 KB line limit, with no newline: an unbounded
+    // `read_line` would grow the server's buffer without limit.
+    let oversized = "a".repeat(70_000);
+    client.send_raw(&oversized).await;
+    let line = client.read_line().await;
+    assert!(
+        line.is_empty() || line.starts_with("ACK "),
+        "expected connection close or ACK for an oversized line, got: {line}"
+    );
+}

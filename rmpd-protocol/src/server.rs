@@ -1,5 +1,5 @@
 use rmpd_core::error::Result;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UnixStream};
 use tokio::sync::broadcast;
 use tracing::{debug, error, info};
@@ -25,6 +25,18 @@ const DEFAULT_MAX_CONNECTIONS: usize = 100;
 /// Default idle timeout (seconds) for a connection waiting on its next
 /// command line, when not overridden via `with_connection_timeout`.
 const DEFAULT_CONNECTION_TIMEOUT_SECS: u64 = 60;
+
+/// Hard cap on a single protocol line (MPD's own line-length limit), so a
+/// client that never sends a newline can't grow the read buffer without
+/// bound. Enforced by capping the reader with `AsyncReadExt::take` before
+/// `read_line`, not by checking the length after the fact.
+const MAX_LINE_BYTES: usize = 64 * 1024;
+
+/// Hard cap on the total size of an in-flight `command_list_begin` /
+/// `command_list_ok_begin` batch (MPD's default `max_command_list_size`),
+/// so an unterminated command list can't grow `batch_commands` without
+/// bound.
+const MAX_COMMAND_LIST_BYTES: usize = 2 * 1024 * 1024;
 
 /// Convert a `parse_command` error into the correct ACK response string.
 /// Arg-count errors ("wrong number / too few arguments") → code 2;
@@ -306,10 +318,21 @@ async fn handle_client_inner(
     let mut batch_mode = false;
     let mut batch_ok_mode = false;
     let mut batch_commands: Vec<String> = Vec::new();
+    let mut batch_bytes: usize = 0;
 
     loop {
         line.clear();
-        let bytes_read = match tokio::time::timeout(timeout, reader.read_line(&mut line)).await {
+        // Cap the reader with `take` so `line` can never grow past
+        // `MAX_LINE_BYTES`, regardless of whether the client ever sends a
+        // newline — bounding the allocation, not just checking it after.
+        let bytes_read = match tokio::time::timeout(
+            timeout,
+            (&mut reader)
+                .take(MAX_LINE_BYTES as u64)
+                .read_line(&mut line),
+        )
+        .await
+        {
             Ok(result) => result?,
             Err(_elapsed) => {
                 // Idle timeout: client connected but sent nothing for
@@ -321,6 +344,21 @@ async fn handle_client_inner(
 
         if bytes_read == 0 {
             // Connection closed
+            break;
+        }
+
+        if bytes_read == MAX_LINE_BYTES && !line.ends_with('\n') {
+            // Hit the cap without finding a terminator: reject and close
+            // rather than keep waiting for a newline that would let the
+            // client grow the buffer unbounded.
+            let response = Response::Text(ResponseBuilder::error(
+                ACK_ERROR_ARG,
+                0,
+                "",
+                "Line too long",
+            ));
+            writer.write_all(response.as_bytes()).await?;
+            writer.flush().await?;
             break;
         }
 
@@ -336,12 +374,14 @@ async fn handle_client_inner(
                 batch_mode = true;
                 batch_ok_mode = false;
                 batch_commands.clear();
+                batch_bytes = 0;
                 continue; // Don't send response yet
             }
             Ok(Command::CommandListOkBegin) => {
                 batch_mode = true;
                 batch_ok_mode = true;
                 batch_commands.clear();
+                batch_bytes = 0;
                 continue; // Don't send response yet
             }
             Ok(Command::CommandListEnd) => {
@@ -363,6 +403,7 @@ async fn handle_client_inner(
                     batch_mode = false;
                     batch_ok_mode = false;
                     batch_commands.clear();
+                    batch_bytes = 0;
                     response
                 }
             }
@@ -370,9 +411,24 @@ async fn handle_client_inner(
                 Response::Text(handle_idle(&mut reader, &mut event_rx, subsystems).await)
             }
             Ok(_cmd) if batch_mode => {
-                // Accumulate commands in batch
-                batch_commands.push(trimmed.to_string());
-                continue; // Don't send response yet
+                // Accumulate commands in batch, capped so an unterminated
+                // command list can't grow `batch_commands` without bound.
+                if batch_bytes + trimmed.len() > MAX_COMMAND_LIST_BYTES {
+                    batch_mode = false;
+                    batch_ok_mode = false;
+                    batch_commands.clear();
+                    batch_bytes = 0;
+                    Response::Text(ResponseBuilder::error(
+                        ACK_ERROR_ARG,
+                        0,
+                        "command_list",
+                        "command list too large",
+                    ))
+                } else {
+                    batch_bytes += trimmed.len();
+                    batch_commands.push(trimmed.to_string());
+                    continue; // Don't send response yet
+                }
             }
             Ok(Command::NoIdle) => {
                 // `noidle` received while NOT in idle mode. This happens when an
@@ -527,6 +583,7 @@ async fn handle_idle(
     let mut line = String::new();
 
     loop {
+        let mut limited = (&mut *reader).take(MAX_LINE_BYTES as u64);
         tokio::select! {
             // Wait for event
             event_result = event_rx.recv() => {
@@ -567,7 +624,7 @@ async fn handle_idle(
                 }
             }
             // Wait for noidle command
-            line_result = reader.read_line(&mut line) => {
+            line_result = limited.read_line(&mut line) => {
                 if let Ok(bytes) = line_result
                     && bytes > 0 && line.trim() == "noidle" {
                         // Cancel idle
