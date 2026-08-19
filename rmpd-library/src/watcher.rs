@@ -165,33 +165,47 @@ async fn handle_fs_event(
 
                 debug!("file created/modified: {}", path_str);
 
-                // Extract metadata
+                // Extract metadata off the async runtime: file I/O and tag parsing block.
                 let path_buf = camino::Utf8PathBuf::from(path.to_string_lossy().to_string());
-                match MetadataExtractor::extract_from_file(&path_buf) {
-                    Ok(song) => {
-                        // Database operations need to be done with lock
-                        let db_guard = db.lock().await;
+                let extraction = tokio::task::spawn_blocking(move || {
+                    MetadataExtractor::extract_from_file(&path_buf)
+                })
+                .await;
 
-                        // Check if song already exists
-                        let exists = db_guard.get_song_by_path(&path_str)?.is_some();
-
-                        // Add/update in database
-                        db_guard.add_song(&song)?;
-
-                        drop(db_guard); // Release lock before emitting event
-
-                        // Emit appropriate event
-                        if exists {
-                            debug!("song updated: {}", path_str);
-                            event_bus.emit(RmpdEvent::SongUpdated(song));
-                        } else {
-                            debug!("song added: {}", path_str);
-                            event_bus.emit(RmpdEvent::SongAdded(song));
-                        }
+                let mut song = match extraction {
+                    Ok(Ok(song)) => song,
+                    Ok(Err(e)) => {
+                        warn!("failed to extract metadata from {}: {}", path_str, e);
+                        continue;
                     }
                     Err(e) => {
-                        warn!("failed to extract metadata from {}: {}", path_str, e);
+                        warn!("metadata extraction task panicked for {}: {}", path_str, e);
+                        continue;
                     }
+                };
+
+                // Store the same music-dir-relative path the scanner uses, so
+                // get_song_by_path lookups (lsinfo/add/playlistinfo/stickers) find it.
+                song.path = camino::Utf8PathBuf::from(path_str.clone());
+
+                // Database operations need to be done with lock
+                let db_guard = db.lock().await;
+
+                // Check if song already exists
+                let exists = db_guard.get_song_by_path(&path_str)?.is_some();
+
+                // Add/update in database
+                db_guard.add_song(&song)?;
+
+                drop(db_guard); // Release lock before emitting event
+
+                // Emit appropriate event
+                if exists {
+                    debug!("song updated: {}", path_str);
+                    event_bus.emit(RmpdEvent::SongUpdated(song));
+                } else {
+                    debug!("song added: {}", path_str);
+                    event_bus.emit(RmpdEvent::SongAdded(song));
                 }
             }
         }

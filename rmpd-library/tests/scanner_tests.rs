@@ -2,7 +2,11 @@
 use rmpd_core::event::EventBus;
 use rmpd_library::database::Database;
 use rmpd_library::scanner::Scanner;
+use rmpd_library::watcher::FilesystemWatcher;
+use std::sync::Arc;
+use std::time::Duration;
 use tempfile::TempDir;
+use tokio::sync::Mutex;
 
 /// A symlink that points back at an ancestor directory (or otherwise forms a
 /// cycle) must not send the scanner into deep/unbounded recursion when
@@ -48,4 +52,45 @@ fn scan_with_symlink_cycle_terminates() {
         "cycle guard should skip the already-visited directory on first re-entry \
          instead of recursing until the OS's own symlink-loop limit errors out"
     );
+}
+
+/// `handle_fs_event` (the watcher's create/modify handler) must store songs
+/// under the same music-dir-relative path the scanner uses. It used to insert
+/// the absolute path returned by `MetadataExtractor::extract_from_file`
+/// directly, so `get_song_by_path(relative)` — used by lsinfo/add/
+/// playlistinfo/stickers — could never find a watcher-added file.
+#[tokio::test]
+async fn watcher_stores_relative_path_for_new_file() {
+    let temp_dir = TempDir::new().expect("create temp dir");
+    let music_dir = temp_dir.path().join("music");
+    std::fs::create_dir(&music_dir).expect("create music dir");
+
+    let db_path = temp_dir.path().join("test.db");
+    let database = Database::open(db_path.to_str().unwrap()).expect("open database");
+    let db = Arc::new(Mutex::new(database));
+
+    let mut watcher = FilesystemWatcher::new(music_dir.clone(), db.clone(), EventBus::new())
+        .expect("create watcher");
+    watcher.start().await.expect("start watcher");
+
+    // Let the watcher's spawned event-handler task hook up before the
+    // debounced filesystem event arrives.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/samples/basic.flac");
+    std::fs::copy(&fixture, music_dir.join("song.flac")).expect("copy fixture into music dir");
+
+    // Debounce window is 300ms; wait past it plus processing time.
+    tokio::time::sleep(Duration::from_millis(800)).await;
+
+    let db_guard = db.lock().await;
+    let song = db_guard
+        .get_song_by_path("song.flac")
+        .expect("query by relative path")
+        .expect(
+            "watcher should store the new file under its music-dir-relative \
+             path, not the absolute path returned by extract_from_file",
+        );
+    assert_eq!(song.path.as_str(), "song.flac");
 }
