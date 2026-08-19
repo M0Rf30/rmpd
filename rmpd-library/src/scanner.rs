@@ -16,8 +16,6 @@ use rmpd_core::time::system_time_to_unix_secs;
 struct FileInfo {
     absolute_path: Utf8PathBuf,
     relative_path: Utf8PathBuf,
-    #[allow(dead_code)] // Used by directory mtime comparison during incremental scans
-    mtime: i64,
     existing_song: Option<rmpd_core::song::Song>,
 }
 
@@ -345,7 +343,6 @@ impl Scanner {
                 files.push(FileInfo {
                     absolute_path: utf8_path,
                     relative_path,
-                    mtime,
                     existing_song,
                 });
             }
