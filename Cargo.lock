@@ -2005,8 +2005,8 @@ dependencies = [
 
 [[package]]
 name = "lofty"
-version = "0.24.0"
-source = "git+https://github.com/M0Rf30/lofty-rs?rev=bd7defe1d4f0408958787e4aa799dca11a71b90a#bd7defe1d4f0408958787e4aa799dca11a71b90a"
+version = "0.25.1"
+source = "git+https://github.com/M0Rf30/lofty-rs?rev=b0064904dbd09f61fd76c46ba48d5d4393b87bf7#b0064904dbd09f61fd76c46ba48d5d4393b87bf7"
 dependencies = [
  "byteorder",
  "data-encoding",
@@ -2019,12 +2019,12 @@ dependencies = [
 
 [[package]]
 name = "lofty_attr"
-version = "0.12.0"
-source = "git+https://github.com/M0Rf30/lofty-rs?rev=bd7defe1d4f0408958787e4aa799dca11a71b90a#bd7defe1d4f0408958787e4aa799dca11a71b90a"
+version = "0.13.0"
+source = "git+https://github.com/M0Rf30/lofty-rs?rev=b0064904dbd09f61fd76c46ba48d5d4393b87bf7#b0064904dbd09f61fd76c46ba48d5d4393b87bf7"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.119",
+ "syn 3.0.3",
 ]
 
 [[package]]
@@ -2448,7 +2448,7 @@ dependencies = [
 [[package]]
 name = "ogg_pager"
 version = "0.7.2"
-source = "git+https://github.com/M0Rf30/lofty-rs?rev=bd7defe1d4f0408958787e4aa799dca11a71b90a#bd7defe1d4f0408958787e4aa799dca11a71b90a"
+source = "git+https://github.com/M0Rf30/lofty-rs?rev=b0064904dbd09f61fd76c46ba48d5d4393b87bf7#b0064904dbd09f61fd76c46ba48d5d4393b87bf7"
 dependencies = [
  "byteorder",
 ]
@@ -3561,8 +3561,8 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "symphonia"
-version = "0.6.0"
-source = "git+https://github.com/M0Rf30/Symphonia?rev=e0649c9c77e6104a03ac99ce4600fef420b62478#e0649c9c77e6104a03ac99ce4600fef420b62478"
+version = "0.5.9"
+source = "git+https://github.com/M0Rf30/Symphonia?rev=84c21b7d2b563326c9f1bbf4a35f1ac1d80675c2#84c21b7d2b563326c9f1bbf4a35f1ac1d80675c2"
 dependencies = [
  "lazy_static",
  "symphonia-bundle-flac",
@@ -3585,8 +3585,8 @@ dependencies = [
 
 [[package]]
 name = "symphonia-bundle-flac"
-version = "0.6.0"
-source = "git+https://github.com/M0Rf30/Symphonia?rev=e0649c9c77e6104a03ac99ce4600fef420b62478#e0649c9c77e6104a03ac99ce4600fef420b62478"
+version = "0.5.9"
+source = "git+https://github.com/M0Rf30/Symphonia?rev=84c21b7d2b563326c9f1bbf4a35f1ac1d80675c2#84c21b7d2b563326c9f1bbf4a35f1ac1d80675c2"
 dependencies = [
  "log",
  "symphonia-common",
@@ -3596,8 +3596,8 @@ dependencies = [
 
 [[package]]
 name = "symphonia-bundle-mp3"
-version = "0.6.0"
-source = "git+https://github.com/M0Rf30/Symphonia?rev=e0649c9c77e6104a03ac99ce4600fef420b62478#e0649c9c77e6104a03ac99ce4600fef420b62478"
+version = "0.5.9"
+source = "git+https://github.com/M0Rf30/Symphonia?rev=84c21b7d2b563326c9f1bbf4a35f1ac1d80675c2#84c21b7d2b563326c9f1bbf4a35f1ac1d80675c2"
 dependencies = [
  "lazy_static",
  "log",
@@ -3606,8 +3606,8 @@ dependencies = [
 
 [[package]]
 name = "symphonia-codec-aac"
-version = "0.6.0"
-source = "git+https://github.com/M0Rf30/Symphonia?rev=e0649c9c77e6104a03ac99ce4600fef420b62478#e0649c9c77e6104a03ac99ce4600fef420b62478"
+version = "0.5.9"
+source = "git+https://github.com/M0Rf30/Symphonia?rev=84c21b7d2b563326c9f1bbf4a35f1ac1d80675c2#84c21b7d2b563326c9f1bbf4a35f1ac1d80675c2"
 dependencies = [
  "lazy_static",
  "log",
@@ -3617,8 +3617,8 @@ dependencies = [
 
 [[package]]
 name = "symphonia-codec-adpcm"
-version = "0.6.0"
-source = "git+https://github.com/M0Rf30/Symphonia?rev=e0649c9c77e6104a03ac99ce4600fef420b62478#e0649c9c77e6104a03ac99ce4600fef420b62478"
+version = "0.5.9"
+source = "git+https://github.com/M0Rf30/Symphonia?rev=84c21b7d2b563326c9f1bbf4a35f1ac1d80675c2#84c21b7d2b563326c9f1bbf4a35f1ac1d80675c2"
 dependencies = [
  "log",
  "symphonia-core",
@@ -3626,8 +3626,8 @@ dependencies = [
 
 [[package]]
 name = "symphonia-codec-alac"
-version = "0.6.0"
-source = "git+https://github.com/M0Rf30/Symphonia?rev=e0649c9c77e6104a03ac99ce4600fef420b62478#e0649c9c77e6104a03ac99ce4600fef420b62478"
+version = "0.5.9"
+source = "git+https://github.com/M0Rf30/Symphonia?rev=84c21b7d2b563326c9f1bbf4a35f1ac1d80675c2#84c21b7d2b563326c9f1bbf4a35f1ac1d80675c2"
 dependencies = [
  "log",
  "symphonia-common",
@@ -3636,8 +3636,8 @@ dependencies = [
 
 [[package]]
 name = "symphonia-codec-dsd"
-version = "0.6.0"
-source = "git+https://github.com/M0Rf30/Symphonia?rev=e0649c9c77e6104a03ac99ce4600fef420b62478#e0649c9c77e6104a03ac99ce4600fef420b62478"
+version = "0.5.9"
+source = "git+https://github.com/M0Rf30/Symphonia?rev=84c21b7d2b563326c9f1bbf4a35f1ac1d80675c2#84c21b7d2b563326c9f1bbf4a35f1ac1d80675c2"
 dependencies = [
  "log",
  "symphonia-core",
@@ -3645,8 +3645,8 @@ dependencies = [
 
 [[package]]
 name = "symphonia-codec-pcm"
-version = "0.6.0"
-source = "git+https://github.com/M0Rf30/Symphonia?rev=e0649c9c77e6104a03ac99ce4600fef420b62478#e0649c9c77e6104a03ac99ce4600fef420b62478"
+version = "0.5.9"
+source = "git+https://github.com/M0Rf30/Symphonia?rev=84c21b7d2b563326c9f1bbf4a35f1ac1d80675c2#84c21b7d2b563326c9f1bbf4a35f1ac1d80675c2"
 dependencies = [
  "log",
  "symphonia-core",
@@ -3654,8 +3654,8 @@ dependencies = [
 
 [[package]]
 name = "symphonia-codec-vorbis"
-version = "0.6.0"
-source = "git+https://github.com/M0Rf30/Symphonia?rev=e0649c9c77e6104a03ac99ce4600fef420b62478#e0649c9c77e6104a03ac99ce4600fef420b62478"
+version = "0.5.9"
+source = "git+https://github.com/M0Rf30/Symphonia?rev=84c21b7d2b563326c9f1bbf4a35f1ac1d80675c2#84c21b7d2b563326c9f1bbf4a35f1ac1d80675c2"
 dependencies = [
  "log",
  "symphonia-common",
@@ -3664,8 +3664,8 @@ dependencies = [
 
 [[package]]
 name = "symphonia-common"
-version = "0.6.0"
-source = "git+https://github.com/M0Rf30/Symphonia?rev=e0649c9c77e6104a03ac99ce4600fef420b62478#e0649c9c77e6104a03ac99ce4600fef420b62478"
+version = "0.5.9"
+source = "git+https://github.com/M0Rf30/Symphonia?rev=84c21b7d2b563326c9f1bbf4a35f1ac1d80675c2#84c21b7d2b563326c9f1bbf4a35f1ac1d80675c2"
 dependencies = [
  "log",
  "symphonia-core",
@@ -3674,8 +3674,8 @@ dependencies = [
 
 [[package]]
 name = "symphonia-core"
-version = "0.6.0"
-source = "git+https://github.com/M0Rf30/Symphonia?rev=e0649c9c77e6104a03ac99ce4600fef420b62478#e0649c9c77e6104a03ac99ce4600fef420b62478"
+version = "0.5.9"
+source = "git+https://github.com/M0Rf30/Symphonia?rev=84c21b7d2b563326c9f1bbf4a35f1ac1d80675c2#84c21b7d2b563326c9f1bbf4a35f1ac1d80675c2"
 dependencies = [
  "bitflags 2.13.1",
  "bytemuck",
@@ -3688,8 +3688,8 @@ dependencies = [
 
 [[package]]
 name = "symphonia-format-caf"
-version = "0.6.0"
-source = "git+https://github.com/M0Rf30/Symphonia?rev=e0649c9c77e6104a03ac99ce4600fef420b62478#e0649c9c77e6104a03ac99ce4600fef420b62478"
+version = "0.5.9"
+source = "git+https://github.com/M0Rf30/Symphonia?rev=84c21b7d2b563326c9f1bbf4a35f1ac1d80675c2#84c21b7d2b563326c9f1bbf4a35f1ac1d80675c2"
 dependencies = [
  "log",
  "symphonia-common",
@@ -3698,8 +3698,8 @@ dependencies = [
 
 [[package]]
 name = "symphonia-format-dsd"
-version = "0.6.0"
-source = "git+https://github.com/M0Rf30/Symphonia?rev=e0649c9c77e6104a03ac99ce4600fef420b62478#e0649c9c77e6104a03ac99ce4600fef420b62478"
+version = "0.5.9"
+source = "git+https://github.com/M0Rf30/Symphonia?rev=84c21b7d2b563326c9f1bbf4a35f1ac1d80675c2#84c21b7d2b563326c9f1bbf4a35f1ac1d80675c2"
 dependencies = [
  "log",
  "symphonia-core",
@@ -3708,8 +3708,8 @@ dependencies = [
 
 [[package]]
 name = "symphonia-format-isomp4"
-version = "0.6.0"
-source = "git+https://github.com/M0Rf30/Symphonia?rev=e0649c9c77e6104a03ac99ce4600fef420b62478#e0649c9c77e6104a03ac99ce4600fef420b62478"
+version = "0.5.9"
+source = "git+https://github.com/M0Rf30/Symphonia?rev=84c21b7d2b563326c9f1bbf4a35f1ac1d80675c2#84c21b7d2b563326c9f1bbf4a35f1ac1d80675c2"
 dependencies = [
  "log",
  "symphonia-common",
@@ -3719,8 +3719,8 @@ dependencies = [
 
 [[package]]
 name = "symphonia-format-mkv"
-version = "0.6.0"
-source = "git+https://github.com/M0Rf30/Symphonia?rev=e0649c9c77e6104a03ac99ce4600fef420b62478#e0649c9c77e6104a03ac99ce4600fef420b62478"
+version = "0.5.9"
+source = "git+https://github.com/M0Rf30/Symphonia?rev=84c21b7d2b563326c9f1bbf4a35f1ac1d80675c2#84c21b7d2b563326c9f1bbf4a35f1ac1d80675c2"
 dependencies = [
  "lazy_static",
  "log",
@@ -3730,8 +3730,8 @@ dependencies = [
 
 [[package]]
 name = "symphonia-format-ogg"
-version = "0.6.0"
-source = "git+https://github.com/M0Rf30/Symphonia?rev=e0649c9c77e6104a03ac99ce4600fef420b62478#e0649c9c77e6104a03ac99ce4600fef420b62478"
+version = "0.5.9"
+source = "git+https://github.com/M0Rf30/Symphonia?rev=84c21b7d2b563326c9f1bbf4a35f1ac1d80675c2#84c21b7d2b563326c9f1bbf4a35f1ac1d80675c2"
 dependencies = [
  "log",
  "symphonia-common",
@@ -3741,8 +3741,8 @@ dependencies = [
 
 [[package]]
 name = "symphonia-format-riff"
-version = "0.6.0"
-source = "git+https://github.com/M0Rf30/Symphonia?rev=e0649c9c77e6104a03ac99ce4600fef420b62478#e0649c9c77e6104a03ac99ce4600fef420b62478"
+version = "0.5.9"
+source = "git+https://github.com/M0Rf30/Symphonia?rev=84c21b7d2b563326c9f1bbf4a35f1ac1d80675c2#84c21b7d2b563326c9f1bbf4a35f1ac1d80675c2"
 dependencies = [
  "extended",
  "log",
@@ -3752,8 +3752,8 @@ dependencies = [
 
 [[package]]
 name = "symphonia-metadata"
-version = "0.6.0"
-source = "git+https://github.com/M0Rf30/Symphonia?rev=e0649c9c77e6104a03ac99ce4600fef420b62478#e0649c9c77e6104a03ac99ce4600fef420b62478"
+version = "0.5.9"
+source = "git+https://github.com/M0Rf30/Symphonia?rev=84c21b7d2b563326c9f1bbf4a35f1ac1d80675c2#84c21b7d2b563326c9f1bbf4a35f1ac1d80675c2"
 dependencies = [
  "lazy_static",
  "log",

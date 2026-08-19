@@ -17,7 +17,7 @@ use std::io::BufReader;
 use std::time::SystemTime;
 
 /// Collect Vorbis comment key/value pairs into owned `(key, value)` tuples.
-fn collect_vorbis_pairs(comments: &lofty::ogg::VorbisComments) -> Vec<(String, String)> {
+fn collect_vorbis_pairs(comments: &lofty::ogg::tag::VorbisComments) -> Vec<(String, String)> {
     comments
         .items()
         .map(|(k, v)| (k.to_string(), v.to_string()))
