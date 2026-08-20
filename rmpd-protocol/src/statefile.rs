@@ -78,6 +78,13 @@ impl StateFile {
             content.push_str(&format!("audio_device_state:0:{name}\n"));
         }
 
+        // Last stored playlist loaded via `load` (MPD: PlaylistState.cxx,
+        // written unconditionally, empty when none has been loaded).
+        content.push_str(&format!(
+            "lastloadedplaylist: {}\n",
+            queue.last_loaded_playlist()
+        ));
+
         // Playlist
         content.push_str("playlist_begin\n");
         for item in queue.items() {
@@ -211,6 +218,9 @@ impl StateFile {
                         "replay_gain_mode" => {
                             state.replay_gain_mode = ReplayGainMode::parse_mode(value);
                         }
+                        "lastloadedplaylist" => {
+                            state.last_loaded_playlist = value.to_string();
+                        }
                         "audio_device_state" => {
                             // value is "STATE:NAME" where NAME may contain ':'
                             if let Some((state_str, name)) = value.split_once(':')
@@ -249,6 +259,9 @@ pub struct SavedState {
     pub replay_gain_mode: ReplayGainMode,
     pub playlist_paths: Vec<String>,
     pub disabled_outputs: Vec<String>,
+    /// Last stored playlist loaded via `load` before the state was saved
+    /// (MPD's `lastloadedplaylist`); empty when none had been loaded.
+    pub last_loaded_playlist: String,
 }
 
 #[cfg(test)]
@@ -269,6 +282,7 @@ mod tests {
         let mut queue = Queue::new();
         queue.add(make_test_song("/music/song1.mp3", 0));
         queue.add(make_test_song("/music/song2.mp3", 1));
+        queue.set_last_loaded_playlist("favorites");
 
         let status = PlayerStatus {
             volume: 75,
@@ -309,6 +323,7 @@ mod tests {
         assert_eq!(loaded.playlist_paths.len(), 2);
         assert_eq!(loaded.playlist_paths[0], "/music/song1.mp3");
         assert_eq!(loaded.playlist_paths[1], "/music/song2.mp3");
+        assert_eq!(loaded.last_loaded_playlist, "favorites");
     }
 
     #[tokio::test]
