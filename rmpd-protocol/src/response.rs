@@ -133,7 +133,12 @@ impl ResponseBuilder {
         self
     }
 
-    pub fn status(&mut self, status: &PlayerStatus) -> &mut Self {
+    pub fn status(
+        &mut self,
+        status: &PlayerStatus,
+        partition: &str,
+        last_loaded_playlist: &str,
+    ) -> &mut Self {
         self.field("volume", status.volume);
         self.field("repeat", if status.repeat { 1 } else { 0 });
         self.field("random", if status.random { 1 } else { 0 });
@@ -152,14 +157,11 @@ impl ResponseBuilder {
         };
         self.field("consume", consume_val);
 
-        self.field("partition", "default");
+        self.field("partition", partition);
 
         self.field("playlist", status.playlist_version);
         self.field("playlistlength", status.playlist_length);
         self.field("mixrampdb", status.mixramp_db);
-        if status.mixramp_delay > 0.0 {
-            self.field("mixrampdelay", status.mixramp_delay);
-        }
 
         let state_str = match status.state {
             rmpd_core::state::PlayerState::Stop => "stop",
@@ -167,30 +169,35 @@ impl ResponseBuilder {
             rmpd_core::state::PlayerState::Pause => "pause",
         };
         self.field("state", state_str);
-        self.field("lastloadedplaylist", "");
+        self.field("lastloadedplaylist", last_loaded_playlist);
+
+        // MPD order: xfade then mixrampdelay, both only when non-default
+        // (PlayerCommands.cxx handle_status).
+        if status.crossfade > 0 {
+            self.field("xfade", status.crossfade);
+        }
+        if status.mixramp_delay > 0.0 {
+            self.field("mixrampdelay", status.mixramp_delay);
+        }
 
         if let Some(pos) = &status.current_song {
             self.field("song", pos.position);
             self.field("songid", pos.id);
         }
 
-        // Show time/elapsed/duration/bitrate/audio only when playing or paused (not stopped)
+        // time/elapsed/bitrate/duration/audio only when playing or paused
+        // (not stopped). time/elapsed/bitrate are unconditional in that
+        // state per MPD; duration and audio are individually optional.
         if !matches!(status.state, rmpd_core::state::PlayerState::Stop) {
-            if let Some(elapsed) = status.elapsed {
-                if let Some(duration) = status.duration {
-                    self.field(
-                        "time",
-                        format!("{}:{}", elapsed.as_secs(), duration.as_secs()),
-                    );
-                }
-                self.field("elapsed", format!("{:.3}", elapsed.as_secs_f64()));
-            }
-
+            let elapsed = status.elapsed.unwrap_or_default();
+            let duration_secs = status.duration.map(|d| d.as_secs()).unwrap_or(0);
+            self.field("time", format!("{}:{duration_secs}", elapsed.as_secs()));
+            self.field("elapsed", format!("{:.3}", elapsed.as_secs_f64()));
+            self.field("bitrate", status.bitrate.unwrap_or(0));
             self.optional_field(
                 "duration",
                 status.duration.map(|d| format!("{:.3}", d.as_secs_f64())),
             );
-            self.optional_field("bitrate", status.bitrate);
 
             if let Some(fmt) = status.audio_format {
                 self.field(
@@ -203,24 +210,40 @@ impl ResponseBuilder {
             }
         }
 
-        if let Some(next) = &status.next_song {
+        self.optional_field("updating_db", status.updating_db);
+        self.optional_field("error", status.error.as_ref());
+
+        // nextsong/nextsongid are printed last, matching handle_status, and
+        // only when there is a current song: MPD derives them from
+        // playlist::GetNextPosition(), which returns -1 whenever
+        // `current < 0` (Playlist.cxx:320), so a stopped player never
+        // reports a next song.
+        if let (Some(_), Some(next)) = (&status.current_song, &status.next_song) {
             self.field("nextsong", next.position);
             self.field("nextsongid", next.id);
         }
 
-        if status.crossfade > 0 {
-            self.field("xfade", status.crossfade);
-        }
-
-        self.optional_field("updating_db", status.updating_db);
-        self.optional_field("error", status.error.as_ref());
-
         self
     }
 
-    pub fn song(&mut self, song: &Song, position: Option<u32>, id: Option<u32>) -> &mut Self {
+    pub fn song(
+        &mut self,
+        song: &Song,
+        position: Option<u32>,
+        id: Option<u32>,
+        range: Option<(f64, f64)>,
+    ) -> &mut Self {
         self.field("file", &song.path);
-        // MPD order: Last-Modified, Added, Format, tags in file insertion order, Time/duration, Pos/Id
+        // MPD order (SongPrint.cxx song_print_info): Range, Last-Modified,
+        // Added, Format, tags in file insertion order, Time/duration, then
+        // Pos/Id/Prio appended by the caller (queue/Print.cxx).
+        if let Some((start, end)) = range {
+            if end > 0.0 {
+                self.field("Range", format!("{start:.3}-{end:.3}"));
+            } else if start > 0.0 {
+                self.field("Range", format!("{start:.3}-"));
+            }
+        }
         if song.last_modified > 0 {
             let ts = crate::commands::utils::format_iso8601_timestamp(song.last_modified);
             self.field("Last-Modified", &ts);
@@ -269,7 +292,11 @@ impl ResponseBuilder {
         self.field("albums", stats.albums);
         self.field("songs", stats.songs);
         self.field("db_playtime", stats.db_playtime);
-        self.field("db_update", stats.db_update);
+        // MPD omits db_update when the database has never been updated
+        // (db.GetUpdateStamp() negative -> Stats.cxx db_stats_print).
+        if stats.db_update > 0 {
+            self.field("db_update", stats.db_update);
+        }
         self
     }
 }
@@ -314,7 +341,7 @@ mod tests {
     #[test]
     fn source_song_emits_format_line_and_keeps_extension() {
         let mut rb = ResponseBuilder::new();
-        rb.song(&source_song(), None, None);
+        rb.song(&source_song(), None, None, None);
         let out = rb.ok();
 
         assert!(
@@ -325,5 +352,174 @@ mod tests {
             out.contains("file: alarm-music/Artist/Album/song-1.flac"),
             "expected mount-style file line with .flac extension, got:\n{out}"
         );
+    }
+
+    fn base_status() -> PlayerStatus {
+        PlayerStatus::default()
+    }
+
+    /// Regression: `mixrampdelay` and `xfade` must be emitted after `state`
+    /// and `lastloadedplaylist`, and `nextsong`/`nextsongid` must be the
+    /// very last fields — matching PlayerCommands.cxx handle_status, not
+    /// the previous interleaved order.
+    #[test]
+    fn status_field_order_matches_mpd() {
+        let mut status = base_status();
+        status.state = rmpd_core::state::PlayerState::Play;
+        status.crossfade = 5;
+        status.mixramp_delay = 2.5;
+        status.current_song = Some(rmpd_core::state::QueuePosition { position: 0, id: 1 });
+        status.next_song = Some(rmpd_core::state::QueuePosition { position: 1, id: 2 });
+        status.elapsed = Some(std::time::Duration::from_secs(10));
+        status.duration = Some(std::time::Duration::from_secs(200));
+        status.bitrate = Some(320);
+        status.updating_db = Some(3);
+        status.error = Some("boom".to_string());
+
+        let mut rb = ResponseBuilder::new();
+        rb.status(&status, "default", "");
+        let out = rb.ok();
+
+        let idx = |name: &str| {
+            out.find(&format!("{name}:"))
+                .unwrap_or_else(|| panic!("missing '{name}' in:\n{out}"))
+        };
+
+        assert!(idx("state") < idx("xfade"), "state before xfade:\n{out}");
+        assert!(
+            idx("xfade") < idx("mixrampdelay"),
+            "xfade before mixrampdelay:\n{out}"
+        );
+        assert!(
+            idx("mixrampdelay") < idx("song"),
+            "mixrampdelay before song:\n{out}"
+        );
+        assert!(idx("song") < idx("time"), "song before time:\n{out}");
+        assert!(idx("time") < idx("bitrate"), "time before bitrate:\n{out}");
+        assert!(
+            idx("bitrate") < idx("duration"),
+            "bitrate before duration:\n{out}"
+        );
+        assert!(
+            idx("error") < idx("nextsong"),
+            "error before nextsong:\n{out}"
+        );
+        assert!(
+            idx("nextsong") < idx("nextsongid"),
+            "nextsong before nextsongid:\n{out}"
+        );
+    }
+
+    /// While playing/paused, MPD always emits `time`/`elapsed`/`bitrate`
+    /// (defaulting duration to 0, bitrate to 0) even when the decoder hasn't
+    /// reported them yet; `duration` itself stays omitted when unknown.
+    #[test]
+    fn status_playing_defaults_time_and_bitrate_when_unknown() {
+        let mut status = base_status();
+        status.state = rmpd_core::state::PlayerState::Play;
+        status.elapsed = Some(std::time::Duration::from_secs(5));
+        status.duration = None;
+        status.bitrate = None;
+
+        let mut rb = ResponseBuilder::new();
+        rb.status(&status, "default", "");
+        let out = rb.ok();
+
+        assert!(out.contains("time: 5:0\n"), "got:\n{out}");
+        assert!(out.contains("elapsed: 5.000\n"), "got:\n{out}");
+        assert!(out.contains("bitrate: 0\n"), "got:\n{out}");
+        assert!(!out.contains("duration:"), "got:\n{out}");
+    }
+
+    /// Stopped state omits every playback-only field.
+    #[test]
+    fn status_stopped_omits_playback_fields() {
+        let status = base_status();
+        let mut rb = ResponseBuilder::new();
+        rb.status(&status, "default", "");
+        let out = rb.ok();
+
+        for field in [
+            "time:",
+            "elapsed:",
+            "bitrate:",
+            "duration:",
+            "audio:",
+            "song:",
+            "songid:",
+            "nextsong:",
+            "xfade:",
+            "mixrampdelay:",
+            "updating_db:",
+            "error:",
+        ] {
+            assert!(
+                !out.contains(field),
+                "unexpected '{field}' when stopped:\n{out}"
+            );
+        }
+    }
+
+    /// `Range` is positioned right after `file` (SongPrint.cxx PrintRange),
+    /// and formats an open-ended range without a trailing bound.
+    #[test]
+    fn song_range_field_placement_and_format() {
+        let mut rb = ResponseBuilder::new();
+        rb.song(&source_song(), Some(3), Some(7), Some((12.5, 60.0)));
+        let out = rb.ok();
+        assert!(out.contains("Range: 12.500-60.000\n"), "got:\n{out}");
+        let file_idx = out.find("file:").unwrap();
+        let range_idx = out.find("Range:").unwrap();
+        let format_idx = out.find("Format:").unwrap();
+        assert!(
+            file_idx < range_idx && range_idx < format_idx,
+            "got:\n{out}"
+        );
+
+        let mut rb2 = ResponseBuilder::new();
+        rb2.song(&source_song(), None, None, Some((12.5, 0.0)));
+        let out2 = rb2.ok();
+        assert!(out2.contains("Range: 12.500-\n"), "got:\n{out2}");
+
+        let mut rb3 = ResponseBuilder::new();
+        rb3.song(&source_song(), None, None, None);
+        let out3 = rb3.ok();
+        assert!(!out3.contains("Range:"), "got:\n{out3}");
+    }
+
+    /// MPD omits `db_update` entirely when the database has never been
+    /// updated (Stats.cxx db_stats_print: `IsNegative(update_stamp)`).
+    #[test]
+    fn stats_omits_db_update_when_never_updated() {
+        let stats = Stats {
+            artists: 0,
+            albums: 0,
+            songs: 0,
+            uptime: 10,
+            db_playtime: 0,
+            db_update: 0,
+            playtime: 0,
+        };
+        let mut rb = ResponseBuilder::new();
+        rb.stats(&stats);
+        let out = rb.ok();
+        assert!(!out.contains("db_update"), "got:\n{out}");
+    }
+
+    #[test]
+    fn stats_includes_db_update_when_present() {
+        let stats = Stats {
+            artists: 1,
+            albums: 1,
+            songs: 1,
+            uptime: 10,
+            db_playtime: 100,
+            db_update: 1_700_000_000,
+            playtime: 0,
+        };
+        let mut rb = ResponseBuilder::new();
+        rb.stats(&stats);
+        let out = rb.ok();
+        assert!(out.contains("db_update: 1700000000\n"), "got:\n{out}");
     }
 }

@@ -45,13 +45,13 @@ async fn stats_response_format() {
     let resp = client.command("stats").await;
     assert_ok(&resp);
 
+    // MPD always emits these regardless of database state.
     for field in &[
         "artists",
         "albums",
         "songs",
         "uptime",
         "db_playtime",
-        "db_update",
         "playtime",
     ] {
         assert!(
@@ -59,6 +59,30 @@ async fn stats_response_format() {
             "missing required field: {field}"
         );
     }
+}
+
+#[tokio::test]
+async fn stats_omits_db_update_when_never_updated() {
+    // Stats.cxx db_stats_print omits `db_update` entirely when the database
+    // has never been updated (GetUpdateStamp() negative).
+    let (_server, mut client) = setup().await;
+    let resp = client.command("stats").await;
+    assert_ok(&resp);
+    assert!(
+        get_field(&resp, "db_update").is_none(),
+        "db_update should be omitted with no database: {resp}"
+    );
+}
+
+#[tokio::test]
+async fn stats_includes_db_update_once_songs_exist() {
+    let (_server, mut client, _tmp) = setup_with_db(2).await;
+    let resp = client.command("stats").await;
+    assert_ok(&resp);
+    assert!(
+        get_field(&resp, "db_update").is_some(),
+        "db_update should be present once songs exist: {resp}"
+    );
 }
 
 #[tokio::test]

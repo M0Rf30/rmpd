@@ -182,38 +182,58 @@ impl AppState {
 
     /// Spawn a background library scan of the configured music directory.
     ///
-    /// Shared by the `update`/`rescan` commands and by auto-update on startup.
-    /// Returns immediately; the scan runs on a blocking task and reports
-    /// progress/results via the event bus and the tracing log. Does nothing if
-    /// the database or music directory is not configured.
-    pub fn spawn_library_update(&self) {
+    /// Shared by the `update`/`rescan` commands and by auto-update on
+    /// startup. `discard` forces re-reading every file's tags even if its
+    /// mtime hasn't advanced (MPD's `rescan`; `update` passes `false`).
+    ///
+    /// Persists an incrementing job id to `status.updating_db` for the scan's
+    /// duration (matching MPD's `status` response while a job is running)
+    /// and returns it, or `None` if the database/music directory isn't
+    /// configured. `Scanner::scan_directory` itself emits the
+    /// `update`/`database` idle events.
+    pub async fn spawn_library_update(&self, discard: bool) -> Option<u32> {
         let (Some(db_path), Some(music_dir)) = (self.db_path.clone(), self.music_dir.clone())
         else {
             tracing::warn!("library update requested but database/music_dir not configured");
-            return;
+            return None;
         };
-        let event_bus = self.event_bus.clone();
         let follow_symlinks = self.follow_symlinks;
+        let event_bus = self.event_bus.clone();
+        let status = self.status.clone();
 
-        tokio::task::spawn_blocking(move || {
-            tracing::info!("starting library update");
-            match rmpd_library::Database::open(&db_path) {
-                Ok(db) => {
-                    let scanner = rmpd_library::Scanner::new(event_bus.clone(), follow_symlinks);
-                    match scanner.scan_directory(&db, std::path::Path::new(&music_dir)) {
-                        Ok(stats) => tracing::info!(
-                            "library scan complete: {} scanned, {} added, {} updated, {} errors",
-                            stats.scanned,
-                            stats.added,
-                            stats.updated,
-                            stats.errors
-                        ),
-                        Err(e) => tracing::error!("library scan error: {}", e),
-                    }
-                }
-                Err(e) => tracing::error!("failed to open database for update: {}", e),
+        let job_id = {
+            let mut status_guard = self.status.write().await;
+            let next = status_guard.updating_db.map_or(1, |j| j + 1);
+            status_guard.updating_db = Some(next);
+            next
+        };
+
+        tokio::spawn(async move {
+            tracing::info!("starting library update (job {job_id})");
+            let result = tokio::task::spawn_blocking(move || {
+                let db = rmpd_library::Database::open(&db_path)?;
+                let scanner = rmpd_library::Scanner::new(event_bus, follow_symlinks)
+                    .with_force_rescan(discard);
+                scanner.scan_directory(&db, std::path::Path::new(&music_dir))
+            })
+            .await;
+
+            match result {
+                Ok(Ok(stats)) => tracing::info!(
+                    "library scan complete: {} scanned, {} added, {} updated, {} errors",
+                    stats.scanned,
+                    stats.added,
+                    stats.updated,
+                    stats.errors
+                ),
+                Ok(Err(e)) => tracing::error!("library update failed: {}", e),
+                Err(e) => tracing::error!("library update task panicked: {}", e),
             }
+
+            status.write().await.updating_db = None;
         });
+
+        Some(job_id)
     }
 
     /// Spawn a background source sync for every enabled music source.
