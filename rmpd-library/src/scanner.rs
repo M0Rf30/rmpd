@@ -32,6 +32,7 @@ pub struct Scanner {
     event_bus: EventBus,
     music_directory: Option<Utf8PathBuf>,
     follow_symlinks: bool,
+    force_rescan: bool,
 }
 
 impl Scanner {
@@ -40,6 +41,7 @@ impl Scanner {
             event_bus,
             music_directory: None,
             follow_symlinks,
+            force_rescan: false,
         }
     }
 
@@ -52,6 +54,20 @@ impl Scanner {
             event_bus: self.event_bus.clone(),
             music_directory: Some(dir),
             follow_symlinks: self.follow_symlinks,
+            force_rescan: self.force_rescan,
+        }
+    }
+
+    /// When `true`, re-reads tags for every file even if its on-disk mtime
+    /// hasn't advanced past the database's recorded `last_modified` —
+    /// matches MPD's `rescan` command (`update` only re-reads modified
+    /// files, `rescan` also rescans unmodified ones).
+    pub fn with_force_rescan(&self, force: bool) -> Self {
+        Self {
+            event_bus: self.event_bus.clone(),
+            music_directory: self.music_directory.clone(),
+            follow_symlinks: self.follow_symlinks,
+            force_rescan: force,
         }
     }
 
@@ -332,8 +348,9 @@ impl Scanner {
                         .unwrap_or(std::time::SystemTime::UNIX_EPOCH),
                 );
 
-                // Skip if file hasn't been modified
-                if let Some(ref existing) = existing_song
+                // Skip if file hasn't been modified (unless a forced rescan)
+                if !self.force_rescan
+                    && let Some(existing) = &existing_song
                     && existing.last_modified >= mtime
                 {
                     continue;

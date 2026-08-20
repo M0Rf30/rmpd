@@ -1060,14 +1060,16 @@ impl Database {
         Ok(songs)
     }
 
-    /// Find songs using filter expression
+    /// Find songs using filter expression. Default order (no `sort TAG`
+    /// override applied by the caller) matches MPD's database tree walk —
+    /// see `rmpd_core::path::compare_db_path` — not a plain path string sort.
     pub fn find_songs_filter(
         &self,
         filter_expr: &rmpd_core::filter::FilterExpression,
     ) -> Result<Vec<Song>> {
         let (where_clause, filter_params) = filter_expr.to_sql();
 
-        let sql = format!("SELECT {SONG_COLUMNS} FROM songs WHERE {where_clause} ORDER BY path");
+        let sql = format!("SELECT {SONG_COLUMNS} FROM songs WHERE {where_clause}");
 
         let mut stmt = self.conn.prepare(&sql)?;
 
@@ -1083,16 +1085,20 @@ impl Database {
             .query_map(params_refs.as_slice(), song_from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         self.load_tags_for_songs(&mut songs)?;
+        songs.sort_by(|a, b| rmpd_core::path::compare_db_path(a.path.as_str(), b.path.as_str()));
         Ok(songs)
     }
 
+    /// Default order matches MPD's database tree walk (see
+    /// `find_songs_filter`'s doc comment), not a plain path string sort.
     pub fn list_all_songs(&self) -> Result<Vec<Song>> {
-        let sql = format!("SELECT {SONG_COLUMNS} FROM songs ORDER BY path");
+        let sql = format!("SELECT {SONG_COLUMNS} FROM songs");
         let mut stmt = self.conn.prepare(&sql)?;
         let mut songs: Vec<Song> = stmt
             .query_map([], song_from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         self.load_tags_for_songs(&mut songs)?;
+        songs.sort_by(|a, b| rmpd_core::path::compare_db_path(a.path.as_str(), b.path.as_str()));
         Ok(songs)
     }
 
@@ -1339,15 +1345,17 @@ impl Database {
         Ok(DirectoryListing { directories, songs })
     }
 
-    /// List all songs under a directory recursively
+    /// List all songs under a directory recursively, in MPD's database
+    /// tree-walk order (see `rmpd_core::path::compare_db_path`) — used by
+    /// `add DIRECTORY` / `add /`.
     pub fn list_directory_recursive(&self, path: &str) -> Result<Vec<Song>> {
-        let sql =
-            format!("SELECT {SONG_COLUMNS} FROM songs WHERE path LIKE ?1 || '%' ORDER BY path");
+        let sql = format!("SELECT {SONG_COLUMNS} FROM songs WHERE path LIKE ?1 || '%'");
         let mut stmt = self.conn.prepare(&sql)?;
         let mut songs: Vec<Song> = stmt
             .query_map(params![path], song_from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         self.load_tags_for_songs(&mut songs)?;
+        songs.sort_by(|a, b| rmpd_core::path::compare_db_path(a.path.as_str(), b.path.as_str()));
         Ok(songs)
     }
 
@@ -1742,6 +1750,20 @@ impl Database {
         }
 
         Ok(results)
+    }
+
+    /// All distinct sticker names across every URI, matching MPD's global
+    /// `stickernames` command (`SELECT DISTINCT name FROM sticker ORDER BY name`).
+    pub fn list_all_sticker_names(&self) -> Result<Vec<String>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT DISTINCT name FROM stickers ORDER BY name")?;
+        let rows = stmt.query_map([], |row| row.get(0))?;
+        let mut names = Vec::new();
+        for row in rows {
+            names.push(row?);
+        }
+        Ok(names)
     }
 }
 
