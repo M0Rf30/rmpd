@@ -146,3 +146,29 @@ async fn single_connection_idle_sees_buffered_addid() {
     );
     assert_ok(&idle_resp);
 }
+
+#[tokio::test]
+async fn idle_coalesces_simultaneous_subsystem_changes() {
+    // Regression: protocol.rst command_idle says idle "lists all changed
+    // systems in a line" — MPD accumulates idle flags and reports every
+    // pending subsystem in one reply. rmpd used to return only the first
+    // matching event and silently drop the rest until the next idle.
+    //
+    // Both changes are made while the client is NOT idling, so they are
+    // already buffered by the time `idle` is sent — no race between the
+    // triggering commands and the idler's wakeup.
+    let (server, mut trigger, _tmp) = setup_with_db(1).await;
+    let mut idler = MpdTestClient::connect(server.port()).await;
+
+    let r1 = trigger.command("toggleoutput 0").await;
+    assert_ok(&r1);
+    let r2 = trigger.command("addid \"music/song1.flac\"").await;
+    assert!(get_field(&r2, "Id").is_some(), "addid must return Id: {r2}");
+
+    let idle_resp = idler.command("idle").await;
+    assert!(
+        idle_resp.contains("changed: output") && idle_resp.contains("changed: playlist"),
+        "idle must report every buffered subsystem in one reply, got: {idle_resp}"
+    );
+    assert_ok(&idle_resp);
+}
