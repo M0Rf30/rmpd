@@ -7,6 +7,17 @@ use super::{AppState, ResponseBuilder};
 use crate::commands::utils::{ACK_ERROR_ARG, ACK_ERROR_EXIST, ACK_ERROR_NO_EXIST};
 use crate::connection::ConnectionState;
 
+/// MPD caps subscriptions per client (`Client::MAX_SUBSCRIPTIONS`).
+const MAX_SUBSCRIPTIONS: usize = 16;
+
+/// Notify idle clients that a channel subscription changed, mirroring MPD's
+/// `EmitIdle(IDLE_SUBSCRIPTION)`.
+fn notify_subscription_changed(state: &AppState) {
+    state
+        .event_bus
+        .emit(rmpd_core::event::Event::SubscriptionChanged);
+}
+
 /// Subscribe to a message channel
 ///
 /// Clients can subscribe to named channels to receive messages.
@@ -35,8 +46,17 @@ pub async fn handle_subscribe_command(
             "already subscribed to this channel",
         );
     }
+    if conn_state.subscribed_channels().len() >= MAX_SUBSCRIPTIONS {
+        return ResponseBuilder::error(
+            ACK_ERROR_EXIST,
+            0,
+            "subscribe",
+            "subscription list is full",
+        );
+    }
     conn_state.subscribe(channel.to_string());
     state.message_broker.register_subscriber(channel).await;
+    notify_subscription_changed(state);
     ResponseBuilder::new().ok()
 }
 
@@ -61,6 +81,7 @@ pub async fn handle_unsubscribe_command(
     }
     conn_state.unsubscribe(channel);
     state.message_broker.unregister_subscriber(channel).await;
+    notify_subscription_changed(state);
     ResponseBuilder::new().ok()
 }
 
@@ -103,11 +124,23 @@ pub async fn handle_readmessages_command(state: &AppState, conn_state: &Connecti
 /// Broadcasts a message to a channel. All subscribed clients will receive it
 /// when they call readmessages.
 pub async fn handle_sendmessage_command(state: &AppState, channel: &str, message: &str) -> String {
+    // MPD validates the channel name on send too (`handle_send_message`), not
+    // just on subscribe.
+    if channel.is_empty()
+        || !channel
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.' || c == ':')
+    {
+        return ResponseBuilder::error(ACK_ERROR_ARG, 0, "sendmessage", "invalid channel name");
+    }
     let ok = state
         .message_broker
         .send_message(channel.to_string(), message.to_string())
         .await;
     if ok {
+        state
+            .event_bus
+            .emit(rmpd_core::event::Event::MessageReceived);
         ResponseBuilder::new().ok()
     } else {
         ResponseBuilder::error(

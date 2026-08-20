@@ -18,7 +18,7 @@ pub async fn handle_getfingerprint_command(state: &AppState, uri: &str) -> Strin
         Ok(p) => p,
         Err(e) => {
             return ResponseBuilder::error(
-                50,
+                ACK_ERROR_NO_EXIST,
                 0,
                 "getfingerprint",
                 &format!("Failed to resolve URI: {e}"),

@@ -1,6 +1,8 @@
 //! Integration tests for advanced commands (partitions, storage, messaging)
 
 mod common;
+#[path = "common/tcp_harness.rs"]
+mod tcp_harness;
 
 use common::TestClient;
 
@@ -74,39 +76,101 @@ fn test_listneighbors_command() {
 }
 
 // Client messaging commands
-#[test]
-fn test_subscribe_command() {
-    // subscribe should subscribe to a channel
-    let response = "OK\n";
-    assert!(TestClient::is_ok(response));
+
+#[tokio::test]
+async fn test_subscribe_command() {
+    let (_server, mut client) = tcp_harness::setup().await;
+    let response = client.command("subscribe test-channel").await;
+    tcp_harness::assert_ok(&response);
 }
 
-#[test]
-fn test_unsubscribe_command() {
-    // unsubscribe should unsubscribe from a channel
-    let response = "OK\n";
-    assert!(TestClient::is_ok(response));
+#[tokio::test]
+async fn test_subscribe_invalid_channel_name_rejected() {
+    let (_server, mut client) = tcp_harness::setup().await;
+    let response = client.command("subscribe \"bad channel!\"").await;
+    assert!(response.starts_with("ACK [2@0]"), "got: {response}");
 }
 
-#[test]
-fn test_channels_command() {
-    // channels should list available channels
-    let response = "OK\n";
-    assert!(TestClient::is_ok(response));
+#[tokio::test]
+async fn test_subscribe_duplicate_rejected() {
+    let (_server, mut client) = tcp_harness::setup().await;
+    tcp_harness::assert_ok(&client.command("subscribe test-channel").await);
+    let response = client.command("subscribe test-channel").await;
+    assert!(response.starts_with("ACK [56@0]"), "got: {response}");
 }
 
-#[test]
-fn test_readmessages_command() {
-    // readmessages should return messages
-    let response = "OK\n";
-    assert!(TestClient::is_ok(response));
+#[tokio::test]
+async fn test_subscribe_full_rejected() {
+    let (_server, mut client) = tcp_harness::setup().await;
+    for i in 0..16 {
+        tcp_harness::assert_ok(&client.command(&format!("subscribe chan{i}")).await);
+    }
+    let response = client.command("subscribe chan16").await;
+    assert!(response.starts_with("ACK [56@0]"), "got: {response}");
+    assert!(
+        response.contains("subscription list is full"),
+        "got: {response}"
+    );
 }
 
-#[test]
-fn test_sendmessage_command() {
-    // sendmessage should send a message to channel
-    let response = "OK\n";
-    assert!(TestClient::is_ok(response));
+#[tokio::test]
+async fn test_unsubscribe_command() {
+    let (_server, mut client) = tcp_harness::setup().await;
+    tcp_harness::assert_ok(&client.command("subscribe test-channel").await);
+    let response = client.command("unsubscribe test-channel").await;
+    tcp_harness::assert_ok(&response);
+}
+
+#[tokio::test]
+async fn test_unsubscribe_not_subscribed_rejected() {
+    let (_server, mut client) = tcp_harness::setup().await;
+    let response = client.command("unsubscribe never-subscribed").await;
+    assert!(response.starts_with("ACK [50@0]"), "got: {response}");
+}
+
+#[tokio::test]
+async fn test_channels_command_lists_subscriptions() {
+    let server = tcp_harness::MpdTestServer::start().await;
+    let mut a = tcp_harness::MpdTestClient::connect(server.port()).await;
+    tcp_harness::assert_ok(&a.command("subscribe test-channel").await);
+
+    let mut b = tcp_harness::MpdTestClient::connect(server.port()).await;
+    let response = b.command("channels").await;
+    assert!(
+        response.contains("channel: test-channel"),
+        "got: {response}"
+    );
+}
+
+#[tokio::test]
+async fn test_sendmessage_and_readmessages_roundtrip() {
+    let server = tcp_harness::MpdTestServer::start().await;
+    let mut receiver = tcp_harness::MpdTestClient::connect(server.port()).await;
+    tcp_harness::assert_ok(&receiver.command("subscribe test-channel").await);
+
+    let mut sender = tcp_harness::MpdTestClient::connect(server.port()).await;
+    tcp_harness::assert_ok(&sender.command("sendmessage test-channel \"hello\"").await);
+
+    let response = receiver.command("readmessages").await;
+    assert_eq!(response, "channel: test-channel\nmessage: hello\nOK\n");
+
+    // The queue is drained: a second read returns nothing.
+    let response = receiver.command("readmessages").await;
+    assert_eq!(response, "OK\n");
+}
+
+#[tokio::test]
+async fn test_sendmessage_no_subscribers_rejected() {
+    let (_server, mut client) = tcp_harness::setup().await;
+    let response = client.command("sendmessage nobody-here \"hi\"").await;
+    assert!(response.starts_with("ACK [50@0]"), "got: {response}");
+}
+
+#[tokio::test]
+async fn test_sendmessage_invalid_channel_name_rejected() {
+    let (_server, mut client) = tcp_harness::setup().await;
+    let response = client.command("sendmessage \"bad channel!\" \"hi\"").await;
+    assert!(response.starts_with("ACK [2@0]"), "got: {response}");
 }
 
 // Output commands
