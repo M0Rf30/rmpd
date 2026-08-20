@@ -222,8 +222,12 @@ async fn clear_removes_all_songs() {
 
 #[tokio::test]
 async fn addtagid_and_cleartagid() {
-    let (_server, mut client, _tmp) = setup_with_db(3).await;
-    let r = client.command("addid \"music/song1.flac\"").await;
+    // MPD only allows tag edits on remote songs (a `scheme://` URI); local
+    // database files reject with "Cannot edit tags of local file".
+    let (_server, mut client) = setup().await;
+    let r = client
+        .command("addid \"http://example.com/stream.mp3\"")
+        .await;
     let id = get_field(&r, "Id").unwrap();
 
     let resp = client
