@@ -8,6 +8,56 @@ use crate::database::Database;
 
 const MAX_ARTWORK_SIZE: usize = 5 * 1024 * 1024; // 5MB
 
+/// MPD's default binary chunk size (`Client::binary_limit`'s default).
+const CHUNK_SIZE: usize = 8192;
+
+/// Standalone cover-art filenames searched in a song's directory, in MPD's
+/// priority order (`FileCommands.cxx::find_stream_art`). Used by `albumart`
+/// only — never by `readpicture`, which reads embedded tag pictures instead.
+const COVER_FILE_NAMES: [&str; 4] = ["cover.png", "cover.jpg", "cover.jxl", "cover.webp"];
+
+/// Result of a chunked art lookup, mirroring the three outcomes MPD
+/// distinguishes: found (with a chunk at the requested offset), no art
+/// exists at all, or the requested offset is past the end of the art data.
+#[derive(Debug)]
+pub enum ArtLookup<T> {
+    Found(T),
+    NotFound,
+    OffsetTooLarge,
+}
+
+/// A chunk of a standalone cover-art file (`cover.png`/`.jpg`/`.jxl`/`.webp`).
+#[derive(Debug)]
+pub struct ExternalArtwork {
+    pub filename: &'static str,
+    pub total_size: usize,
+    pub data: Vec<u8>,
+}
+
+/// Locate a standalone cover-art file in `dir` and return the chunk at
+/// `offset`. This is MPD's `albumart` lookup: it only considers separate
+/// image files, never embedded tag pictures (see `AlbumArtExtractor::get_artwork`
+/// for that).
+#[must_use]
+pub fn find_external_cover(dir: &Path, offset: usize) -> ArtLookup<ExternalArtwork> {
+    for filename in COVER_FILE_NAMES {
+        let Ok(data) = std::fs::read(dir.join(filename)) else {
+            continue;
+        };
+        let total_size = data.len();
+        if offset > total_size {
+            return ArtLookup::OffsetTooLarge;
+        }
+        let end = (offset + CHUNK_SIZE).min(total_size);
+        return ArtLookup::Found(ExternalArtwork {
+            filename,
+            total_size,
+            data: data[offset..end].to_vec(),
+        });
+    }
+    ArtLookup::NotFound
+}
+
 fn infer_mime(data: &[u8]) -> &'static str {
     if data.starts_with(b"\xFF\xD8\xFF") {
         "image/jpeg"
@@ -133,10 +183,10 @@ impl AlbumArtExtractor {
         cache_key: &str,
         file_path: &str,
         offset: usize,
-    ) -> Result<Option<ArtworkData>> {
+    ) -> Result<ArtLookup<ArtworkData>> {
         let (data, stored_mime) = match self.extract_and_cache(cache_key, file_path)? {
             Some(result) => result,
-            None => return Ok(None),
+            None => return Ok(ArtLookup::NotFound),
         };
 
         // Use the stored MIME type; fall back to magic-byte inference only when empty.
@@ -146,20 +196,13 @@ impl AlbumArtExtractor {
             stored_mime
         };
 
-        // Handle offset for chunked transfer
-        // MPD protocol uses 8KB (8192 byte) chunks
-        const CHUNK_SIZE: usize = 8192;
+        if offset > data.len() {
+            return Ok(ArtLookup::OffsetTooLarge);
+        }
+        let end = (offset + CHUNK_SIZE).min(data.len());
+        let chunk = data[offset..end].to_vec();
 
-        let chunk = if offset >= data.len() {
-            // Return empty chunk when offset is past the end
-            // This is needed for proper MPD protocol compliance
-            Vec::new()
-        } else {
-            let end = (offset + CHUNK_SIZE).min(data.len());
-            data[offset..end].to_vec()
-        };
-
-        Ok(Some(ArtworkData {
+        Ok(ArtLookup::Found(ArtworkData {
             mime_type,
             total_size: data.len(),
             data: chunk,

@@ -45,6 +45,12 @@ pub enum Event {
     // Output events
     OutputsChanged,
 
+    // Partition events
+    PartitionsChanged,
+
+    // Mount events
+    MountsChanged,
+
     // Filesystem watcher events
     FilesystemWatchStarted,
     FilesystemWatchStopped,
@@ -53,6 +59,16 @@ pub enum Event {
     SongDeleted {
         path: String,
     },
+
+    // Sticker events
+    /// A sticker was set, incremented/decremented, or deleted.
+    StickerChanged,
+
+    // Client-to-client messaging events
+    /// A client subscribed to or unsubscribed from a channel.
+    SubscriptionChanged,
+    /// A message was delivered to at least one subscriber.
+    MessageReceived,
 }
 
 /// Maps to MPD's idle subsystems
@@ -97,7 +113,11 @@ impl Event {
                 &[Subsystem::Database]
             }
             Event::OutputsChanged => &[Subsystem::Output],
-            Event::FilesystemWatchStarted | Event::FilesystemWatchStopped => &[],
+            Event::PartitionsChanged => &[Subsystem::Partition],
+            Event::MountsChanged => &[Subsystem::Mount],
+            Event::StickerChanged => &[Subsystem::Sticker],
+            Event::SubscriptionChanged => &[Subsystem::Subscription],
+            Event::MessageReceived => &[Subsystem::Message],
             _ => &[],
         }
     }
