@@ -30,30 +30,80 @@ pub fn open_db(
 
 pub use rmpd_core::time::format_iso8601 as format_iso8601_timestamp;
 
-/// Build a FilterExpression from multiple tag/value pairs joined with AND,
-/// using `op` as the comparison for every pair (`Equal` for exact matches,
-/// `Contains` for case-insensitive substring matching as used by `search`).
-/// Panics if `filters` is empty.
-pub fn build_filter(
+/// Build a `FilterExpression` from a command's parsed argument list,
+/// detecting whether it's a single modern `(...)` expression token (per
+/// `parser::parse_find_search_filters`'s convention: `[(expr, "")]`) or
+/// legacy `TAG VALUE [TAG VALUE ...]` pairs — mirroring the dispatch
+/// `SongFilter::Parse` itself does on `args.front()[0] == '('`.
+///
+/// `fold_case`: `true` for `search`-family commands (case-insensitive),
+/// `false` for `find`-family commands (case-sensitive).
+pub fn parse_filter_args(
     filters: &[(String, String)],
-    op: rmpd_core::filter::CompareOp,
-) -> rmpd_core::filter::FilterExpression {
-    use rmpd_core::filter::FilterExpression;
+    fold_case: bool,
+) -> rmpd_core::error::Result<rmpd_core::filter::FilterExpression> {
+    if filters.len() == 1 && filters[0].0.starts_with('(') {
+        rmpd_core::filter::FilterExpression::parse(&filters[0].0, fold_case)
+    } else {
+        rmpd_core::filter::FilterExpression::from_pairs(filters, fold_case)
+    }
+}
 
-    let base = FilterExpression::Compare {
-        tag: filters[0].0.clone(),
-        op,
-        value: filters[0].1.clone(),
+/// Convert a filter-expression parse error into an `ACK_ERROR_ARG` response,
+/// using the raw MPD-style message text (stripping the `RmpdError` Display
+/// wrapper, same convention used for `RmpdError::Library` elsewhere).
+pub fn filter_parse_ack(command: &str, err: &rmpd_core::error::RmpdError) -> String {
+    let msg = err.to_string();
+    let msg = msg.strip_prefix("Parse error: ").unwrap_or(&msg);
+    ResponseBuilder::error(ACK_ERROR_ARG, 0, command, msg)
+}
+
+/// A resolved `sort TAG` clause: either one of MPD's two synthetic sort
+/// keys (`Last-Modified`, `Added`) or a real tag name (already validated
+/// and lowercased).
+pub enum SortKey {
+    LastModified,
+    Added,
+    Tag(String),
+}
+
+/// Parse a `sort TAG` argument, mirroring `ParseSortTag()`: a leading `-`
+/// requests descending order; `Last-Modified`/`Added` are synthetic sort
+/// keys, anything else must be a known tag name. Returns `None` for an
+/// unknown tag — the caller reports MPD's exact `"Unknown sort tag"` text.
+pub fn parse_sort_tag(s: &str) -> Option<(SortKey, bool)> {
+    let (descending, rest) = match s.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, s),
     };
+    let key = if rest.eq_ignore_ascii_case("last-modified") {
+        SortKey::LastModified
+    } else if rest.eq_ignore_ascii_case("added") {
+        SortKey::Added
+    } else {
+        let tag_lower = rest.to_lowercase();
+        if rmpd_core::song::canonical_tag_name(&tag_lower) == "Unknown" {
+            return None;
+        }
+        SortKey::Tag(tag_lower)
+    };
+    Some((key, descending))
+}
 
-    filters[1..].iter().fold(base, |expr, filter| {
-        let next_expr = FilterExpression::Compare {
-            tag: filter.0.clone(),
-            op,
-            value: filter.1.clone(),
-        };
-        FilterExpression::And(Box::new(expr), Box::new(next_expr))
-    })
+/// Sort songs in place by a resolved `sort` key, reversing for descending
+/// order. Only the first value of a multi-valued tag is used (matches
+/// MPD's documented behaviour).
+pub fn sort_songs(songs: &mut [rmpd_core::song::Song], key: &SortKey, descending: bool) {
+    match key {
+        SortKey::LastModified => songs.sort_by_key(|s| s.last_modified),
+        SortKey::Added => songs.sort_by_key(|s| s.added_at),
+        SortKey::Tag(tag) => {
+            songs.sort_by(|a, b| a.tag_with_fallback(tag).cmp(&b.tag_with_fallback(tag)))
+        }
+    }
+    if descending {
+        songs.reverse();
+    }
 }
 
 /// Apply a range/window filter to a slice, returning the filtered sub-slice.
@@ -69,6 +119,117 @@ pub fn apply_range<T>(items: &[T], range: Option<(u32, u32)>) -> &[T] {
     } else {
         items
     }
+}
+
+/// Append `songs` to the queue, then — if `position` is before the queue's
+/// prior end — move the newly-added block there in one pass. Mirrors MPD's
+/// `handle_match_add` (`AddFromDatabase` followed by `Partition::MoveRange`
+/// when the insert position isn't a plain append). `position` beyond the
+/// queue's prior length is rejected with MPD's `"Bad song index"` instead of
+/// silently clamping.
+pub async fn add_songs_at_position(
+    state: &crate::state::AppState,
+    songs: Vec<rmpd_core::song::Song>,
+    position: Option<u32>,
+    command: &str,
+) -> Result<(), String> {
+    let start = state.queue.read().await.len() as u32;
+    if let Some(pos) = position
+        && pos > start
+    {
+        return Err(ResponseBuilder::error(
+            ACK_ERROR_ARG,
+            0,
+            command,
+            "Bad song index",
+        ));
+    }
+    if songs.is_empty() {
+        return Ok(());
+    }
+    let added = songs.len() as u32;
+    {
+        let mut queue = state.queue.write().await;
+        for song in songs {
+            queue.add(song);
+        }
+    }
+    if let Some(pos) = position
+        && pos < start
+    {
+        let mut queue = state.queue.write().await;
+        for i in 0..added {
+            queue.move_item(start, pos + i);
+        }
+    }
+    crate::helpers::update_playlist_version(state).await;
+    Ok(())
+}
+
+/// Resolve the optional 0.24 `position` argument of `findadd`/`searchadd`/
+/// `searchaddpl` (`+N`/`-N`/absolute — same grammar as `addid`) into an
+/// absolute queue index, mirroring MPD's `ParseInsertPosition`
+/// (`PositionArg.cxx`). `None` means "append" and passes through unchanged.
+pub async fn resolve_add_position(
+    state: &crate::state::AppState,
+    spec: Option<crate::parser::InsertPosition>,
+    command: &str,
+) -> Result<Option<u32>, String> {
+    use crate::parser::InsertPosition;
+
+    let Some(spec) = spec else {
+        return Ok(None);
+    };
+    let queue_len = state.queue.read().await.len() as u32;
+    let resolved = match spec {
+        InsertPosition::Absolute(n) => {
+            if n > queue_len {
+                return Err(ResponseBuilder::error(
+                    ACK_ERROR_ARG,
+                    0,
+                    command,
+                    &format!("Number too large: {n}"),
+                ));
+            }
+            n
+        }
+        InsertPosition::After(n) | InsertPosition::Before(n) => {
+            let current = match state.status.read().await.current_song {
+                Some(pos) => pos.position,
+                None => {
+                    return Err(ResponseBuilder::error(
+                        ACK_ERROR_PLAYER_SYNC,
+                        0,
+                        command,
+                        "No current song",
+                    ));
+                }
+            };
+            if let InsertPosition::After(n) = spec {
+                let max = queue_len - current - 1;
+                if n > max {
+                    return Err(ResponseBuilder::error(
+                        ACK_ERROR_ARG,
+                        0,
+                        command,
+                        &format!("Number too large: {n}"),
+                    ));
+                }
+                current + 1 + n
+            } else {
+                if n > current {
+                    return Err(ResponseBuilder::error(
+                        ACK_ERROR_ARG,
+                        0,
+                        command,
+                        &format!("Number too large: {n}"),
+                    ));
+                }
+                current - n
+            }
+        }
+    };
+    Ok(Some(resolved))
 }
 
 /// Insert `song` into the queue at `position`, rejecting an out-of-range
@@ -97,16 +258,15 @@ pub async fn add_at_checked(
     Ok(queue.add_at(song, position))
 }
 
-/// Append queue item metadata (priority, range) to the response.
+/// Append the queue-item priority to the response (Prio, only if non-zero).
+/// Range is emitted by `ResponseBuilder::song()` itself, positioned right
+/// after the `file` field per MPD's SongPrint.cxx.
 pub fn add_queue_item_metadata(
     resp: &mut crate::response::ResponseBuilder,
     item: &rmpd_core::queue::QueueItem,
 ) {
     if item.priority > 0 {
         resp.field("Prio", item.priority);
-    }
-    if let Some((start, end)) = item.range {
-        resp.field("Range", format!("{start:.3}-{end:.3}"));
     }
 }
 
