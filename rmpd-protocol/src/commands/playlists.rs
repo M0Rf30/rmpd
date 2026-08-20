@@ -4,9 +4,10 @@ use crate::response::ResponseBuilder;
 use crate::state::AppState;
 
 use super::utils::{
-    ACK_ERROR_ARG, ACK_ERROR_EXIST, ACK_ERROR_NO_EXIST, ACK_ERROR_SYS, format_iso8601_timestamp,
-    open_db,
+    ACK_ERROR_ARG, ACK_ERROR_EXIST, ACK_ERROR_NO_EXIST, ACK_ERROR_PLAYER_SYNC, ACK_ERROR_SYS,
+    apply_range, format_iso8601_timestamp, open_db, parse_sort_tag, sort_songs,
 };
+use crate::parser::InsertPosition;
 use std::path::Path;
 
 fn strip_file_uri_prefix(value: &str) -> String {
@@ -30,15 +31,13 @@ fn notify_stored_playlist(state: &AppState) {
 }
 
 /// Reject playlist names that could escape `playlist_directory` or otherwise
-/// misbehave, mirroring MPD's `playlist_check_name()` (playlist_file.c).
+/// misbehave. Mirrors MPD's `spl_valid_name()` (PlaylistFile.cxx) exactly:
+/// on a non-Windows build the only forbidden character is '/' (the
+/// directory separator), plus the name must be non-empty. Names like "."
+/// or ".." are valid single path components once the ".m3u" suffix is
+/// appended, so MPD does not special-case them.
 pub(crate) fn validate_playlist_name(name: &str) -> Result<(), String> {
-    if name.is_empty()
-        || name.contains('/')
-        || name.contains('\\')
-        || name == "."
-        || name == ".."
-        || name.chars().any(|c| c.is_control())
-    {
+    if name.is_empty() || name.contains('/') {
         return Err("Bad playlist name".to_string());
     }
     Ok(())
@@ -283,10 +282,13 @@ pub async fn handle_listplaylists_command(state: &AppState) -> String {
         for entry in dir.flatten() {
             let path = entry.path();
             let ext = path.extension().and_then(|e| e.to_str());
-            if matches!(
-                ext,
-                Some("m3u") | Some("pls") | Some("xspf") | Some("cue") | Some("asx")
-            ) && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
+            // MPD's `listplaylists` enumerates only the stored-playlist
+            // directory's `.m3u` files (`ListPlaylistFiles()` in
+            // PlaylistFile.cxx filters on `PLAYLIST_FILE_SUFFIX`); playlist
+            // plugin files (.pls/.xspf/.cue/.asx) are readable via
+            // `listplaylist`/`load` but are not "stored playlists".
+            if ext == Some("m3u")
+                && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
             {
                 let mtime = entry
                     .metadata()
@@ -316,16 +318,29 @@ pub async fn handle_listplaylists_command(state: &AppState) -> String {
     }
 }
 
-pub async fn handle_save_command(
-    state: &AppState,
-    name: &str,
-    mode: Option<crate::parser::SaveMode>,
-) -> String {
+pub async fn handle_save_command(state: &AppState, name: &str, mode: Option<String>) -> String {
     use crate::parser::SaveMode;
 
     if let Err(e) = validate_playlist_name(name) {
         return ResponseBuilder::error(ACK_ERROR_ARG, 0, "save", &e);
     }
+
+    // Mode names are matched case-sensitively, as MPD does with
+    // `StringIsEqual` in `handle_save` (PlaylistCommands.cxx).
+    let mode = match mode.as_deref() {
+        None => SaveMode::Create,
+        Some("create") => SaveMode::Create,
+        Some("append") => SaveMode::Append,
+        Some("replace") => SaveMode::Replace,
+        Some(_) => {
+            return ResponseBuilder::error(
+                ACK_ERROR_ARG,
+                0,
+                "save",
+                "Unrecognized save mode, expected one of 'create', 'append', 'replace'",
+            );
+        }
+    };
 
     let playlist_dir = match &state.playlist_dir {
         Some(d) => d.clone(),
@@ -339,9 +354,11 @@ pub async fn handle_save_command(
         }
     };
     let pl_path = Path::new(&playlist_dir).join(format!("{name}.m3u"));
-    let mode = mode.unwrap_or(SaveMode::Replace);
 
-    // Enforce mode preconditions (matching MPD's PlaylistSave.cxx spl_save_queue)
+    // Enforce mode preconditions (matching MPD's PlaylistSave.cxx
+    // spl_save_queue: CREATE fails if the playlist exists; APPEND and
+    // REPLACE both fail unless it already exists — "replace" is not a
+    // create-or-overwrite despite the name).
     match mode {
         SaveMode::Create => {
             if pl_path.exists() {
@@ -353,13 +370,10 @@ pub async fn handle_save_command(
                 );
             }
         }
-        SaveMode::Append => {
+        SaveMode::Append | SaveMode::Replace => {
             if !pl_path.exists() {
                 return ResponseBuilder::error(ACK_ERROR_NO_EXIST, 0, "save", "No such playlist");
             }
-        }
-        SaveMode::Replace => {
-            // Replace works whether playlist exists or not (create-or-overwrite)
         }
     }
 
@@ -414,11 +428,48 @@ pub async fn handle_save_command(
     }
 }
 
+/// Resolve `load`'s POSITION argument to an absolute queue index, mirroring
+/// MPD's `ParseInsertPosition()` (PositionArg.cxx): `+N`/`-N` are relative to
+/// the currently playing song, bounds-checked against the queue's length and
+/// current position *before* the load inserts anything.
+fn resolve_insert_position(
+    pos: InsertPosition,
+    queue_len: u32,
+    current_song_position: Option<u32>,
+) -> Result<u32, String> {
+    match pos {
+        InsertPosition::Absolute(n) => {
+            if n > queue_len {
+                Err("Bad song index".to_string())
+            } else {
+                Ok(n)
+            }
+        }
+        InsertPosition::After(n) => {
+            let current = current_song_position.ok_or_else(|| "No current song".to_string())?;
+            let max = queue_len - current - 1;
+            if n > max {
+                Err("Bad song index".to_string())
+            } else {
+                Ok(current + 1 + n)
+            }
+        }
+        InsertPosition::Before(n) => {
+            let current = current_song_position.ok_or_else(|| "No current song".to_string())?;
+            if n > current {
+                Err("Bad song index".to_string())
+            } else {
+                Ok(current - n)
+            }
+        }
+    }
+}
+
 pub async fn handle_load_command(
     state: &AppState,
     name: &str,
     range: Option<(u32, u32)>,
-    position: Option<u32>,
+    position: Option<InsertPosition>,
 ) -> String {
     if let Err(e) = validate_playlist_name(name) {
         return ResponseBuilder::error(ACK_ERROR_ARG, 0, "load", &e);
@@ -436,6 +487,28 @@ pub async fn handle_load_command(
         }
     };
 
+    // Resolve a relative (+N/-N) or absolute POSITION against the queue's
+    // pre-load length and current song, mirroring MPD's ParseInsertPosition
+    // call (which runs before the songs are loaded into the queue).
+    let resolved_position = match position {
+        None => None,
+        Some(pos) => {
+            let queue_len = state.queue.read().await.len() as u32;
+            let current = state.status.read().await.current_song.map(|q| q.position);
+            match resolve_insert_position(pos, queue_len, current) {
+                Ok(p) => Some(p),
+                Err(e) => {
+                    let code = if e == "No current song" {
+                        ACK_ERROR_PLAYER_SYNC
+                    } else {
+                        ACK_ERROR_ARG
+                    };
+                    return ResponseBuilder::error(code, 0, "load", &e);
+                }
+            }
+        }
+    };
+
     // A `.cue` sheet (when no higher-priority playlist of the same name exists)
     // expands into virtual tracks with playback ranges instead of plain paths.
     let cue_only = {
@@ -447,30 +520,25 @@ pub async fn handle_load_command(
             && !p("asx").exists()
     };
     if cue_only {
-        return load_cue_virtual_tracks(state, &playlist_dir, name, range, position).await;
+        return load_cue_virtual_tracks(state, &playlist_dir, name, range, resolved_position).await;
     }
 
     let state_clone = state.clone();
     let playlist_dir_clone = playlist_dir.clone();
     let name_owned = name.to_string();
     let songs = match tokio::task::spawn_blocking(move || {
-        let mut paths = read_playlist(&playlist_dir_clone, &name_owned)
-            .map_err(|e| ResponseBuilder::error(ACK_ERROR_SYS, 0, "load", &e))?;
+        let mut paths = read_playlist(&playlist_dir_clone, &name_owned).map_err(|_| {
+            ResponseBuilder::error(ACK_ERROR_NO_EXIST, 0, "load", "No such playlist")
+        })?;
 
-        // Apply range filter if specified
+        // Apply the optional range, clamping like MPD's playlist enumerator:
+        // a start beyond the playlist's length simply yields nothing, not an
+        // error (`playlist_load_into_queue` never validates the range).
         if let Some((start, end)) = range {
-            let start = start as usize;
-            let end = (end as usize).min(paths.len());
-            if start <= paths.len() {
-                paths = paths[start..end].to_vec();
-            } else {
-                return Err(ResponseBuilder::error(
-                    ACK_ERROR_ARG,
-                    0,
-                    "load",
-                    "Invalid range",
-                ));
-            }
+            let total = paths.len();
+            let start = (start as usize).min(total);
+            let end = (end as usize).min(total).max(start);
+            paths = paths[start..end].to_vec();
         }
 
         // Look up songs from DB; fall back to stub Song if not found
@@ -490,7 +558,7 @@ pub async fn handle_load_command(
 
     {
         let mut queue = state.queue.write().await;
-        if let Some(pos) = position {
+        if let Some(pos) = resolved_position {
             for (i, song) in songs.into_iter().enumerate() {
                 queue.add_at(song, Some(pos + i as u32));
             }
@@ -499,6 +567,11 @@ pub async fn handle_load_command(
                 queue.add(song);
             }
         }
+        // Mirrors MPD's unconditional `SetLastLoadedPlaylist(uri)` at the
+        // end of `playlist_load_into_queue`: recorded once the playlist
+        // file was successfully read, regardless of how many songs (if
+        // any) actually matched the range/database.
+        queue.set_last_loaded_playlist(name);
     }
 
     crate::helpers::update_playlist_version(state).await;
@@ -507,7 +580,8 @@ pub async fn handle_load_command(
 
 /// Load a `.cue` sheet as virtual tracks: each track is added to the queue with
 /// its own playback range (start/end in seconds) so playback is restricted to
-/// that segment of the underlying audio file.
+/// that segment of the underlying audio file. `position` is already an
+/// absolute queue index, resolved by `resolve_insert_position`.
 async fn load_cue_virtual_tracks(
     state: &AppState,
     playlist_dir: &str,
@@ -517,15 +591,15 @@ async fn load_cue_virtual_tracks(
 ) -> String {
     let mut tracks = match read_cue_tracks(playlist_dir, name) {
         Ok(t) => t,
-        Err(e) => return ResponseBuilder::error(ACK_ERROR_SYS, 0, "load", &e),
+        Err(_) => {
+            return ResponseBuilder::error(ACK_ERROR_NO_EXIST, 0, "load", "No such playlist");
+        }
     };
 
     if let Some((start, end)) = range {
-        let start = start as usize;
-        let end = (end as usize).min(tracks.len());
-        if start > tracks.len() || start > end {
-            return ResponseBuilder::error(ACK_ERROR_ARG, 0, "load", "Invalid range");
-        }
+        let total = tracks.len();
+        let start = (start as usize).min(total);
+        let end = (end as usize).min(total).max(start);
         tracks = tracks[start..end].to_vec();
     }
 
@@ -536,6 +610,7 @@ async fn load_cue_virtual_tracks(
             let id = queue.add_at(song, pos);
             queue.set_range_by_id(id, Some(song_range));
         }
+        queue.set_last_loaded_playlist(name);
     }
 
     crate::helpers::update_playlist_version(state).await;
@@ -545,17 +620,51 @@ async fn load_cue_virtual_tracks(
 pub async fn handle_searchaddpl_command(
     state: &AppState,
     name: &str,
-    tag: &str,
-    value: &str,
+    filters: &[(String, String)],
+    sort: Option<&str>,
+    window: Option<(u32, u32)>,
+    position: Option<u32>,
 ) -> String {
     if let Err(e) = validate_playlist_name(name) {
         return ResponseBuilder::error(ACK_ERROR_ARG, 0, "searchaddpl", &e);
     }
 
+    let state_db = state.clone();
+    let filters = filters.to_vec();
+    let sort = sort.map(|s| s.to_string());
+    let songs = match tokio::task::spawn_blocking(move || {
+        let db = open_db(&state_db, "searchaddpl")?;
+        // `searchaddpl`'s parameters have the same meaning as `search`
+        // (case-insensitive).
+        let mut songs = crate::helpers::resolve_filters(&db, &filters, "searchaddpl", false)?;
+        if let Some(sort_arg) = sort.as_deref() {
+            match parse_sort_tag(sort_arg) {
+                Some((key, descending)) => sort_songs(&mut songs, &key, descending),
+                None => {
+                    return Err(ResponseBuilder::error(
+                        ACK_ERROR_ARG,
+                        0,
+                        "searchaddpl",
+                        "Unknown sort tag",
+                    ));
+                }
+            }
+        }
+        Ok(songs)
+    })
+    .await
+    {
+        Ok(Ok(s)) => s,
+        Ok(Err(e)) => return e,
+        Err(_) => return ResponseBuilder::error(ACK_ERROR_SYS, 0, "searchaddpl", "internal error"),
+    };
+    let new_paths: Vec<String> = apply_range(&songs, window)
+        .iter()
+        .map(|s| s.path.to_string())
+        .collect();
+
     let state = state.clone();
     let name = name.to_string();
-    let tag = tag.to_string();
-    let value = value.to_string();
     match tokio::task::spawn_blocking(move || {
         let playlist_dir = match &state.playlist_dir {
             Some(d) => d.clone(),
@@ -568,46 +677,27 @@ pub async fn handle_searchaddpl_command(
                 );
             }
         };
-        let db = match open_db(&state, "searchaddpl") {
-            Ok(d) => d,
-            Err(e) => return e,
-        };
-
-        let songs = if tag.eq_ignore_ascii_case("any") {
-            match db.search_songs(&value) {
-                Ok(s) => s,
-                Err(e) => {
-                    return ResponseBuilder::error(
-                        ACK_ERROR_SYS,
-                        0,
-                        "searchaddpl",
-                        &format!("search error: {e}"),
-                    );
-                }
-            }
-        } else {
-            match db.find_songs(&tag, &value) {
-                Ok(s) => s,
-                Err(e) => {
-                    return ResponseBuilder::error(
-                        ACK_ERROR_SYS,
-                        0,
-                        "searchaddpl",
-                        &format!("query error: {e}"),
-                    );
-                }
-            }
-        };
-
         let pl_path = Path::new(&playlist_dir).join(format!("{name}.m3u"));
         let mut paths = if pl_path.exists() {
             read_m3u_playlist(&playlist_dir, &name).unwrap_or_default()
         } else {
             vec![]
         };
-        for song in &songs {
-            paths.push(song.path.to_string());
+
+        if let Some(pos) = position
+            && pos as usize > paths.len()
+        {
+            return ResponseBuilder::error(ACK_ERROR_ARG, 0, "searchaddpl", "Bad position");
         }
+
+        if let Some(pos) = position {
+            for (i, p) in new_paths.into_iter().enumerate() {
+                paths.insert(pos as usize + i, p);
+            }
+        } else {
+            paths.extend(new_paths);
+        }
+
         let content = paths
             .iter()
             .map(|p| p.as_str())
@@ -658,9 +748,16 @@ pub async fn handle_listplaylist_command(
     let name = name.to_string();
 
     match tokio::task::spawn_blocking(move || {
-        let paths = match read_m3u_playlist(&playlist_dir, &name) {
+        let paths = match read_playlist(&playlist_dir, &name) {
             Ok(p) => p,
-            Err(e) => return ResponseBuilder::error(ACK_ERROR_SYS, 0, "listplaylist", &e),
+            Err(_) => {
+                return ResponseBuilder::error(
+                    ACK_ERROR_NO_EXIST,
+                    0,
+                    "listplaylist",
+                    "No such playlist",
+                );
+            }
         };
 
         let total = paths.len();
@@ -707,9 +804,16 @@ pub async fn handle_listplaylistinfo_command(
             }
         };
 
-        let paths = match read_m3u_playlist(&playlist_dir, &name) {
+        let paths = match read_playlist(&playlist_dir, &name) {
             Ok(p) => p,
-            Err(e) => return ResponseBuilder::error(ACK_ERROR_SYS, 0, "listplaylistinfo", &e),
+            Err(_) => {
+                return ResponseBuilder::error(
+                    ACK_ERROR_NO_EXIST,
+                    0,
+                    "listplaylistinfo",
+                    "No such playlist",
+                );
+            }
         };
         let db = match open_db(&state, "listplaylistinfo") {
             Ok(d) => d,
@@ -728,7 +832,7 @@ pub async fn handle_listplaylistinfo_command(
         for path in slice {
             match db.find_songs("file", path) {
                 Ok(songs) if !songs.is_empty() => {
-                    resp.song(&songs[0], None, None);
+                    resp.song(&songs[0], None, None, None);
                 }
                 _ => {
                     // Song not in DB — emit just the file path like MPD does for unknown tracks
@@ -770,6 +874,23 @@ pub async fn handle_playlistadd_command(
                 );
             }
         };
+
+        let pl_path = Path::new(&playlist_dir).join(format!("{name}.m3u"));
+        let mut paths = if pl_path.exists() {
+            read_m3u_playlist(&playlist_dir, &name).unwrap_or_default()
+        } else {
+            vec![]
+        };
+
+        // Bound-check POSITION against the playlist's current size ahead of
+        // any lookup, matching MPD's `handle_playlistadd_position` (checked
+        // once, before either the scheme-URI or database-search path runs).
+        if let Some(pos) = position
+            && pos as usize > paths.len()
+        {
+            return ResponseBuilder::error(ACK_ERROR_ARG, 0, "playlistadd", "Bad position");
+        }
+
         let db = match open_db(&state, "playlistadd") {
             Ok(d) => d,
             Err(e) => return e,
@@ -796,18 +917,10 @@ pub async fn handle_playlistadd_command(
             }
         };
 
-        let pl_path = Path::new(&playlist_dir).join(format!("{name}.m3u"));
-        let mut paths = if pl_path.exists() {
-            read_m3u_playlist(&playlist_dir, &name).unwrap_or_default()
-        } else {
-            vec![]
-        };
-
-        // Collect new paths to append (sorted, matching MPD behavior)
-        let start_pos = position.map(|p| p as usize);
+        // Collect new paths to insert/append (matching MPD behavior)
         let new_paths: Vec<String> = songs.iter().map(|s| s.path.to_string()).collect();
-        if let Some(pos) = start_pos {
-            let pos = pos.min(paths.len());
+        if let Some(pos) = position {
+            let pos = pos as usize;
             for (i, p) in new_paths.into_iter().enumerate() {
                 paths.insert(pos + i, p);
             }
@@ -887,7 +1000,11 @@ pub async fn handle_playlistclear_command(state: &AppState, name: &str) -> Strin
     }
 }
 
-pub async fn handle_playlistdelete_command(state: &AppState, name: &str, position: u32) -> String {
+pub async fn handle_playlistdelete_command(
+    state: &AppState,
+    name: &str,
+    range: (u32, u32),
+) -> String {
     if let Err(e) = validate_playlist_name(name) {
         return ResponseBuilder::error(ACK_ERROR_ARG, 0, "playlistdelete", &e);
     }
@@ -908,13 +1025,25 @@ pub async fn handle_playlistdelete_command(state: &AppState, name: &str, positio
     match tokio::task::spawn_blocking(move || {
         let mut paths = match read_m3u_playlist(&playlist_dir, &name) {
             Ok(p) => p,
-            Err(e) => return ResponseBuilder::error(ACK_ERROR_SYS, 0, "playlistdelete", &e),
+            Err(_) => {
+                return ResponseBuilder::error(
+                    ACK_ERROR_NO_EXIST,
+                    0,
+                    "playlistdelete",
+                    "No such playlist",
+                );
+            }
         };
-        let pos = position as usize;
-        if pos >= paths.len() {
+        // Mirrors `RangeArg::CheckClip`: only the start bound is validated;
+        // the end is silently clipped to the playlist's length (so e.g. a
+        // single index one past the end is accepted as a no-op removal).
+        let (start, end) = range;
+        let start = start as usize;
+        if start > paths.len() {
             return ResponseBuilder::error(ACK_ERROR_ARG, 0, "playlistdelete", "Bad song index");
         }
-        paths.remove(pos);
+        let end = (end as usize).min(paths.len());
+        paths.drain(start..end);
         let content = paths
             .iter()
             .map(|p| p.as_str())
@@ -946,9 +1075,28 @@ pub async fn handle_playlistdelete_command(state: &AppState, name: &str, positio
 pub async fn handle_playlistmove_command(
     state: &AppState,
     name: &str,
-    from: u32,
+    from: (u32, u32),
     to: u32,
 ) -> String {
+    // MPD doesn't support an open-ended FROM range for playlistmove, and an
+    // empty range or a move to its own start position succeeds as a no-op
+    // without even checking the playlist name/existence (MPD's comment:
+    // "this doesn't check whether the playlist exists, but what the
+    // hell.."). Both checks run before `PlaylistFileEditor` (which is what
+    // validates the name) is ever constructed, so they must precede our own
+    // name validation too.
+    if from.1 == u32::MAX {
+        return ResponseBuilder::error(
+            ACK_ERROR_ARG,
+            0,
+            "playlistmove",
+            "Open-ended range not supported",
+        );
+    }
+    if from.0 >= from.1 || from.0 == to {
+        return ResponseBuilder::new().ok();
+    }
+
     if let Err(e) = validate_playlist_name(name) {
         return ResponseBuilder::error(ACK_ERROR_ARG, 0, "playlistmove", &e);
     }
@@ -969,16 +1117,28 @@ pub async fn handle_playlistmove_command(
     match tokio::task::spawn_blocking(move || {
         let mut paths = match read_m3u_playlist(&playlist_dir, &name) {
             Ok(p) => p,
-            Err(e) => return ResponseBuilder::error(ACK_ERROR_SYS, 0, "playlistmove", &e),
+            Err(_) => {
+                return ResponseBuilder::error(
+                    ACK_ERROR_NO_EXIST,
+                    0,
+                    "playlistmove",
+                    "No such playlist",
+                );
+            }
         };
-        let from = from as usize;
+        // Mirrors `PlaylistFileEditor::MoveIndex`: `src.end` must fit inside
+        // the playlist, and `dest` is bounded by the size *after* removing
+        // the moved range (not the original length).
+        let (start, end) = from;
+        let (start, end) = (start as usize, end as usize);
         let to = to as usize;
-        if from >= paths.len() || to > paths.len() {
-            return ResponseBuilder::error(ACK_ERROR_ARG, 0, "playlistmove", "Bad song index");
+        let total = paths.len();
+        let count = end - start;
+        if end > total || to > total - count {
+            return ResponseBuilder::error(ACK_ERROR_ARG, 0, "playlistmove", "Bad range");
         }
-        let song = paths.remove(from);
-        let insert_pos = if to > from { to - 1 } else { to };
-        paths.insert(insert_pos.min(paths.len()), song);
+        let moved: Vec<String> = paths.drain(start..end).collect();
+        paths.splice(to..to, moved);
         let content = paths
             .iter()
             .map(|p| p.as_str())
@@ -1095,17 +1255,19 @@ pub async fn handle_rename_command(state: &AppState, from: &str, to: &str) -> St
 pub async fn handle_searchplaylist_command(
     state: &AppState,
     name: &str,
-    tag: &str,
-    value: &str,
+    filters: &[(String, String)],
+    window: Option<(u32, u32)>,
 ) -> String {
     if let Err(e) = validate_playlist_name(name) {
         return ResponseBuilder::error(ACK_ERROR_ARG, 0, "searchplaylist", &e);
     }
+    if filters.is_empty() {
+        return ResponseBuilder::error(ACK_ERROR_ARG, 0, "searchplaylist", "missing arguments");
+    }
 
     let state = state.clone();
     let name = name.to_string();
-    let tag = tag.to_string();
-    let value = value.to_string();
+    let filters = filters.to_vec();
     match tokio::task::spawn_blocking(move || {
         let playlist_dir = match &state.playlist_dir {
             Some(d) => d.clone(),
@@ -1118,7 +1280,7 @@ pub async fn handle_searchplaylist_command(
                 );
             }
         };
-        let paths = match read_m3u_playlist(&playlist_dir, &name) {
+        let paths = match read_playlist(&playlist_dir, &name) {
             Ok(p) => p,
             Err(_) => {
                 return ResponseBuilder::error(
@@ -1134,15 +1296,38 @@ pub async fn handle_searchplaylist_command(
             Err(e) => return e,
         };
 
+        // Same filter grammar and case-insensitivity as `search` (MPD's
+        // `filter.Parse(args, /*fold_case=*/true)`), matched against the DB
+        // then intersected with this playlist's own songs so the printed
+        // "Pos:" reflects the playlist's order, not a DB query order.
+        let matched = match crate::helpers::resolve_filters(&db, &filters, "searchplaylist", false)
+        {
+            Ok(s) => s,
+            Err(e) => return e,
+        };
+        let matched_by_path: std::collections::HashMap<&str, &rmpd_core::song::Song> =
+            matched.iter().map(|s| (s.path.as_str(), s)).collect();
+
+        // Mirrors `playlist_provider_search_print`: `position` walks every
+        // playlist entry regardless of match; `window` skips/limits matches.
+        let (win_start, win_end) = window.unwrap_or((0, u32::MAX));
+        let mut skip = win_start as u64;
+        let mut remaining = (win_end as u64).saturating_sub(win_start as u64);
+
         let mut resp = ResponseBuilder::new();
-        let value_lower = value.to_lowercase();
-        let tag_lower = tag.to_lowercase();
-        for path in &paths {
-            if let Ok(Some(song)) = db.get_song_by_path(path)
-                && song.tag_contains(&tag_lower, &value_lower)
-            {
-                resp.song(&song, None, None);
+        for (pos, path) in paths.iter().enumerate() {
+            if remaining == 0 {
+                break;
             }
+            let Some(song) = matched_by_path.get(path.as_str()).copied() else {
+                continue;
+            };
+            if skip > 0 {
+                skip -= 1;
+                continue;
+            }
+            resp.song(song, Some(pos as u32), None, None);
+            remaining -= 1;
         }
         resp.ok()
     })
@@ -1172,7 +1357,7 @@ pub async fn handle_playlistlength_command(state: &AppState, name: &str) -> Stri
                 );
             }
         };
-        let paths = match read_m3u_playlist(&playlist_dir, &name) {
+        let paths = match read_playlist(&playlist_dir, &name) {
             Ok(p) => p,
             Err(_) => {
                 return ResponseBuilder::error(

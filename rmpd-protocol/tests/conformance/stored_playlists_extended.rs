@@ -4,16 +4,22 @@
 use crate::tcp_harness::*;
 
 #[tokio::test]
-async fn save_default_replaces_existing() {
+async fn save_default_mode_is_create() {
     let (_server, mut client, _tmp) = setup_with_db(3).await;
     client.command("add \"music/song1.flac\"").await;
 
     let resp = client.command("save \"dup\"").await;
     assert_ok(&resp);
 
-    // MPD default: save replaces existing playlist (not create-or-fail)
+    // MPD's handle_save defaults to PlaylistSaveMode::CREATE, and
+    // spl_save_playlist throws LIST_EXISTS -> ACK_ERROR_EXIST(56) with
+    // "Playlist already exists" when the file is already there.
     let resp = client.command("save \"dup\"").await;
-    assert_ok(&resp);
+    assert_eq!(
+        resp.trim_end(),
+        "ACK [56@0] {save} Playlist already exists",
+        "default save mode must be create, not replace"
+    );
 }
 
 #[tokio::test]

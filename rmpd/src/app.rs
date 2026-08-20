@@ -136,7 +136,7 @@ pub async fn run(bind_address: String, config: Config) -> Result<()> {
     // Trigger an initial library scan on startup when auto-update is enabled.
     if config.database.auto_update {
         info!("auto-update enabled: scanning music directory");
-        state.spawn_library_update();
+        state.spawn_library_update(false).await;
     }
 
     // Sync enabled music sources (ping first; unreachable sources are skipped).
@@ -276,6 +276,17 @@ async fn restore_state(
         if !enabled.is_empty() {
             state.engine.write().await.set_outputs(enabled);
         }
+    }
+
+    // Restore the last-loaded-playlist name unconditionally (mirrors MPD's
+    // PlaylistState.cxx, which sets it directly from the state file and
+    // doesn't depend on whether any songs are also being restored).
+    if !saved_state.last_loaded_playlist.is_empty() {
+        state
+            .queue
+            .write()
+            .await
+            .set_last_loaded_playlist(saved_state.last_loaded_playlist.clone());
     }
 
     // Restore playlist
