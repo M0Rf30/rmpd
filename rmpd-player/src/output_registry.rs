@@ -28,11 +28,21 @@ fn cpal_factory(
 }
 
 fn null_factory(
-    _format: AudioFormat,
+    format: AudioFormat,
     _quality: ResamplerQuality,
-    _cfg: &OutputConfig,
+    cfg: &OutputConfig,
 ) -> Result<Box<dyn AudioOutput>> {
-    Ok(Box::new(NullOutput::new()))
+    // MPD's null plugin: `sync` defaults to true, pacing playback in real
+    // time via a Timer.
+    let sync = cfg
+        .setting_str("sync")
+        .map(|v| !matches!(v.as_str(), "0" | "no" | "false"))
+        .unwrap_or(true);
+    Ok(Box::new(if sync {
+        NullOutput::synced(format)
+    } else {
+        NullOutput::new()
+    }))
 }
 
 fn fifo_factory(
