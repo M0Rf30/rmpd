@@ -1,3 +1,6 @@
+// Shared across multiple test binaries; each uses only a subset of the helpers.
+#![allow(dead_code)]
+
 use rmpd_core::queue::Queue;
 use rmpd_core::state::{
     ConsumeMode, PlayerState, PlayerStatus, QueuePosition, ReplayGainMode, SingleMode,

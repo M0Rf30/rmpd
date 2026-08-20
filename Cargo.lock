@@ -3078,6 +3078,7 @@ dependencies = [
  "mdns-sd",
  "mpris-server",
  "rand 0.10.2",
+ "regex",
  "rmpd-core",
  "rmpd-library",
  "rmpd-macros",
