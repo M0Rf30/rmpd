@@ -3,7 +3,7 @@
 use crate::response::ResponseBuilder;
 use crate::state::AppState;
 
-use super::utils::ACK_ERROR_NO_EXIST;
+use super::utils::{ACK_ERROR_ARG, ACK_ERROR_NO_EXIST};
 
 /// Reconcile the engine's active output set after an enabled-flag change.
 /// Feeds the engine ALL enabled outputs; if none are enabled, stops playback.
@@ -23,11 +23,14 @@ async fn reconcile_active_output(state: &AppState) {
     }
 }
 
-pub async fn handle_outputs_command(state: &AppState) -> String {
+pub async fn handle_outputs_command(state: &AppState, current_partition: &str) -> String {
     let outputs = state.outputs.read().await;
     let mut resp = ResponseBuilder::new();
 
-    for (i, output) in outputs.iter().enumerate() {
+    for output in outputs
+        .iter()
+        .filter(|o| o.partition.as_deref() == Some(current_partition))
+    {
         resp.field("outputid", output.id);
         resp.field("outputname", &output.name);
         resp.field("plugin", &output.plugin);
@@ -35,19 +38,22 @@ pub async fn handle_outputs_command(state: &AppState) -> String {
         for (key, value) in &output.attributes {
             resp.field("attribute", format!("{key}={value}"));
         }
-        // Add blank line between outputs, but not after the last one
-        if i < outputs.len() - 1 {
-            resp.blank_line();
-        }
     }
 
     resp.ok()
 }
 
-pub async fn handle_enableoutput_command(state: &AppState, id: u32) -> String {
+pub async fn handle_enableoutput_command(
+    state: &AppState,
+    current_partition: &str,
+    id: u32,
+) -> String {
     let found = {
         let mut outputs = state.outputs.write().await;
-        if let Some(output) = outputs.iter_mut().find(|o| o.id == id) {
+        if let Some(output) = outputs
+            .iter_mut()
+            .find(|o| o.id == id && o.partition.as_deref() == Some(current_partition))
+        {
             output.enabled = true;
             true
         } else {
@@ -71,10 +77,17 @@ pub async fn handle_enableoutput_command(state: &AppState, id: u32) -> String {
     }
 }
 
-pub async fn handle_disableoutput_command(state: &AppState, id: u32) -> String {
+pub async fn handle_disableoutput_command(
+    state: &AppState,
+    current_partition: &str,
+    id: u32,
+) -> String {
     let found = {
         let mut outputs = state.outputs.write().await;
-        if let Some(output) = outputs.iter_mut().find(|o| o.id == id) {
+        if let Some(output) = outputs
+            .iter_mut()
+            .find(|o| o.id == id && o.partition.as_deref() == Some(current_partition))
+        {
             output.enabled = false;
             true
         } else {
@@ -98,10 +111,17 @@ pub async fn handle_disableoutput_command(state: &AppState, id: u32) -> String {
     }
 }
 
-pub async fn handle_toggleoutput_command(state: &AppState, id: u32) -> String {
+pub async fn handle_toggleoutput_command(
+    state: &AppState,
+    current_partition: &str,
+    id: u32,
+) -> String {
     let found = {
         let mut outputs = state.outputs.write().await;
-        if let Some(output) = outputs.iter_mut().find(|o| o.id == id) {
+        if let Some(output) = outputs
+            .iter_mut()
+            .find(|o| o.id == id && o.partition.as_deref() == Some(current_partition))
+        {
             output.enabled = !output.enabled;
             true
         } else {
@@ -125,14 +145,27 @@ pub async fn handle_toggleoutput_command(state: &AppState, id: u32) -> String {
     }
 }
 
+/// MPD's IsValidAttributeName: non-empty, alphanumeric plus '_'.
+fn is_valid_attribute_name(name: &str) -> bool {
+    !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
 pub async fn handle_outputset_command(
     state: &AppState,
+    current_partition: &str,
     id: u32,
     name: &str,
     value: &str,
 ) -> String {
+    if !is_valid_attribute_name(name) {
+        return ResponseBuilder::error(ACK_ERROR_ARG, 0, "outputset", "Illegal attribute name");
+    }
+
     let mut outputs = state.outputs.write().await;
-    if let Some(output) = outputs.iter_mut().find(|o| o.id == id) {
+    if let Some(output) = outputs
+        .iter_mut()
+        .find(|o| o.id == id && o.partition.as_deref() == Some(current_partition))
+    {
         output
             .attributes
             .insert(name.to_string(), value.to_string());

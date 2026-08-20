@@ -3,6 +3,10 @@
 //! Tests for multi-partition support including partition management,
 //! client context switching, and output assignment.
 
+mod common;
+#[path = "common/tcp_harness.rs"]
+mod tcp_harness;
+
 use rmpd_protocol::commands::partition;
 use rmpd_protocol::{AppState, ConnectionState};
 
@@ -52,12 +56,12 @@ async fn test_newpartition_invalid_name() {
     // Test empty name
     let response1 = partition::handle_newpartition_command(&state, "").await;
     assert!(response1.contains("ACK"));
-    assert!(response1.contains("Invalid partition name"));
+    assert!(response1.contains("bad name"));
 
     // Test invalid characters
     let response2 = partition::handle_newpartition_command(&state, "foo/bar").await;
     assert!(response2.contains("ACK"));
-    assert!(response2.contains("Invalid partition name"));
+    assert!(response2.contains("bad name"));
 }
 
 #[tokio::test]
@@ -102,7 +106,7 @@ async fn test_partition_switch_nonexistent() {
         partition::handle_partition_command(&state, &mut conn_state, "nonexistent").await;
 
     assert!(response.contains("ACK"));
-    assert!(response.contains("No such partition"));
+    assert!(response.contains("partition does not exist"));
     // Should not change current partition
     assert_eq!(conn_state.current_partition, "default");
 }
@@ -130,7 +134,7 @@ async fn test_delpartition_default() {
     let response = partition::handle_delpartition_command(&state, "default").await;
 
     assert!(response.contains("ACK"));
-    assert!(response.contains("Cannot delete default partition"));
+    assert!(response.contains("cannot delete the default partition"));
 }
 
 #[tokio::test]
@@ -140,8 +144,7 @@ async fn test_delpartition_nonexistent() {
     let response = partition::handle_delpartition_command(&state, "nonexistent").await;
 
     assert!(response.contains("ACK"));
-    // The error message may vary, just check it's an error
-    assert!(response.contains("not found") || response.contains("No such partition"));
+    assert!(response.contains("no such partition"));
 }
 
 #[tokio::test]
@@ -242,4 +245,129 @@ async fn test_output_partition_tracking() {
     let outputs = state.outputs.read().await;
     let moved_output = outputs.iter().find(|o| o.id == 0).unwrap();
     assert_eq!(moved_output.partition.as_deref(), Some("bedroom"));
+}
+
+#[tokio::test]
+async fn test_delpartition_refuses_with_assigned_outputs() {
+    let state = AppState::new();
+    let mut conn_state = ConnectionState::new();
+
+    partition::handle_newpartition_command(&state, "bedroom").await;
+    partition::handle_partition_command(&state, &mut conn_state, "bedroom").await;
+    partition::handle_moveoutput_command(&state, &conn_state, "Default Output").await;
+
+    let response = partition::handle_delpartition_command(&state, "bedroom").await;
+    assert!(response.contains("ACK"));
+    assert!(response.contains("still has outputs"));
+
+    // Partition must still exist
+    let manager = state.partition_manager.as_ref().unwrap();
+    assert!(manager.get_partition("bedroom").await.is_some());
+}
+
+#[tokio::test]
+async fn test_listpartitions_creation_order() {
+    let state = AppState::new();
+
+    // MPD lists partitions in creation order, not alphabetically.
+    partition::handle_newpartition_command(&state, "zzz").await;
+    partition::handle_newpartition_command(&state, "aaa").await;
+
+    let response = partition::handle_listpartitions_command(&state).await;
+    let default_pos = response.find("partition: default").unwrap();
+    let zzz_pos = response.find("partition: zzz").unwrap();
+    let aaa_pos = response.find("partition: aaa").unwrap();
+    assert!(default_pos < zzz_pos);
+    assert!(zzz_pos < aaa_pos);
+}
+
+#[tokio::test]
+async fn test_newpartition_delpartition_emit_partition_idle() {
+    use rmpd_core::event::Event;
+
+    let state = AppState::new();
+    let mut rx = state.event_bus.subscribe();
+
+    partition::handle_newpartition_command(&state, "bedroom").await;
+    let mut got = false;
+    while let Ok(ev) = rx.try_recv() {
+        got |= matches!(ev, Event::PartitionsChanged);
+    }
+    assert!(got, "newpartition must emit Event::PartitionsChanged");
+
+    partition::handle_delpartition_command(&state, "bedroom").await;
+    let mut got = false;
+    while let Ok(ev) = rx.try_recv() {
+        got |= matches!(ev, Event::PartitionsChanged);
+    }
+    assert!(got, "delpartition must emit Event::PartitionsChanged");
+}
+
+#[tokio::test]
+async fn test_moveoutput_emits_output_idle() {
+    use rmpd_core::event::Event;
+
+    let state = AppState::new();
+    let mut conn_state = ConnectionState::new();
+    partition::handle_newpartition_command(&state, "bedroom").await;
+    partition::handle_partition_command(&state, &mut conn_state, "bedroom").await;
+
+    let mut rx = state.event_bus.subscribe();
+    let response =
+        partition::handle_moveoutput_command(&state, &conn_state, "Default Output").await;
+    assert_eq!(response, "OK\n");
+
+    let mut got = false;
+    while let Ok(ev) = rx.try_recv() {
+        got |= matches!(ev, Event::OutputsChanged);
+    }
+    assert!(got, "moveoutput must emit Event::OutputsChanged");
+}
+
+#[tokio::test]
+async fn status_reflects_current_partition() {
+    let (_server, mut client) = tcp_harness::setup().await;
+
+    client.command("newpartition bedroom").await;
+    client.command("partition bedroom").await;
+
+    let status = client.command("status").await;
+    assert_eq!(
+        tcp_harness::get_field(&status, "partition"),
+        Some("bedroom"),
+        "status must report the client's current partition, not a hardcoded default: {status}"
+    );
+}
+
+#[tokio::test]
+async fn outputs_scoped_to_current_partition() {
+    let (_server, mut client) = tcp_harness::setup().await;
+
+    client.command("newpartition bedroom").await;
+    client.command("partition bedroom").await;
+
+    // The default output still belongs to "default"; a fresh partition owns
+    // no outputs, so `outputs` must be a bare OK (matches MPD's
+    // per-partition output listing).
+    let resp = client.command("outputs").await;
+    assert_eq!(
+        resp, "OK\n",
+        "outputs must be scoped to the current partition: {resp}"
+    );
+}
+
+#[tokio::test]
+async fn enableoutput_scoped_to_current_partition() {
+    let (_server, mut client) = tcp_harness::setup().await;
+
+    client.command("newpartition bedroom").await;
+    client.command("partition bedroom").await;
+
+    // Output id 0 exists but belongs to "default", not "bedroom" — must be
+    // invisible to id-based lookups from this partition.
+    let resp = client.command("enableoutput 0").await;
+    assert!(
+        resp.starts_with("ACK ") && resp.contains("No such audio output"),
+        "enableoutput must not resolve ids outside the current partition: {resp}"
+    );
 }
