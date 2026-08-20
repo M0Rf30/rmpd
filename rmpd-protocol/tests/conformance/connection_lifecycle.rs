@@ -50,12 +50,17 @@ async fn close_terminates_connection() {
 }
 
 #[tokio::test]
-async fn empty_lines_are_ignored() {
+async fn empty_line_closes_connection() {
     let (_server, mut client) = setup().await;
-    // Send empty lines then a real command
-    client.send_raw("\n\n\nping\n").await;
-    let resp = client.read_response().await;
-    assert_ok(&resp);
+    // MPD closes the connection on any line that doesn't start with a
+    // lowercase ASCII letter (Client::ProcessLine's IsLowerAlphaASCII
+    // check) — including a bare empty line. No ACK is sent.
+    client.send_raw("\n").await;
+    let line = client.read_line().await;
+    assert!(
+        line.is_empty(),
+        "empty line should close the connection: {line:?}"
+    );
 }
 
 #[tokio::test]
