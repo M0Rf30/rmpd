@@ -51,7 +51,12 @@ pub async fn handle_partition_command(
         conn_state.current_partition = name.to_string();
         ResponseBuilder::new().ok()
     } else {
-        ResponseBuilder::error(ACK_ERROR_NO_EXIST, 0, "partition", "No such partition")
+        ResponseBuilder::error(
+            ACK_ERROR_NO_EXIST,
+            0,
+            "partition",
+            "partition does not exist",
+        )
     }
 }
 
@@ -67,34 +72,14 @@ pub async fn handle_partition_command(
 /// OK
 /// ```
 pub async fn handle_listpartitions_command(state: &AppState) -> String {
-    let manager = match &state.partition_manager {
-        Some(m) => m,
-        None => {
-            // If no partition manager, return just default
-            let mut resp = ResponseBuilder::new();
-            resp.field("partition", "default");
-            return resp.ok();
-        }
-    };
-
-    let mut partitions = manager.list_partitions().await;
-
-    // Always include "default" partition (MPD guarantees it exists)
-    if !partitions.contains(&"default".to_string()) {
-        partitions.insert(0, "default".to_string());
-    }
-    // Sort so "default" comes first, others alphabetically
-    partitions.sort_by(|a, b| {
-        if a == "default" {
-            std::cmp::Ordering::Less
-        } else if b == "default" {
-            std::cmp::Ordering::Greater
-        } else {
-            a.cmp(b)
-        }
-    });
     let mut resp = ResponseBuilder::new();
-    for name in partitions {
+
+    let names = match &state.partition_manager {
+        Some(m) => m.list_partitions().await,
+        // If no partition manager, MPD still always has "default".
+        None => vec!["default".to_string()],
+    };
+    for name in names {
         resp.field("partition", &name);
     }
     resp.ok()
@@ -107,17 +92,19 @@ pub async fn handle_listpartitions_command(state: &AppState) -> String {
 ///
 /// Returns:
 /// - OK if partition created successfully
-/// - ACK `[50@0]` {newpartition} Partition already exists
-/// - ACK `[50@0]` {newpartition} Invalid partition name
-pub async fn handle_newpartition_command(state: &AppState, name: &str) -> String {
-    // Validate partition name
-    // Validate partition name: only alphanumeric, '-', '_' allowed (MPD IsValidPartitionName)
-    let is_valid = !name.is_empty()
+/// - ACK `[56@0]` {newpartition} name already exists
+/// - ACK `[2@0]` {newpartition} bad name
+fn is_valid_partition_name(name: &str) -> bool {
+    // MPD's IsValidPartitionName: non-empty, alphanumeric plus '-'/'_'.
+    !name.is_empty()
         && name
             .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
-    if !is_valid {
-        return ResponseBuilder::error(ACK_ERROR_ARG, 0, "newpartition", "Invalid partition name");
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+pub async fn handle_newpartition_command(state: &AppState, name: &str) -> String {
+    if !is_valid_partition_name(name) {
+        return ResponseBuilder::error(ACK_ERROR_ARG, 0, "newpartition", "bad name");
     }
 
     let manager = match &state.partition_manager {
@@ -135,6 +122,9 @@ pub async fn handle_newpartition_command(state: &AppState, name: &str) -> String
     match manager.create_partition(name.to_string()).await {
         Ok(_) => {
             info!("created new partition: {}", name);
+            state
+                .event_bus
+                .emit(rmpd_core::event::Event::PartitionsChanged);
             ResponseBuilder::new().ok()
         }
         Err(e) if e.contains("already exists") => {
@@ -149,13 +139,18 @@ pub async fn handle_newpartition_command(state: &AppState, name: &str) -> String
 /// Delete an existing partition
 ///
 /// Deletes a partition and all its associated state. Cannot delete the
-/// default partition. Clients in the deleted partition are moved to default.
+/// default partition, one that still has clients, or one that still has
+/// outputs assigned.
 ///
 /// Returns:
 /// - OK if partition deleted successfully
-/// - ACK `[50@0]` {delpartition} Cannot delete default partition
-/// - ACK `[50@0]` {delpartition} No such partition
+/// - ACK `[5@0]` {delpartition} cannot delete the default partition
+/// - ACK `[50@0]` {delpartition} no such partition
 pub async fn handle_delpartition_command(state: &AppState, name: &str) -> String {
+    if !is_valid_partition_name(name) {
+        return ResponseBuilder::error(ACK_ERROR_ARG, 0, "delpartition", "bad name");
+    }
+
     let manager = match &state.partition_manager {
         Some(m) => m,
         None => {
@@ -171,16 +166,19 @@ pub async fn handle_delpartition_command(state: &AppState, name: &str) -> String
     match manager.delete_partition(name).await {
         Ok(_) => {
             info!("deleted partition: {}", name);
+            state
+                .event_bus
+                .emit(rmpd_core::event::Event::PartitionsChanged);
             ResponseBuilder::new().ok()
         }
         Err(e) if e.contains("Cannot delete default") => ResponseBuilder::error(
             ACK_ERROR_UNKNOWN,
             0,
             "delpartition",
-            "Cannot delete default partition",
+            "cannot delete the default partition",
         ),
         Err(e) if e.contains("not found") || e.contains("Not found") => {
-            ResponseBuilder::error(ACK_ERROR_NO_EXIST, 0, "delpartition", "No such partition")
+            ResponseBuilder::error(ACK_ERROR_NO_EXIST, 0, "delpartition", "no such partition")
         }
         Err(e) if e.contains("still has clients") => ResponseBuilder::error(
             ACK_ERROR_UNKNOWN,
@@ -291,6 +289,10 @@ pub async fn handle_moveoutput_command(
                     output.partition = Some(to.clone());
                 }
             }
+
+            state
+                .event_bus
+                .emit(rmpd_core::event::Event::OutputsChanged);
 
             info!("moved output '{}' to partition '{}'", output_name, to);
             ResponseBuilder::new().ok()

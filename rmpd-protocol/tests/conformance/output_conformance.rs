@@ -68,3 +68,38 @@ async fn output_nonexistent_id() {
     let resp = client.command("enableoutput 999").await;
     assert!(resp.starts_with("ACK "), "nonexistent output: {resp}");
 }
+
+#[tokio::test]
+async fn outputset_illegal_attribute_name_rejected() {
+    let (_server, mut client) = setup().await;
+    let resp = client.command("outputset 0 \"bad name!\" value").await;
+    assert!(resp.starts_with("ACK [2@0]"), "got: {resp}");
+}
+
+#[tokio::test]
+async fn outputs_no_blank_line_between_entries() {
+    use rmpd_protocol::state::{AppState, OutputInfo};
+
+    let state = AppState::new();
+    {
+        let mut outputs = state.outputs.write().await;
+        outputs.push(OutputInfo {
+            id: 1,
+            name: "Second Output".to_string(),
+            plugin: "cpal".to_string(),
+            enabled: true,
+            partition: Some("default".to_string()),
+            config: None,
+            attributes: Default::default(),
+        });
+    }
+
+    let server = MpdTestServer::start_with_state(state).await;
+    let mut client = MpdTestClient::connect(server.port()).await;
+    let resp = client.command("outputs").await;
+    assert_ok(&resp);
+    assert!(
+        !resp.contains("\n\n"),
+        "outputs response must not have blank lines between entries: {resp:?}"
+    );
+}

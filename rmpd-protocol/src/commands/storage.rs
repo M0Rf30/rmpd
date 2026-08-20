@@ -8,7 +8,7 @@
 //! - mount/unmount/listmounts: ✅ Tier 1 (tracking) + Tier 2 (actual mounting) implemented
 
 use super::ResponseBuilder;
-use super::utils::ACK_ERROR_SYS;
+use super::utils::{ACK_ERROR_ARG, ACK_ERROR_SYS};
 use crate::state::AppState;
 use rmpd_core::storage::platform::get_default_backend;
 use std::path::PathBuf;
@@ -24,6 +24,11 @@ use std::path::PathBuf;
 /// Set `disable_actual_mount` on AppState to disable actual mounting
 /// and only track mounts in registry (Tier 1 mode).
 pub async fn handle_mount_command(state: &AppState, path: &str, uri: &str) -> String {
+    // MPD: empty mount point is always rejected ("Bad mount point").
+    if path.is_empty() {
+        return ResponseBuilder::error(ACK_ERROR_ARG, 0, "mount", "Bad mount point");
+    }
+
     // Validate path (no ../, no absolute paths)
     if path.contains("..") || path.starts_with('/') {
         return ResponseBuilder::error(
@@ -32,6 +37,10 @@ pub async fn handle_mount_command(state: &AppState, path: &str, uri: &str) -> St
             "mount",
             "Invalid path: no absolute paths or path traversal allowed",
         );
+    }
+
+    if state.mount_registry.is_mounted(path).await {
+        return ResponseBuilder::error(ACK_ERROR_ARG, 0, "mount", "Mount point busy");
     }
 
     // Check if music directory is configured
@@ -92,6 +101,7 @@ pub async fn handle_mount_command(state: &AppState, path: &str, uri: &str) -> St
                     );
                 }
 
+                state.event_bus.emit(rmpd_core::event::Event::MountsChanged);
                 ResponseBuilder::new().ok()
             }
             Ok(Err(e)) => {
@@ -110,7 +120,10 @@ pub async fn handle_mount_command(state: &AppState, path: &str, uri: &str) -> St
             .register(path.to_string(), uri.to_string())
             .await
         {
-            Ok(_) => ResponseBuilder::new().ok(),
+            Ok(_) => {
+                state.event_bus.emit(rmpd_core::event::Event::MountsChanged);
+                ResponseBuilder::new().ok()
+            }
             Err(e) => ResponseBuilder::error(
                 ACK_ERROR_SYS,
                 0,
@@ -128,6 +141,15 @@ pub async fn handle_mount_command(state: &AppState, path: &str, uri: &str) -> St
 /// Set `disable_actual_mount` on AppState to disable actual unmounting
 /// and only remove from registry (Tier 1 mode).
 pub async fn handle_unmount_command(state: &AppState, path: &str) -> String {
+    // MPD: empty mount point is always rejected ("Bad mount point").
+    if path.is_empty() {
+        return ResponseBuilder::error(ACK_ERROR_ARG, 0, "unmount", "Bad mount point");
+    }
+
+    if state.mount_registry.get(path).await.is_none() {
+        return ResponseBuilder::error(ACK_ERROR_ARG, 0, "unmount", "Not a mount point");
+    }
+
     // Check if music directory is configured
     let music_dir = match &state.music_dir {
         Some(dir) => dir,
@@ -165,6 +187,7 @@ pub async fn handle_unmount_command(state: &AppState, path: &str) -> String {
                     tracing::error!("failed to unregister mount: {}", e);
                 }
 
+                state.event_bus.emit(rmpd_core::event::Event::MountsChanged);
                 ResponseBuilder::new().ok()
             }
             Ok(Err(e)) => {
@@ -181,7 +204,10 @@ pub async fn handle_unmount_command(state: &AppState, path: &str) -> String {
     } else {
         // Tier 1: Only remove from registry
         match state.mount_registry.unmount(path).await {
-            Ok(_) => ResponseBuilder::new().ok(),
+            Ok(_) => {
+                state.event_bus.emit(rmpd_core::event::Event::MountsChanged);
+                ResponseBuilder::new().ok()
+            }
             Err(e) => {
                 ResponseBuilder::error(ACK_ERROR_SYS, 0, "unmount", &format!("Unmount failed: {e}"))
             }

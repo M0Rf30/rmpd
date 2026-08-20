@@ -86,8 +86,7 @@ async fn test_unmount_nonexistent() {
 
     let response = storage::handle_unmount_command(&state, "nonexistent").await;
     assert!(response.contains("ACK"));
-    // In Tier 1 mode, unmounting unregistered mount returns error
-    assert!(response.contains("not found") || response.contains("failed"));
+    assert!(response.contains("Not a mount point"));
 }
 
 #[tokio::test]
@@ -133,4 +132,44 @@ async fn test_protocol_extraction() {
             _ => panic!("Unexpected mount path"),
         }
     }
+}
+
+#[tokio::test]
+async fn test_mount_empty_path_rejected() {
+    let state = test_state();
+
+    let response = storage::handle_mount_command(&state, "", "nfs://server/share").await;
+    assert!(response.contains("ACK"));
+    assert!(response.contains("Bad mount point"));
+}
+
+#[tokio::test]
+async fn test_unmount_empty_path_rejected() {
+    let state = test_state();
+
+    let response = storage::handle_unmount_command(&state, "").await;
+    assert!(response.contains("ACK"));
+    assert!(response.contains("Bad mount point"));
+}
+
+#[tokio::test]
+async fn test_mount_and_unmount_emit_mount_idle() {
+    use rmpd_core::event::Event;
+
+    let state = test_state();
+    let mut rx = state.event_bus.subscribe();
+
+    storage::handle_mount_command(&state, "remote/nas", "nfs://192.168.1.100/music").await;
+    let mut got = false;
+    while let Ok(ev) = rx.try_recv() {
+        got |= matches!(ev, Event::MountsChanged);
+    }
+    assert!(got, "mount must emit Event::MountsChanged");
+
+    storage::handle_unmount_command(&state, "remote/nas").await;
+    let mut got = false;
+    while let Ok(ev) = rx.try_recv() {
+        got |= matches!(ev, Event::MountsChanged);
+    }
+    assert!(got, "unmount must emit Event::MountsChanged");
 }

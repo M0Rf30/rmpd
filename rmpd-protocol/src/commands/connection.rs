@@ -4,13 +4,24 @@
 //! and connection management.
 
 use super::{AppState, ResponseBuilder};
-use crate::commands::utils::ACK_ERROR_PASSWORD;
+use crate::commands::utils::{ACK_ERROR_PASSWORD, ACK_ERROR_PERMISSION};
 use crate::connection::ConnectionState;
 
 /// Return server configuration
 ///
-/// Returns server configuration information from AppState.
-pub async fn handle_config_command(state: &AppState) -> String {
+/// Returns server configuration information from AppState. MPD restricts
+/// this command to clients connected over the local Unix socket
+/// (`Client::IsLocal`); remote clients get an ACK.
+pub async fn handle_config_command(state: &AppState, conn_state: &ConnectionState) -> String {
+    if !conn_state.is_local {
+        return ResponseBuilder::error(
+            ACK_ERROR_PERMISSION,
+            0,
+            "config",
+            "Command only permitted to local clients",
+        );
+    }
+
     let mut resp = ResponseBuilder::new();
 
     if let Some(music_dir) = &state.music_dir {
@@ -21,8 +32,8 @@ pub async fn handle_config_command(state: &AppState) -> String {
         resp.field("playlist_directory", playlist_dir);
     }
 
-    // MPD reports pcre support; rmpd uses basic regex matching
-    resp.field("pcre", "0");
+    // rmpd has no PCRE support compiled in (matches MPD builds without
+    // HAVE_PCRE): omit the field entirely rather than reporting "pcre: 0".
     resp.ok()
 }
 
