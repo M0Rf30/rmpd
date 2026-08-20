@@ -357,8 +357,8 @@ pub enum Command {
     },
     /// A `sticker` line whose subcommand isn't recognized. Carries
     /// `sticker_type` through so the handler validates the domain first
-    /// (MPD's `handle_sticker` resolves args[1] into a domain handler
-    /// before ever checking args[0]) and only reports "bad request" once
+    /// (MPD's `handle_sticker` resolves `args[1]` into a domain handler
+    /// before ever checking `args[0]`) and only reports "bad request" once
     /// the domain itself is valid.
     #[command(name = "sticker", permission = 8)]
     StickerInvalid { sticker_type: String },

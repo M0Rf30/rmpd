@@ -183,7 +183,7 @@ fn sticker_matches(op: StickerCmp, sticker_value: &str, cmp_value: &str) -> bool
 }
 
 /// A `sticker` line with an unrecognized subcommand. MPD resolves the
-/// domain (args[1]) before ever checking the subcommand (StickerCommands.cxx
+/// domain (`args[1]`) before ever checking the subcommand (StickerCommands.cxx
 /// `handle_sticker`), so an invalid domain still reports "unknown sticker
 /// domain"/"not supported" here; only a valid (song) domain reaches the
 /// generic "bad request".
