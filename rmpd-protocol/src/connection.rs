@@ -11,8 +11,9 @@ pub const PERMISSION_READ: u8 = 1;
 pub const PERMISSION_ADD: u8 = 2;
 pub const PERMISSION_CONTROL: u8 = 4;
 pub const PERMISSION_ADMIN: u8 = 8;
+pub const PERMISSION_PLAYER: u8 = 16;
 pub const PERMISSION_ALL: u8 =
-    PERMISSION_READ | PERMISSION_ADD | PERMISSION_CONTROL | PERMISSION_ADMIN;
+    PERMISSION_READ | PERMISSION_ADD | PERMISSION_CONTROL | PERMISSION_ADMIN | PERMISSION_PLAYER;
 
 /// Per-client connection state
 ///
@@ -33,6 +34,11 @@ pub struct ConnectionState {
     /// Some(set) means only features in the set are enabled
     pub enabled_features: Option<HashSet<String>>,
 
+    /// Set of enabled string-normalization options for this connection
+    /// (e.g. `strip_diacritics`). None means all are enabled; MPD starts
+    /// with none enabled, so `ConnectionState::new()` uses `Some(empty)`.
+    pub enabled_normalizations: Option<HashSet<String>>,
+
     /// Channels this client is subscribed to
     pub subscribed_channels: Vec<String>,
 
@@ -41,6 +47,17 @@ pub struct ConnectionState {
 
     /// MPD permissions bitmask for this connection
     pub permissions: u8,
+
+    /// Whether this connection came in over the local Unix domain socket.
+    /// Mirrors MPD's `Client::IsLocal()` (true only when peer credentials
+    /// are available, i.e. AF_UNIX — never for TCP, including loopback).
+    /// Gates `config` and the `file://` line of `urlhandlers`.
+    pub is_local: bool,
+
+    /// Maximum size in bytes of a binary payload chunk (`albumart`,
+    /// `readpicture`), settable via `binarylimit`. Matches MPD's
+    /// `Client::binary_limit` default of 8192.
+    pub binary_limit: u32,
 }
 
 impl ConnectionState {
@@ -50,11 +67,14 @@ impl ConnectionState {
     /// starts in the "default" partition
     pub fn new() -> Self {
         Self {
-            enabled_tags: None,                     // All tags enabled
-            enabled_features: Some(HashSet::new()), // No protocol features enabled by default
+            enabled_tags: None,                           // All tags enabled
+            enabled_features: Some(HashSet::new()),       // No protocol features enabled by default
+            enabled_normalizations: Some(HashSet::new()), // None enabled by default
             subscribed_channels: Vec::new(),
             current_partition: "default".to_string(),
             permissions: PERMISSION_ALL,
+            is_local: false,
+            binary_limit: 8192,
         }
     }
 
@@ -85,8 +105,13 @@ impl ConnectionState {
         self.permissions = PERMISSION_ALL;
     }
 
-    /// OR-in additional permission bits.
+    /// OR-in additional permission bits. For backwards compatibility with
+    /// MPD 0.22 and older, `control` implies `player` (see Permission.cxx).
     pub fn grant_permissions(&mut self, perms: u8) {
+        let mut perms = perms;
+        if perms & PERMISSION_CONTROL != 0 {
+            perms |= PERMISSION_PLAYER;
+        }
         self.permissions |= perms;
     }
 
@@ -191,6 +216,7 @@ impl ConnectionState {
         tags.insert("Grouping".to_string());
         // Comment is excluded by default (matches MPD's global_tag_mask)
         tags.insert("Disc".to_string());
+        tags.insert("DiscSubtitle".to_string());
         tags.insert("Label".to_string());
         tags.insert("MUSICBRAINZ_ARTISTID".to_string());
         tags.insert("MUSICBRAINZ_ALBUMID".to_string());
@@ -262,6 +288,39 @@ impl ConnectionState {
     fn default_features() -> HashSet<String> {
         HashSet::new()
     }
+
+    /// Check if a string-normalization option is enabled for this connection
+    pub fn is_normalization_enabled(&self, name: &str) -> bool {
+        match &self.enabled_normalizations {
+            None => true,
+            Some(names) => names.contains(name),
+        }
+    }
+
+    /// Disable all string-normalization options (`stringnormalization clear`)
+    pub fn clear_normalizations(&mut self) {
+        self.enabled_normalizations = Some(HashSet::new());
+    }
+
+    /// Set exactly these string-normalization options (`stringnormalization all`)
+    pub fn set_normalizations(&mut self, names: Vec<String>) {
+        self.enabled_normalizations = Some(names.into_iter().collect());
+    }
+
+    /// Enable specific string-normalization options
+    pub fn enable_normalizations(&mut self, names: Vec<String>) {
+        self.enabled_normalizations
+            .get_or_insert_with(HashSet::new)
+            .extend(names);
+    }
+
+    /// Disable specific string-normalization options
+    pub fn disable_normalizations(&mut self, names: Vec<String>) {
+        let set = self.enabled_normalizations.get_or_insert_with(HashSet::new);
+        for name in names {
+            set.remove(&name);
+        }
+    }
 }
 
 impl Default for ConnectionState {
@@ -322,5 +381,30 @@ mod tests {
         state.enable_features(vec!["binary".to_string()]);
         assert!(state.is_feature_enabled("binary"));
         assert!(!state.is_feature_enabled("idle"));
+    }
+
+    #[test]
+    fn test_control_implies_player() {
+        // MPD 0.22 backwards compatibility: granting `control` also grants
+        // `player` (see Permission.cxx::parsePermissions).
+        let mut state = ConnectionState::new();
+        state.permissions = PERMISSION_NONE;
+        state.grant_permissions(PERMISSION_CONTROL);
+        assert!(state.has_permission(PERMISSION_CONTROL));
+        assert!(state.has_permission(PERMISSION_PLAYER));
+    }
+
+    #[test]
+    fn test_permission_all_includes_player() {
+        let state = ConnectionState::new();
+        assert!(state.has_permission(PERMISSION_PLAYER));
+        assert_eq!(
+            PERMISSION_ALL,
+            PERMISSION_READ
+                | PERMISSION_ADD
+                | PERMISSION_CONTROL
+                | PERMISSION_ADMIN
+                | PERMISSION_PLAYER
+        );
     }
 }
