@@ -1,10 +1,11 @@
-use rmpd_protocol::parser::{Command, DeleteTarget, MoveFrom};
+use rmpd_protocol::parser::{Command, DeleteTarget, InsertPosition, MoveFrom};
 
 const PERMISSION_NONE: u8 = 0;
 const PERMISSION_READ: u8 = 1;
 const PERMISSION_ADD: u8 = 2;
 const PERMISSION_CONTROL: u8 = 4;
 const PERMISSION_ADMIN: u8 = 8;
+const PERMISSION_PLAYER: u8 = 16;
 
 fn s(v: &str) -> String {
     v.to_string()
@@ -29,28 +30,24 @@ fn check(cmd: &Command, expected_name: &str, expected_perm: u8) {
 
 #[test]
 fn playback_control_metadata() {
-    check(
-        &Command::Play { position: None },
-        "play",
-        PERMISSION_CONTROL,
-    );
-    check(&Command::PlayId { id: None }, "playid", PERMISSION_CONTROL);
-    check(&Command::Pause { state: None }, "pause", PERMISSION_CONTROL);
-    check(&Command::Stop, "stop", PERMISSION_CONTROL);
-    check(&Command::Next, "next", PERMISSION_CONTROL);
-    check(&Command::Previous, "previous", PERMISSION_CONTROL);
+    check(&Command::Play { position: None }, "play", PERMISSION_PLAYER);
+    check(&Command::PlayId { id: None }, "playid", PERMISSION_PLAYER);
+    check(&Command::Pause { state: None }, "pause", PERMISSION_PLAYER);
+    check(&Command::Stop, "stop", PERMISSION_PLAYER);
+    check(&Command::Next, "next", PERMISSION_PLAYER);
+    check(&Command::Previous, "previous", PERMISSION_PLAYER);
     check(
         &Command::Seek {
             position: 0,
             time: 0.0,
         },
         "seek",
-        PERMISSION_CONTROL,
+        PERMISSION_PLAYER,
     );
     check(
         &Command::SeekId { id: 0, time: 0.0 },
         "seekid",
-        PERMISSION_CONTROL,
+        PERMISSION_PLAYER,
     );
     check(
         &Command::SeekCur {
@@ -58,7 +55,7 @@ fn playback_control_metadata() {
             relative: false,
         },
         "seekcur",
-        PERMISSION_CONTROL,
+        PERMISSION_PLAYER,
     );
 }
 
@@ -85,37 +82,40 @@ fn queue_management_metadata() {
             target: DeleteTarget::Position(0),
         },
         "delete",
-        PERMISSION_CONTROL,
+        PERMISSION_PLAYER,
     );
-    check(&Command::DeleteId { id: 0 }, "deleteid", PERMISSION_CONTROL);
-    check(&Command::Clear, "clear", PERMISSION_CONTROL);
+    check(&Command::DeleteId { id: 0 }, "deleteid", PERMISSION_PLAYER);
+    check(&Command::Clear, "clear", PERMISSION_PLAYER);
     check(
         &Command::Move {
             from: MoveFrom::Position(0),
-            to: 0,
+            to: InsertPosition::Absolute(0),
         },
         "move",
-        PERMISSION_CONTROL,
+        PERMISSION_PLAYER,
     );
     check(
-        &Command::MoveId { id: 0, to: 0 },
+        &Command::MoveId {
+            id: 0,
+            to: InsertPosition::Absolute(0),
+        },
         "moveid",
-        PERMISSION_CONTROL,
+        PERMISSION_PLAYER,
     );
     check(
         &Command::Shuffle { range: None },
         "shuffle",
-        PERMISSION_CONTROL,
+        PERMISSION_PLAYER,
     );
     check(
         &Command::Swap { pos1: 0, pos2: 0 },
         "swap",
-        PERMISSION_CONTROL,
+        PERMISSION_PLAYER,
     );
     check(
         &Command::SwapId { id1: 0, id2: 0 },
         "swapid",
-        PERMISSION_CONTROL,
+        PERMISSION_PLAYER,
     );
 }
 
@@ -124,7 +124,7 @@ fn status_metadata() {
     check(&Command::Status, "status", PERMISSION_READ);
     check(&Command::CurrentSong, "currentsong", PERMISSION_READ);
     check(&Command::Stats, "stats", PERMISSION_READ);
-    check(&Command::ClearError, "clearerror", PERMISSION_CONTROL);
+    check(&Command::ClearError, "clearerror", PERMISSION_PLAYER);
 }
 
 #[test]
@@ -158,16 +158,18 @@ fn queue_inspection_metadata() {
     );
     check(
         &Command::PlaylistFind {
-            tag: s(""),
-            value: s(""),
+            filters: vec![(s(""), s(""))],
+            sort: None,
+            window: None,
         },
         "playlistfind",
         PERMISSION_READ,
     );
     check(
         &Command::PlaylistSearch {
-            tag: s(""),
-            value: s(""),
+            filters: vec![(s(""), s(""))],
+            sort: None,
+            window: None,
         },
         "playlistsearch",
         PERMISSION_READ,
@@ -176,12 +178,8 @@ fn queue_inspection_metadata() {
 
 #[test]
 fn volume_metadata() {
-    check(
-        &Command::SetVol { volume: 50 },
-        "setvol",
-        PERMISSION_CONTROL,
-    );
-    check(&Command::Volume { change: 0 }, "volume", PERMISSION_CONTROL);
+    check(&Command::SetVol { volume: 50 }, "setvol", PERMISSION_PLAYER);
+    check(&Command::Volume { change: 0 }, "volume", PERMISSION_PLAYER);
     check(&Command::GetVol, "getvol", PERMISSION_READ);
 }
 
@@ -190,32 +188,32 @@ fn options_metadata() {
     check(
         &Command::Repeat { enabled: false },
         "repeat",
-        PERMISSION_CONTROL,
+        PERMISSION_PLAYER,
     );
     check(
         &Command::Random { enabled: false },
         "random",
-        PERMISSION_CONTROL,
+        PERMISSION_PLAYER,
     );
     check(
         &Command::Single { mode: s("0") },
         "single",
-        PERMISSION_CONTROL,
+        PERMISSION_PLAYER,
     );
     check(
         &Command::Consume { mode: s("0") },
         "consume",
-        PERMISSION_CONTROL,
+        PERMISSION_PLAYER,
     );
     check(
         &Command::Crossfade { seconds: 0 },
         "crossfade",
-        PERMISSION_CONTROL,
+        PERMISSION_PLAYER,
     );
     check(
         &Command::ReplayGainMode { mode: s("off") },
         "replay_gain_mode",
-        PERMISSION_CONTROL,
+        PERMISSION_PLAYER,
     );
     check(
         &Command::ReplayGainStatus,
@@ -257,7 +255,7 @@ fn reflection_metadata() {
     check(&Command::UrlHandlers, "urlhandlers", PERMISSION_READ);
     check(&Command::Decoders, "decoders", PERMISSION_READ);
     check(
-        &Command::StringNormalization,
+        &Command::StringNormalization { subcommand: None },
         "stringnormalization",
         PERMISSION_NONE,
     );
@@ -296,9 +294,9 @@ fn database_metadata() {
     check(
         &Command::List {
             tag: s(""),
-            filter_tag: None,
-            filter_value: None,
-            group: None,
+            filters: vec![],
+            groups: vec![],
+            window: None,
         },
         "list",
         PERMISSION_READ,
@@ -320,8 +318,7 @@ fn database_metadata() {
     );
     check(
         &Command::SearchCount {
-            tag: s(""),
-            value: s(""),
+            filters: vec![],
             group: None,
         },
         "searchcount",
@@ -412,7 +409,7 @@ fn stored_playlists_metadata() {
     check(
         &Command::PlaylistDelete {
             name: s(""),
-            position: 0,
+            range: (0, 0),
         },
         "playlistdelete",
         PERMISSION_CONTROL,
@@ -420,7 +417,7 @@ fn stored_playlists_metadata() {
     check(
         &Command::PlaylistMove {
             name: s(""),
-            from: 0,
+            from: (0, 0),
             to: 0,
         },
         "playlistmove",
@@ -438,8 +435,8 @@ fn stored_playlists_metadata() {
     check(
         &Command::SearchPlaylist {
             name: s(""),
-            tag: s(""),
-            value: s(""),
+            filters: vec![],
+            window: None,
         },
         "searchplaylist",
         PERMISSION_READ,
@@ -456,7 +453,7 @@ fn idle_metadata() {
     check(
         &Command::Idle { subsystems: vec![] },
         "idle",
-        PERMISSION_NONE,
+        PERMISSION_READ,
     );
     check(&Command::NoIdle, "noidle", PERMISSION_NONE);
 }
@@ -505,8 +502,10 @@ fn command_batching_metadata() {
 fn advanced_database_metadata() {
     check(
         &Command::SearchAdd {
-            tag: s(""),
-            value: s(""),
+            filters: vec![],
+            sort: None,
+            window: None,
+            position: None,
         },
         "searchadd",
         PERMISSION_ADD,
@@ -514,16 +513,20 @@ fn advanced_database_metadata() {
     check(
         &Command::SearchAddPl {
             name: s(""),
-            tag: s(""),
-            value: s(""),
+            filters: vec![],
+            sort: None,
+            window: None,
+            position: None,
         },
         "searchaddpl",
-        PERMISSION_ADD,
+        PERMISSION_CONTROL,
     );
     check(
         &Command::FindAdd {
-            tag: s(""),
-            value: s(""),
+            filters: vec![],
+            sort: None,
+            window: None,
+            position: None,
         },
         "findadd",
         PERMISSION_ADD,
@@ -539,71 +542,78 @@ fn advanced_database_metadata() {
 fn sticker_metadata() {
     check(
         &Command::StickerGet {
+            sticker_type: s("song"),
             uri: s(""),
             name: s(""),
         },
         "sticker",
-        PERMISSION_CONTROL,
+        PERMISSION_ADMIN,
     );
     check(
         &Command::StickerSet {
+            sticker_type: s("song"),
             uri: s(""),
             name: s(""),
             value: s(""),
         },
         "sticker",
-        PERMISSION_CONTROL,
+        PERMISSION_ADMIN,
     );
     check(
         &Command::StickerDelete {
+            sticker_type: s("song"),
             uri: s(""),
             name: None,
         },
         "sticker",
-        PERMISSION_CONTROL,
+        PERMISSION_ADMIN,
     );
     check(
-        &Command::StickerList { uri: s("") },
+        &Command::StickerList {
+            sticker_type: s("song"),
+            uri: s(""),
+        },
         "sticker",
-        PERMISSION_CONTROL,
+        PERMISSION_ADMIN,
     );
     check(
         &Command::StickerFind {
+            sticker_type: s("song"),
             uri: s(""),
             name: s(""),
             value: None,
+            sort: None,
+            window: None,
         },
         "sticker",
-        PERMISSION_CONTROL,
+        PERMISSION_ADMIN,
     );
     check(
         &Command::StickerInc {
+            sticker_type: s("song"),
             uri: s(""),
             name: s(""),
-            delta: None,
+            delta: 1,
         },
         "sticker",
-        PERMISSION_CONTROL,
+        PERMISSION_ADMIN,
     );
     check(
         &Command::StickerDec {
+            sticker_type: s("song"),
             uri: s(""),
             name: s(""),
-            delta: None,
+            delta: 1,
         },
         "sticker",
-        PERMISSION_CONTROL,
+        PERMISSION_ADMIN,
     );
+    check(&Command::StickerNames, "stickernames", PERMISSION_ADMIN);
+    check(&Command::StickerTypes, "stickertypes", PERMISSION_ADMIN);
     check(
-        &Command::StickerNames { uri: None },
-        "stickernames",
-        PERMISSION_READ,
-    );
-    check(&Command::StickerTypes, "stickertypes", PERMISSION_READ);
-    check(
-        &Command::StickerNamesTypes { uri: None },
+        &Command::StickerNamesTypes { sticker_type: None },
         "stickernamestypes",
-        PERMISSION_READ,
+        PERMISSION_ADMIN,
     );
 }
 
@@ -612,7 +622,7 @@ fn partition_metadata() {
     check(
         &Command::Partition { name: s("") },
         "partition",
-        PERMISSION_CONTROL,
+        PERMISSION_READ,
     );
     check(&Command::ListPartitions, "listpartitions", PERMISSION_READ);
     check(
@@ -656,15 +666,15 @@ fn messaging_metadata() {
     check(
         &Command::Subscribe { channel: s("") },
         "subscribe",
-        PERMISSION_CONTROL,
+        PERMISSION_READ,
     );
     check(
         &Command::Unsubscribe { channel: s("") },
         "unsubscribe",
-        PERMISSION_CONTROL,
+        PERMISSION_READ,
     );
     check(&Command::Channels, "channels", PERMISSION_READ);
-    check(&Command::ReadMessages, "readmessages", PERMISSION_CONTROL);
+    check(&Command::ReadMessages, "readmessages", PERMISSION_READ);
     check(
         &Command::SendMessage {
             channel: s(""),
@@ -683,7 +693,7 @@ fn advanced_queue_metadata() {
             ranges: vec![],
         },
         "prio",
-        PERMISSION_CONTROL,
+        PERMISSION_PLAYER,
     );
     check(
         &Command::PrioId {
@@ -691,15 +701,12 @@ fn advanced_queue_metadata() {
             ids: vec![],
         },
         "prioid",
-        PERMISSION_CONTROL,
+        PERMISSION_PLAYER,
     );
     check(
-        &Command::RangeId {
-            id: 0,
-            range: (0.0, 0.0),
-        },
+        &Command::RangeId { id: 0, range: None },
         "rangeid",
-        PERMISSION_CONTROL,
+        PERMISSION_ADD,
     );
     check(
         &Command::AddTagId {
@@ -708,12 +715,12 @@ fn advanced_queue_metadata() {
             value: s(""),
         },
         "addtagid",
-        PERMISSION_CONTROL,
+        PERMISSION_ADD,
     );
     check(
         &Command::ClearTagId { id: 0, tag: None },
         "cleartagid",
-        PERMISSION_CONTROL,
+        PERMISSION_ADD,
     );
 }
 
@@ -724,12 +731,12 @@ fn miscellaneous_metadata() {
     check(
         &Command::MixRampDb { decibels: 0.0 },
         "mixrampdb",
-        PERMISSION_CONTROL,
+        PERMISSION_PLAYER,
     );
     check(
         &Command::MixRampDelay { seconds: 0.0 },
         "mixrampdelay",
-        PERMISSION_CONTROL,
+        PERMISSION_PLAYER,
     );
 }
 
