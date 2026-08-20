@@ -1,6 +1,8 @@
 //! Integration tests for database commands
 
 mod common;
+#[path = "common/tcp_harness.rs"]
+mod tcp_harness;
 
 use common::TestClient;
 
@@ -132,4 +134,95 @@ fn test_readpicture_command() {
     let response = "size: 54321\ntype: image/jpeg\nbinary: 54321\nOK\n";
     assert!(TestClient::is_ok(response));
     assert_eq!(TestClient::get_field(response, "type"), Some("image/jpeg"));
+}
+
+// ── ACK code audit: "not found" (DatabaseErrorCode::NOT_FOUND ->
+// ACK_ERROR_NO_EXIST=50) vs genuine internal/IO failure (ACK_ERROR_SYS=52),
+// mirroring MPD's CommandError.cxx exception mapping. These run against a
+// real rmpd instance (tcp_harness) rather than canned strings, so they
+// actually exercise the handlers.
+
+#[tokio::test]
+async fn lsinfo_nonexistent_directory_is_no_exist() {
+    let (_server, mut client, _tmp) = tcp_harness::setup_with_db(1).await;
+    let resp = client.command("lsinfo nosuch").await;
+    assert!(resp.starts_with("ACK [50@0]"), "got: {resp}");
+}
+
+#[tokio::test]
+async fn listall_nonexistent_directory_is_no_exist() {
+    let (_server, mut client, _tmp) = tcp_harness::setup_with_db(1).await;
+    let resp = client.command("listall nosuch").await;
+    assert!(resp.starts_with("ACK [50@0]"), "got: {resp}");
+}
+
+#[tokio::test]
+async fn listallinfo_nonexistent_directory_is_no_exist() {
+    let (_server, mut client, _tmp) = tcp_harness::setup_with_db(1).await;
+    let resp = client.command("listallinfo nosuch").await;
+    assert!(resp.starts_with("ACK [50@0]"), "got: {resp}");
+}
+
+#[tokio::test]
+async fn listfiles_nonexistent_directory_stays_sys_error() {
+    // Unlike lsinfo/listall (a pure database-tree lookup), `listfiles` reads
+    // the real filesystem: a missing directory is a genuine `opendir()`
+    // failure, which MPD's own exception mapping treats as a
+    // `std::system_error` -> ACK_ERROR_SYS (52), not NOT_FOUND. This is a
+    // regression test pinning that this one stays 52.
+    let (_server, mut client, _tmp) = tcp_harness::setup_with_db(1).await;
+    let resp = client.command("listfiles nosuch").await;
+    assert!(resp.starts_with("ACK [52@0]"), "got: {resp}");
+}
+
+#[tokio::test]
+async fn update_nonexistent_path_is_no_exist() {
+    let (_server, mut client, _tmp) = tcp_harness::setup_with_db(1).await;
+    let resp = client.command("update nosuch").await;
+    assert!(resp.starts_with("ACK [50@0]"), "got: {resp}");
+}
+
+#[tokio::test]
+async fn update_malformed_path_is_arg_error() {
+    // A path escaping the music directory (`..`) is a different MPD error
+    // than a merely nonexistent one: `uri_safe_local()` rejects it before
+    // any database lookup happens, giving ACK_ERROR_ARG (2), not NOT_FOUND.
+    let (_server, mut client, _tmp) = tcp_harness::setup_with_db(1).await;
+    let resp = client.command("update \"../etc\"").await;
+    assert!(resp.starts_with("ACK [2@0]"), "got: {resp}");
+}
+
+#[tokio::test]
+async fn rescan_nonexistent_path_is_no_exist() {
+    let (_server, mut client, _tmp) = tcp_harness::setup_with_db(1).await;
+    let resp = client.command("rescan nosuch").await;
+    assert!(resp.starts_with("ACK [50@0]"), "got: {resp}");
+}
+
+#[tokio::test]
+async fn rescan_malformed_path_is_arg_error() {
+    let (_server, mut client, _tmp) = tcp_harness::setup_with_db(1).await;
+    let resp = client.command("rescan \"../etc\"").await;
+    assert!(resp.starts_with("ACK [2@0]"), "got: {resp}");
+}
+
+#[tokio::test]
+async fn albumart_missing_uri_is_no_exist() {
+    let (_server, mut client, _tmp) = tcp_harness::setup_with_db(1).await;
+    let resp = client.command("albumart \"nosuch.flac\" 0").await;
+    assert!(resp.starts_with("ACK [50@0]"), "got: {resp}");
+}
+
+#[tokio::test]
+async fn readpicture_missing_uri_is_no_exist() {
+    let (_server, mut client, _tmp) = tcp_harness::setup_with_db(1).await;
+    let resp = client.command("readpicture \"nosuch.flac\" 0").await;
+    assert!(resp.starts_with("ACK [50@0]"), "got: {resp}");
+}
+
+#[tokio::test]
+async fn readcomments_missing_uri_is_no_exist() {
+    let (_server, mut client, _tmp) = tcp_harness::setup_with_db(1).await;
+    let resp = client.command("readcomments \"nosuch.flac\"").await;
+    assert!(resp.starts_with("ACK [50@0]"), "got: {resp}");
 }
