@@ -145,6 +145,11 @@ pub struct Queue {
     items: Vec<QueueItem>,
     next_id: u32,
     version: u32,
+    /// Name of the last stored playlist successfully loaded into this
+    /// queue (mirrors MPD's `Queue::last_loaded_playlist`, `Queue.hxx`).
+    /// Empty when none has been loaded since the last `clear`.
+    #[serde(default)]
+    last_loaded_playlist: String,
 }
 
 impl Queue {
@@ -152,9 +157,22 @@ impl Queue {
         Self::default()
     }
 
-    pub fn add(&mut self, song: Song) -> u32 {
+    /// Allocate the next queue-item id. Mirrors MPD's `IdTable`, whose
+    /// counter starts at 1: id 0 is never a valid song id, and clients
+    /// (libmpdclient, mpc) read a 0 `songid` as "no song". The zero guard
+    /// also normalizes a queue restored from a state file written before
+    /// this rule.
+    fn allocate_id(&mut self) -> u32 {
+        if self.next_id == 0 {
+            self.next_id = 1;
+        }
         let id = self.next_id;
         self.next_id += 1;
+        id
+    }
+
+    pub fn add(&mut self, song: Song) -> u32 {
+        let id = self.allocate_id();
 
         let position = self.items.len() as u32;
         self.items.push(QueueItem {
@@ -194,7 +212,23 @@ impl Queue {
 
     pub fn clear(&mut self) {
         self.items.clear();
+        self.last_loaded_playlist.clear();
         self.version += 1;
+    }
+
+    /// Name of the last stored playlist loaded into this queue via `load`,
+    /// or `""` if none has been loaded since the last `clear`. Mirrors
+    /// MPD's `playlist::GetLastLoadedPlaylist()`.
+    pub fn last_loaded_playlist(&self) -> &str {
+        &self.last_loaded_playlist
+    }
+
+    /// Record `name` as the last stored playlist loaded into this queue.
+    /// Mirrors MPD's `playlist::SetLastLoadedPlaylist()`, called
+    /// unconditionally once a `load` has successfully read the playlist
+    /// file, regardless of how many songs ended up queued.
+    pub fn set_last_loaded_playlist(&mut self, name: impl Into<String>) {
+        self.last_loaded_playlist = name.into();
     }
 
     pub fn get(&self, position: u32) -> Option<&QueueItem> {
@@ -296,8 +330,7 @@ impl Queue {
     }
 
     pub fn add_at(&mut self, song: Song, position: Option<u32>) -> u32 {
-        let id = self.next_id;
-        self.next_id += 1;
+        let id = self.allocate_id();
 
         let pos = position.unwrap_or(self.items.len() as u32);
         let item = QueueItem {

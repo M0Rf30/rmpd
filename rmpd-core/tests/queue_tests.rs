@@ -9,7 +9,8 @@ fn test_add_single_song() {
     let id = queue.add(song);
 
     assert_eq!(queue.len(), 1);
-    assert_eq!(id, 0);
+    // MPD's IdTable counter starts at 1; id 0 is never a valid song id.
+    assert_eq!(id, 1);
     assert!(!queue.is_empty());
 }
 
@@ -22,9 +23,9 @@ fn test_add_multiple_songs() {
     let id3 = queue.add(create_test_song(3, "song3"));
 
     assert_eq!(queue.len(), 3);
-    assert_eq!(id1, 0);
-    assert_eq!(id2, 1);
-    assert_eq!(id3, 2);
+    assert_eq!(id1, 1);
+    assert_eq!(id2, 2);
+    assert_eq!(id3, 3);
 }
 
 #[test]

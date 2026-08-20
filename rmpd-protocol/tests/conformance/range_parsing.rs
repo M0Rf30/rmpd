@@ -92,11 +92,13 @@ async fn playlistinfo_out_of_bounds() {
     let (_server, mut client, _tmp) = setup_with_db(3).await;
     client.command("add \"music/song1.flac\"").await;
 
-    // Single position beyond queue should return empty (apply_range returns &[])
+    // MPD's RangeArg::CheckClip errors when `start > length` (here 999 > 1)
+    // rather than silently returning an empty list.
     let resp = client.command("playlistinfo 999").await;
-    assert_ok(&resp);
-    let file_count = resp.matches("file:").count();
-    assert_eq!(file_count, 0, "out of bounds should return 0 songs");
+    assert!(
+        resp.starts_with("ACK [2@0]") && resp.contains("Bad song index"),
+        "out of bounds should ACK: {resp}"
+    );
 }
 
 #[tokio::test]
@@ -148,7 +150,9 @@ async fn move_range() {
     client.command("add \"music/song2.flac\"").await;
     client.command("add \"music/song3.flac\"").await;
 
-    let resp = client.command("move 0:2 2").await;
+    // Moving the 2-song range [0,2) leaves exactly 1 slot (3 - 2); `to = 1`
+    // is the largest destination that fits.
+    let resp = client.command("move 0:2 1").await;
     assert_ok(&resp);
 
     let status = client.command("status").await;
