@@ -163,6 +163,16 @@ async fn handle_fs_event(
 
                 let path_str = relative_path.to_string_lossy().to_string();
 
+                // `notify` reports a rename/move-away as a modify (sometimes a
+                // create for the source path), not a remove. If the path is no
+                // longer a regular file (gone, or replaced by a directory),
+                // treat it exactly like `Remove`.
+                if !path.is_file() {
+                    debug!("file moved away: {}", path_str);
+                    remove_song_row(db, event_bus, &path_str).await?;
+                    continue;
+                }
+
                 debug!("file created/modified: {}", path_str);
 
                 // Extract metadata off the async runtime: file I/O and tag parsing block.
@@ -175,6 +185,14 @@ async fn handle_fs_event(
                 let mut song = match extraction {
                     Ok(Ok(song)) => song,
                     Ok(Err(e)) => {
+                        // The file may have vanished between the `is_file` check
+                        // above and the extraction: then it is a removal, not an
+                        // extraction failure.
+                        if !path.is_file() {
+                            debug!("file moved away during extraction: {}", path_str);
+                            remove_song_row(db, event_bus, &path_str).await?;
+                            continue;
+                        }
                         warn!("failed to extract metadata from {}: {}", path_str, e);
                         continue;
                     }
@@ -224,15 +242,7 @@ async fn handle_fs_event(
 
                 debug!("file removed: {}", path_str);
 
-                // Remove from database
-                let db_guard = db.lock().await;
-                db_guard.delete_song_by_path(&path_str)?;
-                drop(db_guard);
-
-                // Emit event
-                event_bus.emit(RmpdEvent::SongDeleted {
-                    path: path_str.clone(),
-                });
+                remove_song_row(db, event_bus, &path_str).await?;
             }
         }
         _ => {
@@ -241,4 +251,89 @@ async fn handle_fs_event(
     }
 
     Ok(())
+}
+
+/// Delete a song's row and emit `SongDeleted`. Shared by the `Remove` branch
+/// and the `Create | Modify` branch's vanished-path check, so a file that
+/// disappears from disk is handled identically regardless of which `notify`
+/// event kind reported it.
+async fn remove_song_row(
+    db: &Arc<Mutex<Database>>,
+    event_bus: &EventBus,
+    path_str: &str,
+) -> Result<()> {
+    let db_guard = db.lock().await;
+    db_guard.delete_song_by_path(path_str)?;
+    drop(db_guard);
+
+    event_bus.emit(RmpdEvent::SongDeleted {
+        path: path_str.to_string(),
+    });
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use notify::event::{ModifyKind, RenameMode};
+    use rmpd_core::song::Song;
+
+    fn local_song(path: &str) -> Song {
+        Song {
+            id: 0,
+            path: path.into(),
+            duration: None,
+            sample_rate: None,
+            channels: None,
+            bits_per_sample: None,
+            bitrate: None,
+            replay_gain_track_gain: None,
+            replay_gain_track_peak: None,
+            replay_gain_album_gain: None,
+            replay_gain_album_peak: None,
+            added_at: 0,
+            last_modified: 0,
+            tags: Vec::new(),
+        }
+    }
+
+    /// A rename/move-away arrives from `notify` as a modify event for a path
+    /// that no longer exists (backends differ; inotify reports `MOVED_FROM`).
+    /// Independently of the backend, that event must delete the row and emit
+    /// `SongDeleted`, exactly like a `Remove` would.
+    #[tokio::test]
+    async fn modify_event_for_a_vanished_path_removes_the_row() {
+        let temp_dir = tempfile::TempDir::new().expect("create temp dir");
+        let music_dir = temp_dir.path().join("music");
+        std::fs::create_dir(&music_dir).expect("create music dir");
+        let db_path = temp_dir.path().join("test.db");
+        let database = Database::open(db_path.to_str().unwrap()).expect("open database");
+        database
+            .add_song(&local_song("song.flac"))
+            .expect("insert the row the file used to have");
+        let db = Arc::new(Mutex::new(database));
+        let event_bus = EventBus::new();
+        let mut rx = event_bus.subscribe();
+
+        // The file was never created on disk: the path no longer exists.
+        let event = Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::From)))
+            .add_path(music_dir.join("song.flac"));
+        handle_fs_event(&event, &music_dir, &db, &event_bus)
+            .await
+            .expect("handle the synthetic event");
+
+        assert!(
+            db.lock()
+                .await
+                .get_song_by_path("song.flac")
+                .expect("query")
+                .is_none(),
+            "the row of a vanished path must be deleted"
+        );
+        match rx.try_recv() {
+            Ok(RmpdEvent::SongDeleted { path }) => assert_eq!(path, "song.flac"),
+            other => panic!("expected SongDeleted for song.flac, got {other:?}"),
+        }
+    }
 }
