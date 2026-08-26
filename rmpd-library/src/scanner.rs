@@ -85,14 +85,70 @@ impl Scanner {
 
         scanner_with_dir.scan_recursive(db, root_path, &mut stats)?;
 
+        self.prune_missing(db, root_path, &mut stats);
+
         info!(
-            "scan complete: {} files scanned, {} added, {} updated, {} errors",
-            stats.scanned, stats.added, stats.updated, stats.errors
+            "scan complete: {} files scanned, {} added, {} updated, {} removed, {} errors",
+            stats.scanned, stats.added, stats.updated, stats.removed, stats.errors
         );
 
         self.event_bus.emit(Event::DatabaseUpdateFinished);
 
         Ok(stats)
+    }
+
+    /// Delete local song rows whose file is no longer present on disk.
+    ///
+    /// Iterates `Database::list_local_song_paths` (already scoped to
+    /// `source IS NULL`, so remote catalog rows from `add_source_song` are never
+    /// considered) and removes any row whose file `root_path.join(path)` does not
+    /// resolve to an existing regular file. A symlink counts as present only when
+    /// the scanner follows symlinks, mirroring the walk in `collect_audio_files`
+    /// (a row for a symlinked file is pruned by a scan configured not to follow
+    /// them, as MPD does).
+    ///
+    /// Assumes `root_path` is the music directory itself (the only way
+    /// `scan_directory` is called today). A scoped update of a subdirectory
+    /// would have to restrict the candidates to rows under that subtree first,
+    /// otherwise every row outside it would look missing.
+    fn prune_missing(&self, db: &Database, root_path: &Path, stats: &mut ScanStats) {
+        let paths = match db.list_local_song_paths() {
+            Ok(paths) => paths,
+            Err(e) => {
+                warn!("failed to list local songs for prune: {}", e);
+                stats.errors += 1;
+                return;
+            }
+        };
+
+        for path in paths {
+            if self.file_is_present(&root_path.join(&path)) {
+                continue;
+            }
+
+            match db.delete_song_by_path(&path) {
+                Ok(()) => {
+                    stats.removed += 1;
+                    debug!("pruned missing song: {}", path);
+                    self.event_bus.emit(Event::SongDeleted { path });
+                }
+                Err(e) => {
+                    warn!("failed to prune missing song {}: {}", path, e);
+                    stats.errors += 1;
+                }
+            }
+        }
+    }
+
+    /// Whether `path` is a regular file the scan would have visited: symlinks
+    /// only count when `follow_symlinks` is set, like `collect_audio_files`.
+    fn file_is_present(&self, path: &Path) -> bool {
+        if !self.follow_symlinks
+            && fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink())
+        {
+            return false;
+        }
+        path.is_file()
     }
 
     /// Convert absolute path to relative path (relative to music_directory)
@@ -374,5 +430,6 @@ pub struct ScanStats {
     pub scanned: u32,
     pub added: u32,
     pub updated: u32,
+    pub removed: u32,
     pub errors: u32,
 }

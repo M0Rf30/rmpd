@@ -32,6 +32,7 @@ fn main() -> anyhow::Result<()> {
     println!("  Files scanned: {}", stats.scanned);
     println!("  Files added: {}", stats.added);
     println!("  Files updated: {}", stats.updated);
+    println!("  Files removed: {}", stats.removed);
     println!("  Errors: {}", stats.errors);
 
     // Show database stats

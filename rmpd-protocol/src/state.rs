@@ -220,10 +220,11 @@ impl AppState {
 
             match result {
                 Ok(Ok(stats)) => tracing::info!(
-                    "library scan complete: {} scanned, {} added, {} updated, {} errors",
+                    "library scan complete: {} scanned, {} added, {} updated, {} removed, {} errors",
                     stats.scanned,
                     stats.added,
                     stats.updated,
+                    stats.removed,
                     stats.errors
                 ),
                 Ok(Err(e)) => tracing::error!("library update failed: {}", e),
