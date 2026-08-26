@@ -149,6 +149,7 @@ async fn handle_fs_event(
         EventKind::Create(_) | EventKind::Modify(_) => {
             for path in &event.paths {
                 if !is_audio_file(path) {
+                    prune_if_vanished_directory(path, music_dir, db, event_bus).await?;
                     continue;
                 }
 
@@ -230,6 +231,7 @@ async fn handle_fs_event(
         EventKind::Remove(_) => {
             for path in &event.paths {
                 if !is_audio_file(path) {
+                    prune_if_vanished_directory(path, music_dir, db, event_bus).await?;
                     continue;
                 }
 
@@ -273,10 +275,62 @@ async fn remove_song_row(
     Ok(())
 }
 
+/// If `path` is not an audio file (the caller already checked that) and no
+/// longer exists on disk, it denotes a directory (or some other non-audio
+/// path) that was removed or moved away out from under the watcher: `notify`
+/// reports the event on the directory path itself, not on each audio file
+/// inside it, so none of those files' own `Remove`/`Modify` events ever fire
+/// and `is_audio_file` never sees them. Prune every local row under it.
+/// A path that still exists (e.g. a directory that is untouched, or some
+/// other non-audio file) is left alone — the caller already skips it.
+async fn prune_if_vanished_directory(
+    path: &Path,
+    music_dir: &Path,
+    db: &Arc<Mutex<Database>>,
+    event_bus: &EventBus,
+) -> Result<()> {
+    if path.exists() {
+        return Ok(());
+    }
+
+    let relative_path = match path.strip_prefix(music_dir) {
+        Ok(p) => p,
+        Err(_) => return Ok(()),
+    };
+    let rel_str = relative_path.to_string_lossy().to_string();
+
+    debug!("directory vanished, pruning rows under: {}", rel_str);
+    remove_rows_under(db, event_bus, &rel_str).await
+}
+
+/// Delete every local row whose path is `rel` itself or starts with `rel/`,
+/// emitting `SongDeleted` for each — used when `rel` denotes a directory that
+/// vanished from disk. Reuses `remove_song_row` per matching row so each
+/// deletion still respects `delete_song_by_path`'s `source IS NULL` guard
+/// (remote catalog rows are never evicted) and still emits the same event a
+/// single vanished file would. A `rel` under which nothing matches (e.g. a
+/// non-audio file that vanished) is a no-op.
+async fn remove_rows_under(
+    db: &Arc<Mutex<Database>>,
+    event_bus: &EventBus,
+    rel: &str,
+) -> Result<()> {
+    let rows = {
+        let db_guard = db.lock().await;
+        db_guard.find_songs_by_prefix(rel)?
+    };
+
+    for song in rows {
+        remove_song_row(db, event_bus, song.path.as_str()).await?;
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use notify::event::{ModifyKind, RenameMode};
+    use notify::event::{ModifyKind, RemoveKind, RenameMode};
     use rmpd_core::song::Song;
 
     fn local_song(path: &str) -> Song {
@@ -335,5 +389,95 @@ mod tests {
             Ok(RmpdEvent::SongDeleted { path }) => assert_eq!(path, "song.flac"),
             other => panic!("expected SongDeleted for song.flac, got {other:?}"),
         }
+    }
+
+    /// Shared body for the two vanished-directory tests below: seed `dir/a.flac`,
+    /// `dir/b.flac` and a control row `other/c.flac`, feed `handle_fs_event` a
+    /// synthetic event of `kind` whose path is `music_dir/dir` (a directory that
+    /// does not exist on disk, since nothing was ever created there), and assert
+    /// both rows under `dir/` are gone, the control row survives, and a
+    /// `SongDeleted` was emitted for each pruned row.
+    async fn assert_vanished_directory_prunes_rows_under_it(kind: EventKind) {
+        let temp_dir = tempfile::TempDir::new().expect("create temp dir");
+        let music_dir = temp_dir.path().join("music");
+        std::fs::create_dir(&music_dir).expect("create music dir");
+        let db_path = temp_dir.path().join("test.db");
+        let database = Database::open(db_path.to_str().unwrap()).expect("open database");
+        database
+            .add_song(&local_song("dir/a.flac"))
+            .expect("insert dir/a.flac");
+        database
+            .add_song(&local_song("dir/b.flac"))
+            .expect("insert dir/b.flac");
+        database
+            .add_song(&local_song("other/c.flac"))
+            .expect("insert control row other/c.flac");
+        let db = Arc::new(Mutex::new(database));
+        let event_bus = EventBus::new();
+        let mut rx = event_bus.subscribe();
+
+        // `dir` was never created on disk: the directory no longer exists.
+        let event = Event::new(kind).add_path(music_dir.join("dir"));
+        handle_fs_event(&event, &music_dir, &db, &event_bus)
+            .await
+            .expect("handle the synthetic event");
+
+        let db_guard = db.lock().await;
+        assert!(
+            db_guard
+                .get_song_by_path("dir/a.flac")
+                .expect("query")
+                .is_none(),
+            "dir/a.flac should be pruned along with the vanished directory"
+        );
+        assert!(
+            db_guard
+                .get_song_by_path("dir/b.flac")
+                .expect("query")
+                .is_none(),
+            "dir/b.flac should be pruned along with the vanished directory"
+        );
+        assert!(
+            db_guard
+                .get_song_by_path("other/c.flac")
+                .expect("query")
+                .is_some(),
+            "other/c.flac is outside the vanished directory and must survive"
+        );
+        drop(db_guard);
+
+        let mut deleted_paths = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            match event {
+                RmpdEvent::SongDeleted { path } => deleted_paths.push(path),
+                other => panic!("expected only SongDeleted events, got {other:?}"),
+            }
+        }
+        deleted_paths.sort();
+        assert_eq!(
+            deleted_paths,
+            vec!["dir/a.flac".to_string(), "dir/b.flac".to_string()],
+            "a SongDeleted event should be emitted for each pruned row"
+        );
+    }
+
+    /// A directory removed or moved away arrives from `notify` as a modify/rename
+    /// event on the directory's own path (backends differ; inotify reports
+    /// `MOVED_FROM`), not one event per file inside it — `is_audio_file` never
+    /// matches a directory, so without special handling every row under it would
+    /// be left behind (issue #12 follow-up).
+    #[tokio::test]
+    async fn modify_event_for_a_vanished_directory_prunes_rows_under_it() {
+        assert_vanished_directory_prunes_rows_under_it(EventKind::Modify(ModifyKind::Name(
+            RenameMode::From,
+        )))
+        .await;
+    }
+
+    /// Same as above, but for the `Remove` event kind `notify` reports when a
+    /// watched directory is deleted outright (e.g. `IN_DELETE_SELF` on inotify).
+    #[tokio::test]
+    async fn remove_event_for_a_vanished_directory_prunes_rows_under_it() {
+        assert_vanished_directory_prunes_rows_under_it(EventKind::Remove(RemoveKind::Folder)).await;
     }
 }

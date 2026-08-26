@@ -343,3 +343,84 @@ async fn watcher_prunes_row_for_file_moved_away() {
          out of the music directory, but it is still in the database"
     );
 }
+
+/// Moving (or deleting) a whole directory reports the filesystem event on the
+/// directory's own path, not one event per file inside it — none of the
+/// contained files' own events ever fire, so the old `is_audio_file` gate
+/// silently dropped the directory path and left every row under it behind
+/// (issue #12 follow-up). The watcher must prune the whole subtree.
+#[tokio::test]
+async fn watcher_prunes_rows_for_directory_moved_away() {
+    let temp_dir = TempDir::new().expect("create temp dir");
+    std::fs::create_dir(temp_dir.path().join("music")).expect("create music dir");
+    std::fs::create_dir(temp_dir.path().join("elsewhere")).expect("create elsewhere dir");
+    // Resolve symlinks (macOS puts temp dirs behind /var -> /private/var), so the
+    // watcher's music-dir prefix matches the paths the OS reports for events.
+    let music_dir = std::fs::canonicalize(temp_dir.path().join("music")).expect("canonicalize");
+    let elsewhere_dir =
+        std::fs::canonicalize(temp_dir.path().join("elsewhere")).expect("canonicalize");
+    std::fs::create_dir(music_dir.join("dir")).expect("create music/dir");
+
+    let db_path = temp_dir.path().join("test.db");
+    let database = Database::open(db_path.to_str().unwrap()).expect("open database");
+    let db = Arc::new(Mutex::new(database));
+
+    let mut watcher = FilesystemWatcher::new(music_dir.clone(), db.clone(), EventBus::new())
+        .expect("create watcher");
+    watcher.start().await.expect("start watcher");
+
+    // Let the watcher's spawned event-handler task hook up before the
+    // debounced filesystem event arrives.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/samples/basic.flac");
+    std::fs::copy(&fixture, music_dir.join("dir").join("song.flac"))
+        .expect("copy fixture into music/dir");
+
+    // Debounce is 300ms, but filesystem-event latency varies by backend
+    // (inotify vs FSEvents), so poll instead of sleeping a fixed amount.
+    let mut song = None;
+    for _ in 0..60 {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        song = db
+            .lock()
+            .await
+            .get_song_by_path("dir/song.flac")
+            .expect("query by relative path");
+        if song.is_some() {
+            break;
+        }
+    }
+    assert!(
+        song.is_some(),
+        "dir/song.flac should be in the database before its directory is moved away"
+    );
+
+    // Move the whole directory outside the watched music directory, into
+    // another subdirectory of the same TempDir. `notify` reports this event
+    // on the directory's own path, not on the file inside it.
+    std::fs::rename(music_dir.join("dir"), elsewhere_dir.join("dir"))
+        .expect("move the directory out of the music dir");
+
+    let mut still_present = true;
+    for _ in 0..60 {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        still_present = db
+            .lock()
+            .await
+            .get_song_by_path("dir/song.flac")
+            .expect("query by relative path")
+            .is_some();
+        if !still_present {
+            break;
+        }
+    }
+
+    assert!(
+        !still_present,
+        "the watcher should have pruned dir/song.flac's row once its \
+         directory moved out of the music directory, but it is still \
+         in the database"
+    );
+}
