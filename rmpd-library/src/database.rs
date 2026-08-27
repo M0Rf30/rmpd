@@ -1110,21 +1110,96 @@ impl Database {
         Ok(())
     }
 
-    /// List the paths of every local song, ordered by path.
+    /// List the paths of every local song at or under `prefix`, ordered by path.
     ///
-    /// `source IS NULL` is the same predicate `delete_song_by_path` guards its
-    /// `DELETE` with, so this only ever returns local filesystem rows — never
-    /// remote catalog rows inserted by `add_source_song`. Used by the scanner to
-    /// find local rows whose file has disappeared from disk. Deliberately not
-    /// `list_all_songs`: that loads tags for every song and includes remote rows.
-    pub fn list_local_song_paths(&self) -> Result<Vec<String>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT path FROM songs WHERE source IS NULL ORDER BY path")?;
+    /// `prefix` is a database-relative directory path (`""` means the whole
+    /// library); a row matches when its path equals `prefix` or starts with
+    /// `prefix/`, the same rule as `find_songs_by_prefix`, but only `path` is
+    /// read — no tags are loaded. `source IS NULL` is the predicate
+    /// `delete_songs_by_paths` guards its `DELETE` with, so remote catalog rows
+    /// inserted by `add_source_song` are never returned.
+    pub fn list_local_song_paths_under(&self, prefix: &str) -> Result<Vec<String>> {
+        if prefix.is_empty() {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT path FROM songs WHERE source IS NULL ORDER BY path")?;
+            let paths = stmt
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            return Ok(paths);
+        }
+
+        let dir_prefix = if prefix.ends_with('/') {
+            prefix.to_string()
+        } else {
+            format!("{prefix}/")
+        };
+        let like_prefix = format!("{}%", dir_prefix.replace('%', "\\%").replace('_', "\\_"));
+        let mut stmt = self.conn.prepare(
+            "SELECT path FROM songs
+             WHERE source IS NULL AND (path = ?1 OR path LIKE ?2)
+             ORDER BY path",
+        )?;
+        let paths = stmt
+            .query_map(params![prefix, like_prefix], |row| row.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(paths)
+    }
+
+    /// Delete local song rows for `paths` in a single transaction.
+    ///
+    /// One commit for the whole batch instead of one per row, which matters when
+    /// a scan prunes a large number of vanished files. Carries the same
+    /// `source IS NULL` guard as `delete_song_by_path`, so remote catalog rows
+    /// are never evicted. Returns the paths whose row was actually deleted, in
+    /// input order, so the caller can emit one `SongDeleted` per real deletion.
+    pub fn delete_songs_by_paths(&self, paths: &[String]) -> Result<Vec<String>> {
+        let tx = self.conn.unchecked_transaction()?;
+        let mut deleted = Vec::with_capacity(paths.len());
+        {
+            let mut stmt = tx.prepare("DELETE FROM songs WHERE path = ?1 AND source IS NULL")?;
+            for path in paths {
+                if stmt.execute(params![path])? > 0 {
+                    deleted.push(path.clone());
+                }
+            }
+        }
+        tx.commit()?;
+        Ok(deleted)
+    }
+
+    /// Directory rows, deepest first, that hold no songs and no child directory
+    /// rows. The root row (`parent_id IS NULL`) is never returned.
+    ///
+    /// Deepest first so that a caller deleting all of them empties a subtree
+    /// bottom-up in one pass: once a leaf is gone its parent qualifies on the
+    /// next iteration. Emptiness counts songs of any origin, so a mount point
+    /// carrying remote catalog rows is never reported as empty.
+    pub fn list_empty_directory_paths(&self) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT d.path FROM directories d
+             WHERE d.parent_id IS NOT NULL
+               AND NOT EXISTS (SELECT 1 FROM songs s WHERE s.directory_id = d.id)
+               AND NOT EXISTS (SELECT 1 FROM directories c WHERE c.parent_id = d.id)
+             ORDER BY length(d.path) DESC, d.path",
+        )?;
         let paths = stmt
             .query_map([], |row| row.get::<_, String>(0))?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(paths)
+    }
+
+    /// Delete the directory row at `path`. A row that still has songs or child
+    /// directories is left alone: the foreign keys would reject it anyway, and
+    /// callers pair this with `list_empty_directory_paths`.
+    pub fn delete_directory_by_path(&self, path: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM directories WHERE path = ?1 AND parent_id IS NOT NULL
+               AND NOT EXISTS (SELECT 1 FROM songs s WHERE s.directory_id = directories.id)
+               AND NOT EXISTS (SELECT 1 FROM directories c WHERE c.parent_id = directories.id)",
+            params![path],
+        )?;
+        Ok(())
     }
 
     /// Ensure the root directory (path="", parent_id=NULL) exists and return its id.
