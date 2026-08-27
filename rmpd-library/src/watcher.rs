@@ -283,6 +283,11 @@ async fn remove_song_row(
 /// and `is_audio_file` never sees them. Prune every local row under it.
 /// A path that still exists (e.g. a directory that is untouched, or some
 /// other non-audio file) is left alone — the caller already skips it.
+/// If `path` *is* the music directory itself, `strip_prefix` yields `""`,
+/// and pruning `""` would delete every local row in the library — but the
+/// music directory can be a transiently-unmounted mount point, so a watcher
+/// event on it is not proof the whole library is gone. Refuse to prune in
+/// that case instead of trusting it.
 async fn prune_if_vanished_directory(
     path: &Path,
     music_dir: &Path,
@@ -299,29 +304,39 @@ async fn prune_if_vanished_directory(
     };
     let rel_str = relative_path.to_string_lossy().to_string();
 
+    if rel_str.is_empty() {
+        warn!(
+            "music directory {:?} vanished; refusing to prune the entire library",
+            music_dir
+        );
+        return Ok(());
+    }
+
     debug!("directory vanished, pruning rows under: {}", rel_str);
     remove_rows_under(db, event_bus, &rel_str).await
 }
 
 /// Delete every local row whose path is `rel` itself or starts with `rel/`,
-/// emitting `SongDeleted` for each — used when `rel` denotes a directory that
-/// vanished from disk. Reuses `remove_song_row` per matching row so each
-/// deletion still respects `delete_song_by_path`'s `source IS NULL` guard
-/// (remote catalog rows are never evicted) and still emits the same event a
-/// single vanished file would. A `rel` under which nothing matches (e.g. a
-/// non-audio file that vanished) is a no-op.
+/// in one lock acquisition and one transaction, then emit `SongDeleted` for
+/// each row actually deleted — used when `rel` denotes a directory that
+/// vanished from disk. `list_local_song_paths_under` and
+/// `delete_songs_by_paths` are both already scoped to local rows
+/// (`source IS NULL`), so remote catalog rows are never touched. A `rel`
+/// under which nothing matches (e.g. a non-audio file that vanished) is a
+/// no-op.
 async fn remove_rows_under(
     db: &Arc<Mutex<Database>>,
     event_bus: &EventBus,
     rel: &str,
 ) -> Result<()> {
-    let rows = {
+    let deleted = {
         let db_guard = db.lock().await;
-        db_guard.find_songs_by_prefix(rel)?
+        let paths = db_guard.list_local_song_paths_under(rel)?;
+        db_guard.delete_songs_by_paths(&paths)?
     };
 
-    for song in rows {
-        remove_song_row(db, event_bus, song.path.as_str()).await?;
+    for path in deleted {
+        event_bus.emit(RmpdEvent::SongDeleted { path });
     }
 
     Ok(())
@@ -479,5 +494,46 @@ mod tests {
     #[tokio::test]
     async fn remove_event_for_a_vanished_directory_prunes_rows_under_it() {
         assert_vanished_directory_prunes_rows_under_it(EventKind::Remove(RemoveKind::Folder)).await;
+    }
+
+    /// A watcher event on the music directory path itself must never wipe the
+    /// whole library: `strip_prefix` yields `""` for that path, which without
+    /// the guard in `prune_if_vanished_directory` would match every local row.
+    #[tokio::test]
+    async fn modify_event_for_the_music_directory_itself_leaves_all_rows() {
+        let temp_dir = tempfile::TempDir::new().expect("create temp dir");
+        let music_dir = temp_dir.path().join("music");
+        std::fs::create_dir(&music_dir).expect("create music dir");
+        let db_path = temp_dir.path().join("test.db");
+        let database = Database::open(db_path.to_str().unwrap()).expect("open database");
+        database
+            .add_song(&local_song("dir/a.flac"))
+            .expect("insert dir/a.flac");
+        let db = Arc::new(Mutex::new(database));
+        let event_bus = EventBus::new();
+        let mut rx = event_bus.subscribe();
+
+        // Simulate the music directory itself vanishing (e.g. an unmounted
+        // mount point): the event path is the music directory, so its
+        // relative path is "".
+        std::fs::remove_dir(&music_dir).expect("remove music dir to simulate vanish");
+        let event = Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::From)))
+            .add_path(music_dir.clone());
+        handle_fs_event(&event, &music_dir, &db, &event_bus)
+            .await
+            .expect("handle the synthetic event");
+
+        assert!(
+            db.lock()
+                .await
+                .get_song_by_path("dir/a.flac")
+                .expect("query")
+                .is_some(),
+            "a vanished music directory must not wipe the library"
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "no SongDeleted should be emitted when refusing to prune the whole library"
+        );
     }
 }

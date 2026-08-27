@@ -78,14 +78,23 @@ impl Scanner {
         let mut stats = ScanStats::default();
 
         // Build a scanner variant that knows the music directory so that make_relative_path
-        // can strip the root prefix from absolute paths during the scan.
-        let music_dir = Utf8PathBuf::try_from(root_path.to_path_buf())
+        // can strip the root prefix from absolute paths during the scan. If `self` already
+        // has one configured (a scan of one of its own subtrees), keep it — `root_path` is
+        // then a subtree root, not the library root, and prune_missing/file_is_present need
+        // the real root to resolve database-relative paths back to disk.
+        let utf8_root = Utf8PathBuf::try_from(root_path.to_path_buf())
             .map_err(|_| RmpdError::Library("Music directory path is not valid UTF-8".into()))?;
-        let scanner_with_dir = self.with_music_dir(music_dir);
+        let scanner_with_dir = self.with_music_dir(
+            self.music_directory
+                .clone()
+                .unwrap_or_else(|| utf8_root.clone()),
+        );
 
         scanner_with_dir.scan_recursive(db, root_path, &mut stats)?;
 
-        self.prune_missing(db, root_path, &mut stats);
+        let prefix = scanner_with_dir.make_relative_path(&utf8_root)?;
+        scanner_with_dir.prune_missing(db, prefix.as_str(), &mut stats);
+        scanner_with_dir.prune_empty_directories(db, &mut stats);
 
         info!(
             "scan complete: {} files scanned, {} added, {} updated, {} removed, {} errors",
@@ -97,22 +106,25 @@ impl Scanner {
         Ok(stats)
     }
 
-    /// Delete local song rows whose file is no longer present on disk.
+    /// Delete local song rows at or under `prefix` whose file is no longer present on disk.
     ///
-    /// Iterates `Database::list_local_song_paths` (already scoped to
-    /// `source IS NULL`, so remote catalog rows from `add_source_song` are never
-    /// considered) and removes any row whose file `root_path.join(path)` does not
-    /// resolve to an existing regular file. A symlink counts as present only when
-    /// the scanner follows symlinks, mirroring the walk in `collect_audio_files`
-    /// (a row for a symlinked file is pruned by a scan configured not to follow
-    /// them, as MPD does).
-    ///
-    /// Assumes `root_path` is the music directory itself (the only way
-    /// `scan_directory` is called today). A scoped update of a subdirectory
-    /// would have to restrict the candidates to rows under that subtree first,
-    /// otherwise every row outside it would look missing.
-    fn prune_missing(&self, db: &Database, root_path: &Path, stats: &mut ScanStats) {
-        let paths = match db.list_local_song_paths() {
+    /// `prefix` is the scanned subtree's database-relative path (`""` for a whole-library
+    /// scan, which is what every caller passes today), computed by `scan_directory` from the
+    /// scanner's `music_directory` and the scan root — so a scan rooted at a subdirectory only
+    /// ever considers rows under that subdirectory, never every row outside it.
+    /// `Database::list_local_song_paths_under` is already scoped to `source IS NULL`, so remote
+    /// catalog rows from `add_source_song` are never candidates. A row is missing when
+    /// `music_directory.join(path)` does not resolve to an existing regular file; a symlink
+    /// counts as present only when the scanner follows symlinks, mirroring the walk in
+    /// `collect_audio_files` (a row for a symlinked file is pruned by a scan configured not to
+    /// follow them, as MPD does). Vanished rows are all deleted in a single transaction.
+    fn prune_missing(&self, db: &Database, prefix: &str, stats: &mut ScanStats) {
+        let music_dir = self
+            .music_directory
+            .as_ref()
+            .expect("prune_missing is only called on a scanner with music_directory set");
+
+        let paths = match db.list_local_song_paths_under(prefix) {
             Ok(paths) => paths,
             Err(e) => {
                 warn!("failed to list local songs for prune: {}", e);
@@ -121,34 +133,94 @@ impl Scanner {
             }
         };
 
-        for path in paths {
-            if self.file_is_present(&root_path.join(&path)) {
-                continue;
-            }
+        let missing: Vec<String> = paths
+            .into_iter()
+            .filter(|path| !self.file_is_present(music_dir.join(path).as_std_path()))
+            .collect();
 
-            match db.delete_song_by_path(&path) {
-                Ok(()) => {
-                    stats.removed += 1;
+        if missing.is_empty() {
+            return;
+        }
+
+        match db.delete_songs_by_paths(&missing) {
+            Ok(deleted) => {
+                stats.removed += deleted.len() as u32;
+                for path in deleted {
                     debug!("pruned missing song: {}", path);
                     self.event_bus.emit(Event::SongDeleted { path });
                 }
-                Err(e) => {
-                    warn!("failed to prune missing song {}: {}", path, e);
-                    stats.errors += 1;
-                }
+            }
+            Err(e) => {
+                warn!("failed to prune missing songs: {}", e);
+                stats.errors += 1;
             }
         }
+    }
+
+    /// Delete directory rows that hold no songs and no child directories once their on-disk
+    /// location is gone (e.g. `prune_missing` above just emptied it, or the whole directory was
+    /// removed directly). Re-lists `Database::list_empty_directory_paths` after every pass:
+    /// deleting a leaf can make its now-childless parent qualify on the next pass, so a vanished
+    /// subtree collapses bottom-up within this one call. A row for a directory still present on
+    /// disk is always kept even if empty, and a remote mount point's row is never a candidate —
+    /// it holds remote songs, so it is never reported as empty.
+    fn prune_empty_directories(&self, db: &Database, stats: &mut ScanStats) {
+        let music_dir = self
+            .music_directory
+            .as_ref()
+            .expect("prune_empty_directories is only called on a scanner with music_directory set");
+
+        loop {
+            let candidates = match db.list_empty_directory_paths() {
+                Ok(paths) => paths,
+                Err(e) => {
+                    warn!("failed to list empty directories for prune: {}", e);
+                    stats.errors += 1;
+                    return;
+                }
+            };
+
+            let mut pruned = 0u32;
+            for path in candidates {
+                if self.dir_is_present(music_dir.join(&path).as_std_path()) {
+                    continue;
+                }
+
+                match db.delete_directory_by_path(&path) {
+                    Ok(()) => {
+                        pruned += 1;
+                        debug!("pruned missing directory: {}", path);
+                    }
+                    Err(e) => {
+                        warn!("failed to prune missing directory {}: {}", path, e);
+                        stats.errors += 1;
+                    }
+                }
+            }
+
+            if pruned == 0 {
+                break;
+            }
+        }
+    }
+
+    /// Whether `path` is excluded because it's a symlink and the scan doesn't follow them,
+    /// mirroring the entry-skip in `collect_audio_files`.
+    fn is_symlink_excluded(&self, path: &Path) -> bool {
+        !self.follow_symlinks
+            && fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink())
     }
 
     /// Whether `path` is a regular file the scan would have visited: symlinks
     /// only count when `follow_symlinks` is set, like `collect_audio_files`.
     fn file_is_present(&self, path: &Path) -> bool {
-        if !self.follow_symlinks
-            && fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink())
-        {
-            return false;
-        }
-        path.is_file()
+        !self.is_symlink_excluded(path) && path.is_file()
+    }
+
+    /// Whether `path` is a directory the scan would have visited: symlinks
+    /// only count when `follow_symlinks` is set, like `collect_audio_files`.
+    fn dir_is_present(&self, path: &Path) -> bool {
+        !self.is_symlink_excluded(path) && path.is_dir()
     }
 
     /// Convert absolute path to relative path (relative to music_directory)
