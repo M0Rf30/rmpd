@@ -1,4 +1,5 @@
 /// Regression tests for `Scanner::collect_audio_files`'s directory-tree walk.
+use camino::Utf8PathBuf;
 use rmpd_core::event::{Event, EventBus};
 use rmpd_core::song::Song;
 use rmpd_library::database::Database;
@@ -29,6 +30,12 @@ fn remote_song(virtual_path: &str) -> Song {
         last_modified: 0,
         tags: Vec::new(),
     }
+}
+
+/// Build a minimal local song with a relative path (no `source`), for
+/// seeding rows directly via `Database::add_song` without a real file on disk.
+fn local_song(path: &str) -> Song {
+    remote_song(path)
 }
 
 /// A symlink that points back at an ancestor directory (or otherwise forms a
@@ -183,8 +190,8 @@ fn update_prunes_songs_whose_files_are_gone() {
 }
 
 /// Remote catalog rows (`Database::add_source_song`) must never be evicted by
-/// the local-filesystem prune, since `list_local_song_paths`/
-/// `delete_song_by_path` are guarded with `source IS NULL`.
+/// the local-filesystem prune, since `list_local_song_paths_under`/
+/// `delete_songs_by_paths` are guarded with `source IS NULL`.
 #[test]
 fn update_keeps_remote_source_rows() {
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -422,5 +429,131 @@ async fn watcher_prunes_rows_for_directory_moved_away() {
         "the watcher should have pruned dir/song.flac's row once its \
          directory moved out of the music directory, but it is still \
          in the database"
+    );
+}
+
+/// A scan rooted at a subdirectory must only prune local song rows under that
+/// subdirectory. `prune_missing` used to list every local row regardless of
+/// `root_path`, so a scoped `update <uri>` scanning just `inside/` would have
+/// deleted `outside/y.flac`'s row too, even though that file's presence was
+/// never checked.
+#[test]
+fn scoped_scan_does_not_prune_rows_outside_its_subtree() {
+    let temp_dir = TempDir::new().expect("create temp dir");
+    let music_dir = temp_dir.path().join("music");
+    std::fs::create_dir(&music_dir).expect("create music dir");
+    std::fs::create_dir(music_dir.join("inside")).expect("create inside dir");
+
+    let db_path = temp_dir.path().join("test.db");
+    let database = Database::open(db_path.to_str().unwrap()).expect("open database");
+    database
+        .add_song(&local_song("inside/x.flac"))
+        .expect("seed inside/x.flac");
+    database
+        .add_song(&local_song("outside/y.flac"))
+        .expect("seed outside/y.flac");
+
+    let scanner = Scanner::new(EventBus::new(), false)
+        .with_music_dir(Utf8PathBuf::try_from(music_dir.clone()).expect("music dir is utf8"));
+    let stats = scanner
+        .scan_directory(&database, &music_dir.join("inside"))
+        .expect("scoped scan of inside/");
+
+    assert_eq!(
+        stats.removed, 1,
+        "only inside/x.flac, the row under the scanned subtree, should be pruned"
+    );
+    assert!(
+        database
+            .get_song_by_path("inside/x.flac")
+            .unwrap()
+            .is_none(),
+        "inside/x.flac should be pruned: it is under the scanned subtree and its file is gone"
+    );
+    assert!(
+        database
+            .get_song_by_path("outside/y.flac")
+            .unwrap()
+            .is_some(),
+        "outside/y.flac must survive a scan scoped to inside/, even though its file is also gone"
+    );
+}
+
+/// Once a directory and every file under it are removed from disk, a
+/// subsequent scan must also drop its now-empty `directories` row — `lsinfo`
+/// used to keep listing a directory whose contents (and the directory
+/// itself) no longer exist.
+#[test]
+fn scan_prunes_directory_row_once_its_files_and_dir_are_gone() {
+    let temp_dir = TempDir::new().expect("create temp dir");
+    let music_dir = temp_dir.path().join("music");
+    std::fs::create_dir(&music_dir).expect("create music dir");
+    let gone_dir = music_dir.join("gone");
+    std::fs::create_dir(&gone_dir).expect("create gone dir");
+
+    let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/samples/basic.flac");
+    std::fs::copy(&fixture, gone_dir.join("x.flac")).expect("copy fixture as gone/x.flac");
+
+    let db_path = temp_dir.path().join("test.db");
+    let database = Database::open(db_path.to_str().unwrap()).expect("open database");
+    let scanner = Scanner::new(EventBus::new(), false);
+
+    scanner
+        .scan_directory(&database, &music_dir)
+        .expect("first scan");
+    assert!(
+        database
+            .list_directory("")
+            .unwrap()
+            .directories
+            .iter()
+            .any(|(path, _)| path == "gone"),
+        "gone/ should have a directory row after the first scan"
+    );
+
+    std::fs::remove_dir_all(&gone_dir).expect("remove gone dir and its file");
+
+    scanner
+        .scan_directory(&database, &music_dir)
+        .expect("second scan");
+
+    assert!(
+        !database
+            .list_directory("")
+            .unwrap()
+            .directories
+            .iter()
+            .any(|(path, _)| path == "gone"),
+        "gone/'s directory row should be pruned once both its file and the directory itself \
+         are gone from disk"
+    );
+}
+
+/// An empty directory that is still present on disk must keep its
+/// `directories` row: emptiness alone is not grounds for pruning it.
+#[test]
+fn scan_keeps_directory_row_for_directory_still_on_disk() {
+    let temp_dir = TempDir::new().expect("create temp dir");
+    let music_dir = temp_dir.path().join("music");
+    std::fs::create_dir(&music_dir).expect("create music dir");
+    std::fs::create_dir(music_dir.join("empty")).expect("create empty dir");
+
+    let db_path = temp_dir.path().join("test.db");
+    let database = Database::open(db_path.to_str().unwrap()).expect("open database");
+    let scanner = Scanner::new(EventBus::new(), false);
+
+    scanner
+        .scan_directory(&database, &music_dir)
+        .expect("scan with an empty subdirectory");
+
+    assert!(
+        database
+            .list_directory("")
+            .unwrap()
+            .directories
+            .iter()
+            .any(|(path, _)| path == "empty"),
+        "empty/'s directory row must survive since the directory itself is still on disk"
     );
 }
