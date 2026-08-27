@@ -22,7 +22,7 @@ jobs:
     name: GitHub Actions Linting
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Run actionlint
         uses: reviewdog/action-actionlint@v1
@@ -33,7 +33,7 @@ jobs:
     name: YAML Linting
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install yamllint
         run: pip install --user yamllint
@@ -48,10 +48,10 @@ jobs:
     name: Validate Configuration Files
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.12'
 
@@ -77,7 +77,7 @@ jobs:
     name: Validate Renovate Config
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Validate renovate.json
         uses: suzuki-shunsuke/github-action-renovate-config-validator@v1.1.0
