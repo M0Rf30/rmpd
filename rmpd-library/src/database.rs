@@ -1110,6 +1110,23 @@ impl Database {
         Ok(())
     }
 
+    /// List the paths of every local song, ordered by path.
+    ///
+    /// `source IS NULL` is the same predicate `delete_song_by_path` guards its
+    /// `DELETE` with, so this only ever returns local filesystem rows — never
+    /// remote catalog rows inserted by `add_source_song`. Used by the scanner to
+    /// find local rows whose file has disappeared from disk. Deliberately not
+    /// `list_all_songs`: that loads tags for every song and includes remote rows.
+    pub fn list_local_song_paths(&self) -> Result<Vec<String>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT path FROM songs WHERE source IS NULL ORDER BY path")?;
+        let paths = stmt
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(paths)
+    }
+
     /// Ensure the root directory (path="", parent_id=NULL) exists and return its id.
     /// Local scans create this automatically via `get_or_create_directory`; this
     /// method creates it on first use in a remote-only deployment.
