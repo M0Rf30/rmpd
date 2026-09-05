@@ -3,10 +3,13 @@ use camino::Utf8PathBuf;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct Config {
+    #[serde(default)]
     pub general: GeneralConfig,
+    #[serde(default)]
     pub network: NetworkConfig,
+    #[serde(default)]
     pub audio: AudioConfig,
     #[serde(default)]
     pub output: Vec<OutputConfig>,
@@ -20,6 +23,7 @@ pub struct Config {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct GeneralConfig {
+    #[serde(default = "default_music_dir")]
     pub music_directory: Utf8PathBuf,
     #[serde(default = "default_playlist_dir")]
     pub playlist_directory: Utf8PathBuf,
@@ -264,32 +268,42 @@ pub enum DopMode {
 }
 
 // Default value functions
+
+/// Join `rel` onto the user's home directory. Used only as a fallback when the
+/// XDG lookup fails (headless systems without `xdg-user-dirs`), so the result
+/// must still be an absolute, usable path rather than a literal `~/…`.
+fn home_join(rel: &str) -> Utf8PathBuf {
+    dirs::home_dir()
+        .and_then(|p| Utf8PathBuf::try_from(p).ok())
+        .map_or_else(|| Utf8PathBuf::from(rel), |home| home.join(rel))
+}
+
 fn default_music_dir() -> Utf8PathBuf {
     // Honor $XDG_MUSIC_DIR (e.g. ~/Musica) when set, else fall back to ~/Music.
     dirs::audio_dir()
         .and_then(|p| Utf8PathBuf::try_from(p).ok())
-        .unwrap_or_else(|| Utf8PathBuf::from("~/Music"))
+        .unwrap_or_else(|| home_join("Music"))
 }
 
 fn default_playlist_dir() -> Utf8PathBuf {
     dirs::config_dir()
         .map(|p| p.join("rmpd/playlists"))
         .and_then(|p| Utf8PathBuf::try_from(p).ok())
-        .unwrap_or_else(|| Utf8PathBuf::from("~/.config/rmpd/playlists"))
+        .unwrap_or_else(|| home_join(".config/rmpd/playlists"))
 }
 
 fn default_db_file() -> Utf8PathBuf {
     dirs::config_dir()
         .map(|p| p.join("rmpd/database.db"))
         .and_then(|p| Utf8PathBuf::try_from(p).ok())
-        .unwrap_or_else(|| Utf8PathBuf::from("~/.config/rmpd/database.db"))
+        .unwrap_or_else(|| home_join(".config/rmpd/database.db"))
 }
 
 fn default_state_file() -> Utf8PathBuf {
     dirs::config_dir()
         .map(|p| p.join("rmpd/state"))
         .and_then(|p| Utf8PathBuf::try_from(p).ok())
-        .unwrap_or_else(|| Utf8PathBuf::from("~/.config/rmpd/state"))
+        .unwrap_or_else(|| home_join(".config/rmpd/state"))
 }
 
 fn default_log_level() -> String {
@@ -347,21 +361,43 @@ impl Config {
     }
 
     pub fn load_from_path<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let content = std::fs::read_to_string(path.as_ref())
-            .map_err(|e| RmpdError::Config(format!("Failed to read config: {e}")))?;
+        let path = path.as_ref();
+        let content = std::fs::read_to_string(path).map_err(|e| {
+            RmpdError::Config(format!("Failed to read config {}: {e}", path.display()))
+        })?;
 
-        let mut config: Config = toml::from_str(&content)
-            .map_err(|e| RmpdError::Config(format!("Failed to parse config: {e}")))?;
+        let mut config: Config = toml::from_str(&content).map_err(|e| {
+            RmpdError::Config(format!("Failed to parse config {}: {e}", path.display()))
+        })?;
 
         config.expand_paths();
         config.ensure_directories();
         config.validate()?;
+        tracing::info!("configuration loaded from {}", path.display());
         Ok(config)
     }
 
+    /// Load the first config file found in the standard locations, falling back
+    /// to built-in defaults. The fallback is logged loudly: a silent fallback is
+    /// indistinguishable from a config file that was found but ignored.
+    ///
+    /// The default config goes through the same path expansion and directory
+    /// creation as a loaded one, so a defaults-only start is still usable.
     #[must_use]
     pub fn load_or_default() -> Self {
-        Self::load().unwrap_or_else(|_| Self::default())
+        match Self::load() {
+            Ok(config) => config,
+            Err(e) => {
+                tracing::warn!("{e}; falling back to built-in defaults");
+                let mut config = Self::default();
+                config.expand_paths();
+                config.ensure_directories();
+                if let Err(e) = config.validate() {
+                    tracing::warn!("{e}");
+                }
+                config
+            }
+        }
     }
 
     /// Effective DoP mode. Prefers `[audio].dop`; if that is the default `No`,
@@ -422,18 +458,28 @@ impl Config {
     }
 
     fn find_config_file() -> Result<PathBuf> {
-        let candidates = [
+        let candidates: Vec<PathBuf> = [
             dirs::config_dir().map(|p| p.join("rmpd/rmpd.toml")),
             Some(PathBuf::from("/etc/rmpd/rmpd.toml")),
-        ];
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
 
-        for candidate in candidates.into_iter().flatten() {
+        for candidate in &candidates {
             if candidate.exists() {
-                return Ok(candidate);
+                return Ok(candidate.clone());
             }
         }
 
-        Err(RmpdError::Config("Config file not found".to_owned()))
+        let searched = candidates
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        Err(RmpdError::Config(format!(
+            "Config file not found (searched: {searched})"
+        )))
     }
 
     fn expand_paths(&mut self) {
@@ -476,47 +522,51 @@ impl Config {
     }
 }
 
-impl Default for Config {
+impl Default for GeneralConfig {
     fn default() -> Self {
         Self {
-            general: GeneralConfig {
-                music_directory: default_music_dir(),
-                playlist_directory: default_playlist_dir(),
-                db_file: default_db_file(),
-                state_file: default_state_file(),
-                log_level: default_log_level(),
-                follow_symlinks: false,
-                filesystem_charset: default_charset(),
-            },
-            network: NetworkConfig {
-                bind_address: default_bind_address(),
-                port: default_port(),
-                unix_socket: None,
-                max_connections: default_max_connections(),
-                connection_timeout: default_connection_timeout(),
-                password: None,
-                mpris: true,
-            },
-            audio: AudioConfig {
-                default_output: default_output(),
-                buffer_time: default_buffer_time(),
-                resampler_quality: ResamplerQuality::default(),
-                dop: DopMode::default(),
-                device: None,
-                replay_gain: ReplayGainMode::default(),
-                replay_gain_preamp: 0.0,
-                replay_gain_missing_preamp: 0.0,
-                volume_normalization: false,
-                gapless: true,
-                crossfade: 0.0,
-                mixramp_db: default_mixramp_db(),
-                mixramp_delay: 0.0,
-                restore_paused: false,
-            },
-            output: vec![],
-            source: Vec::new(),
-            decoder: DecoderConfig::default(),
-            database: DatabaseConfig::default(),
+            music_directory: default_music_dir(),
+            playlist_directory: default_playlist_dir(),
+            db_file: default_db_file(),
+            state_file: default_state_file(),
+            log_level: default_log_level(),
+            follow_symlinks: false,
+            filesystem_charset: default_charset(),
+        }
+    }
+}
+
+impl Default for NetworkConfig {
+    fn default() -> Self {
+        Self {
+            bind_address: default_bind_address(),
+            port: default_port(),
+            unix_socket: None,
+            max_connections: default_max_connections(),
+            connection_timeout: default_connection_timeout(),
+            password: None,
+            mpris: true,
+        }
+    }
+}
+
+impl Default for AudioConfig {
+    fn default() -> Self {
+        Self {
+            default_output: default_output(),
+            buffer_time: default_buffer_time(),
+            resampler_quality: ResamplerQuality::default(),
+            dop: DopMode::default(),
+            device: None,
+            replay_gain: ReplayGainMode::default(),
+            replay_gain_preamp: 0.0,
+            replay_gain_missing_preamp: 0.0,
+            volume_normalization: false,
+            gapless: true,
+            crossfade: 0.0,
+            mixramp_db: default_mixramp_db(),
+            mixramp_delay: 0.0,
+            restore_paused: false,
         }
     }
 }
@@ -537,6 +587,50 @@ mod tests {
             output_type: "alsa".to_owned(),
             enabled,
             settings,
+        }
+    }
+
+    #[test]
+    fn partial_config_keeps_defaults_for_absent_sections() {
+        // A config listing only the sections a user cares about must still
+        // deserialize; requiring [network]/[audio] silently discarded the whole
+        // file and fell back to defaults.
+        let c: Config = toml::from_str(
+            r#"
+[general]
+music_directory = "/srv/music"
+
+[network]
+port = 6611
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(c.general.music_directory, "/srv/music");
+        assert_eq!(c.network.port, 6611);
+        assert_eq!(c.network.bind_address, default_bind_address());
+        assert_eq!(c.audio.buffer_time, default_buffer_time());
+        assert!(c.audio.gapless);
+    }
+
+    #[test]
+    fn empty_config_deserializes_to_defaults() {
+        let c: Config = toml::from_str("").unwrap();
+        assert_eq!(c.general.music_directory, default_music_dir());
+        assert_eq!(c.network.port, default_port());
+    }
+
+    #[test]
+    fn default_paths_are_absolute() {
+        // A literal "~/Music" fallback is never usable: nothing expands it on
+        // the defaults path, so the daemon scanned a directory named "~".
+        for p in [
+            default_music_dir(),
+            default_playlist_dir(),
+            default_db_file(),
+            default_state_file(),
+        ] {
+            assert!(!p.as_str().starts_with('~'), "unexpanded default: {p}");
         }
     }
 

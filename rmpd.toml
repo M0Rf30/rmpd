@@ -1,7 +1,10 @@
 # rmpd configuration file
+#
+# Every section and key is optional; anything omitted falls back to a built-in
+# default. Paths starting with "~" are expanded to your home directory.
 
 [general]
-# Path to your music library (required; "~" is expanded).
+# Path to your music library. Defaults to $XDG_MUSIC_DIR, else ~/Music.
 music_directory = "~/Music"
 # The following default to your XDG config dir (~/.config/rmpd/…) when omitted:
 # playlist_directory = "~/.config/rmpd/playlists"
