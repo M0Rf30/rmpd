@@ -150,7 +150,6 @@ async fn main() -> Result<()> {
 
     let full_address = make_bind_addr(&bind_address, port);
 
-    info!("configuration loaded");
     info!("music directory: {}", config.general.music_directory);
     info!("database: {}", config.general.db_file);
 
