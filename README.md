@@ -82,51 +82,85 @@ mpc current   # shows the live ICY "now playing" title for streams
 
 ## Configuration
 
-Create `~/.config/rmpd/rmpd.toml`:
+rmpd does not require you to create a config file. On first start, if no
+config file is found, rmpd writes a commented starter config to
+`~/.config/rmpd/rmpd.toml` and logs the path it chose. You can also manage
+this explicitly:
+
+- `--generate-config` writes the starter config on demand and refuses to
+  overwrite an existing file.
+- `--print-config-path` prints the path that would be used, without writing
+  anything.
+- `--no-config` skips file discovery entirely and runs on built-in defaults.
+
+### Search order
+
+When `--config` is not given, rmpd searches these locations in order and
+uses the first one that exists:
+
+1. the path given to `--config`
+2. `$XDG_CONFIG_HOME/rmpd/rmpd.toml` (usually `~/.config/rmpd/rmpd.toml`)
+3. `~/.rmpd.toml`
+4. `~/.rmpd/rmpd.toml`
+5. `/etc/rmpd/rmpd.toml`
+
+This mirrors MPD's own search order (`$XDG_CONFIG_HOME/mpd/mpd.conf`,
+`~/.mpdconf`, `~/.mpd/mpd.conf`, `/etc/mpd.conf`).
+
+Every section and key is optional — anything omitted uses a built-in
+default, so a partial config is valid. Paths beginning with `~` are
+expanded.
+
+A minimal config:
 
 ```toml
 [general]
 music_directory = "~/Music"
-playlist_directory = "~/.config/rmpd/playlists"
-db_file = "~/.config/rmpd/database.db"
 log_level = "info"
 
 [network]
 bind_address = "127.0.0.1"
 port = 6600
-mpris = true
 
 [audio]
 default_output = "alsa"
-gapless = true
 replay_gain = "auto"
-buffer_time = 500
-
-[[output]]
-name = "Local Audio"
-type = "cpal"          # system audio via cpal (ALSA / PulseAudio / PipeWire host)
-enabled = true
-
-[[output]]
-name = "PipeWire"      # native pipewire-rs client; follows the graph rate (build with --features pipewire)
-type = "pipewire"
-enabled = false
-
-[[output]]
-name = "HTTP Stream"   # listen on http://<host>:8000 — play in a browser or another MPD
-type = "httpd"
-enabled = false
-port = 8000
-encoder = "wav"        # "wav" or "pcm"
-
-[[output]]
-name = "Snapcast FIFO" # feed an external snapserver for synchronized multi-room
-type = "fifo"
-enabled = false
-path = "/tmp/snapfifo"
 ```
 
-See [rmpd.toml](rmpd.toml) for a complete configuration example.
+See [rmpd.toml](rmpd.toml) for a complete, annotated configuration example.
+
+### Diagnostics
+
+Unrecognized keys are reported at startup instead of being silently
+ignored, with a suggestion when a typo is likely, for example:
+
+```
+unknown config key `general.msic_directory` (did you mean `music_directory`?)
+```
+
+Keys carried over from `mpd.conf` produce a migration hint pointing at the
+rmpd equivalent. Unknown keys only warn — they never stop the daemon.
+An explicitly passed `--config` file that cannot be read or parsed is
+fatal, since a config you asked for by name should never be silently
+substituted with defaults.
+
+A missing or nonexistent `music_directory` is **not** fatal: rmpd warns,
+starts anyway, and skips library scanning, matching MPD's
+degrade-don't-die behaviour.
+
+`log_level` under `[general]` controls logging (`trace`/`debug`/`info`/
+`warn`/`error`). `--verbose` forces `debug`, and the `RUST_LOG` environment
+variable overrides both.
+
+The following keys were parsed in older versions but never did anything
+and have been removed; a config that still sets them gets a startup
+warning naming each one:
+
+- `audio.gapless` — gapless playback is always on
+- the entire `[decoder]` section, including `decoder.enabled` — decoders
+  come from a compile-time registry
+- `database.cache_size`
+- `database.fts_enabled`
 
 ### Music Sources (OpenSubsonic)
 
