@@ -1,6 +1,7 @@
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use clap::Parser;
-use tracing::info;
+use rmpd_core::config::{Config, ConfigSource, DiagLevel, DiscoverOptions};
+use tracing::{info, warn};
 
 mod app;
 
@@ -66,6 +67,18 @@ struct Args {
     /// Log to syslog/journald instead of stdout (useful when running as a daemon)
     #[arg(long)]
     syslog: bool,
+
+    /// Skip configuration file discovery entirely and use built-in defaults
+    #[arg(long)]
+    no_config: bool,
+
+    /// Write a starter configuration file to the default search location and exit
+    #[arg(long)]
+    generate_config: bool,
+
+    /// Print the configuration file path that would be used and exit
+    #[arg(long)]
+    print_config_path: bool,
 }
 
 fn make_bind_addr(addr: &str, port: u16) -> String {
@@ -97,13 +110,53 @@ fn default_env_filter(level: &str) -> tracing_subscriber::EnvFilter {
 async fn main() -> Result<()> {
     let args = Args::parse();
 
+    if args.generate_config {
+        let search_paths = Config::search_paths();
+        let path = &search_paths[0];
+        return match Config::write_template(path.as_std_path()) {
+            Ok(()) => {
+                println!("{path}");
+                Ok(())
+            }
+            Err(e) => Err(anyhow!(e)),
+        };
+    }
+
+    if args.print_config_path {
+        let path = Config::search_paths()
+            .into_iter()
+            .find(|p| p.exists())
+            .unwrap_or_else(|| Config::search_paths()[0].clone());
+        println!("{path}");
+        return Ok(());
+    }
+
+    // Load configuration before any logging is set up, so the effective log
+    // level (from config or --verbose) can drive the tracing filter from the
+    // very first line of output.
+    let discover_opts = DiscoverOptions {
+        generate_if_missing: !args.no_config,
+        no_config: args.no_config,
+    };
+    // anyhow prints the error to stderr on exit, which is the only channel
+    // available here: the tracing subscriber is not up yet, by design.
+    let load = Config::discover(
+        args.config.as_ref().map(std::path::Path::new),
+        discover_opts,
+    )?;
+    let config = load.config;
+
     // Initialize logging
-    let log_level = if args.verbose { "debug" } else { "info" };
+    let log_level = if args.verbose {
+        "debug".to_owned()
+    } else {
+        config.general.log_level.clone()
+    };
     if args.syslog || args.daemonize {
         #[cfg(target_os = "linux")]
         {
             use tracing_subscriber::prelude::*;
-            let env_filter = default_env_filter(log_level);
+            let env_filter = default_env_filter(&log_level);
             match tracing_journald::layer() {
                 Ok(journald) => {
                     tracing_subscriber::registry()
@@ -125,22 +178,34 @@ async fn main() -> Result<()> {
         tracing_subscriber::fmt()
             .with_ansi(false)
             .with_writer(std::io::stderr)
-            .with_env_filter(default_env_filter(log_level))
+            .with_env_filter(default_env_filter(&log_level))
             .init();
     } else {
         tracing_subscriber::fmt()
-            .with_env_filter(default_env_filter(log_level))
+            .with_env_filter(default_env_filter(&log_level))
             .init();
     }
 
     info!("starting rmpd v{}", env!("CARGO_PKG_VERSION"));
 
-    // Load configuration
-    let config = if let Some(config_path) = args.config {
-        rmpd_core::config::Config::load_from_path(config_path)?
-    } else {
-        rmpd_core::config::Config::load_or_default()
-    };
+    // Replay diagnostics collected during config discovery now that the
+    // subscriber is up; discover() never logs directly so nothing is lost.
+    for d in &load.diagnostics {
+        match d.level {
+            DiagLevel::Warn => warn!("{}", d.message),
+            DiagLevel::Info => info!("{}", d.message),
+        }
+    }
+
+    match &load.source {
+        ConfigSource::File(p) => info!("configuration loaded from {p}"),
+        ConfigSource::Generated(p) => {
+            info!("no configuration file found; wrote a starter config to {p}")
+        }
+        ConfigSource::Defaults => {
+            warn!("no configuration file in use; running with built-in defaults")
+        }
+    }
 
     // Override with CLI arguments
     let bind_address = args

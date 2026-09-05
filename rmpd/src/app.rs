@@ -133,10 +133,20 @@ pub async fn run(bind_address: String, config: Config) -> Result<()> {
         None
     };
 
+    // A missing music_directory is not fatal (config warns about it), but the
+    // scanner and the watcher both need a real directory. Skipping them here is
+    // what makes that warning honest: without this the daemon would immediately
+    // log a scan failure and a watch failure for a path we already reported.
+    let music_dir_exists = std::path::Path::new(&music_dir).is_dir();
+
     // Trigger an initial library scan on startup when auto-update is enabled.
     if config.database.auto_update {
-        info!("auto-update enabled: scanning music directory");
-        state.spawn_library_update(false).await;
+        if music_dir_exists {
+            info!("auto-update enabled: scanning music directory");
+            state.spawn_library_update(false).await;
+        } else {
+            warn!("skipping library scan: music directory {music_dir} does not exist");
+        }
     }
 
     // Sync enabled music sources (ping first; unreachable sources are skipped).
@@ -148,7 +158,7 @@ pub async fn run(bind_address: String, config: Config) -> Result<()> {
     // Start the filesystem watcher so the database stays in sync with on-disk
     // changes. Kept alive (`_watcher`) for the lifetime of the server; dropping
     // it would stop watching.
-    let _watcher = if config.database.filesystem_watch {
+    let _watcher = if config.database.filesystem_watch && music_dir_exists {
         match start_filesystem_watch(&state, &db_path, &music_dir).await {
             Ok(w) => Some(w),
             Err(e) => {

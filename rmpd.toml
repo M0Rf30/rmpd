@@ -2,6 +2,15 @@
 #
 # Every section and key is optional; anything omitted falls back to a built-in
 # default. Paths starting with "~" are expanded to your home directory.
+#
+# rmpd searches for this file, in order, at:
+#   $XDG_CONFIG_HOME/rmpd/rmpd.toml   (usually ~/.config/rmpd/rmpd.toml)
+#   ~/.rmpd.toml
+#   ~/.rmpd/rmpd.toml
+#   /etc/rmpd/rmpd.toml
+# The first one found wins. This file is also the shipped starter config: every
+# uncommented value below matches rmpd's built-in default, except
+# music_directory (set here to a sample path since it has no safe default).
 
 [general]
 # Path to your music library. Defaults to $XDG_MUSIC_DIR, else ~/Music.
@@ -50,9 +59,8 @@ replay_gain = "off"
 replay_gain_preamp = 0.0
 replay_gain_missing_preamp = 0.0
 volume_normalization = false
-gapless = true
 crossfade = 0
-mixramp_db = -17.0
+mixramp_db = 0.0
 mixramp_delay = 0.0
 
 [[output]]
@@ -77,14 +85,9 @@ enabled = true
 # type = "pipewire"
 # enabled = true
 
-[decoder]
-enabled = ["symphonia"]
-
 [database]
 auto_update = true
 filesystem_watch = true
-cache_size = 64
-fts_enabled = true
 
 # ── Music Sources ────────────────────────────────────────────────────────────
 # Remote catalogs are declared as [[source]] blocks. Each enabled source is
