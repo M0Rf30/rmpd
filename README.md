@@ -209,8 +209,8 @@ rmpd also advertises itself over **mDNS/Zeroconf** so MPD clients on the local n
 
 ### Supported Formats
 
-- **Lossless**: FLAC, WAV, ALAC, APE, WavPack, TrueAudio
-- **Lossy**: MP3, Ogg Vorbis, Opus, AAC, MP4
+- **Lossless**: FLAC, WAV, AIFF, ALAC
+- **Lossy**: MP3, Ogg Vorbis, Opus, AAC, MP4, Matroska/WebM
 - **High-Resolution**: DSD (DSF, DFF) with DoP and native playback
 - **Streaming**: HTTP streams, Icecast, internet radio
 
@@ -276,7 +276,7 @@ See [CI.md](CI.md) for detailed CI/CD documentation.
 - **Library Management**
   - Filesystem scanning
   - SQLite database
-  - Metadata extraction with lofty
+  - Metadata extraction with symphonia
   - Full-text search with tantivy
   - Album art support
 
@@ -364,7 +364,7 @@ at your option.
 ## Acknowledgments
 
 - Inspired by the original [Music Player Daemon](https://www.musicpd.org/)
-- Built with modern Rust audio libraries: [Symphonia](https://github.com/pdeljanov/Symphonia), [cpal](https://github.com/RustAudio/cpal), [lofty](https://github.com/Serial-ATA/lofty-rs)
+- Built with modern Rust audio libraries: [Symphonia](https://github.com/pdeljanov/Symphonia), [cpal](https://github.com/RustAudio/cpal)
 - Special thanks to the Rust audio community
 
 ## Links

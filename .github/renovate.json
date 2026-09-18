@@ -64,8 +64,7 @@
       "matchPackageNames": [
         "symphonia",
         "cpal",
-        "rubato",
-        "lofty"
+        "rubato"
       ],
       "groupName": "audio stack",
       "automerge": false

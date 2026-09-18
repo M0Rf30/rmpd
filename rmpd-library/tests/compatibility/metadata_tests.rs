@@ -92,11 +92,15 @@ fn test_wav_metadata_extraction() {
     let path = pregenerated::basic_wav();
     let song = harness.extract_metadata(path.to_str().unwrap()).unwrap();
 
-    // WAV may or may not preserve metadata depending on the tag format
-    // Just verify we can read audio properties
     assert!(song.sample_rate.is_some());
     assert!(song.channels.is_some());
     assert!(song.duration.is_some());
+
+    // RIFF INFO chunk tags (INAM/IART/IPRD). Guards the WavReader fix in the
+    // Symphonia fork, which used to parse the INFO chunk and then discard it.
+    assert_eq!(song.tag("title"), Some("Test Song WAV"));
+    assert_eq!(song.tag("artist"), Some("Test Artist WAV"));
+    assert_eq!(song.tag("album"), Some("Test Album WAV"));
 }
 
 #[test]

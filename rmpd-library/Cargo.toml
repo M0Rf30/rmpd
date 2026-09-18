@@ -10,16 +10,15 @@ keywords.workspace = true
 categories.workspace = true
 
 [package.metadata.cargo-machete]
-# symphonia and tantivy used in examples and tests
+# tantivy used in examples and tests
 # thiserror used for error handling macros
 # base64 used in fingerprint module for encoding
-ignored = ["symphonia", "tantivy", "thiserror", "base64"]
+ignored = ["tantivy", "thiserror", "base64"]
 
 [dependencies]
 rmpd-core = { workspace = true, features = ["database-errors", "library-errors"] }
 rmpd-player.workspace = true
 rusqlite = { workspace = true, features = ["functions"] }
-lofty.workspace = true
 symphonia.workspace = true
 tantivy.workspace = true
 notify.workspace = true

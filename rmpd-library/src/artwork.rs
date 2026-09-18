@@ -1,10 +1,11 @@
-use lofty::file::TaggedFileExt;
-use lofty::picture::PictureType;
+use camino::Utf8PathBuf;
 use rmpd_core::error::{Result, RmpdError};
 use sha2::{Digest, Sha256};
 use std::path::Path;
+use symphonia::core::meta::StandardVisualKey;
 
 use crate::database::Database;
+use crate::metadata::{Artwork, MetadataExtractor};
 
 const MAX_ARTWORK_SIZE: usize = 5 * 1024 * 1024; // 5MB
 
@@ -58,7 +59,7 @@ pub fn find_external_cover(dir: &Path, offset: usize) -> ArtLookup<ExternalArtwo
     ArtLookup::NotFound
 }
 
-fn infer_mime(data: &[u8]) -> &'static str {
+pub(crate) fn infer_mime(data: &[u8]) -> &'static str {
     if data.starts_with(b"\xFF\xD8\xFF") {
         "image/jpeg"
     } else if data.starts_with(b"\x89PNG\r\n\x1a\n") {
@@ -103,23 +104,17 @@ impl AlbumArtExtractor {
         }
 
         // Not in cache, extract from file using absolute path
-        let abs_path = Path::new(file_path);
-        let tagged_file = lofty::read_from_path(abs_path)
-            .map_err(|e| RmpdError::Library(format!("Failed to read file: {e}")))?;
+        let path = Utf8PathBuf::from(file_path);
+        let artworks = MetadataExtractor::extract_artwork_from_file(&path)?;
 
-        // Try to find front cover
-        let picture = if let Some(primary_tag) = tagged_file.primary_tag() {
-            primary_tag
-                .pictures()
-                .iter()
-                .find(|p| matches!(p.pic_type(), PictureType::CoverFront | PictureType::Other))
-                .or_else(|| primary_tag.pictures().first())
-        } else {
-            None
-        };
+        // Try to find a front cover, falling back to any embedded picture.
+        let picture: Option<&Artwork> = artworks
+            .iter()
+            .find(|a| a.picture_type == "front" || a.picture_type == "other")
+            .or_else(|| artworks.first());
 
-        if let Some(pic) = picture {
-            let data = pic.data();
+        if let Some(art) = picture {
+            let data = art.data.as_slice();
 
             // Check size limit
             if data.len() > MAX_ARTWORK_SIZE {
@@ -132,11 +127,7 @@ impl AlbumArtExtractor {
 
             let hash = sha256_hex(data);
 
-            // Get MIME type from tag, fall back to magic-byte inference
-            let mime_type = pic
-                .mime_type()
-                .map(|m| m.to_string())
-                .unwrap_or_else(|| infer_mime(data).to_owned());
+            let mime_type = art.mime_type.clone();
 
             // Store in cache using relative path as key
             self.db
@@ -189,12 +180,7 @@ impl AlbumArtExtractor {
             None => return Ok(ArtLookup::NotFound),
         };
 
-        // Use the stored MIME type; fall back to magic-byte inference only when empty.
-        let mime_type = if stored_mime.is_empty() {
-            infer_mime(&data).to_owned()
-        } else {
-            stored_mime
-        };
+        let mime_type = stored_mime;
 
         if offset > data.len() {
             return Ok(ArtLookup::OffsetTooLarge);
@@ -217,28 +203,28 @@ pub struct ArtworkData {
     pub data: Vec<u8>,
 }
 
-pub(crate) fn picture_type_to_string(pic_type: PictureType) -> String {
-    match pic_type {
-        PictureType::CoverFront => "front",
-        PictureType::CoverBack => "back",
-        PictureType::Icon => "icon",
-        PictureType::OtherIcon => "other_icon",
-        PictureType::Leaflet => "leaflet",
-        PictureType::Media => "media",
-        PictureType::LeadArtist => "artist",
-        PictureType::Artist => "artist",
-        PictureType::Conductor => "conductor",
-        PictureType::Band => "band",
-        PictureType::Composer => "composer",
-        PictureType::Lyricist => "lyricist",
-        PictureType::RecordingLocation => "recording_location",
-        PictureType::DuringRecording => "during_recording",
-        PictureType::DuringPerformance => "during_performance",
-        PictureType::ScreenCapture => "screen_capture",
-        PictureType::BrightFish => "bright_fish",
-        PictureType::Illustration => "illustration",
-        PictureType::BandLogo => "band_logo",
-        PictureType::PublisherLogo => "publisher_logo",
+pub(crate) fn picture_type_to_string(usage: Option<StandardVisualKey>) -> String {
+    match usage {
+        Some(StandardVisualKey::FrontCover) => "front",
+        Some(StandardVisualKey::BackCover) => "back",
+        Some(StandardVisualKey::FileIcon) => "icon",
+        Some(StandardVisualKey::OtherIcon) => "other_icon",
+        Some(StandardVisualKey::Leaflet) => "leaflet",
+        Some(StandardVisualKey::Media) => "media",
+        Some(
+            StandardVisualKey::LeadArtistPerformerSoloist | StandardVisualKey::ArtistPerformer,
+        ) => "artist",
+        Some(StandardVisualKey::Conductor) => "conductor",
+        Some(StandardVisualKey::BandOrchestra) => "band",
+        Some(StandardVisualKey::Composer) => "composer",
+        Some(StandardVisualKey::Lyricist) => "lyricist",
+        Some(StandardVisualKey::RecordingLocation) => "recording_location",
+        Some(StandardVisualKey::RecordingSession) => "during_recording",
+        Some(StandardVisualKey::Performance) => "during_performance",
+        Some(StandardVisualKey::ScreenCapture) => "screen_capture",
+        Some(StandardVisualKey::Illustration) => "illustration",
+        Some(StandardVisualKey::BandArtistLogo) => "band_logo",
+        Some(StandardVisualKey::PublisherStudioLogo) => "publisher_logo",
         _ => "other",
     }
     .to_owned()

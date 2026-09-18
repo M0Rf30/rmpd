@@ -1256,8 +1256,8 @@ pub async fn handle_readcomments_command(state: &AppState, uri: &str) -> String 
     use camino::Utf8PathBuf;
     use rmpd_library::MetadataExtractor;
 
-    // Source-backed (remote) songs have no local file to read tags from; running
-    // lofty on a mount-style path would fail. readcomments returns an empty OK.
+    // Source-backed (remote) songs have no local file to read tags from; probing
+    // a mount-style path would fail. readcomments returns an empty OK.
     if state.sources.owns_path(uri) {
         return ResponseBuilder::new().ok();
     }
