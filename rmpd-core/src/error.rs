@@ -31,9 +31,6 @@ pub enum RmpdError {
 
     #[error("Invalid state: {0}")]
     InvalidState(String),
-
-    #[error("Permission denied")]
-    PermissionDenied,
 }
 
 pub type Result<T> = std::result::Result<T, RmpdError>;

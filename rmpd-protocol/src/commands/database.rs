@@ -44,12 +44,40 @@ fn directory_lookup_ack(command: &str, err: &rmpd_core::error::RmpdError) -> Str
         ResponseBuilder::error(ACK_ERROR_SYS, 0, command, msg)
     }
 }
-
 use super::utils::{
-    ACK_ERROR_ARG, ACK_ERROR_NO_EXIST, ACK_ERROR_SYS, add_songs_at_position, apply_range,
-    filter_parse_ack, format_iso8601_timestamp, open_db, parse_filter_args, parse_sort_tag,
-    resolve_add_position, sort_songs,
+    ACK_ERROR_ARG, ACK_ERROR_NO_EXIST, ACK_ERROR_PLAYLIST_MAX, ACK_ERROR_SYS, MAX_QUEUE_LEN,
+    add_songs_at_position, apply_range, filter_parse_ack, format_iso8601_timestamp, open_db,
+    parse_filter_args, parse_sort_tag, resolve_add_position, sort_songs,
 };
+
+/// Resolve a client-supplied relative URI to a path within `music_dir`,
+/// rejecting absolute URIs and `.`/`..` segments (mirrors MPD's
+/// `uri_safe_local`), then canonicalizing and bounds-checking the result
+/// like `getfingerprint`'s resolver does. If the resolved path does not
+/// exist yet, the lexical (non-canonicalized) join is returned so callers
+/// can still produce a "no such file" error instead of "malformed".
+pub(crate) fn resolve_safe_music_path(
+    music_dir: &str,
+    uri: &str,
+) -> Result<std::path::PathBuf, ()> {
+    if !rmpd_core::path::uri_safe_local(uri) {
+        return Err(());
+    }
+    let path = std::path::PathBuf::from(music_dir).join(uri);
+    match path.canonicalize() {
+        Ok(canonical) => {
+            let music_dir_canonical = std::path::PathBuf::from(music_dir)
+                .canonicalize()
+                .map_err(|_| ())?;
+            if canonical.starts_with(&music_dir_canonical) {
+                Ok(canonical)
+            } else {
+                Err(())
+            }
+        }
+        Err(_) => Ok(path),
+    }
+}
 
 async fn handle_find_search_core(
     state: &AppState,
@@ -465,7 +493,12 @@ fn synth_cover_filename(uri: &str, mime_type: &str) -> String {
     }
 }
 
-pub async fn handle_albumart_command(state: &AppState, uri: &str, offset: usize) -> Response {
+pub async fn handle_albumart_command(
+    state: &AppState,
+    uri: &str,
+    offset: usize,
+    binary_limit: usize,
+) -> Response {
     debug!("albumart command: uri=[{}], offset={}", uri, offset);
 
     // Source-backed mount-style paths (e.g. `alarm-music/…`): artwork is fetched
@@ -528,7 +561,7 @@ pub async fn handle_albumart_command(state: &AppState, uri: &str, offset: usize)
 
         let uri_owned = uri.to_string();
         return match tokio::task::spawn_blocking(move || {
-            extractor.get_artwork(&uri_owned, "", offset)
+            extractor.get_artwork(&uri_owned, "", offset, binary_limit)
         })
         .await
         {
@@ -567,22 +600,29 @@ pub async fn handle_albumart_command(state: &AppState, uri: &str, offset: usize)
     // Local files: `albumart` only looks at a standalone cover image
     // (cover.png/.jpg/.jxl/.webp) in the song's directory — it never reads
     // embedded tag pictures. That's `readpicture`'s job.
-    let absolute_path = if uri.starts_with('/') {
-        uri.to_string()
-    } else {
-        match &state.music_dir {
-            Some(music_dir) => format!("{music_dir}/{uri}"),
-            None => {
-                return Response::Text(ResponseBuilder::error(
-                    ACK_ERROR_NO_EXIST,
-                    0,
-                    "albumart",
-                    "music directory not configured",
-                ));
-            }
+    let music_dir = match &state.music_dir {
+        Some(d) => d.clone(),
+        None => {
+            return Response::Text(ResponseBuilder::error(
+                ACK_ERROR_NO_EXIST,
+                0,
+                "albumart",
+                "music directory not configured",
+            ));
         }
     };
-    let dir = match std::path::Path::new(&absolute_path).parent() {
+    let path = match resolve_safe_music_path(&music_dir, uri) {
+        Ok(p) => p,
+        Err(()) => {
+            return Response::Text(ResponseBuilder::error(
+                ACK_ERROR_ARG,
+                0,
+                "albumart",
+                "Malformed URI",
+            ));
+        }
+    };
+    let dir = match path.parent() {
         Some(d) => d.to_path_buf(),
         None => {
             return Response::Text(ResponseBuilder::error(
@@ -595,7 +635,10 @@ pub async fn handle_albumart_command(state: &AppState, uri: &str, offset: usize)
     };
     let uri_dir = uri.rsplit_once('/').map(|(d, _)| d.to_string());
 
-    match tokio::task::spawn_blocking(move || rmpd_library::find_external_cover(&dir, offset)).await
+    match tokio::task::spawn_blocking(move || {
+        rmpd_library::find_external_cover(&dir, offset, binary_limit)
+    })
+    .await
     {
         Ok(rmpd_library::ArtLookup::Found(art)) => {
             let file_field = match &uri_dir {
@@ -629,7 +672,12 @@ pub async fn handle_albumart_command(state: &AppState, uri: &str, offset: usize)
     }
 }
 
-pub async fn handle_readpicture_command(state: &AppState, uri: &str, offset: usize) -> Response {
+pub async fn handle_readpicture_command(
+    state: &AppState,
+    uri: &str,
+    offset: usize,
+    binary_limit: usize,
+) -> Response {
     // readpicture returns embedded pictures from audio files.
     // Unlike albumart: file-not-found -> "No such song", no picture -> OK (empty)
     let state_open = state.clone();
@@ -692,7 +740,7 @@ pub async fn handle_readpicture_command(state: &AppState, uri: &str, offset: usi
 
         let uri_owned = uri.to_string();
         return match tokio::task::spawn_blocking(move || {
-            extractor.get_artwork(&uri_owned, "", offset)
+            extractor.get_artwork(&uri_owned, "", offset, binary_limit)
         })
         .await
         {
@@ -719,27 +767,38 @@ pub async fn handle_readpicture_command(state: &AppState, uri: &str, offset: usi
         };
     }
 
-    let absolute_path = if uri.starts_with('/') {
-        uri.to_string()
-    } else {
-        match &state.music_dir {
-            Some(music_dir) => format!("{music_dir}/{uri}"),
-            None => {
-                return Response::Text(ResponseBuilder::error(
-                    ACK_ERROR_NO_EXIST,
-                    0,
-                    "readpicture",
-                    "music directory not configured",
-                ));
-            }
+    let music_dir = match &state.music_dir {
+        Some(d) => d.clone(),
+        None => {
+            return Response::Text(ResponseBuilder::error(
+                ACK_ERROR_NO_EXIST,
+                0,
+                "readpicture",
+                "music directory not configured",
+            ));
+        }
+    };
+    let absolute_path = match resolve_safe_music_path(&music_dir, uri) {
+        Ok(p) => p.to_string_lossy().to_string(),
+        Err(()) => {
+            return Response::Text(ResponseBuilder::error(
+                ACK_ERROR_ARG,
+                0,
+                "readpicture",
+                "Malformed URI",
+            ));
         }
     };
 
-    let uri_owned = uri.to_string();
+    // Key the artwork cache by the canonicalized on-disk path rather than
+    // the raw client URI, so differing URI spellings (case, `.`/`..`
+    // segments already stripped by resolve_safe_music_path, symlinks) of
+    // the same file share one cache entry instead of poisoning/duplicating it.
+    let cache_key = absolute_path.clone();
     let absolute_path_for_check = absolute_path.clone();
     match tokio::task::spawn_blocking(move || {
         let extractor = rmpd_library::AlbumArtExtractor::new(db);
-        extractor.get_artwork(&uri_owned, &absolute_path, offset)
+        extractor.get_artwork(&cache_key, &absolute_path, offset, binary_limit)
     })
     .await
     {
@@ -1073,6 +1132,15 @@ async fn handle_match_add_core(
     };
 
     let windowed = apply_range(&songs, window).to_vec();
+    let queue_len = state.queue.read().await.len() as u32;
+    if queue_len + windowed.len() as u32 > MAX_QUEUE_LEN {
+        return ResponseBuilder::error(
+            ACK_ERROR_PLAYLIST_MAX,
+            0,
+            cmd,
+            "playlist is at the max size",
+        );
+    }
     match add_songs_at_position(state, windowed, position, cmd).await {
         Ok(()) => ResponseBuilder::new().ok(),
         Err(e) => e,
@@ -1103,16 +1171,18 @@ pub async fn handle_listfiles_command(state: &AppState, uri: Option<&str>) -> St
     let path = uri.unwrap_or("");
     // Prefer filesystem listing (like MPD) to show all files with size.
     if let Some(music_dir) = state.music_dir.as_deref() {
+        // Safety: reject absolute paths and `..` segments (MPD's
+        // `uri_safe_local`). Must happen before joining, since `Path::join`
+        // discards `music_dir` entirely when `path` is absolute.
+        if !path.is_empty() && !rmpd_core::path::uri_safe_local(path) {
+            return ResponseBuilder::error(ACK_ERROR_ARG, 0, "listfiles", "Malformed URI");
+        }
+
         let full_path = if path.is_empty() {
             std::path::PathBuf::from(music_dir)
         } else {
             std::path::PathBuf::from(music_dir).join(path)
         };
-
-        // Safety: reject path traversal
-        if path.contains("..") {
-            return ResponseBuilder::error(ACK_ERROR_ARG, 0, "listfiles", "bad path");
-        }
 
         let path_owned = path.to_string();
         let fs_result = tokio::task::spawn_blocking(move || {
@@ -1262,41 +1332,69 @@ pub async fn handle_readcomments_command(state: &AppState, uri: &str) -> String 
         return ResponseBuilder::new().ok();
     }
 
-    // Resolve absolute path from music_dir + relative URI
-    let abs_path = if let Some(music_dir) = &state.music_dir {
-        let base = music_dir.trim_end_matches('/');
-        format!("{base}/{uri}")
-    } else {
-        // Try as-is (absolute path)
-        uri.to_string()
+    let music_dir = match &state.music_dir {
+        Some(d) => d.clone(),
+        None => {
+            return ResponseBuilder::error(
+                ACK_ERROR_NO_EXIST,
+                0,
+                "readcomments",
+                "music directory not configured",
+            );
+        }
+    };
+    let path = match resolve_safe_music_path(&music_dir, uri) {
+        Ok(p) => p,
+        Err(()) => {
+            return ResponseBuilder::error(ACK_ERROR_ARG, 0, "readcomments", "Malformed URI");
+        }
     };
 
-    let path = Utf8PathBuf::from(&abs_path);
-    if !path.exists() {
-        return ResponseBuilder::error(ACK_ERROR_NO_EXIST, 0, "readcomments", "No such song");
-    }
+    let uri_owned = uri.to_string();
+    match tokio::task::spawn_blocking(move || {
+        let path = Utf8PathBuf::from(path.to_string_lossy().to_string());
+        if !path.exists() {
+            return Err(ResponseBuilder::error(
+                ACK_ERROR_NO_EXIST,
+                0,
+                "readcomments",
+                "No such song",
+            ));
+        }
 
-    match MetadataExtractor::read_raw_comments(&path) {
-        Ok(pairs) => {
-            let mut resp = ResponseBuilder::new();
-            for (key, value) in pairs {
-                // MPD's IsValidName: must start with alpha, all chars [A-Za-z_-]
-                // MPD's IsValidValue: no control chars (< 0x20)
-                let valid_name = !key.is_empty()
-                    && key.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
-                    && key
-                        .chars()
-                        .all(|c| c.is_ascii_alphabetic() || c == '_' || c == '-');
-                let valid_value = value.bytes().all(|b| b >= 0x20);
-                if valid_name && valid_value {
-                    resp.field(&key, &value);
+        match MetadataExtractor::read_raw_comments(&path) {
+            Ok(pairs) => {
+                let mut resp = ResponseBuilder::new();
+                for (key, value) in pairs {
+                    // MPD's IsValidName: must start with alpha, all chars [A-Za-z_-]
+                    // MPD's IsValidValue: no control chars (< 0x20)
+                    let valid_name = !key.is_empty()
+                        && key.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+                        && key
+                            .chars()
+                            .all(|c| c.is_ascii_alphabetic() || c == '_' || c == '-');
+                    let valid_value = value.bytes().all(|b| b >= 0x20);
+                    if valid_name && valid_value {
+                        resp.field(&key, &value);
+                    }
                 }
+                Ok(resp.ok())
             }
-            resp.ok()
+            Err(e) => {
+                error!("readcomments error for {uri_owned}: {e}");
+                Err(ResponseBuilder::error(
+                    ACK_ERROR_SYS,
+                    0,
+                    "readcomments",
+                    "No such song",
+                ))
+            }
         }
-        Err(e) => {
-            error!("readcomments error for {uri}: {e}");
-            ResponseBuilder::error(ACK_ERROR_SYS, 0, "readcomments", "No such song")
-        }
+    })
+    .await
+    {
+        Ok(Ok(s)) => s,
+        Ok(Err(s)) => s,
+        Err(_) => ResponseBuilder::error(ACK_ERROR_SYS, 0, "readcomments", "internal error"),
     }
 }

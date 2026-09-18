@@ -8,9 +8,9 @@ use crate::response::ResponseBuilder;
 use crate::state::AppState;
 
 use super::utils::{
-    ACK_ERROR_ARG, ACK_ERROR_NO_EXIST, ACK_ERROR_PERMISSION, ACK_ERROR_PLAYER_SYNC, ACK_ERROR_SYS,
-    add_at_checked, add_queue_item_metadata, apply_range, open_db, prepare_song_for_playback,
-    update_next_song,
+    ACK_ERROR_ARG, ACK_ERROR_NO_EXIST, ACK_ERROR_PERMISSION, ACK_ERROR_PLAYER_SYNC,
+    ACK_ERROR_PLAYLIST_MAX, ACK_ERROR_SYS, MAX_QUEUE_LEN, add_at_checked, add_queue_item_metadata,
+    apply_range, open_db, prepare_song_for_playback, update_next_song,
 };
 
 fn number_too_large(command: &str, n: u32) -> String {
@@ -264,6 +264,15 @@ pub async fn handle_add_command(
         AddOutcome::Directory(songs) => {
             let mut queue = state.queue.write().await;
             let old_size = queue.len() as u32;
+            if old_size >= MAX_QUEUE_LEN || old_size as usize + songs.len() > MAX_QUEUE_LEN as usize
+            {
+                return ResponseBuilder::error(
+                    ACK_ERROR_PLAYLIST_MAX,
+                    0,
+                    "add",
+                    "playlist is at the max size",
+                );
+            }
             for song in songs {
                 queue.add(song);
             }
@@ -429,10 +438,15 @@ pub async fn handle_moveid_command(
     id: u32,
     to: crate::parser::InsertPosition,
 ) -> String {
-    let queue_len = state.queue.read().await.len() as u32;
-    let position = match state.queue.read().await.get_by_id(id) {
-        Some(item) => item.position,
-        None => return ResponseBuilder::error(ACK_ERROR_NO_EXIST, 0, "moveid", "No such song"),
+    let (queue_len, position) = {
+        let queue = state.queue.read().await;
+        let queue_len = queue.len() as u32;
+        match queue.get_by_id(id) {
+            Some(item) => (queue_len, item.position),
+            None => {
+                return ResponseBuilder::error(ACK_ERROR_NO_EXIST, 0, "moveid", "No such song");
+            }
+        }
     };
 
     let to =

@@ -6,6 +6,9 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[lints]
+workspace = true
+
 [package.metadata.cargo-machete]
 # thiserror used for error handling macros
 ignored = ["thiserror"]

@@ -9,6 +9,9 @@ description.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+[lints]
+workspace = true
+
 [package.metadata.cargo-machete]
 # tantivy used in examples and tests
 # thiserror used for error handling macros

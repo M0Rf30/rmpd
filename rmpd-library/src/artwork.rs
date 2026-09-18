@@ -9,9 +9,6 @@ use crate::metadata::{Artwork, MetadataExtractor};
 
 const MAX_ARTWORK_SIZE: usize = 5 * 1024 * 1024; // 5MB
 
-/// MPD's default binary chunk size (`Client::binary_limit`'s default).
-const CHUNK_SIZE: usize = 8192;
-
 /// Standalone cover-art filenames searched in a song's directory, in MPD's
 /// priority order (`FileCommands.cxx::find_stream_art`). Used by `albumart`
 /// only — never by `readpicture`, which reads embedded tag pictures instead.
@@ -38,18 +35,28 @@ pub struct ExternalArtwork {
 /// Locate a standalone cover-art file in `dir` and return the chunk at
 /// `offset`. This is MPD's `albumart` lookup: it only considers separate
 /// image files, never embedded tag pictures (see `AlbumArtExtractor::get_artwork`
-/// for that).
+/// for that). `chunk_size` is the client's `binarylimit` (min 64, MPD default
+/// 8192); the returned chunk is `min(chunk_size, remaining)` bytes.
 #[must_use]
-pub fn find_external_cover(dir: &Path, offset: usize) -> ArtLookup<ExternalArtwork> {
+pub fn find_external_cover(
+    dir: &Path,
+    offset: usize,
+    chunk_size: usize,
+) -> ArtLookup<ExternalArtwork> {
     for filename in COVER_FILE_NAMES {
-        let Ok(data) = std::fs::read(dir.join(filename)) else {
+        let file_path = dir.join(filename);
+        match std::fs::metadata(&file_path) {
+            Ok(meta) if meta.len() as usize <= MAX_ARTWORK_SIZE => {}
+            _ => continue,
+        }
+        let Ok(data) = std::fs::read(&file_path) else {
             continue;
         };
         let total_size = data.len();
         if offset > total_size {
             return ArtLookup::OffsetTooLarge;
         }
-        let end = (offset + CHUNK_SIZE).min(total_size);
+        let end = (offset + chunk_size).min(total_size);
         return ArtLookup::Found(ExternalArtwork {
             filename,
             total_size,
@@ -169,11 +176,13 @@ impl AlbumArtExtractor {
     /// Get album art from cache or extract if not cached
     /// `cache_key`: relative path for cache lookup (e.g., "01.m4a")
     /// `file_path`: absolute path for file reading (e.g., "/home/user/Music/01.m4a")
+    /// `chunk_size`: the client's `binarylimit` (min 64, MPD default 8192).
     pub fn get_artwork(
         &self,
         cache_key: &str,
         file_path: &str,
         offset: usize,
+        chunk_size: usize,
     ) -> Result<ArtLookup<ArtworkData>> {
         let (data, stored_mime) = match self.extract_and_cache(cache_key, file_path)? {
             Some(result) => result,
@@ -185,7 +194,7 @@ impl AlbumArtExtractor {
         if offset > data.len() {
             return Ok(ArtLookup::OffsetTooLarge);
         }
-        let end = (offset + CHUNK_SIZE).min(data.len());
+        let end = (offset + chunk_size).min(data.len());
         let chunk = data[offset..end].to_vec();
 
         Ok(ArtLookup::Found(ArtworkData {

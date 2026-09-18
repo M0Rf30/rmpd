@@ -769,3 +769,99 @@ fn test_fts_contentless_delete_migration_from_legacy_db() {
     assert_eq!(db2.count_songs().unwrap(), 1);
     assert_eq!(db2.search_songs("legacbeta").unwrap().len(), 1);
 }
+
+/// LIB-01/SEC-13: `list_directory_recursive` must respect a `/` boundary and
+/// escape literal `%`/`_` in the path, not treat the prefix as a raw LIKE
+/// pattern — a `Rock` directory must not also match `Rockabilly/...`, and a
+/// literal `%`/`_` in a directory name must match literally.
+#[test]
+fn test_list_directory_recursive_like_boundary_and_escaping() {
+    let temp_dir = tempfile::TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("dir.db").to_string_lossy().to_string();
+    let db = rmpd_library::database::Database::open(&db_path).unwrap();
+
+    db.add_song(&make_local_song("music/Rock/song.flac"))
+        .unwrap();
+    db.add_song(&make_local_song("music/Rockabilly/other.flac"))
+        .unwrap();
+    db.add_song(&make_local_song("music/100%_Cool/track.flac"))
+        .unwrap();
+
+    let rock_songs = db.list_directory_recursive("music/Rock").unwrap();
+    assert_eq!(
+        rock_songs.len(),
+        1,
+        "prefix must not match a sibling directory that merely shares the string prefix"
+    );
+    assert_eq!(rock_songs[0].path.as_str(), "music/Rock/song.flac");
+
+    let wildcard_songs = db.list_directory_recursive("music/100%_Cool").unwrap();
+    assert_eq!(
+        wildcard_songs.len(),
+        1,
+        "a literal '%'/'_' in the directory name must be treated literally, not as a wildcard"
+    );
+    assert_eq!(
+        wildcard_songs[0].path.as_str(),
+        "music/100%_Cool/track.flac"
+    );
+}
+
+/// LIB-02/SEC-13: `sticker find` must respect the same boundary/escaping
+/// rules as `list_directory_recursive`.
+#[test]
+fn test_find_stickers_like_boundary_and_escaping() {
+    let temp_dir = tempfile::TempDir::new().unwrap();
+    let db_path = temp_dir
+        .path()
+        .join("stickers.db")
+        .to_string_lossy()
+        .to_string();
+    let db = rmpd_library::database::Database::open(&db_path).unwrap();
+
+    db.set_sticker("music/Rock/song.flac", "rating", "5")
+        .unwrap();
+    db.set_sticker("music/Rockabilly/other.flac", "rating", "1")
+        .unwrap();
+
+    let found = db.find_stickers("music/Rock", "rating").unwrap();
+    assert_eq!(
+        found.len(),
+        1,
+        "sticker find must not match a sibling URI that merely shares the string prefix"
+    );
+    assert_eq!(found[0].0, "music/Rock/song.flac");
+}
+
+/// LIB-03: `Database::with_transaction` commits every statement issued by
+/// `f` on success, and rolls back all of them together when `f` errors —
+/// a partial batch never lands.
+#[test]
+fn test_with_transaction_commits_and_rolls_back() {
+    let temp_dir = tempfile::TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("tx.db").to_string_lossy().to_string();
+    let db = rmpd_library::database::Database::open(&db_path).unwrap();
+
+    db.with_transaction(|db| {
+        db.add_song(&make_local_song("music/a.flac"))?;
+        db.add_song(&make_local_song("music/b.flac"))?;
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(db.count_songs().unwrap(), 2, "successful batch must commit");
+
+    let result: rmpd_core::error::Result<()> = db.with_transaction(|db| {
+        db.add_song(&make_local_song("music/c.flac"))?;
+        Err(rmpd_core::error::RmpdError::Library("boom".to_string()))
+    });
+    assert!(result.is_err(), "callback error must propagate");
+    assert_eq!(
+        db.count_songs().unwrap(),
+        2,
+        "a failed batch must roll back every statement it issued, not just skip the error"
+    );
+    assert!(
+        db.get_song_by_path("music/c.flac").unwrap().is_none(),
+        "the row inserted before the error must not survive the rollback"
+    );
+}

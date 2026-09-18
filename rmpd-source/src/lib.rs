@@ -119,8 +119,11 @@ impl SourceRegistry {
 /// Sync a music source's catalog into the local database.
 ///
 /// Calls `source.list_all()`, then atomically replaces every cached row for
-/// that source in one `spawn_blocking` transaction: `clear_source` followed by
-/// `add_source_song` for each song. Returns the number of songs inserted.
+/// that source via `Database::with_transaction`: `clear_source` followed by
+/// `add_source_song` for each song, all inside one BEGIN/COMMIT. A failure
+/// partway through rolls back the whole batch, so the catalog never ends up
+/// with the old rows gone and only some new rows inserted. Returns the
+/// number of songs inserted.
 ///
 /// This function is `async` because `list_all` does network I/O; the DB work
 /// runs on a blocking thread so libsqlite does not stall the Tokio runtime.
@@ -132,14 +135,14 @@ pub async fn sync_source(source: &dyn MusicSource, db_path: &str) -> Result<usiz
     tokio::task::spawn_blocking(move || -> Result<usize, SourceError> {
         let db = rmpd_library::Database::open(&db_path)
             .map_err(|e| SourceError::Protocol(format!("failed to open database: {e}")))?;
-        let _old = db
-            .clear_source(&token)
-            .map_err(|e| SourceError::Protocol(format!("clear_source: {e}")))?;
-        for song in &songs {
-            db.add_source_song(song, &token)
-                .map_err(|e| SourceError::Protocol(format!("add_source_song: {e}")))?;
-        }
-        Ok(count)
+        db.with_transaction(|db| {
+            db.clear_source(&token)?;
+            for song in &songs {
+                db.add_source_song(song, &token)?;
+            }
+            Ok(count)
+        })
+        .map_err(|e| SourceError::Protocol(format!("sync_source transaction failed: {e}")))
     })
     .await
     .map_err(|e| SourceError::Protocol(format!("sync task panicked: {e}")))?
@@ -178,7 +181,99 @@ fn extract_remote_id(path: &str) -> &str {
 mod tests {
     use super::*;
     use crate::filesystem::FilesystemSource;
+    use async_trait::async_trait;
     use camino::Utf8PathBuf;
+    use rmpd_core::song::Song;
+
+    /// Mock `MusicSource` for `sync_source` tests: `list_all` returns a fixed
+    /// set of songs.
+    struct MockSource {
+        songs: Vec<Song>,
+    }
+
+    #[async_trait]
+    impl MusicSource for MockSource {
+        fn scheme(&self) -> &str {
+            "mock"
+        }
+        fn name(&self) -> &str {
+            "mock"
+        }
+        async fn ping(&self) -> SourceResult<()> {
+            Ok(())
+        }
+        async fn browse(&self, _dir: &str) -> SourceResult<Vec<SourceEntry>> {
+            Ok(Vec::new())
+        }
+        async fn list_all(&self) -> SourceResult<Vec<Song>> {
+            Ok(self.songs.clone())
+        }
+        async fn search(&self, _query: &str) -> SourceResult<Vec<Song>> {
+            Ok(Vec::new())
+        }
+        async fn resolve_stream_uri(&self, _song_id: &str) -> SourceResult<String> {
+            Err(SourceError::NotFound("mock".to_owned()))
+        }
+    }
+
+    fn make_song(path: &str) -> Song {
+        Song {
+            id: 0,
+            path: Utf8PathBuf::from(path),
+            duration: None,
+            sample_rate: None,
+            channels: None,
+            bits_per_sample: None,
+            bitrate: None,
+            replay_gain_track_gain: None,
+            replay_gain_track_peak: None,
+            replay_gain_album_gain: None,
+            replay_gain_album_peak: None,
+            added_at: 0,
+            last_modified: 0,
+            tags: vec![("title".into(), "Test".to_owned())],
+        }
+    }
+
+    /// A full resync replaces every previously-cached row for the source in
+    /// one transaction: a second sync with a smaller song set must leave no
+    /// stale rows behind (proves `clear_source` + inserts committed together).
+    #[tokio::test]
+    async fn sync_source_replaces_stale_rows_atomically() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("test.db");
+        let db_path = db_path.to_str().expect("utf8 path").to_owned();
+
+        let first = MockSource {
+            songs: vec![
+                make_song("mock/a/one.mp3"),
+                make_song("mock/a/two.mp3"),
+                make_song("mock/a/three.mp3"),
+            ],
+        };
+        let count = sync_source(&first, &db_path).await.expect("first sync");
+        assert_eq!(count, 3);
+
+        let second = MockSource {
+            songs: vec![make_song("mock/a/one.mp3")],
+        };
+        let count = sync_source(&second, &db_path).await.expect("second sync");
+        assert_eq!(count, 1);
+
+        // Verify the stale rows from the first sync are gone, not just
+        // shadowed: open the DB directly and count rows for this source.
+        let db = rmpd_library::Database::open(&db_path).expect("reopen db");
+        let remaining = db
+            .list_all_songs()
+            .expect("list songs")
+            .into_iter()
+            .filter(|s| s.path.as_str().starts_with("mock/a/"))
+            .count();
+        assert_eq!(
+            remaining, 1,
+            "resync must remove rows dropped from the source"
+        );
+    }
 
     fn make_registry_with_home() -> SourceRegistry {
         let source = Box::new(FilesystemSource {

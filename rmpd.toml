@@ -31,6 +31,10 @@ connection_timeout = 60
 # Advertise rmpd on the session D-Bus via MPRIS (org.mpris.MediaPlayer2.rmpd)
 # so desktop environments, playerctl, and media keys can detect and control it.
 mpris = true
+# Advertise rmpd on the LAN via mDNS/Zeroconf (_mpd._tcp) so clients can
+# auto-discover it. Disable if you don't want the daemon's presence and
+# hostname broadcast on the network (e.g. bind_address = "127.0.0.1").
+zeroconf_enabled = true
 
 [audio]
 default_output = "default"

@@ -4,27 +4,9 @@
 # Parallel compilation
 jobs = 4
 
-[target.x86_64-unknown-linux-gnu]
-linker = "clang"
-rustflags = ["-C", "link-arg=-fuse-ld=lld"]
-
 [target.aarch64-unknown-linux-gnu]
 linker = "aarch64-linux-gnu-gcc"
 
-# Clippy configuration
-[target.'cfg(all())']
-rustflags = [
-    # Standard clippy lints
-    "-W", "clippy::all",
-
-    # Allow some clippy::all lints that are noisy during development
-    "-A", "clippy::too_many_arguments",
-    "-A", "clippy::type_complexity",
-    "-A", "clippy::empty_line_after_doc_comments",
-    "-A", "clippy::redundant_field_names",
-    "-A", "clippy::unnecessary_cast",
-    "-A", "clippy::same_item_push",
-]
 
 [alias]
 # Custom aliases for common operations

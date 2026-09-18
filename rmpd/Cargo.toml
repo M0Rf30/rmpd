@@ -10,6 +10,9 @@ readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+[lints]
+workspace = true
+
 [package.metadata.cargo-machete]
 # rmpd-player used by protocol handlers
 ignored = ["rmpd-player"]

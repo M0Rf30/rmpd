@@ -557,3 +557,64 @@ fn scan_keeps_directory_row_for_directory_still_on_disk() {
         "empty/'s directory row must survive since the directory itself is still on disk"
     );
 }
+
+/// LIB-04: a file replaced with different content but the *same* mtime (e.g.
+/// `cp -p`, a backup restore, a tagger that preserves mtime) must still be
+/// rescanned — mtime-only change detection would silently skip it forever.
+#[test]
+fn scan_rescans_file_with_same_mtime_but_different_size() {
+    let temp_dir = TempDir::new().expect("create temp dir");
+    let music_dir = temp_dir.path().join("music");
+    std::fs::create_dir(&music_dir).expect("create music dir");
+
+    let basic = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/samples/basic.flac");
+    let extended = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/samples/extended.flac");
+    assert_ne!(
+        std::fs::metadata(&basic).unwrap().len(),
+        std::fs::metadata(&extended).unwrap().len(),
+        "fixtures must differ in size for this test to be meaningful"
+    );
+
+    let song_path = music_dir.join("song.flac");
+    std::fs::copy(&basic, &song_path).expect("copy basic fixture");
+
+    let db_path = temp_dir.path().join("test.db");
+    let database = Database::open(db_path.to_str().unwrap()).expect("open database");
+    let scanner = Scanner::new(EventBus::new(), false);
+
+    let stats = scanner
+        .scan_directory(&database, &music_dir)
+        .expect("first scan");
+    assert_eq!(stats.added, 1, "first scan should add song.flac");
+    let original_size = database.get_song_size_by_path("song.flac").unwrap();
+    assert!(original_size.is_some(), "scan should record the file size");
+
+    // Swap in different content, then force the mtime back to its original
+    // value so change detection can't rely on an advanced mtime.
+    let original_mtime = std::fs::metadata(&song_path).unwrap().modified().unwrap();
+    std::fs::copy(&extended, &song_path).expect("overwrite with extended fixture");
+    std::fs::File::open(&song_path)
+        .unwrap()
+        .set_modified(original_mtime)
+        .expect("restore original mtime");
+    assert_eq!(
+        std::fs::metadata(&song_path).unwrap().modified().unwrap(),
+        original_mtime,
+        "mtime must be unchanged for this test to be meaningful"
+    );
+
+    let stats = scanner
+        .scan_directory(&database, &music_dir)
+        .expect("second scan");
+    assert_eq!(
+        stats.updated, 1,
+        "same-mtime content swap must still be detected via file size and rescanned"
+    );
+    let new_size = database.get_song_size_by_path("song.flac").unwrap();
+    assert_ne!(
+        original_size, new_size,
+        "stored file size must reflect the new content"
+    );
+}

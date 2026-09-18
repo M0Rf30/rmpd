@@ -183,6 +183,9 @@ impl MpdServer {
                         }
                         Err(e) => {
                             error!("failed to accept connection: {}", e);
+                            // Avoid a busy-spin log flood under persistent
+                            // accept failures (e.g. EMFILE/ENFILE).
+                            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                         }
                     }
                 }
@@ -216,6 +219,7 @@ impl MpdServer {
                         }
                         Err(e) => {
                             error!("unix accept error: {}", e);
+                            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                         }
                     }
                 }
@@ -336,186 +340,212 @@ async fn handle_client_inner(
     let mut batch_commands: Vec<String> = Vec::new();
     let mut batch_bytes: usize = 0;
 
-    loop {
-        line.clear();
-        // Cap the reader with `take` so `line` can never grow past
-        // `MAX_LINE_BYTES`, regardless of whether the client ever sends a
-        // newline — bounding the allocation, not just checking it after.
-        let bytes_read = match tokio::time::timeout(
-            timeout,
-            (&mut reader)
-                .take(MAX_LINE_BYTES as u64)
-                .read_line(&mut line),
-        )
-        .await
-        {
-            Ok(result) => result?,
-            Err(_elapsed) => {
-                // Idle timeout: client connected but sent nothing for
-                // `timeout`. Disconnect as if it had closed the socket.
-                debug!("connection idle for {:?}, closing", timeout);
+    let result: Result<()> = async {
+        loop {
+            line.clear();
+            // Cap the reader with `take` so `line` can never grow past
+            // `MAX_LINE_BYTES`, regardless of whether the client ever sends a
+            // newline — bounding the allocation, not just checking it after.
+            let bytes_read = match tokio::time::timeout(
+                timeout,
+                (&mut reader)
+                    .take(MAX_LINE_BYTES as u64)
+                    .read_line(&mut line),
+            )
+            .await
+            {
+                Ok(result) => result?,
+                Err(_elapsed) => {
+                    // Idle timeout: client connected but sent nothing for
+                    // `timeout`. Disconnect as if it had closed the socket.
+                    debug!("connection idle for {:?}, closing", timeout);
+                    break;
+                }
+            };
+
+            if bytes_read == 0 {
+                // Connection closed
                 break;
             }
-        };
 
-        if bytes_read == 0 {
-            // Connection closed
-            break;
-        }
-
-        if bytes_read == MAX_LINE_BYTES && !line.ends_with('\n') {
-            // Hit the cap without finding a terminator: reject and close
-            // rather than keep waiting for a newline that would let the
-            // client grow the buffer unbounded.
-            let response = Response::Text(ResponseBuilder::error(
-                ACK_ERROR_ARG,
-                0,
-                "",
-                "Line too long",
-            ));
-            writer.write_all(response.as_bytes()).await?;
-            writer.flush().await?;
-            break;
-        }
-
-        let stripped = line.trim_end();
-        if !stripped
-            .chars()
-            .next()
-            .is_some_and(|c| c.is_ascii_lowercase())
-        {
-            // MPD closes the connection immediately on any line that doesn't
-            // start with a lowercase ASCII letter — empty lines, leading
-            // whitespace, stray HTTP probes, etc. (Client::ProcessLine's
-            // IsLowerAlphaASCII check; no ACK is sent for this).
-            debug!("malformed command line, closing connection: {:?}", stripped);
-            break;
-        }
-
-        if batch_mode && (stripped == "idle" || stripped == "noidle") {
-            // MPD: idle/noidle are async commands that can't be used inside a
-            // command list; the connection is closed immediately with no ACK
-            // (Client::ProcessLine's IsAsyncCommmand check).
-            debug!("async command {stripped:?} not allowed inside command list, closing");
-            break;
-        }
-
-        let trimmed = stripped;
-        debug!("received command: {}", trimmed);
-
-        let response = match parse_command(trimmed) {
-            Ok(Command::CommandListBegin) if !batch_mode => {
-                batch_mode = true;
-                batch_ok_mode = false;
-                batch_commands.clear();
-                batch_bytes = 0;
-                continue; // Don't send response yet
+            if bytes_read == MAX_LINE_BYTES && !line.ends_with('\n') {
+                // Hit the cap without finding a terminator: reject and close
+                // rather than keep waiting for a newline that would let the
+                // client grow the buffer unbounded.
+                let response = Response::Text(ResponseBuilder::error(
+                    ACK_ERROR_ARG,
+                    0,
+                    "",
+                    "Line too long",
+                ));
+                writer.write_all(response.as_bytes()).await?;
+                writer.flush().await?;
+                break;
             }
-            Ok(Command::CommandListOkBegin) if !batch_mode => {
-                batch_mode = true;
-                batch_ok_mode = true;
-                batch_commands.clear();
-                batch_bytes = 0;
-                continue; // Don't send response yet
+
+            let stripped = line.trim_end();
+            if !stripped
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_lowercase())
+            {
+                // MPD closes the connection immediately on any line that doesn't
+                // start with a lowercase ASCII letter — empty lines, leading
+                // whitespace, stray HTTP probes, etc. (Client::ProcessLine's
+                // IsLowerAlphaASCII check; no ACK is sent for this).
+                debug!("malformed command line, closing connection: {:?}", stripped);
+                break;
             }
-            Ok(Command::CommandListEnd) => {
-                if !batch_mode {
-                    // Real MPD has no dedicated "not in list" error:
-                    // `command_list_end` isn't in the `commands[]` table, so
-                    // outside a list it's looked up like any other name and
-                    // reported as unknown, same as a typo'd command.
-                    Response::Text(ResponseBuilder::error(
-                        ACK_ERROR_UNKNOWN,
-                        0,
-                        "",
-                        "unknown command \"command_list_end\"",
-                    ))
-                } else {
-                    let (response, should_close) = execute_command_list(
-                        &batch_commands,
-                        &state,
-                        &mut conn_state,
-                        batch_ok_mode,
-                    )
-                    .await;
-                    batch_mode = false;
+
+            if batch_mode && (stripped == "idle" || stripped == "noidle") {
+                // MPD: idle/noidle are async commands that can't be used inside a
+                // command list; the connection is closed immediately with no ACK
+                // (Client::ProcessLine's IsAsyncCommmand check).
+                debug!("async command {stripped:?} not allowed inside command list, closing");
+                break;
+            }
+
+            let trimmed = stripped;
+            if trimmed.starts_with("password ") || trimmed == "password" {
+                debug!("received command: password ***");
+            } else {
+                debug!("received command: {}", trimmed);
+            }
+
+            let response = match parse_command(trimmed) {
+                Ok(Command::CommandListBegin) if !batch_mode => {
+                    batch_mode = true;
                     batch_ok_mode = false;
                     batch_commands.clear();
                     batch_bytes = 0;
-                    if should_close {
-                        // `close` ran inside the list: send whatever partial
-                        // output preceded it, then drop the connection —
-                        // there's no final "OK" for a list that never
-                        // finished (matches MPD's `CommandResult::FINISH`).
-                        writer.write_all(response.as_bytes()).await?;
-                        writer.flush().await?;
-                        break;
-                    }
-                    response
-                }
-            }
-            Ok(Command::Idle { subsystems }) if !batch_mode => {
-                // idle bypasses handle_command's generic permission check
-                // because it needs raw reader/event_rx access for long-poll;
-                // enforce the same PERMISSION_READ MPD requires here.
-                if !conn_state.has_permission(crate::connection::PERMISSION_READ) {
-                    Response::Text(ResponseBuilder::error(
-                        ACK_ERROR_PERMISSION,
-                        0,
-                        "idle",
-                        "you don't have permission for \"idle\"",
-                    ))
-                } else {
-                    Response::Text(handle_idle(&mut reader, &mut event_rx, subsystems).await)
-                }
-            }
-            Ok(_cmd) if batch_mode => {
-                // Accumulate commands in batch, capped so an unterminated
-                // command list can't grow `batch_commands` without bound.
-                if batch_bytes + trimmed.len() > MAX_COMMAND_LIST_BYTES {
-                    batch_mode = false;
-                    batch_ok_mode = false;
-                    batch_commands.clear();
-                    batch_bytes = 0;
-                    Response::Text(ResponseBuilder::error(
-                        ACK_ERROR_ARG,
-                        0,
-                        "command_list",
-                        "command list too large",
-                    ))
-                } else {
-                    batch_bytes += trimmed.len();
-                    batch_commands.push(trimmed.to_string());
                     continue; // Don't send response yet
                 }
-            }
-            Ok(Command::NoIdle) => {
-                // `noidle` received while NOT in idle mode. This happens when an
-                // idle event was already delivered (flushing `changed: …\nOK\n`)
-                // before the client's racing `noidle` arrived. Per MPD's
-                // Client::ProcessLine, the server writes NOTHING in this case —
-                // the client already received the full idle response. Emitting an
-                // extra `OK` here would desync the stream (clients like rmpc then
-                // report `Expected 'OK' but got '<value>'`).
-                Response::Text(String::new())
-            }
-            Ok(Command::Close) => {
-                // Close: terminate the connection immediately (per MPD spec)
-                break;
-            }
-            Ok(cmd) => handle_command(cmd, &state, &mut conn_state).await,
-            Err(e) => Response::Text(parse_error_to_ack(trimmed, &e, 0)),
-        };
+                Ok(Command::CommandListOkBegin) if !batch_mode => {
+                    batch_mode = true;
+                    batch_ok_mode = true;
+                    batch_commands.clear();
+                    batch_bytes = 0;
+                    continue; // Don't send response yet
+                }
+                Ok(Command::CommandListEnd) => {
+                    if !batch_mode {
+                        // Real MPD has no dedicated "not in list" error:
+                        // `command_list_end` isn't in the `commands[]` table, so
+                        // outside a list it's looked up like any other name and
+                        // reported as unknown, same as a typo'd command.
+                        Response::Text(ResponseBuilder::error(
+                            ACK_ERROR_UNKNOWN,
+                            0,
+                            "",
+                            "unknown command \"command_list_end\"",
+                        ))
+                    } else {
+                        let (response, should_close) = execute_command_list(
+                            &batch_commands,
+                            &state,
+                            &mut conn_state,
+                            batch_ok_mode,
+                        )
+                        .await;
+                        batch_mode = false;
+                        batch_ok_mode = false;
+                        batch_commands.clear();
+                        batch_bytes = 0;
+                        if should_close {
+                            // `close` ran inside the list: send whatever partial
+                            // output preceded it, then drop the connection —
+                            // there's no final "OK" for a list that never
+                            // finished (matches MPD's `CommandResult::FINISH`).
+                            writer.write_all(response.as_bytes()).await?;
+                            writer.flush().await?;
+                            break;
+                        }
+                        response
+                    }
+                }
+                Ok(Command::Idle { subsystems }) if !batch_mode => {
+                    // idle bypasses handle_command's generic permission check
+                    // because it needs raw reader/event_rx access for long-poll;
+                    // enforce the same PERMISSION_READ MPD requires here.
+                    if !conn_state.has_permission(crate::connection::PERMISSION_READ) {
+                        Response::Text(ResponseBuilder::error(
+                            ACK_ERROR_PERMISSION,
+                            0,
+                            "idle",
+                            "you don't have permission for \"idle\"",
+                        ))
+                    } else if let Some(bad) =
+                        subsystems.iter().find(|s| subsystem_from_str(s).is_none())
+                    {
+                        // MPD (since 0.19): reject an unrecognized idle event
+                        // name with ACK_ERROR_ARG instead of silently ignoring it.
+                        Response::Text(ResponseBuilder::error(
+                            ACK_ERROR_ARG,
+                            0,
+                            "idle",
+                            &format!("Unrecognized idle event: {bad}"),
+                        ))
+                    } else {
+                        Response::Text(handle_idle(&mut reader, &mut event_rx, subsystems).await)
+                    }
+                }
+                Ok(_cmd) if batch_mode => {
+                    // Accumulate commands in batch, capped so an unterminated
+                    // command list can't grow `batch_commands` without bound.
+                    if batch_bytes + trimmed.len() > MAX_COMMAND_LIST_BYTES {
+                        batch_mode = false;
+                        batch_ok_mode = false;
+                        batch_commands.clear();
+                        batch_bytes = 0;
+                        Response::Text(ResponseBuilder::error(
+                            ACK_ERROR_ARG,
+                            0,
+                            "command_list",
+                            "command list too large",
+                        ))
+                    } else {
+                        batch_bytes += trimmed.len();
+                        batch_commands.push(trimmed.to_string());
+                        continue; // Don't send response yet
+                    }
+                }
+                Ok(Command::NoIdle) => {
+                    // `noidle` received while NOT in idle mode. This happens when an
+                    // idle event was already delivered (flushing `changed: …\nOK\n`)
+                    // before the client's racing `noidle` arrived. Per MPD's
+                    // Client::ProcessLine, the server writes NOTHING in this case —
+                    // the client already received the full idle response. Emitting an
+                    // extra `OK` here would desync the stream (clients like rmpc then
+                    // report `Expected 'OK' but got '<value>'`).
+                    Response::Text(String::new())
+                }
+                Ok(Command::Close) => {
+                    // Close: terminate the connection immediately (per MPD spec)
+                    break;
+                }
+                Ok(cmd) => handle_command(cmd, &state, &mut conn_state).await,
+                Err(e) => Response::Text(parse_error_to_ack(trimmed, &e, 0)),
+            };
 
-        writer.write_all(response.as_bytes()).await?;
-        writer.flush().await?; // Flush immediately to ensure low latency
+            writer.write_all(response.as_bytes()).await?;
+            writer.flush().await?; // Flush immediately to ensure low latency
+        }
+        Ok(())
     }
+    .await;
 
-    // Cleanup: unregister any channel subscriptions when connection closes
+    // Cleanup: unregister any channel subscriptions when connection closes,
+    // on every exit path (normal close, malformed line, timeout, or an I/O
+    // error propagated from a read/write above) so an abrupt disconnect
+    // never leaves a stale subscriber_counts entry in the MessageBroker.
+    let sid = crate::commands::messaging::subscriber_id(&conn_state);
     for channel in conn_state.subscribed_channels() {
-        state.message_broker.unregister_subscriber(channel).await;
+        state
+            .message_broker
+            .unregister_subscriber(channel, sid)
+            .await;
     }
-    Ok(())
+    result
 }
 
 async fn execute_command_list(
@@ -673,23 +703,7 @@ async fn handle_idle(
     } else {
         subsystems
             .iter()
-            .filter_map(|s| match s.to_lowercase().as_str() {
-                "database" => Some(Subsystem::Database),
-                "update" => Some(Subsystem::Update),
-                "stored_playlist" => Some(Subsystem::StoredPlaylist),
-                "playlist" => Some(Subsystem::Playlist),
-                "player" => Some(Subsystem::Player),
-                "mixer" => Some(Subsystem::Mixer),
-                "output" => Some(Subsystem::Output),
-                "options" => Some(Subsystem::Options),
-                "partition" => Some(Subsystem::Partition),
-                "sticker" => Some(Subsystem::Sticker),
-                "subscription" => Some(Subsystem::Subscription),
-                "message" => Some(Subsystem::Message),
-                "neighbor" => Some(Subsystem::Neighbor),
-                "mount" => Some(Subsystem::Mount),
-                _ => None,
-            })
+            .filter_map(|s| subsystem_from_str(s))
             .collect()
     };
 
@@ -797,6 +811,27 @@ fn subsystem_to_string(subsystem: rmpd_core::event::Subsystem) -> &'static str {
     }
 }
 
+fn subsystem_from_str(s: &str) -> Option<rmpd_core::event::Subsystem> {
+    use rmpd_core::event::Subsystem;
+    match s.to_lowercase().as_str() {
+        "database" => Some(Subsystem::Database),
+        "update" => Some(Subsystem::Update),
+        "stored_playlist" => Some(Subsystem::StoredPlaylist),
+        "playlist" => Some(Subsystem::Playlist),
+        "player" => Some(Subsystem::Player),
+        "mixer" => Some(Subsystem::Mixer),
+        "output" => Some(Subsystem::Output),
+        "options" => Some(Subsystem::Options),
+        "partition" => Some(Subsystem::Partition),
+        "sticker" => Some(Subsystem::Sticker),
+        "subscription" => Some(Subsystem::Subscription),
+        "message" => Some(Subsystem::Message),
+        "neighbor" => Some(Subsystem::Neighbor),
+        "mount" => Some(Subsystem::Mount),
+        _ => None,
+    }
+}
+
 async fn handle_command(
     cmd: Command,
     state: &AppState,
@@ -817,10 +852,22 @@ async fn handle_command(
     // Special handling for binary commands
     match cmd {
         Command::AlbumArt { uri, offset } => {
-            return database::handle_albumart_command(state, &uri, offset).await;
+            return database::handle_albumart_command(
+                state,
+                &uri,
+                offset,
+                conn_state.binary_limit as usize,
+            )
+            .await;
         }
         Command::ReadPicture { uri, offset } => {
-            return database::handle_readpicture_command(state, &uri, offset).await;
+            return database::handle_readpicture_command(
+                state,
+                &uri,
+                offset,
+                conn_state.binary_limit as usize,
+            )
+            .await;
         }
         _ => {}
     }

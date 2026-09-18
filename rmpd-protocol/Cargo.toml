@@ -9,6 +9,9 @@ description.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+[lints]
+workspace = true
+
 [package.metadata.cargo-machete]
 # bytes used for protocol handling
 # thiserror used for error handling macros
@@ -26,7 +29,6 @@ winnow.workspace = true
 thiserror.workspace = true
 bytes.workspace = true
 tracing.workspace = true
-rand = "0.10"
 regex = "1"
 mdns-sd.workspace = true
 mpris-server.workspace = true

@@ -265,6 +265,8 @@ impl PlaybackEngine {
         let buffer_time_ms = self.buffer_time_ms;
 
         let handle = thread::spawn(move || {
+            let atomic_state_err = atomic_state_clone.clone();
+            let event_bus_err = event_bus.clone();
             if let Err(e) = Self::playback_thread(
                 song_path.as_std_path(),
                 status_clone,
@@ -291,6 +293,12 @@ impl PlaybackEngine {
                 buffer_time_ms,
             ) {
                 error!("playback error: {}", e);
+                // A decode/output failure must not leave the player stuck
+                // reporting Play forever with no further events: reset state
+                // and let the queue-advance logic react as it does to a
+                // normal end-of-song (PLAY-01).
+                atomic_state_err.store(PlayerState::Stop as u8, Ordering::Release);
+                event_bus_err.emit(Event::SongFinished);
             }
         });
 
@@ -335,8 +343,12 @@ impl PlaybackEngine {
         debug!("stopping playback");
         self.stop_internal().await?;
         // User stop: tear down the cached output/device (song transitions use
-        // stop_internal, which keeps it for gapless reuse).
-        self.output_slot.clear();
+        // stop_internal, which keeps it for gapless reuse). Dropping the last
+        // `Arc<MultiOutput>` here can run `MultiOutput::drop`'s blocking
+        // `join()` inline, so route it through spawn_blocking like the decode
+        // thread join above (PLAY-02) — it must never stall a Tokio worker.
+        let output_slot = self.output_slot.clone();
+        let _ = tokio::task::spawn_blocking(move || output_slot.clear()).await;
         // Emit event to notify clients (external stop)
         self.event_bus.emit(Event::SongChanged(None));
         crate::httpd_output::set_now_playing(None);
@@ -650,12 +662,25 @@ impl PlaybackEngine {
                 // DORMANT when crossfade_secs == 0 (the default): this entire
                 // block is skipped, so behaviour is byte-identical to the
                 // pre-look-ahead engine.
-                if crossfade_secs > 0
-                    && let Some(duration) = decoder.duration()
-                {
+                let cf_end_samples: Option<u64> = if crossfade_secs > 0 {
+                    match range_limit_samples {
+                        // CUE/rangeid virtual track: the overlap window must
+                        // end at the range boundary, not the underlying
+                        // file's end (PLAY-06) — otherwise look-ahead never
+                        // triggers before `reached_range_end` cuts the song
+                        // off.
+                        Some(limit) => Some(limit),
+                        None => decoder
+                            .duration()
+                            .map(|d| (d * samples_per_second as f64) as u64),
+                    }
+                } else {
+                    None
+                };
+                if let Some(end_samples) = cf_end_samples {
                     // Sample offset at which the overlap window begins
-                    let cf_start = ((duration - crossfade_secs as f64) * samples_per_second as f64)
-                        .max(0.0) as u64;
+                    let cf_window = crossfade_secs as u64 * samples_per_second as u64;
+                    let cf_start = end_samples.saturating_sub(cf_window);
 
                     if total_samples_played >= cf_start {
                         // Claim the pre-fetched next song (destructive take —
@@ -804,14 +829,25 @@ impl PlaybackEngine {
                                     next_gain_scale * g_in,
                                 );
 
-                                if multi.write(Arc::from(&cf_cur[..n_mix])).is_err() {
+                                // If the incoming track ran out mid-chunk
+                                // (n_mix < n_cur), its tail has no next-track
+                                // counterpart to blend with; apply the
+                                // outgoing gain unmixed rather than silently
+                                // dropping those samples (PLAY-10).
+                                if n_mix < n_cur {
+                                    for s in cf_cur[n_mix..n_cur].iter_mut() {
+                                        *s *= gain_scale * g_out;
+                                    }
+                                }
+
+                                if multi.write(Arc::from(&cf_cur[..n_cur])).is_err() {
                                     warn!("output disconnected during crossfade");
                                     break 'song;
                                 }
 
                                 overlap_done += n_mix;
                                 next_pos += n_mix as u64;
-                                total_samples_played += n_mix as u64;
+                                total_samples_played += n_cur as u64;
 
                                 // Position/bitrate events (~1 s throttle)
                                 if total_samples_played % samples_per_second < (n_mix as u64) {
@@ -1186,7 +1222,14 @@ impl Drop for PlaybackEngine {
     fn drop(&mut self) {
         self.stop_flag.store(true, Ordering::Release);
         if let Some(handle) = self.playback_thread.take() {
-            let _ = handle.join();
+            // Never join inline: Drop can run on a Tokio worker (e.g. the
+            // last `Arc<RwLock<PlaybackEngine>>` clone dropped from an async
+            // handler), and joining would stall it until the decode thread
+            // notices `stop_flag` and unwinds (PLAY-04). Detach the join to
+            // a dedicated OS thread instead.
+            thread::spawn(move || {
+                let _ = handle.join();
+            });
         }
     }
 }

@@ -129,6 +129,10 @@ impl DiscoveryService {
             }
         }
 
+        if let Err(e) = self.mdns.stop_browse(service_type) {
+            warn!("failed to stop mDNS browse for {}: {}", service_type, e);
+        }
+
         Ok(neighbors)
     }
 

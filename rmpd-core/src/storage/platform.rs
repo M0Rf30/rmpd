@@ -7,6 +7,14 @@ fn parse_uri(uri: &str) -> Result<(String, String)> {
     if let Some(pos) = uri.find("://") {
         let protocol = uri[..pos].to_lowercase();
         let address = &uri[pos + 3..];
+        if address.starts_with('-') {
+            // Reject a leading '-': mount(8) argv option injection otherwise
+            // (getopt permutes non-option args, so a source string starting
+            // with '-' becomes an extra option to `mount`).
+            return Err(RmpdError::Storage(format!(
+                "Invalid mount address (leading '-' not allowed): {address}"
+            )));
+        }
         Ok((protocol, address.to_string()))
     } else {
         Err(RmpdError::Storage(format!("Invalid URI format: {uri}")))
@@ -56,12 +64,22 @@ impl LinuxMountBackend {
         target: &str,
         options: &[String],
     ) -> Result<()> {
-        let mut cmd = Command::new("mount");
-        cmd.arg("-t").arg(fs_type).arg(source).arg(target);
+        // Defense in depth: `parse_uri` already rejects a leading '-' in the
+        // client-supplied address, but re-check both positional args here
+        // and separate them with `--` so neither can be parsed as an
+        // option by mount(8)'s getopt (CWE-88 option injection).
+        if source.starts_with('-') || target.starts_with('-') {
+            return Err(RmpdError::Storage(
+                "mount source/target must not start with '-'".to_string(),
+            ));
+        }
 
+        let mut cmd = Command::new("mount");
+        cmd.arg("-t").arg(fs_type);
         if !options.is_empty() {
             cmd.arg("-o").arg(options.join(","));
         }
+        cmd.arg("--").arg(source).arg(target);
 
         let output = cmd
             .output()
@@ -313,6 +331,20 @@ mod tests {
     #[test]
     fn test_parse_uri_invalid() {
         let result = parse_uri("invalid_uri");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_uri_rejects_leading_dash_address() {
+        let result = parse_uri("nfs://-oremount,rw/music");
+        assert!(result.is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_execute_mount_command_rejects_leading_dash_source() {
+        let backend = LinuxMountBackend::new();
+        let result = backend.execute_mount_command("nfs", "-oremount", "/mnt/x", &[]);
         assert!(result.is_err());
     }
 

@@ -503,14 +503,25 @@ fn compare_sql(
     }
 }
 
+/// Maximum nesting depth for `(...)` groups. Client-supplied filters are
+/// otherwise only bounded by the protocol's 64KiB line limit, so without a
+/// cap a filter of tens of thousands of consecutive `(` can recurse deep
+/// enough to overflow the worker thread's stack and abort the process.
+const MAX_FILTER_DEPTH: u32 = 64;
+
 struct Parser<'a> {
     input: &'a str,
     pos: usize,
+    depth: u32,
 }
 
 impl<'a> Parser<'a> {
     fn new(input: &'a str) -> Self {
-        Self { input, pos: 0 }
+        Self {
+            input,
+            pos: 0,
+            depth: 0,
+        }
     }
 
     fn peek(&self) -> Option<char> {
@@ -683,7 +694,22 @@ impl<'a> Parser<'a> {
 
     /// Parses one `(...)` group. `fold_case` is the command's default case
     /// sensitivity, threaded down for terms that don't specify `_cs`/`_ci`.
+    /// Enforces `MAX_FILTER_DEPTH` so a client cannot crash the process by
+    /// sending arbitrarily many nested `(`.
     fn parse_group(&mut self, fold_case: bool) -> Result<FilterExpression> {
+        self.depth += 1;
+        if self.depth > MAX_FILTER_DEPTH {
+            self.depth -= 1;
+            return Err(RmpdError::ParseError(format!(
+                "Filter nested too deeply (max {MAX_FILTER_DEPTH})"
+            )));
+        }
+        let result = self.parse_group_inner(fold_case);
+        self.depth -= 1;
+        result
+    }
+
+    fn parse_group_inner(&mut self, fold_case: bool) -> Result<FilterExpression> {
         self.expect_byte('(', "'(' expected")?;
 
         if self.peek() == Some('(') {
@@ -816,6 +842,15 @@ mod tests {
 
     fn parse(input: &str, fold_case: bool) -> FilterExpression {
         FilterExpression::parse(input, fold_case).unwrap()
+    }
+
+    /// CORE-03: 10,000 nested `(` must return a parse error, not overflow
+    /// the stack.
+    #[test]
+    fn test_deeply_nested_filter_does_not_overflow() {
+        let input = "(".repeat(10_000);
+        let result = FilterExpression::parse(&input, false);
+        assert!(result.is_err(), "deeply nested filter should be rejected");
     }
 
     #[test]

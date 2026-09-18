@@ -9,6 +9,7 @@ members = [
     "rmpd-library",
     "rmpd-plugin",
     "rmpd-source",
+    "rmpd-stream",
 ]
 
 [workspace.package]
@@ -67,7 +68,7 @@ mdns-sd = "0.21"                  # Network discovery
 mpris-server = { version = "0.10", features = ["tokio"] }  # MPRIS D-Bus media player interface
 chromaprint-sys-next = "1.6"      # Audio fingerprinting
 base64 = "0.23"                   # Base64 encoding
-nix = { version = "0.31", features = ["mount", "process", "fs"] }  # Linux mount syscalls
+nix = { version = "0.31", features = ["process", "fs"] }  # daemonize: fork/setsid/dup2
 
 # Shared workspace crates
 rmpd-core = { path = "rmpd-core" }
@@ -78,6 +79,14 @@ rmpd-library = { path = "rmpd-library" }
 rmpd-plugin = { path = "rmpd-plugin" }
 rmpd-stream = { path = "rmpd-stream" }
 rmpd-source = { path = "rmpd-source" }
+
+[workspace.lints.clippy]
+too_many_arguments = "allow"
+type_complexity = "allow"
+empty_line_after_doc_comments = "allow"
+redundant_field_names = "allow"
+unnecessary_cast = "allow"
+same_item_push = "allow"
 
 [profile.release]
 opt-level = 3

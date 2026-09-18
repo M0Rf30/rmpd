@@ -9,6 +9,9 @@ description.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 thiserror.workspace = true
 serde.workspace = true
@@ -16,8 +19,8 @@ tokio.workspace = true
 tracing.workspace = true
 camino = { workspace = true, features = ["serde1"] }
 toml.workspace = true
-rand = "0.10"
-dirs = "6"
+rand.workspace = true
+dirs.workspace = true
 rusqlite = { workspace = true, optional = true }
 symphonia = { workspace = true, optional = true }
 cpal = { workspace = true, optional = true }

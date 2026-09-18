@@ -4,8 +4,9 @@ use crate::response::ResponseBuilder;
 use crate::state::AppState;
 
 use super::utils::{
-    ACK_ERROR_ARG, ACK_ERROR_EXIST, ACK_ERROR_NO_EXIST, ACK_ERROR_PLAYER_SYNC, ACK_ERROR_SYS,
-    apply_range, format_iso8601_timestamp, open_db, parse_sort_tag, sort_songs,
+    ACK_ERROR_ARG, ACK_ERROR_EXIST, ACK_ERROR_NO_EXIST, ACK_ERROR_PLAYER_SYNC,
+    ACK_ERROR_PLAYLIST_MAX, ACK_ERROR_SYS, MAX_QUEUE_LEN, apply_range, format_iso8601_timestamp,
+    open_db, parse_sort_tag, sort_songs,
 };
 use crate::parser::InsertPosition;
 use std::path::Path;
@@ -555,6 +556,17 @@ pub async fn handle_load_command(
         Ok(Err(e)) => return e,
         Err(_) => return ResponseBuilder::error(ACK_ERROR_SYS, 0, "load", "internal error"),
     };
+    {
+        let queue_len = state.queue.read().await.len() as u32;
+        if queue_len + songs.len() as u32 > MAX_QUEUE_LEN {
+            return ResponseBuilder::error(
+                ACK_ERROR_PLAYLIST_MAX,
+                0,
+                "load",
+                "playlist is at the max size",
+            );
+        }
+    }
 
     {
         let mut queue = state.queue.write().await;
@@ -589,11 +601,18 @@ async fn load_cue_virtual_tracks(
     range: Option<(u32, u32)>,
     position: Option<u32>,
 ) -> String {
-    let mut tracks = match read_cue_tracks(playlist_dir, name) {
-        Ok(t) => t,
-        Err(_) => {
+    let playlist_dir_owned = playlist_dir.to_string();
+    let name_owned = name.to_string();
+    let mut tracks = match tokio::task::spawn_blocking(move || {
+        read_cue_tracks(&playlist_dir_owned, &name_owned)
+    })
+    .await
+    {
+        Ok(Ok(t)) => t,
+        Ok(Err(_)) => {
             return ResponseBuilder::error(ACK_ERROR_NO_EXIST, 0, "load", "No such playlist");
         }
+        Err(_) => return ResponseBuilder::error(ACK_ERROR_SYS, 0, "load", "internal error"),
     };
 
     if let Some((start, end)) = range {

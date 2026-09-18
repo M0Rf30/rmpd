@@ -9,6 +9,9 @@ description.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 symphonia.workspace = true
 reqwest = { workspace = true, features = ["blocking"] }

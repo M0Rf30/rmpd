@@ -8,8 +8,19 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-/// Maximum messages to store per channel
+/// Maximum messages queued per subscriber per channel.
 const MAX_MESSAGES_PER_CHANNEL: usize = 100;
+
+/// Maximum distinct channels tracked at once, bounding total broker memory
+/// (channels x subscribers x queued messages).
+const MAX_CHANNELS: usize = 256;
+
+/// Maximum message payload length in bytes.
+const MAX_MESSAGE_BYTES: usize = 4096;
+
+/// Opaque per-connection subscriber identity, supplied by the caller (one
+/// per client connection) so each subscriber gets its own message queue.
+pub type SubscriberId = u64;
 
 /// A message in a channel
 #[derive(Debug, Clone)]
@@ -24,79 +35,98 @@ pub struct MessageBroker {
     inner: Arc<RwLock<MessageBrokerInner>>,
 }
 
-#[derive(Debug)]
+/// Per-channel state: every subscriber has its own queue, so each one is
+/// guaranteed to see every message sent while it is subscribed (mirrors
+/// MPD's `Client::PushMessage`/`ConsumeMessages`).
+#[derive(Debug, Default)]
+struct ChannelState {
+    queues: HashMap<SubscriberId, VecDeque<Message>>,
+}
+
+#[derive(Debug, Default)]
 struct MessageBrokerInner {
-    /// Messages queued for each channel
-    channels: HashMap<String, VecDeque<Message>>,
-    /// Number of active subscribers per channel
-    subscriber_counts: HashMap<String, usize>,
+    channels: HashMap<String, ChannelState>,
 }
 
 impl MessageBroker {
     /// Create a new message broker
     pub fn new() -> Self {
         Self {
-            inner: Arc::new(RwLock::new(MessageBrokerInner {
-                channels: HashMap::new(),
-                subscriber_counts: HashMap::new(),
-            })),
+            inner: Arc::new(RwLock::new(MessageBrokerInner::default())),
         }
     }
 
-    /// Send a message to a channel. Returns false if nobody is subscribed.
-    /// Send a message to a channel. Returns false if nobody is subscribed.
+    /// Send a message to a channel, delivering a copy into every current
+    /// subscriber's own queue. Returns false if nobody is subscribed or the
+    /// message exceeds `MAX_MESSAGE_BYTES`.
     pub async fn send_message(&self, channel: String, text: String) -> bool {
-        let mut inner = self.inner.write().await;
-        // Check if anyone is subscribed
-        let count = inner.subscriber_counts.get(&channel).copied().unwrap_or(0);
-        if count == 0 {
+        if text.len() > MAX_MESSAGE_BYTES {
             return false;
         }
-        let message = Message {
-            channel: channel.clone(),
-            text,
+        let mut inner = self.inner.write().await;
+        let Some(state) = inner.channels.get_mut(&channel) else {
+            return false;
         };
-
-        let queue = inner.channels.entry(channel).or_insert_with(VecDeque::new);
-        queue.push_back(message);
-
-        // Limit queue size
-        if queue.len() > MAX_MESSAGES_PER_CHANNEL {
-            queue.pop_front();
+        if state.queues.is_empty() {
+            return false;
+        }
+        for queue in state.queues.values_mut() {
+            queue.push_back(Message {
+                channel: channel.clone(),
+                text: text.clone(),
+            });
+            if queue.len() > MAX_MESSAGES_PER_CHANNEL {
+                queue.pop_front();
+            }
         }
         true
     }
 
-    /// Register a subscription to a channel.
-    pub async fn register_subscriber(&self, channel: &str) {
+    /// Register `subscriber`'s subscription to `channel`. Returns false (and
+    /// does not subscribe) when the broker already tracks `MAX_CHANNELS`
+    /// distinct channels and `channel` is a new one, bounding total memory.
+    pub async fn register_subscriber(&self, channel: &str, subscriber: SubscriberId) -> bool {
         let mut inner = self.inner.write().await;
-        *inner
-            .subscriber_counts
+        if !inner.channels.contains_key(channel) && inner.channels.len() >= MAX_CHANNELS {
+            return false;
+        }
+        inner
+            .channels
             .entry(channel.to_string())
-            .or_insert(0) += 1;
+            .or_default()
+            .queues
+            .entry(subscriber)
+            .or_default();
+        true
     }
 
-    /// Unregister a subscription from a channel.
-    pub async fn unregister_subscriber(&self, channel: &str) {
+    /// Unregister `subscriber`'s subscription to `channel`, dropping its
+    /// queue. Once a channel has no subscribers left it is removed entirely,
+    /// so messages never persist for a channel nobody is listening to.
+    pub async fn unregister_subscriber(&self, channel: &str, subscriber: SubscriberId) {
         let mut inner = self.inner.write().await;
-        if let Some(count) = inner.subscriber_counts.get_mut(channel) {
-            if *count > 0 {
-                *count -= 1;
-            }
-            if *count == 0 {
-                inner.subscriber_counts.remove(channel);
+        if let Some(state) = inner.channels.get_mut(channel) {
+            state.queues.remove(&subscriber);
+            if state.queues.is_empty() {
+                inner.channels.remove(channel);
             }
         }
     }
 
-    /// Get all messages from channels the client is subscribed to
-    pub async fn read_messages(&self, subscribed_channels: &[String]) -> Vec<Message> {
+    /// Get and consume `subscriber`'s own queued messages from
+    /// `subscribed_channels`. Other subscribers' queues are untouched.
+    pub async fn read_messages(
+        &self,
+        subscriber: SubscriberId,
+        subscribed_channels: &[String],
+    ) -> Vec<Message> {
         let mut inner = self.inner.write().await;
         let mut messages = Vec::new();
 
         for channel in subscribed_channels {
-            if let Some(queue) = inner.channels.get_mut(channel) {
-                // Drain all messages from this channel
+            if let Some(state) = inner.channels.get_mut(channel)
+                && let Some(queue) = state.queues.get_mut(&subscriber)
+            {
                 messages.extend(queue.drain(..));
             }
         }
@@ -104,20 +134,10 @@ impl MessageBroker {
         messages
     }
 
-    /// Get list of all active channels (channels with messages or subscribers)
+    /// Get list of all active channels (channels with at least one subscriber)
     pub async fn list_channels(&self) -> Vec<String> {
         let inner = self.inner.read().await;
-        // Include channels with messages OR active subscribers
-        let mut channels: std::collections::HashSet<String> = inner
-            .channels
-            .iter()
-            .filter(|(_, queue)| !queue.is_empty())
-            .map(|(name, _)| name.clone())
-            .collect();
-        for name in inner.subscriber_counts.keys() {
-            channels.insert(name.clone());
-        }
-        let mut result: Vec<String> = channels.into_iter().collect();
+        let mut result: Vec<String> = inner.channels.keys().cloned().collect();
         result.sort();
         result
     }
@@ -137,12 +157,12 @@ mod tests {
     async fn test_send_and_read_message() {
         let broker = MessageBroker::new();
 
-        broker.register_subscriber("test").await;
+        broker.register_subscriber("test", 1).await;
         broker
             .send_message("test".to_string(), "hello".to_string())
             .await;
 
-        let messages = broker.read_messages(&["test".to_string()]).await;
+        let messages = broker.read_messages(1, &["test".to_string()]).await;
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].channel, "test");
         assert_eq!(messages[0].text, "hello");
@@ -152,8 +172,8 @@ mod tests {
     async fn test_multiple_channels() {
         let broker = MessageBroker::new();
 
-        broker.register_subscriber("channel1").await;
-        broker.register_subscriber("channel2").await;
+        broker.register_subscriber("channel1", 1).await;
+        broker.register_subscriber("channel2", 1).await;
         broker
             .send_message("channel1".to_string(), "msg1".to_string())
             .await;
@@ -161,11 +181,11 @@ mod tests {
             .send_message("channel2".to_string(), "msg2".to_string())
             .await;
 
-        let messages = broker.read_messages(&["channel1".to_string()]).await;
+        let messages = broker.read_messages(1, &["channel1".to_string()]).await;
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].text, "msg1");
 
-        let messages = broker.read_messages(&["channel2".to_string()]).await;
+        let messages = broker.read_messages(1, &["channel2".to_string()]).await;
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].text, "msg2");
     }
@@ -174,26 +194,63 @@ mod tests {
     async fn test_messages_are_consumed() {
         let broker = MessageBroker::new();
 
-        broker.register_subscriber("test").await;
+        broker.register_subscriber("test", 1).await;
         broker
             .send_message("test".to_string(), "hello".to_string())
             .await;
 
         // First read gets the message
-        let messages = broker.read_messages(&["test".to_string()]).await;
+        let messages = broker.read_messages(1, &["test".to_string()]).await;
         assert_eq!(messages.len(), 1);
 
         // Second read gets nothing (messages consumed)
-        let messages = broker.read_messages(&["test".to_string()]).await;
+        let messages = broker.read_messages(1, &["test".to_string()]).await;
         assert_eq!(messages.len(), 0);
+    }
+
+    /// CORE-02: two independent subscribers on the same channel must each
+    /// see every message; one reading must not drain the other's queue.
+    #[tokio::test]
+    async fn test_two_subscribers_both_see_every_message() {
+        let broker = MessageBroker::new();
+
+        broker.register_subscriber("test", 1).await;
+        broker.register_subscriber("test", 2).await;
+        broker
+            .send_message("test".to_string(), "hello".to_string())
+            .await;
+
+        // Subscriber 1 reads and consumes only its own queue.
+        let messages = broker.read_messages(1, &["test".to_string()]).await;
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].text, "hello");
+
+        // Subscriber 2 still sees the message, untouched by subscriber 1's read.
+        let messages = broker.read_messages(2, &["test".to_string()]).await;
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].text, "hello");
+
+        // Both queues are now empty.
+        assert!(
+            broker
+                .read_messages(1, &["test".to_string()])
+                .await
+                .is_empty()
+        );
+        assert!(
+            broker
+                .read_messages(2, &["test".to_string()])
+                .await
+                .is_empty()
+        );
     }
 
     #[tokio::test]
     async fn test_list_channels() {
         let broker = MessageBroker::new();
 
-        broker.register_subscriber("channel1").await;
-        broker.register_subscriber("channel2").await;
+        broker.register_subscriber("channel1", 1).await;
+        broker.register_subscriber("channel2", 1).await;
         broker
             .send_message("channel1".to_string(), "msg1".to_string())
             .await;
@@ -207,11 +264,32 @@ mod tests {
         assert!(channels.contains(&"channel2".to_string()));
     }
 
+    /// SEC-15: once the last subscriber leaves, the channel (and any
+    /// unread messages) must be dropped rather than persisting forever.
+    #[tokio::test]
+    async fn test_channel_dropped_after_last_unsubscribe() {
+        let broker = MessageBroker::new();
+
+        broker.register_subscriber("test", 1).await;
+        broker
+            .send_message("test".to_string(), "hello".to_string())
+            .await;
+        broker.unregister_subscriber("test", 1).await;
+
+        assert!(broker.list_channels().await.is_empty());
+        // Sending now finds no subscribers.
+        assert!(
+            !broker
+                .send_message("test".to_string(), "hello again".to_string())
+                .await
+        );
+    }
+
     #[tokio::test]
     async fn test_max_messages_limit() {
         let broker = MessageBroker::new();
 
-        broker.register_subscriber("test").await;
+        broker.register_subscriber("test", 1).await;
         // Send more than MAX_MESSAGES_PER_CHANNEL
         for i in 0..150 {
             broker
@@ -219,10 +297,24 @@ mod tests {
                 .await;
         }
 
-        let messages = broker.read_messages(&["test".to_string()]).await;
+        let messages = broker.read_messages(1, &["test".to_string()]).await;
         // Should only keep the last MAX_MESSAGES_PER_CHANNEL messages
         assert_eq!(messages.len(), MAX_MESSAGES_PER_CHANNEL);
         // First message should be msg50 (last 100 messages)
         assert_eq!(messages[0].text, "msg50");
+    }
+
+    #[tokio::test]
+    async fn test_oversized_message_rejected() {
+        let broker = MessageBroker::new();
+        broker.register_subscriber("test", 1).await;
+        let huge = "x".repeat(MAX_MESSAGE_BYTES + 1);
+        assert!(!broker.send_message("test".to_string(), huge).await);
+        assert!(
+            broker
+                .read_messages(1, &["test".to_string()])
+                .await
+                .is_empty()
+        );
     }
 }

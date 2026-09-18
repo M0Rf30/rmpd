@@ -101,7 +101,20 @@ impl ResponseBuilder {
     }
 
     pub fn field(&mut self, key: &str, value: impl std::fmt::Display) -> &mut Self {
-        writeln!(self.buffer, "{key}: {value}").expect("writing to String buffer cannot fail");
+        let value = value.to_string();
+        if value.bytes().any(|b| b < 0x20) {
+            // Strip control characters (newline, carriage return, NUL, ...)
+            // so a crafted tag/filename/ICY title can't inject a fake
+            // protocol line (matches MPD's FixTagString behavior).
+            let sanitized: String = value
+                .chars()
+                .map(|c| if (c as u32) < 0x20 { ' ' } else { c })
+                .collect();
+            writeln!(self.buffer, "{key}: {sanitized}")
+                .expect("writing to String buffer cannot fail");
+        } else {
+            writeln!(self.buffer, "{key}: {value}").expect("writing to String buffer cannot fail");
+        }
         self
     }
 
@@ -521,5 +534,20 @@ mod tests {
         rb.stats(&stats);
         let out = rb.ok();
         assert!(out.contains("db_update: 1700000000\n"), "got:\n{out}");
+    }
+
+    #[test]
+    fn field_strips_control_characters() {
+        let mut rb = ResponseBuilder::new();
+        rb.field("Title", "evil\ninjected: line\r\0end");
+        let out = rb.ok();
+        assert!(!out.contains('\0'));
+        // Only one real newline per emitted field: the one `field()` itself
+        // appends. An injected '\n'/'\r' must not create extra lines.
+        assert_eq!(out.lines().count(), 2);
+        assert!(
+            out.starts_with("Title: evil injected: line  end\n"),
+            "got:\n{out}"
+        );
     }
 }

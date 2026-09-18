@@ -110,7 +110,7 @@ impl SymphoniaDecoder {
             .make_audio_decoder(audio, &AudioDecoderOptions::default())
             .map_err(|e| RmpdError::Player(format!("Failed to create decoder: {e}")))?;
 
-        Ok(Self {
+        let mut decoder = Self {
             reader,
             decoder,
             track_id,
@@ -126,7 +126,64 @@ impl SymphoniaDecoder {
             bit_order,
             uses_pcm_conversion: false,
             stream_title,
-        })
+        };
+
+        // Some containers don't declare the channel count in the codec
+        // header; it is only known once the first packet is decoded. Resolve
+        // it eagerly here rather than letting `format()`/`channels()` default
+        // to stereo before the first real `read()` call (PLAY-05) — that
+        // default would otherwise get latched into the device/output config
+        // for the whole track.
+        if decoder.channels.is_none() {
+            decoder.resolve_channels()?;
+        }
+
+        Ok(decoder)
+    }
+
+    /// Decode packets until the channel count is known or the stream ends,
+    /// buffering any decoded audio (rather than discarding it) so the first
+    /// real `read()` call still sees it.
+    fn resolve_channels(&mut self) -> Result<()> {
+        while self.channels.is_none() {
+            let packet = match self.reader.next_packet() {
+                Ok(Some(packet)) => packet,
+                Ok(None) => return Ok(()), // EOS with no decodable audio.
+                Err(SymphoniaError::ResetRequired) => {
+                    self.decoder.reset();
+                    continue;
+                }
+                Err(SymphoniaError::IoError(e))
+                    if e.kind() == std::io::ErrorKind::UnexpectedEof =>
+                {
+                    return Ok(());
+                }
+                Err(e) => {
+                    return Err(RmpdError::Player(format!("Failed to read packet: {e}")));
+                }
+            };
+
+            if packet.track_id != self.track_id {
+                continue;
+            }
+
+            let decoded = match self.decoder.decode(&packet) {
+                Ok(decoded) => decoded,
+                Err(SymphoniaError::DecodeError(_)) => continue,
+                Err(e) => {
+                    return Err(RmpdError::Player(format!("Failed to decode packet: {e}")));
+                }
+            };
+
+            if decoded.frames() == 0 {
+                continue;
+            }
+
+            self.channels = Some(decoded.spec().channels().count() as u8);
+            decoded.copy_to_vec_interleaved(&mut self.sample_buf);
+            self.sample_pos = 0;
+        }
+        Ok(())
     }
 
     /// The current ICY "now playing" title for a remote stream, if any has

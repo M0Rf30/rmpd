@@ -9,6 +9,9 @@ description.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 async-trait = { workspace = true }
 rmpd-core = { workspace = true }

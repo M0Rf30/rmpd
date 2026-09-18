@@ -28,6 +28,13 @@ async fn idle_with_subsystem_filter() {
 }
 
 #[tokio::test]
+async fn idle_rejects_unrecognized_subsystem() {
+    let (_server, mut client) = setup().await;
+    let resp = client.command("idle bogus").await;
+    assert_eq!(resp, "ACK [2@0] {idle} Unrecognized idle event: bogus\n");
+}
+
+#[tokio::test]
 async fn idle_triggered_by_output_change() {
     let server = MpdTestServer::start().await;
     let mut client1 = MpdTestClient::connect(server.port()).await;

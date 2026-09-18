@@ -17,6 +17,7 @@ struct FileInfo {
     absolute_path: Utf8PathBuf,
     relative_path: Utf8PathBuf,
     existing_song: Option<rmpd_core::song::Song>,
+    file_size: u64,
 }
 
 /// Result of metadata extraction for a file
@@ -283,39 +284,50 @@ impl Scanner {
             })
             .collect();
 
-        // Step 3: Batch insert into database (sequential, single connection)
+        // Step 3: Batch insert into database (sequential, single connection).
+        // Each `add_song` is itself several statements (upsert, tag delete, N tag
+        // inserts, FTS delete+insert); autocommitting per-file makes a full-library
+        // scan fsync thousands of times. Batch commits in chunks so one transaction
+        // never holds an unbounded number of statements open.
+        const TRANSACTION_BATCH_SIZE: usize = 500;
         let mut added = 0u32;
         let mut updated = 0u32;
         let mut errors = 0u32;
 
-        for extracted_meta in extracted {
-            if let Some(error) = extracted_meta.error {
-                warn!(
-                    "failed to extract metadata from {}: {}",
-                    extracted_meta.file_info.relative_path, error
-                );
-                errors += 1;
-                continue;
-            }
+        for batch in extracted.chunks(TRANSACTION_BATCH_SIZE) {
+            db.with_transaction(|db| {
+                for extracted_meta in batch {
+                    if let Some(error) = &extracted_meta.error {
+                        warn!(
+                            "failed to extract metadata from {}: {}",
+                            extracted_meta.file_info.relative_path, error
+                        );
+                        errors += 1;
+                        continue;
+                    }
 
-            if let Some(song) = extracted_meta.song {
-                match db.add_song(&song) {
-                    Ok(_) => {
-                        let is_update = extracted_meta.file_info.existing_song.is_some();
-                        if is_update {
-                            debug!("updated: {}", song.path);
-                            updated += 1;
-                        } else {
-                            debug!("added: {}", song.path);
-                            added += 1;
+                    if let Some(song) = &extracted_meta.song {
+                        match db.add_song_with_size(song, Some(extracted_meta.file_info.file_size))
+                        {
+                            Ok(_) => {
+                                let is_update = extracted_meta.file_info.existing_song.is_some();
+                                if is_update {
+                                    debug!("updated: {}", song.path);
+                                    updated += 1;
+                                } else {
+                                    debug!("added: {}", song.path);
+                                    added += 1;
+                                }
+                            }
+                            Err(e) => {
+                                warn!("failed to add {} to database: {}", song.path, e);
+                                errors += 1;
+                            }
                         }
                     }
-                    Err(e) => {
-                        warn!("failed to add {} to database: {}", song.path, e);
-                        errors += 1;
-                    }
                 }
-            }
+                Ok(())
+            })?;
         }
 
         stats.added += added;
@@ -475,13 +487,25 @@ impl Scanner {
                         .modified()
                         .unwrap_or(std::time::SystemTime::UNIX_EPOCH),
                 );
+                let file_size = metadata.size();
 
-                // Skip if file hasn't been modified (unless a forced rescan)
+                // Skip if file hasn't been modified (unless a forced rescan). A same/newer
+                // mtime with a changed size (e.g. `cp -p`, a backup restore, some taggers
+                // that preserve mtime) still counts as modified — mtime alone would miss it.
                 if !self.force_rescan
                     && let Some(existing) = &existing_song
                     && existing.last_modified >= mtime
                 {
-                    continue;
+                    let size_changed = match db.get_song_size_by_path(relative_path.as_str()) {
+                        Ok(stored_size) => stored_size.is_some_and(|s| s != file_size),
+                        Err(e) => {
+                            warn!("database error checking size for {}: {}", relative_path, e);
+                            false
+                        }
+                    };
+                    if !size_changed {
+                        continue;
+                    }
                 }
 
                 // Add to files to process
@@ -489,6 +513,7 @@ impl Scanner {
                     absolute_path: utf8_path,
                     relative_path,
                     existing_song,
+                    file_size,
                 });
             }
         }

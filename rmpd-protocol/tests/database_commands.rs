@@ -226,3 +226,47 @@ async fn readcomments_missing_uri_is_no_exist() {
     let resp = client.command("readcomments \"nosuch.flac\"").await;
     assert!(resp.starts_with("ACK [50@0]"), "got: {resp}");
 }
+
+#[tokio::test]
+async fn listfiles_absolute_path_is_malformed_uri() {
+    let (_server, mut client, _tmp) = tcp_harness::setup_with_db(1).await;
+    let resp = client.command("listfiles \"/etc\"").await;
+    assert!(resp.starts_with("ACK [2@0]"), "got: {resp}");
+}
+
+#[tokio::test]
+async fn albumart_absolute_path_is_malformed_uri() {
+    let (_server, mut client, _tmp) = tcp_harness::setup_with_db(1).await;
+    let resp = client.command("albumart \"/etc/x\" 0").await;
+    assert!(resp.starts_with("ACK [2@0]"), "got: {resp}");
+}
+
+#[tokio::test]
+async fn readpicture_traversal_is_malformed_uri() {
+    let (_server, mut client, _tmp) = tcp_harness::setup_with_db(1).await;
+    let resp = client.command("readpicture \"../../x\" 0").await;
+    assert!(resp.starts_with("ACK [2@0]"), "got: {resp}");
+}
+
+#[tokio::test]
+async fn readcomments_traversal_is_malformed_uri() {
+    let (_server, mut client, _tmp) = tcp_harness::setup_with_db(1).await;
+    let resp = client.command("readcomments \"../x\"").await;
+    assert!(resp.starts_with("ACK [2@0]"), "got: {resp}");
+}
+
+#[tokio::test]
+async fn albumart_respects_binarylimit() {
+    // SEC-09: albumart/readpicture chunk sizes must honor the connection's
+    // `binarylimit`, not a hard-coded 8192.
+    let (_server, mut client, tmp) = tcp_harness::setup_with_db(1).await;
+    let cover_path = tmp.path().join("music").join("cover.jpg");
+    std::fs::write(&cover_path, vec![b'A'; 4096]).unwrap();
+
+    let resp = client.command("binarylimit 1024").await;
+    assert!(TestClient::is_ok(&resp), "got: {resp}");
+
+    let resp = client.command("albumart \"song1.flac\" 0").await;
+    assert_eq!(TestClient::get_field(&resp, "size"), Some("4096"));
+    assert_eq!(TestClient::get_field(&resp, "binary"), Some("1024"));
+}

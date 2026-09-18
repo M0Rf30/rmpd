@@ -19,8 +19,14 @@ use std::net::{SocketAddr, TcpStream};
 use std::sync::Arc;
 use std::sync::RwLock as StdRwLock;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{SyncSender, sync_channel};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
+
+/// Bounded per-client outgoing-chunk queue depth. A client whose socket
+/// cannot keep up (queue full) is dropped rather than stalling the audio
+/// thread that calls `write` (SEC-07).
+const CLIENT_QUEUE_DEPTH: usize = 8;
 
 // ──────────────────────────────────────────────────────────────────────────────
 
@@ -82,56 +88,86 @@ fn icy_meta_block(title: Option<&str>) -> Vec<u8> {
 
 // ──────────────────────────────────────────────────────────────────────────────
 
-/// State for a single connected streaming client.
+/// State for a single connected streaming client: a handle to its dedicated
+/// writer thread. Audio bytes are hand off via a bounded channel so a slow
+/// or stalled socket can never block the caller of `write` (the realtime
+/// audio thread) — see the module doc.
 struct HttpdClient {
-    stream: TcpStream,
-    /// True when the client sent `Icy-MetaData: 1`; enables interleaving.
-    wants_meta: bool,
-    /// Audio bytes written since the last metadata block (only meaningful when wants_meta).
-    bytes_since_meta: usize,
-    /// Last title emitted to this client, to send a no-update block when unchanged.
-    last_title: Option<String>,
+    tx: SyncSender<Arc<[u8]>>,
 }
 
-impl HttpdClient {
-    /// Write `bytes` to this client, interleaving ICY metadata blocks for meta
-    /// clients. Returns `false` if any write fails (caller should drop the client).
-    fn serve(&mut self, bytes: &[u8], cur: &Option<String>) -> bool {
-        if !self.wants_meta {
-            return self.stream.write_all(bytes).is_ok();
+/// Write `bytes` to `stream`, interleaving ICY metadata blocks when
+/// `wants_meta` is set. Returns `false` if any write fails (caller drops the
+/// client). Runs on the client's dedicated writer thread.
+fn serve_chunk(
+    stream: &mut TcpStream,
+    bytes: &[u8],
+    wants_meta: bool,
+    bytes_since_meta: &mut usize,
+    cur: &Option<String>,
+    last_title: &mut Option<String>,
+) -> bool {
+    if !wants_meta {
+        return stream.write_all(bytes).is_ok();
+    }
+
+    let mut offset = 0;
+    while offset < bytes.len() {
+        let remaining_to_meta = ICY_METAINT - *bytes_since_meta;
+        let chunk_len = (bytes.len() - offset).min(remaining_to_meta);
+
+        if stream
+            .write_all(&bytes[offset..offset + chunk_len])
+            .is_err()
+        {
+            return false;
         }
+        offset += chunk_len;
+        *bytes_since_meta += chunk_len;
 
-        let mut offset = 0;
-        while offset < bytes.len() {
-            let remaining_to_meta = ICY_METAINT - self.bytes_since_meta;
-            let chunk_len = (bytes.len() - offset).min(remaining_to_meta);
-
-            if self
-                .stream
-                .write_all(&bytes[offset..offset + chunk_len])
-                .is_err()
-            {
+        if *bytes_since_meta == ICY_METAINT {
+            let block = if *cur != *last_title {
+                *last_title = cur.clone();
+                icy_meta_block(cur.as_deref())
+            } else {
+                // No update needed — send the single-zero no-op block.
+                icy_meta_block(None)
+            };
+            if stream.write_all(&block).is_err() {
                 return false;
             }
-            offset += chunk_len;
-            self.bytes_since_meta += chunk_len;
+            *bytes_since_meta = 0;
+        }
+    }
+    true
+}
 
-            if self.bytes_since_meta == ICY_METAINT {
-                let block = if *cur != self.last_title {
-                    self.last_title = cur.clone();
-                    icy_meta_block(cur.as_deref())
-                } else {
-                    // No update needed — send the single-zero no-op block.
-                    icy_meta_block(None)
-                };
-                if self.stream.write_all(&block).is_err() {
-                    return false;
-                }
-                self.bytes_since_meta = 0;
+/// Spawn the dedicated writer thread for one accepted client. Returns the
+/// bounded sender used to hand off encoded audio chunks; the thread exits
+/// once the sender is dropped or a write fails.
+fn spawn_client_writer(
+    mut stream: TcpStream,
+    wants_meta: bool,
+    mut bytes_since_meta: usize,
+) -> SyncSender<Arc<[u8]>> {
+    let (tx, rx) = sync_channel::<Arc<[u8]>>(CLIENT_QUEUE_DEPTH);
+    thread::spawn(move || {
+        let mut last_title: Option<String> = None;
+        while let Ok(bytes) = rx.recv() {
+            let cur = now_playing();
+            if !serve_chunk(
+                &mut stream,
+                &bytes,
+                wants_meta,
+                &mut bytes_since_meta,
+                &cur,
+                &mut last_title,
+            ) {
+                break;
             }
         }
-        true
-    }
+    });
+    tx
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -143,6 +179,9 @@ pub struct HttpdOutput {
     name: String,
     /// All currently-connected client streams; dead streams are pruned on write.
     clients: Arc<Mutex<Vec<HttpdClient>>>,
+    /// Maximum simultaneously-connected clients; new connections beyond this
+    /// are refused (SEC-07: unbounded clients exhaust the daemon's fds).
+    max_clients: usize,
     /// Set to `false` by `stop()` to signal the accept thread to exit.
     running: Arc<AtomicBool>,
     accept_handle: Option<JoinHandle<()>>,
@@ -156,18 +195,25 @@ impl HttpdOutput {
     /// Construct a new `HttpdOutput`.
     ///
     /// Config keys read from `cfg`:
-    /// - `bind_to_address` — interface to bind (default `"0.0.0.0"`)
+    /// - `bind_to_address` — interface to bind (default `"127.0.0.1"`; set
+    ///   explicitly to `"0.0.0.0"` to expose the stream off-host)
     /// - `port`            — TCP port (default `8000`; `0` = OS-assigned)
     /// - `encoder`         — `"wav"` (default) or `"pcm"`
+    /// - `max_clients`     — simultaneous client cap (default `32`)
     pub fn new(format: AudioFormat, cfg: &OutputConfig) -> Self {
         let addr = cfg
             .setting_str("bind_to_address")
-            .unwrap_or_else(|| "0.0.0.0".to_owned());
+            .unwrap_or_else(|| "127.0.0.1".to_owned());
 
         let port: u16 = cfg
             .setting_str("port")
             .and_then(|s| s.parse().ok())
             .unwrap_or(8000);
+
+        let max_clients: usize = cfg
+            .setting_str("max_clients")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(32);
 
         let encoder: Box<dyn Encoder> = match cfg.setting_str("encoder").as_deref().unwrap_or("wav")
         {
@@ -186,6 +232,7 @@ impl HttpdOutput {
             port,
             name,
             clients: Arc::new(Mutex::new(Vec::new())),
+            max_clients,
             running: Arc::new(AtomicBool::new(false)),
             accept_handle: None,
             encoder,
@@ -245,6 +292,7 @@ impl AudioOutput for HttpdOutput {
         // no reference back to self.
         let running = Arc::clone(&self.running);
         let clients = Arc::clone(&self.clients);
+        let max_clients = self.max_clients;
         let content_type = self.encoder.content_type().to_owned();
         let header_bytes = self.encoder.header();
         let icy_name = self.name.clone();
@@ -274,6 +322,12 @@ impl AudioOutput for HttpdOutput {
                     break;
                 }
                 match listener.accept() {
+                    Ok((stream, _)) if clients.lock().len() >= max_clients => {
+                        // SEC-07: cap concurrent clients so a slow-loris of
+                        // connections cannot exhaust the daemon's fds. Refuse
+                        // before spending the handshake budget on it.
+                        let _ = stream.shutdown(std::net::Shutdown::Both);
+                    }
                     Ok((mut stream, _)) => {
                         // Poll for the request head with a short per-read timeout so a
                         // silent client cannot stall this loop, but keep polling until an
@@ -316,18 +370,14 @@ impl AudioOutput for HttpdOutput {
                             && (header_bytes.is_empty() || stream.write_all(&header_bytes).is_ok());
                         if ok {
                             // Clear the read timeout; set a short write timeout so
-                            // a slow client cannot block the audio write path.
+                            // a slow client's handshake write cannot block long.
                             let _ = stream.set_read_timeout(None);
                             let _ = stream.set_write_timeout(Some(Duration::from_millis(200)));
                             // The encoder header (e.g. WAV) is part of the ICY audio
                             // body and counts toward the first metaint boundary.
                             let bytes_since_meta = if wants_meta { header_bytes.len() } else { 0 };
-                            clients.lock().push(HttpdClient {
-                                stream,
-                                wants_meta,
-                                bytes_since_meta,
-                                last_title: None,
-                            });
+                            let tx = spawn_client_writer(stream, wants_meta, bytes_since_meta);
+                            clients.lock().push(HttpdClient { tx });
                         }
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
@@ -347,13 +397,14 @@ impl AudioOutput for HttpdOutput {
         if self.is_paused() {
             return Ok(());
         }
-        let bytes = self.encoder.encode(samples);
-        let cur = now_playing();
-        // Prune dead connections in-place; no error is surfaced — dropping a
-        // client is normal (e.g. listener navigated away).
+        let bytes: Arc<[u8]> = Arc::from(self.encoder.encode(samples));
+        // Non-blocking hand-off: a client whose bounded queue is full (too
+        // slow to keep up) or whose writer thread has exited is dropped
+        // rather than stalling this call — the realtime audio thread must
+        // never block on a client socket (SEC-07).
         self.clients
             .lock()
-            .retain_mut(|client| client.serve(&bytes, &cur));
+            .retain(|client| client.tx.try_send(Arc::clone(&bytes)).is_ok());
         Ok(())
     }
 
@@ -395,6 +446,7 @@ mod tests {
             port,
             name: "rmpd".to_owned(),
             clients: Arc::new(Mutex::new(Vec::new())),
+            max_clients: 32,
             running: Arc::new(AtomicBool::new(false)),
             accept_handle: None,
             encoder: Box::new(PcmEncoder::new(format)),
@@ -764,6 +816,90 @@ mod tests {
         );
 
         set_now_playing(None);
+        output.stop().unwrap();
+    }
+
+    fn make_capped_pcm_output(port: u16, max_clients: usize) -> HttpdOutput {
+        let mut output = make_pcm_output(port);
+        output.max_clients = max_clients;
+        output
+    }
+
+    /// A connection beyond `max_clients` must be refused rather than queued
+    /// indefinitely (SEC-07: unbounded clients exhaust the daemon's fds).
+    #[test]
+    fn connections_beyond_max_clients_are_refused() {
+        let mut output = make_capped_pcm_output(0, 1);
+        output.start().expect("start failed");
+        let port = output.local_addr().unwrap().port();
+        thread::sleep(Duration::from_millis(30));
+
+        let mut first = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
+        first.write_all(b"GET / HTTP/1.0\r\n\r\n").unwrap();
+        wait_for_clients(&output, 1);
+
+        // Second connection exceeds the cap of 1 and must be closed by the
+        // server without a greeting.
+        let mut second = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
+        second
+            .set_read_timeout(Some(Duration::from_millis(500)))
+            .unwrap();
+        let mut buf = [0u8; 16];
+        let n = second.read(&mut buf).unwrap_or(0);
+        assert_eq!(
+            n, 0,
+            "connection beyond max_clients must be closed without a greeting"
+        );
+        assert_eq!(
+            output.clients.lock().len(),
+            1,
+            "refused connection must not be registered as a client"
+        );
+
+        output.stop().unwrap();
+    }
+
+    /// A client that never drains its socket must be dropped once its bounded
+    /// queue fills, instead of ever blocking the caller of `write` (the
+    /// realtime audio thread) (SEC-07).
+    #[test]
+    fn stalled_client_is_dropped_without_blocking_write() {
+        let mut output = make_pcm_output(0);
+        output.start().expect("start failed");
+        let port = output.local_addr().unwrap().port();
+        thread::sleep(Duration::from_millis(30));
+
+        let mut client = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
+        client.write_all(b"GET / HTTP/1.0\r\n\r\n").unwrap();
+        wait_for_clients(&output, 1);
+        // Never read from `client` again: its socket receive buffer plus the
+        // server's bounded queue (CLIENT_QUEUE_DEPTH) will fill.
+
+        let chunk = vec![0.5_f32; 16384];
+        let start = Instant::now();
+        for _ in 0..(CLIENT_QUEUE_DEPTH * 4) {
+            output.write(&chunk).expect("write must not fail");
+        }
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "write must not block on a stalled client (took {elapsed:?})"
+        );
+
+        // Close the client: the writer thread hits EPIPE on its next send and
+        // must prune the entry (socket-buffer size makes "stall" itself
+        // non-deterministic across hosts, so exercise the dead-write path).
+        drop(client);
+        for _ in 0..4 {
+            output.write(&chunk).unwrap();
+            thread::sleep(Duration::from_millis(50));
+        }
+        assert_eq!(
+            output.clients.lock().len(),
+            0,
+            "stalled client must be pruned from the client list"
+        );
+
         output.stop().unwrap();
     }
 }

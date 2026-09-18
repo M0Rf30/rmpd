@@ -118,7 +118,7 @@ impl QueuePlaybackManager {
 
         // Get current song position
         let current_pos = match status.current_song {
-            Some(ref pos) => pos.position,
+            Some(pos) => pos.position,
             None => return Ok(()), // No current song, nothing to do
         };
 
@@ -130,37 +130,46 @@ impl QueuePlaybackManager {
 
         drop(status);
 
-        // Determine next position
+        // Determine next position. `None` means "stop playback" (end of
+        // queue without repeat, or no other song to pick in random mode).
         let queue_len = queue.len() as u32;
         let next_pos = if random {
-            // Random mode: pick a random song
-            if queue_len > 0 {
-                use rand::RngExt;
-                let mut rng = rand::rng();
-                rng.random_range(0..queue_len)
-            } else {
-                return Ok(());
+            // Random mode: pick a song weighted by priority, excluding the
+            // one that just finished. Falls back to replaying it (queue of
+            // one) only when repeat is on.
+            match queue.weighted_random_pos(Some(current_pos)) {
+                Some(pos) => Some(pos),
+                None if repeat => queue.weighted_random_pos(None),
+                None => None,
             }
         } else {
             // Sequential mode
             let next = current_pos + 1;
-
             if next >= queue_len {
-                // Reached end of queue
-                if repeat {
-                    // Repeat mode: go back to start
-                    0
+                if repeat && queue_len > 0 {
+                    Some(0)
                 } else {
-                    // No repeat: stop playback
-                    debug!("end of queue reached, stopping playback");
-                    drop(queue);
-                    state.engine.write().await.stop().await?;
-                    helpers::update_player_state(state, PlayerState::Stop).await;
-                    state.status.write().await.current_song = None;
-                    return Ok(());
+                    None
                 }
             } else {
-                next
+                Some(next)
+            }
+        };
+
+        let next_pos = match next_pos {
+            Some(p) => p,
+            None => {
+                // End of queue (no repeat) or nothing left to play: stop
+                // and clear current-song state so a later SongFinished
+                // (e.g. consume having emptied the queue) can't get stuck.
+                debug!("no next song to play, stopping playback");
+                drop(queue);
+                state.engine.write().await.stop().await?;
+                helpers::update_player_state(state, PlayerState::Stop).await;
+                let mut status = state.status.write().await;
+                status.current_song = None;
+                status.next_song = None;
+                return Ok(());
             }
         };
 
@@ -243,7 +252,13 @@ impl QueuePlaybackManager {
                 }
             }
         } else {
-            debug!("no next song found");
+            debug!("resolved next position vanished, stopping playback");
+            drop(queue);
+            state.engine.write().await.stop().await?;
+            helpers::update_player_state(state, PlayerState::Stop).await;
+            let mut status = state.status.write().await;
+            status.current_song = None;
+            status.next_song = None;
         }
 
         Ok(())

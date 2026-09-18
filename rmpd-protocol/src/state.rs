@@ -52,6 +52,12 @@ pub struct AppState {
     /// Whether to follow symlinks when scanning the music directory.
     /// Mirrors `general.follow_symlinks` from the config file.
     pub follow_symlinks: bool,
+    /// Monotonic counter for library-scan job ids (MPD-style `updating_db`
+    /// job numbers).
+    job_counter: Arc<std::sync::atomic::AtomicU32>,
+    /// Guards against concurrent music-source catalog syncs; a second
+    /// `update` while one is running is a no-op (MPD serializes updates).
+    source_sync_running: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl fmt::Debug for AppState {
@@ -138,6 +144,8 @@ impl AppState {
             stream_title: Arc::new(RwLock::new(None)),
             sources: std::sync::Arc::new(rmpd_source::SourceRegistry::from_config(&[])),
             follow_symlinks: false,
+            job_counter: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            source_sync_running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 
@@ -191,6 +199,9 @@ impl AppState {
     /// and returns it, or `None` if the database/music directory isn't
     /// configured. `Scanner::scan_directory` itself emits the
     /// `update`/`database` idle events.
+    ///
+    /// MPD semantics: if a scan is already running, `update` does not spawn
+    /// a second one — it returns the in-progress job's id.
     pub async fn spawn_library_update(&self, discard: bool) -> Option<u32> {
         let (Some(db_path), Some(music_dir)) = (self.db_path.clone(), self.music_dir.clone())
         else {
@@ -203,7 +214,15 @@ impl AppState {
 
         let job_id = {
             let mut status_guard = self.status.write().await;
-            let next = status_guard.updating_db.map_or(1, |j| j + 1);
+            if let Some(existing) = status_guard.updating_db {
+                // A scan is already running; report its job id rather than
+                // spawning a concurrent one (MPD's `update` behavior).
+                return Some(existing);
+            }
+            let next = self
+                .job_counter
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                + 1;
             status_guard.updating_db = Some(next);
             next
         };
@@ -243,7 +262,9 @@ impl AppState {
     /// database via `rmpd_source::sync_source`. Sources that fail ping are
     /// skipped (cached rows are kept intact). Emits `DatabaseUpdateStarted` /
     /// `DatabaseUpdateFinished` idle events so waiting clients wake up.
-    /// Does nothing when no sources are configured or the database is absent.
+    /// Does nothing when no sources are configured or the database is absent,
+    /// and when a sync is already running (MPD serializes updates rather
+    /// than racing concurrent `clear_source`+insert transactions).
     pub fn spawn_source_sync(&self) {
         let db_path = match self.db_path.clone() {
             Some(p) => p,
@@ -253,7 +274,15 @@ impl AppState {
         if sources.is_empty() {
             return;
         }
+        if self
+            .source_sync_running
+            .swap(true, std::sync::atomic::Ordering::AcqRel)
+        {
+            tracing::debug!("source sync already in progress, skipping");
+            return;
+        }
         let event_bus = self.event_bus.clone();
+        let running = self.source_sync_running.clone();
 
         tokio::spawn(async move {
             event_bus.emit(rmpd_core::event::Event::DatabaseUpdateStarted);
@@ -293,6 +322,7 @@ impl AppState {
                 }
             }
             event_bus.emit(rmpd_core::event::Event::DatabaseUpdateFinished);
+            running.store(false, std::sync::atomic::Ordering::Release);
         });
     }
 

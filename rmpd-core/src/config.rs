@@ -55,6 +55,10 @@ pub struct NetworkConfig {
     /// and media keys can discover and control rmpd.
     #[serde(default = "default_true")]
     pub mpris: bool,
+    /// Advertise the daemon on the LAN via mDNS/Zeroconf (`_mpd._tcp`) so
+    /// clients can auto-discover it. Matches MPD's `zeroconf_enabled`.
+    #[serde(default = "default_true")]
+    pub zeroconf_enabled: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -410,6 +414,7 @@ const NETWORK_KEYS: &[&str] = &[
     "connection_timeout",
     "password",
     "mpris",
+    "zeroconf_enabled",
 ];
 
 const AUDIO_KEYS: &[&str] = &[
@@ -506,12 +511,7 @@ fn mpd_migration_hint(key: &str) -> Option<String> {
                     .to_owned(),
             );
         }
-        "zeroconf_enabled" => {
-            return Some(
-                "`zeroconf_enabled` is mpd.conf syntax; rmpd always advertises via mDNS and has no config equivalent"
-                    .to_owned(),
-            );
-        }
+        "zeroconf_enabled" => Some(("network", "zeroconf_enabled")),
         _ => None,
     };
     target.map(|(section, rmpd_key)| {
@@ -866,6 +866,11 @@ impl Config {
         if config.network.port == 0 {
             return Err(RmpdError::Config("network.port must be nonzero".to_owned()));
         }
+        if config.network.connection_timeout == 0 {
+            return Err(RmpdError::Config(
+                "network.connection_timeout must be greater than 0 (0 would time out every connection instantly)".to_owned(),
+            ));
+        }
 
         if !config.general.music_directory.exists() {
             diagnostics.push(Diagnostic::warn(format!(
@@ -955,6 +960,7 @@ impl Default for NetworkConfig {
             connection_timeout: default_connection_timeout(),
             password: None,
             mpris: true,
+            zeroconf_enabled: true,
         }
     }
 }
@@ -1444,6 +1450,16 @@ some_backend_specific_key = 1
         let base = unique_temp_dir("port0");
         let path = base.join("rmpd.toml");
         std::fs::write(&path, "[network]\nport = 0\n").unwrap();
+        let result = Config::discover(Some(path.as_std_path()), DiscoverOptions::default());
+        assert!(result.is_err());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn connection_timeout_zero_is_hard_error() {
+        let base = unique_temp_dir("timeout0");
+        let path = base.join("rmpd.toml");
+        std::fs::write(&path, "[network]\nconnection_timeout = 0\n").unwrap();
         let result = Config::discover(Some(path.as_std_path()), DiscoverOptions::default());
         assert!(result.is_err());
         let _ = std::fs::remove_dir_all(&base);

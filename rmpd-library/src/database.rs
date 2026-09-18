@@ -134,14 +134,38 @@ fn open_connection(path: &str) -> Result<Connection> {
         2,
         FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
         |ctx| {
-            let pattern: String = ctx.get(0)?;
+            // Cache the compiled pattern on the statement (rusqlite's per-argument
+            // auxiliary data) so a `=~` filter compiles the regex once instead of
+            // once per candidate row.
+            let saved: Option<Arc<regex::Regex>> = ctx.get_aux(0)?;
+            let re = match saved {
+                Some(re) => re,
+                None => {
+                    let pattern: String = ctx.get(0)?;
+                    let re = regex::Regex::new(&pattern)
+                        .map_err(|e| rusqlite::Error::UserFunctionError(Box::new(e)))?;
+                    ctx.set_aux(0, re)?
+                }
+            };
             let text: String = ctx.get(1)?;
-            let re = regex::Regex::new(&pattern)
-                .map_err(|e| rusqlite::Error::UserFunctionError(Box::new(e)))?;
             Ok(re.is_match(&text))
         },
     )?;
     Ok(conn)
+}
+
+/// Escape `%`, `_`, and `\` for a SQL `LIKE ... ESCAPE '\'` value, and append
+/// a `/%` wildcard suffix — matching `find_songs_by_prefix`'s pattern so a
+/// directory prefix only matches its own subtree, not sibling paths that
+/// merely share the same string prefix.
+fn like_dir_prefix(value: &str) -> String {
+    format!(
+        "{}/%",
+        value
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_")
+    )
 }
 
 /// A pool of reusable SQLite connections.
@@ -249,6 +273,24 @@ impl Database {
         Ok(db)
     }
 
+    /// Run `f` inside a SQL transaction: commits on `Ok`, rolls back on `Err`.
+    /// Callers that issue several statements per logical unit of work (e.g.
+    /// a batch scan insert loop) use this instead of autocommitting once per
+    /// statement.
+    pub fn with_transaction<T>(&self, f: impl FnOnce(&Self) -> Result<T>) -> Result<T> {
+        self.conn.execute_batch("BEGIN")?;
+        match f(self) {
+            Ok(v) => {
+                self.conn.execute_batch("COMMIT")?;
+                Ok(v)
+            }
+            Err(e) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(e)
+            }
+        }
+    }
+
     /// Construct a database backed by a pooled connection. The pool already ran
     /// schema setup, so this just borrows a ready connection.
     pub fn from_pool(pool: &Arc<DbPool>) -> Result<Self> {
@@ -258,11 +300,12 @@ impl Database {
     }
 
     /// Perform schema migrations for existing databases.
-    /// Currently handles:
     ///   v1→v2: Remove UNIQUE(song_id, tag, value) from song_tags to allow duplicate tag values
     ///   v2→v3: Add songs.source column for remote catalog origin
     ///   v3→v4: Recreate songs_fts with contentless_delete=1 (fixes FTS index
     ///          corruption triggered by row deletes such as clear_source)
+    ///   v4→v5: Add songs.file_size column so change detection can catch a
+    ///          same-mtime content swap, not just an advanced mtime
     fn migrate_schema(&self) -> Result<()> {
         // Check if song_tags already exists with the old UNIQUE constraint.
         // We detect this by looking at sqlite_master for the table definition.
@@ -316,6 +359,19 @@ impl Database {
             if has_source == 0 {
                 self.conn
                     .execute("ALTER TABLE songs ADD COLUMN source TEXT", [])?;
+            }
+        }
+
+        // v4→v5: add songs.file_size for change-detection (see FileInfo/scanner).
+        if songs_table_exists > 0 {
+            let has_file_size: i64 = self.conn.query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('songs') WHERE name='file_size'",
+                [],
+                |r| r.get(0),
+            )?;
+            if has_file_size == 0 {
+                self.conn
+                    .execute("ALTER TABLE songs ADD COLUMN file_size INTEGER", [])?;
             }
         }
 
@@ -384,6 +440,7 @@ impl Database {
                 added_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
                 last_modified INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
                 source TEXT,
+                file_size INTEGER,
                 FOREIGN KEY (directory_id) REFERENCES directories(id)
             )",
             [],
@@ -500,6 +557,10 @@ impl Database {
         // Indexes on songs
         self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_songs_directory ON songs(directory_id)",
+            [],
+        )?;
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_songs_source ON songs(source) WHERE source IS NOT NULL",
             [],
         )?;
 
@@ -631,6 +692,14 @@ impl Database {
     }
 
     pub fn add_song(&self, song: &Song) -> Result<u64> {
+        self.add_song_with_size(song, None)
+    }
+
+    /// Same as [`Self::add_song`] but also records the on-disk file size,
+    /// used by change detection (a same-mtime file with a different size is
+    /// still stale — see `get_song_size_by_path`). `file_size` is `NULL` when
+    /// unknown (e.g. tests, remote/virtual songs).
+    pub fn add_song_with_size(&self, song: &Song, file_size: Option<u64>) -> Result<u64> {
         let root_path = Utf8PathBuf::from("/");
         let dir_path = song.path.parent().unwrap_or(root_path.as_path());
         let dir_id = self.get_or_create_directory(dir_path)?;
@@ -644,8 +713,8 @@ impl Database {
                 sample_rate, channels, bits_per_sample, bitrate,
                 replay_gain_track_gain, replay_gain_track_peak,
                 replay_gain_album_gain, replay_gain_album_peak,
-                last_modified
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?3)
+                last_modified, file_size
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?3, ?13)
             ON CONFLICT(path) DO UPDATE SET
                 directory_id = excluded.directory_id,
                 mtime = excluded.mtime,
@@ -658,7 +727,8 @@ impl Database {
                 replay_gain_track_peak = excluded.replay_gain_track_peak,
                 replay_gain_album_gain = excluded.replay_gain_album_gain,
                 replay_gain_album_peak = excluded.replay_gain_album_peak,
-                last_modified = excluded.mtime
+                last_modified = excluded.mtime,
+                file_size = excluded.file_size
             RETURNING id",
             params![
                 song.path.as_str(),
@@ -673,6 +743,7 @@ impl Database {
                 song.replay_gain_track_peak,
                 song.replay_gain_album_gain,
                 song.replay_gain_album_peak,
+                file_size.map(|s| s as i64),
             ],
             |row| row.get::<_, i64>(0),
         )? as u64;
@@ -695,6 +766,21 @@ impl Database {
         self.update_fts_for_song(song_id)?;
 
         Ok(song_id)
+    }
+
+    /// Stored file size for change detection (`None` if the song row doesn't
+    /// exist or its size was never recorded, e.g. a pre-migration row).
+    pub fn get_song_size_by_path(&self, path: &str) -> Result<Option<u64>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT file_size FROM songs WHERE path = ?1",
+                params![path],
+                |row| row.get::<_, Option<i64>>(0),
+            )
+            .optional()?
+            .flatten()
+            .map(|s| s as u64))
     }
 
     pub fn get_song(&self, id: u64) -> Result<Option<Song>> {
@@ -1012,7 +1098,10 @@ impl Database {
         Ok(songs)
     }
 
-    /// Search songs by tag with case-insensitive substring match (for `search`/`searchcount`).
+    /// Case-insensitive substring tag match. Unreferenced by the live `search`/
+    /// `searchcount` command paths (those route through `find_songs_filter`/
+    /// `FilterExpression::to_sql` in rmpd-core) — kept for direct callers/tests
+    /// that want a simple single-tag substring lookup without building a filter.
     pub fn search_songs_by_tag(&self, tag: &str, value: &str) -> Result<Vec<Song>> {
         let tag_lower = tag.to_lowercase();
         // `file` is a pseudo-tag matching the path column, not song_tags
@@ -1039,22 +1128,6 @@ impl Database {
         let mut stmt = self.conn.prepare(&sql)?;
         let mut songs: Vec<Song> = stmt
             .query_map(params![tag_lower, pattern], song_from_row)?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        self.load_tags_for_songs(&mut songs)?;
-        Ok(songs)
-    }
-
-    /// Find songs by exact match across all tag values (for `any` tag).
-    pub fn find_songs_any(&self, value: &str) -> Result<Vec<Song>> {
-        let sql = format!(
-            "SELECT {SONG_COLUMNS} FROM songs
-             WHERE id IN (SELECT song_id FROM song_tags WHERE value = ?1)
-                OR path = ?1
-             ORDER BY path"
-        );
-        let mut stmt = self.conn.prepare(&sql)?;
-        let mut songs: Vec<Song> = stmt
-            .query_map(params![value], song_from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         self.load_tags_for_songs(&mut songs)?;
         Ok(songs)
@@ -1441,11 +1514,19 @@ impl Database {
     /// tree-walk order (see `rmpd_core::path::compare_db_path`) — used by
     /// `add DIRECTORY` / `add /`.
     pub fn list_directory_recursive(&self, path: &str) -> Result<Vec<Song>> {
-        let sql = format!("SELECT {SONG_COLUMNS} FROM songs WHERE path LIKE ?1 || '%'");
-        let mut stmt = self.conn.prepare(&sql)?;
-        let mut songs: Vec<Song> = stmt
-            .query_map(params![path], song_from_row)?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let mut songs: Vec<Song> = if path.is_empty() || path == "/" {
+            let sql = format!("SELECT {SONG_COLUMNS} FROM songs");
+            let mut stmt = self.conn.prepare(&sql)?;
+            stmt.query_map([], song_from_row)?
+                .collect::<std::result::Result<Vec<_>, _>>()?
+        } else {
+            let sql = format!(
+                "SELECT {SONG_COLUMNS} FROM songs WHERE path = ?1 OR path LIKE ?2 ESCAPE '\\'"
+            );
+            let mut stmt = self.conn.prepare(&sql)?;
+            stmt.query_map(params![path, like_dir_prefix(path)], song_from_row)?
+                .collect::<std::result::Result<Vec<_>, _>>()?
+        };
         self.load_tags_for_songs(&mut songs)?;
         songs.sort_by(|a, b| rmpd_core::path::compare_db_path(a.path.as_str(), b.path.as_str()));
         Ok(songs)
@@ -1822,26 +1903,25 @@ impl Database {
     }
 
     pub fn find_stickers(&self, uri: &str, name: &str) -> Result<Vec<(String, String)>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT uri, value FROM stickers WHERE uri LIKE ?1 AND name = ?2 ORDER BY uri",
-        )?;
-
-        let search_pattern = if uri.is_empty() {
-            "%".to_string()
+        let sticker_rows: Vec<(String, String)> = if uri.is_empty() {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT uri, value FROM stickers WHERE name = ?1 ORDER BY uri")?;
+            stmt.query_map(params![name], |row| Ok((row.get(0)?, row.get(1)?)))?
+                .collect::<std::result::Result<Vec<_>, _>>()?
         } else {
-            format!("{uri}%")
+            let mut stmt = self.conn.prepare(
+                "SELECT uri, value FROM stickers
+                 WHERE (uri = ?1 OR uri LIKE ?2 ESCAPE '\\') AND name = ?3
+                 ORDER BY uri",
+            )?;
+            stmt.query_map(params![uri, like_dir_prefix(uri), name], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?
         };
 
-        let sticker_rows = stmt.query_map(params![search_pattern, name], |row| {
-            Ok((row.get(0)?, row.get(1)?))
-        })?;
-
-        let mut results = Vec::new();
-        for row in sticker_rows {
-            results.push(row?);
-        }
-
-        Ok(results)
+        Ok(sticker_rows)
     }
 
     /// All distinct sticker names across every URI, matching MPD's global

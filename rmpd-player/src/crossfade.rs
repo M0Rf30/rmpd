@@ -5,10 +5,10 @@
 //! and the MixRamp dB→gain conversion. They are decoupled from the playback
 //! engine so they can be unit-tested without an audio device.
 //!
-//! Wiring these into playback requires decode look-ahead (opening the next
-//! decoder before EOS so two streams overlap) and is an audible-tuning task;
-//! see `docs/PLUGIN_ARCHITECTURE.md`. This module is that integration's
-//! verified foundation.
+//! The look-ahead integration that wires these into playback — opening the
+//! next decoder before EOS so two streams overlap, honoring MixRamp tags and
+//! CUE/rangeid range boundaries — lives in `engine.rs`'s crossfade overlap
+//! loop (`PlaybackEngine::playback_thread`), not in this module.
 
 use std::f32::consts::FRAC_PI_2;
 

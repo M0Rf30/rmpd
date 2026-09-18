@@ -105,8 +105,7 @@ fn default_env_filter(level: &str) -> tracing_subscriber::EnvFilter {
     })
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     let args = Args::parse();
 
     if args.generate_config {
@@ -217,12 +216,17 @@ async fn main() -> Result<()> {
     info!("music directory: {}", config.general.music_directory);
     info!("database: {}", config.general.db_file);
 
+    // Daemonize (double-fork) BEFORE the tokio runtime is built: forking a
+    // live multi-threaded runtime loses every worker/reactor thread except
+    // the calling one in the child, which then hangs or corrupts state the
+    // instant it touches an async primitive.
     if args.daemonize {
         daemonize()?;
     }
 
-    // Start the server
-    app::run(full_address, config).await?;
-
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    runtime.block_on(app::run(full_address, config))?;
     Ok(())
 }

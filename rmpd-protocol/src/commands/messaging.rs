@@ -4,7 +4,7 @@
 //! This module handles channel subscription and message passing commands.
 
 use super::{AppState, ResponseBuilder};
-use crate::commands::utils::{ACK_ERROR_ARG, ACK_ERROR_EXIST, ACK_ERROR_NO_EXIST};
+use crate::commands::utils::{ACK_ERROR_ARG, ACK_ERROR_EXIST, ACK_ERROR_NO_EXIST, ACK_ERROR_SYS};
 use crate::connection::ConnectionState;
 
 /// MPD caps subscriptions per client (`Client::MAX_SUBSCRIPTIONS`).
@@ -16,6 +16,16 @@ fn notify_subscription_changed(state: &AppState) {
     state
         .event_bus
         .emit(rmpd_core::event::Event::SubscriptionChanged);
+}
+
+/// Derives a stable per-connection subscriber identity from the address of
+/// this connection's `ConnectionState`. Each connection owns exactly one
+/// `ConnectionState` for its whole lifetime (see `server.rs`), and all of
+/// its subscriptions are torn down via `unregister_subscriber` before the
+/// connection's state is dropped, so the address cannot collide with a
+/// still-live subscriber even if later reused by a new connection.
+pub(crate) fn subscriber_id(conn_state: &ConnectionState) -> rmpd_core::messaging::SubscriberId {
+    conn_state as *const ConnectionState as u64
 }
 
 /// Subscribe to a message channel
@@ -54,8 +64,14 @@ pub async fn handle_subscribe_command(
             "subscription list is full",
         );
     }
+    if !state
+        .message_broker
+        .register_subscriber(channel, subscriber_id(conn_state))
+        .await
+    {
+        return ResponseBuilder::error(ACK_ERROR_SYS, 0, "subscribe", "too many channels");
+    }
     conn_state.subscribe(channel.to_string());
-    state.message_broker.register_subscriber(channel).await;
     notify_subscription_changed(state);
     ResponseBuilder::new().ok()
 }
@@ -80,7 +96,10 @@ pub async fn handle_unsubscribe_command(
         );
     }
     conn_state.unsubscribe(channel);
-    state.message_broker.unregister_subscriber(channel).await;
+    state
+        .message_broker
+        .unregister_subscriber(channel, subscriber_id(conn_state))
+        .await;
     notify_subscription_changed(state);
     ResponseBuilder::new().ok()
 }
@@ -106,7 +125,7 @@ pub async fn handle_channels_command(state: &AppState) -> String {
 pub async fn handle_readmessages_command(state: &AppState, conn_state: &ConnectionState) -> String {
     let messages = state
         .message_broker
-        .read_messages(conn_state.subscribed_channels())
+        .read_messages(subscriber_id(conn_state), conn_state.subscribed_channels())
         .await;
 
     let mut resp = ResponseBuilder::new();

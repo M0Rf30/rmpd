@@ -107,7 +107,22 @@ impl MultiOutput {
                                 }
                                 let mut buf = arc.to_vec();
                                 vol.apply(&mut buf);
-                                let _ = out.write(&buf);
+                                if let Err(e) = out.write(&buf) {
+                                    // A persistent write failure (device
+                                    // disconnected) must stop the worker so
+                                    // the channel disconnects and `write`
+                                    // starts returning `Err` — otherwise the
+                                    // decode thread races through the rest
+                                    // of the queue at full CPU speed instead
+                                    // of real-time pace (PLAY-03).
+                                    warn!(
+                                        "{} output write failed, stopping worker: {}",
+                                        if primary { "primary" } else { "secondary" },
+                                        e
+                                    );
+                                    let _ = out.stop();
+                                    break;
+                                }
                             }
                             Ok(OutputMsg::Pause) => {
                                 let _ = out.pause();
@@ -318,6 +333,30 @@ mod tests {
         }
     }
 
+    /// An output whose `write` always fails, simulating a disconnected
+    /// device.
+    struct FailingOutput {
+        state: PauseState,
+    }
+
+    impl AudioOutput for FailingOutput {
+        fn start(&mut self) -> rmpd_core::error::Result<()> {
+            Ok(())
+        }
+        fn write(&mut self, _samples: &[f32]) -> rmpd_core::error::Result<()> {
+            Err(RmpdError::Player("device disconnected".into()))
+        }
+        fn stop(&mut self) -> rmpd_core::error::Result<()> {
+            Ok(())
+        }
+        fn pause_state(&self) -> &PauseState {
+            &self.state
+        }
+        fn pause_state_mut(&mut self) -> &mut PauseState {
+            &mut self.state
+        }
+    }
+
     // ── Tests ─────────────────────────────────────────────────────────────────
 
     /// The primary output must receive every chunk even when the secondary is
@@ -410,5 +449,46 @@ mod tests {
         );
 
         multi.stop();
+    }
+
+    /// A persistent `write()` failure (disconnected device) must stop the
+    /// worker rather than loop forever discarding chunks — otherwise the
+    /// decode thread races through the queue at full CPU speed instead of
+    /// real-time pace (PLAY-03), with nothing pinning the contract (PLAY-11).
+    #[test]
+    fn persistent_write_failure_stops_the_worker() {
+        let primary = FailingOutput {
+            state: PauseState::new(),
+        };
+
+        let multi = MultiOutput::spawn(
+            vec![Box::new(primary)],
+            4,
+            Arc::new(std::sync::atomic::AtomicU8::new(100)),
+        )
+        .expect("spawn failed");
+
+        let chunk: Arc<[f32]> = Arc::from(vec![0.0f32; 64].as_slice());
+        // First write may or may not observe the worker exit yet (channel
+        // send can succeed before the worker processes it); keep writing
+        // until the primary channel disconnects.
+        let mut saw_err = false;
+        for _ in 0..depth_iters() {
+            if multi.write(Arc::clone(&chunk)).is_err() {
+                saw_err = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+
+        assert!(
+            saw_err,
+            "MultiOutput::write must start returning Err once the worker exits \
+             after a persistent write failure"
+        );
+    }
+
+    fn depth_iters() -> usize {
+        50
     }
 }

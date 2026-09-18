@@ -321,6 +321,30 @@ async fn test_load_relative_position_without_current_song() {
 }
 
 #[tokio::test]
+async fn test_load_rejects_when_queue_at_max_size() {
+    // SEC-06: load must not silently overflow max_playlist_length.
+    let (_tmp, state) = new_test_state();
+    add_songs_to_db(&state, &["song1.mp3"]);
+    write_playlist(&state, "list1", &["song1.mp3"]);
+
+    {
+        let mut queue = state.queue.write().await;
+        for i in 0..rmpd_protocol::commands::utils::MAX_QUEUE_LEN {
+            queue.add(rmpd_core::test_utils::make_test_song(
+                &format!("filler{i}.mp3"),
+                i,
+            ));
+        }
+    }
+
+    let resp = playlists::handle_load_command(&state, "list1", None, None).await;
+    assert!(
+        resp.contains("[51@0]") && resp.contains("playlist is at the max size"),
+        "load into a full queue must ACK_ERROR_PLAYLIST_MAX, got: {resp}"
+    );
+}
+
+#[tokio::test]
 async fn test_playlistadd_bad_position() {
     let (_tmp, state) = new_test_state();
     add_songs_to_db(&state, &["song1.mp3"]);

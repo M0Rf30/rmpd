@@ -203,8 +203,16 @@ pub fn subsonic_source_factory(cfg: &SourceConfig) -> Result<Box<dyn MusicSource
     let auth = if let Some(key) = sc.api_key {
         Auth::api_key(key)
     } else {
-        // Validated above: both are Some.
-        Auth::token(sc.username.unwrap(), sc.password.unwrap())
+        // `from_source_config` guarantees both are `Some` when `api_key` is
+        // absent; still return an error instead of unwrapping in case that
+        // invariant is ever violated.
+        let username = sc
+            .username
+            .ok_or_else(|| SourceError::Config("subsonic source missing `username`".to_owned()))?;
+        let password = sc
+            .password
+            .ok_or_else(|| SourceError::Config("subsonic source missing `password`".to_owned()))?;
+        Auth::token(username, password)
     };
 
     let client = Client::new(&sc.url, auth)

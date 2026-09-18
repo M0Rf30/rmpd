@@ -201,16 +201,19 @@ async fn handle_fs_event(
                 // get_song_by_path lookups (lsinfo/add/playlistinfo/stickers) find it.
                 song.path = camino::Utf8PathBuf::from(path_str.clone());
 
-                // Database operations need to be done with lock
-                let db_guard = db.lock().await;
-
-                // Check if song already exists
-                let exists = db_guard.get_song_by_path(&path_str)?.is_some();
-
-                // Add/update in database
-                db_guard.add_song(&song)?;
-
-                drop(db_guard); // Release lock before emitting event
+                // Database operations run synchronous rusqlite I/O; do them on a
+                // blocking-pool thread instead of the async runtime worker.
+                let db_for_task = Arc::clone(db);
+                let path_for_db = path_str.clone();
+                let song_for_db = song.clone();
+                let exists = tokio::task::spawn_blocking(move || -> Result<bool> {
+                    let db_guard = db_for_task.blocking_lock();
+                    let exists = db_guard.get_song_by_path(&path_for_db)?.is_some();
+                    db_guard.add_song(&song_for_db)?;
+                    Ok(exists)
+                })
+                .await
+                .map_err(|e| RmpdError::Library(format!("db task panicked: {e}")))??;
 
                 // Emit appropriate event
                 if exists {
@@ -258,9 +261,14 @@ async fn remove_song_row(
     event_bus: &EventBus,
     path_str: &str,
 ) -> Result<()> {
-    let db_guard = db.lock().await;
-    db_guard.delete_song_by_path(path_str)?;
-    drop(db_guard);
+    let db_for_task = Arc::clone(db);
+    let path_for_db = path_str.to_string();
+    tokio::task::spawn_blocking(move || {
+        let db_guard = db_for_task.blocking_lock();
+        db_guard.delete_song_by_path(&path_for_db)
+    })
+    .await
+    .map_err(|e| RmpdError::Library(format!("db task panicked: {e}")))??;
 
     event_bus.emit(RmpdEvent::SongDeleted {
         path: path_str.to_string(),
@@ -323,11 +331,15 @@ async fn remove_rows_under(
     event_bus: &EventBus,
     rel: &str,
 ) -> Result<()> {
-    let deleted = {
-        let db_guard = db.lock().await;
-        let paths = db_guard.list_local_song_paths_under(rel)?;
-        db_guard.delete_songs_by_paths(&paths)?
-    };
+    let db_for_task = Arc::clone(db);
+    let rel_for_db = rel.to_string();
+    let deleted = tokio::task::spawn_blocking(move || -> Result<Vec<String>> {
+        let db_guard = db_for_task.blocking_lock();
+        let paths = db_guard.list_local_song_paths_under(&rel_for_db)?;
+        db_guard.delete_songs_by_paths(&paths)
+    })
+    .await
+    .map_err(|e| RmpdError::Library(format!("db task panicked: {e}")))??;
 
     for path in deleted {
         event_bus.emit(RmpdEvent::SongDeleted { path });

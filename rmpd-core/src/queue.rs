@@ -255,6 +255,35 @@ impl Queue {
         &self.items
     }
 
+    /// Pick a random queue position weighted by priority, mirroring MPD's
+    /// random-mode ordering ("songs with a higher priority come first").
+    /// Selects uniformly among the highest-priority candidates, excluding
+    /// `exclude` (typically the currently playing position). Returns `None`
+    /// for an empty queue or when `exclude` is the only item.
+    pub fn weighted_random_pos(&self, exclude: Option<u32>) -> Option<u32> {
+        use rand::RngExt;
+
+        let max_priority = self
+            .items
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| Some(*i as u32) != exclude)
+            .map(|(_, it)| it.priority)
+            .max()?;
+        let candidates: Vec<u32> = self
+            .items
+            .iter()
+            .enumerate()
+            .filter(|(i, it)| Some(*i as u32) != exclude && it.priority == max_priority)
+            .map(|(i, _)| i as u32)
+            .collect();
+        if candidates.is_empty() {
+            return None;
+        }
+        let idx = rand::rng().random_range(0..candidates.len());
+        Some(candidates[idx])
+    }
+
     pub fn shuffle(&mut self) {
         use rand::rng;
         use rand::seq::SliceRandom;
@@ -500,5 +529,36 @@ mod tests {
 
         // Should still have 5 items
         assert_eq!(queue.len(), 5);
+    }
+
+    #[test]
+    fn test_weighted_random_pos_prefers_highest_priority() {
+        let mut queue = Queue::new();
+        for i in 0..5 {
+            let song = create_test_song(i as u64, &i.to_string());
+            queue.add(song);
+        }
+        // Give position 3 the highest priority; it must always win.
+        queue.set_priority_range(200, &[(3, 4)]);
+
+        for _ in 0..20 {
+            assert_eq!(queue.weighted_random_pos(None), Some(3));
+        }
+    }
+
+    #[test]
+    fn test_weighted_random_pos_excludes_position() {
+        let mut queue = Queue::new();
+        let song = create_test_song(0, "only");
+        queue.add(song);
+
+        // Only item excluded -> no candidate.
+        assert_eq!(queue.weighted_random_pos(Some(0)), None);
+    }
+
+    #[test]
+    fn test_weighted_random_pos_empty_queue() {
+        let queue = Queue::new();
+        assert_eq!(queue.weighted_random_pos(None), None);
     }
 }

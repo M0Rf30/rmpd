@@ -88,7 +88,10 @@ pub async fn handle_play_command(state: &AppState, position: Option<u32>) -> Str
 
             ResponseBuilder::new().ok()
         }
-        Err(e) => ResponseBuilder::error(ACK_ERROR_SYS, 0, "play", &format!("Playback error: {e}")),
+        Err(e) => {
+            tracing::error!("play failed: {e}");
+            ResponseBuilder::error(ACK_ERROR_SYS, 0, "play", "Playback error")
+        }
     }
 }
 
@@ -163,23 +166,69 @@ pub async fn handle_next_command(state: &AppState) -> String {
         Some(c) => c,
         None => return ResponseBuilder::error(ACK_ERROR_PLAYER_SYNC, 0, "next", "Not playing"),
     };
+    let repeat = status.repeat;
+    let random = status.random;
+    let consume = status.consume;
+    drop(status);
 
-    let next_pos = current.position + 1;
+    let queue_len = queue.len() as u32;
+    let target_pos = if random {
+        // Random mode: pick weighted by priority, excluding the current
+        // song; only replay it (single-song queue) when repeat is on.
+        match queue.weighted_random_pos(Some(current.position)) {
+            Some(p) => Some(p),
+            None if repeat => queue.weighted_random_pos(None),
+            None => None,
+        }
+    } else {
+        let next = current.position + 1;
+        if next >= queue_len {
+            if repeat && queue_len > 0 {
+                Some(0)
+            } else {
+                None
+            }
+        } else {
+            Some(next)
+        }
+    };
 
-    if let Some(item) = queue.get(next_pos) {
-        let song = (*item.song).clone();
-        let item_id = item.id;
-        let range = item.range;
-        drop(queue);
-        drop(status);
+    let target_pos = match target_pos {
+        Some(p) => p,
+        None => {
+            // End of queue without repeat: MPD stops and replies OK, not an ACK error.
+            drop(queue);
+            return match state.engine.write().await.stop().await {
+                Ok(_) => {
+                    helpers::update_player_state(state, rmpd_core::state::PlayerState::Stop).await;
+                    let mut status = state.status.write().await;
+                    status.current_song = None;
+                    status.next_song = None;
+                    drop(status);
+                    ResponseBuilder::new().ok()
+                }
+                Err(e) => ResponseBuilder::error(
+                    ACK_ERROR_SYS,
+                    0,
+                    "next",
+                    &format!("Playback error: {e}"),
+                ),
+            };
+        }
+    };
 
-        let playback_song = match prepare_song_for_playback(
-            &song,
-            state.music_dir.as_deref(),
-            range,
-            &state.sources,
-        )
-        .await
+    let item = match queue.get(target_pos) {
+        Some(item) => item,
+        None => return ResponseBuilder::error(ACK_ERROR_PLAYER_SYNC, 0, "next", "Not playing"),
+    };
+    let song = (*item.song).clone();
+    let item_id = item.id;
+    let range = item.range;
+    drop(queue);
+
+    let playback_song =
+        match prepare_song_for_playback(&song, state.music_dir.as_deref(), range, &state.sources)
+            .await
         {
             Ok(ps) => ps,
             Err(e) => {
@@ -192,25 +241,29 @@ pub async fn handle_next_command(state: &AppState) -> String {
             }
         };
 
-        match state.engine.write().await.play(playback_song).await {
-            Ok(_) => {
-                let mut status = state.status.write().await;
-                status.current_song = Some(rmpd_core::state::QueuePosition {
-                    position: next_pos,
-                    id: item_id,
-                });
-
-                let queue = state.queue.read().await;
-                update_next_song(&mut status, &queue, next_pos);
-
-                ResponseBuilder::new().ok()
+    match state.engine.write().await.play(playback_song).await {
+        Ok(_) => {
+            let mut final_pos = target_pos;
+            if matches!(consume, rmpd_core::state::ConsumeMode::On) {
+                state.queue.write().await.delete(current.position);
+                helpers::update_playlist_version(state).await;
+                if target_pos > current.position {
+                    final_pos -= 1;
+                }
             }
-            Err(e) => {
-                ResponseBuilder::error(ACK_ERROR_SYS, 0, "next", &format!("Playback error: {e}"))
-            }
+
+            let mut status = state.status.write().await;
+            status.current_song = Some(rmpd_core::state::QueuePosition {
+                position: final_pos,
+                id: item_id,
+            });
+
+            let queue = state.queue.read().await;
+            update_next_song(&mut status, &queue, final_pos);
+
+            ResponseBuilder::new().ok()
         }
-    } else {
-        ResponseBuilder::error(ACK_ERROR_PLAYER_SYNC, 0, "next", "Not playing")
+        Err(e) => ResponseBuilder::error(ACK_ERROR_SYS, 0, "next", &format!("Playback error: {e}")),
     }
 }
 
@@ -223,21 +276,33 @@ pub async fn handle_previous_command(state: &AppState) -> String {
         Some(c) => c,
         None => return ResponseBuilder::error(ACK_ERROR_PLAYER_SYNC, 0, "previous", "Not playing"),
     };
+    let repeat = status.repeat;
+    let random = status.random;
+    let consume = status.consume;
+    drop(status);
 
-    let prev_pos = if current.position > 0 {
+    let queue_len = queue.len() as u32;
+    let target_pos = if random {
+        match queue.weighted_random_pos(Some(current.position)) {
+            Some(p) => p,
+            None if repeat => queue.weighted_random_pos(None).unwrap_or(current.position),
+            None => current.position,
+        }
+    } else if current.position > 0 {
         current.position - 1
+    } else if repeat && queue_len > 0 {
+        // Wrap to the last song when repeat is on (CMD-06).
+        queue_len - 1
     } else {
-        // Already at first song — MPD still returns Not playing (or plays same song)
-        // Actually MPD wraps to first if repeat, else stays. Simplification: stay OK
+        // Already at the first song, no repeat: MPD replays the same song.
         current.position
     };
 
-    if let Some(item) = queue.get(prev_pos) {
+    if let Some(item) = queue.get(target_pos) {
         let song = (*item.song).clone();
         let item_id = item.id;
         let range = item.range;
         drop(queue);
-        drop(status);
 
         let playback_song = match prepare_song_for_playback(
             &song,
@@ -260,14 +325,23 @@ pub async fn handle_previous_command(state: &AppState) -> String {
 
         match state.engine.write().await.play(playback_song).await {
             Ok(_) => {
+                let mut final_pos = target_pos;
+                if matches!(consume, rmpd_core::state::ConsumeMode::On) {
+                    state.queue.write().await.delete(current.position);
+                    helpers::update_playlist_version(state).await;
+                    if target_pos > current.position {
+                        final_pos -= 1;
+                    }
+                }
+
                 let mut status = state.status.write().await;
                 status.current_song = Some(rmpd_core::state::QueuePosition {
-                    position: prev_pos,
+                    position: final_pos,
                     id: item_id,
                 });
 
                 let queue = state.queue.read().await;
-                update_next_song(&mut status, &queue, prev_pos);
+                update_next_song(&mut status, &queue, final_pos);
 
                 ResponseBuilder::new().ok()
             }

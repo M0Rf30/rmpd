@@ -64,7 +64,7 @@ pub async fn handle_password_command(
             ResponseBuilder::new().ok()
         }
         Some(configured) => {
-            if password == configured.as_str() {
+            if constant_time_eq(password.as_bytes(), configured.as_bytes()) {
                 conn_state.grant_all_permissions();
                 ResponseBuilder::new().ok()
             } else {
@@ -72,4 +72,17 @@ pub async fn handle_password_command(
             }
         }
     }
+}
+
+/// Constant-time byte comparison to avoid leaking how many leading bytes of
+/// a password match via short-circuiting `==` (timing side channel).
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff: u8 = 0;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
 }

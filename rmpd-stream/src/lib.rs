@@ -76,7 +76,7 @@ impl HttpSource {
             .and_then(|v| v.to_str().ok())
             .and_then(|s| s.trim().parse::<usize>().ok())
             .filter(|n| *n > 0);
-        tracing::debug!(url, ?metaint, "opened HTTP stream");
+        tracing::debug!(url = %redact_url(url), ?metaint, "opened HTTP stream");
         Ok(Self::with_reader(Box::new(resp), metaint))
     }
 
@@ -158,8 +158,24 @@ impl MediaSource for HttpSource {
     }
 }
 
+/// Strip credentials `reqwest::Error`'s `Display` may embed (auth tokens,
+/// API keys, salts passed as query parameters) before the error text reaches
+/// logs or clients.
 fn to_io(e: reqwest::Error) -> io::Error {
-    io::Error::other(e.to_string())
+    io::Error::other(e.without_url().to_string())
+}
+
+/// Drop the query string (and any userinfo) from `url` before it is logged,
+/// so a Subsonic/auth token embedded as `?t=...&s=...` never lands in logs.
+fn redact_url(url: &str) -> String {
+    let without_query = url.split('?').next().unwrap_or(url);
+    match without_query.split_once("://") {
+        Some((scheme, rest)) => match rest.split_once('@') {
+            Some((_, host_and_path)) => format!("{scheme}://{host_and_path}"),
+            None => without_query.to_string(),
+        },
+        None => without_query.to_string(),
+    }
 }
 
 /// Like `read_exact`, but maps an early EOF to `UnexpectedEof` so a truncated
@@ -281,5 +297,14 @@ mod tests {
         let src = HttpSource::with_reader(Box::new(Cursor::new(vec![1, 2, 3])), None);
         assert!(!src.is_seekable());
         assert_eq!(src.byte_len(), None);
+    }
+
+    #[test]
+    fn redact_url_strips_query_string() {
+        assert_eq!(
+            redact_url("https://sub.example.com/rest/stream?t=abc123&s=deadbeef&u=alice"),
+            "https://sub.example.com/rest/stream"
+        );
+        assert_eq!(redact_url("not a url"), "not a url");
     }
 }

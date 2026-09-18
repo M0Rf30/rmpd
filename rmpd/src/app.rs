@@ -110,10 +110,6 @@ pub async fn run(bind_address: String, config: Config) -> Result<()> {
     // Set shutdown sender in state for kill command
     state.set_shutdown_sender(shutdown_tx.clone());
 
-    // Advertise rmpd via mDNS so clients can auto-discover it
-    let advertise_port = config.network.port;
-    state.advertise_mdns(advertise_port);
-
     // Expose rmpd on the session D-Bus via MPRIS so desktop environments,
     // `playerctl`, and media keys can discover and control it. Kept alive
     // (`_mpris`) for the lifetime of the server; dropping it releases the
@@ -190,7 +186,7 @@ pub async fn run(bind_address: String, config: Config) -> Result<()> {
     });
 
     // Create and run server
-    let server = MpdServer::with_state(bind_address, state.clone(), shutdown_rx);
+    let server = MpdServer::with_state(bind_address.clone(), state.clone(), shutdown_rx);
     let server =
         server.with_unix_socket(config.network.unix_socket.as_ref().map(|p| p.to_string()));
     let server = server
@@ -199,12 +195,21 @@ pub async fn run(bind_address: String, config: Config) -> Result<()> {
             config.network.connection_timeout,
         ));
 
-    if let Some(ref sock) = config.network.unix_socket {
+    if let Some(sock) = &config.network.unix_socket {
         info!("unix socket: {}", sock);
     }
 
+    let listener = tokio::net::TcpListener::bind(&bind_address).await?;
+    info!("mpd server listening on {}", bind_address);
+
+    // Advertise rmpd via mDNS only once the TCP listener is actually
+    // accepting connections, and only when zeroconf is enabled.
+    if config.network.zeroconf_enabled {
+        state.advertise_mdns(config.network.port);
+    }
+
     // Run server and handle result
-    let server_result = server.run().await;
+    let server_result = server.run_with_listener(listener).await;
 
     // Save state on clean shutdown
     info!("server stopped, saving state");

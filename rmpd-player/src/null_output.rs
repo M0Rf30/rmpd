@@ -24,6 +24,10 @@ struct Pacer {
     channels: usize,
     started: Option<Instant>,
     frames: u64,
+    /// Set while paused; `resume` shifts `started` forward by the elapsed
+    /// pause duration so the target time doesn't fall permanently behind
+    /// wall-clock time (PLAY-09).
+    paused_at: Option<Instant>,
 }
 
 impl Pacer {
@@ -33,6 +37,7 @@ impl Pacer {
             channels: usize::from(format.channels).max(1),
             started: None,
             frames: 0,
+            paused_at: None,
         }
     }
 
@@ -45,9 +50,24 @@ impl Pacer {
         }
     }
 
+    fn pause(&mut self) {
+        if self.started.is_some() && self.paused_at.is_none() {
+            self.paused_at = Some(Instant::now());
+        }
+    }
+
+    fn resume(&mut self) {
+        if let Some(paused_at) = self.paused_at.take()
+            && let Some(started) = self.started.as_mut()
+        {
+            *started += paused_at.elapsed();
+        }
+    }
+
     fn reset(&mut self) {
         self.started = None;
         self.frames = 0;
+        self.paused_at = None;
     }
 }
 
@@ -110,5 +130,58 @@ impl AudioOutput for NullOutput {
 
     fn pause_state_mut(&mut self) -> &mut PauseState {
         &mut self.pause_state
+    }
+
+    fn pause(&mut self) -> Result<()> {
+        self.pause_state_mut().set_paused(true);
+        if let Some(pacer) = self.pacer.as_mut() {
+            pacer.pause();
+        }
+        Ok(())
+    }
+
+    fn resume(&mut self) -> Result<()> {
+        self.pause_state_mut().set_paused(false);
+        if let Some(pacer) = self.pacer.as_mut() {
+            pacer.resume();
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A paused pacer must not count wall-clock time spent paused against its
+    /// real-time budget: without resync (PLAY-09), `add` after a pause would
+    /// see almost no `remaining` time and race ahead instead of pacing
+    /// normally.
+    #[test]
+    fn pacer_resumes_without_drift_after_pause() {
+        let format = AudioFormat {
+            sample_rate: 1000, // 1 sample = 1ms, keeps the test fast
+            channels: 1,
+            bits_per_sample: 16,
+        };
+        let mut pacer = Pacer::new(format);
+
+        // Prime `started` with a first (instant) add.
+        pacer.add(0);
+
+        pacer.pause();
+        std::thread::sleep(Duration::from_millis(200));
+        pacer.resume();
+
+        // Immediately after resume, adding 10ms worth of frames must still
+        // sleep ~10ms (not 0, which it would if the pause time had been
+        // charged against the budget).
+        let start = Instant::now();
+        pacer.add(10);
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed >= Duration::from_millis(8),
+            "pacer must resync after pause instead of racing ahead (slept {elapsed:?})"
+        );
     }
 }
