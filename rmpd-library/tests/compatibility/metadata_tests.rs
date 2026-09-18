@@ -92,11 +92,33 @@ fn test_wav_metadata_extraction() {
     let path = pregenerated::basic_wav();
     let song = harness.extract_metadata(path.to_str().unwrap()).unwrap();
 
-    // WAV may or may not preserve metadata depending on the tag format
-    // Just verify we can read audio properties
     assert!(song.sample_rate.is_some());
     assert!(song.channels.is_some());
     assert!(song.duration.is_some());
+
+    // RIFF INFO chunk tags (INAM/IART/IPRD). Guards the WavReader fix in the
+    // Symphonia fork, which used to parse the INFO chunk and then discard it.
+    assert_eq!(song.tag("title"), Some("Test Song WAV"));
+    assert_eq!(song.tag("artist"), Some("Test Artist WAV"));
+    assert_eq!(song.tag("album"), Some("Test Album WAV"));
+}
+
+#[test]
+fn test_wavpack_metadata_extraction() {
+    let harness = RmpdTestHarness::new().unwrap();
+    let path = pregenerated::basic_wv();
+    let song = harness.extract_metadata(path.to_str().unwrap()).unwrap();
+
+    assert_eq!(song.sample_rate, Some(44100));
+    assert_eq!(song.channels, Some(2));
+    assert!(song.duration.is_some());
+
+    // APEv2 tags on a WavPack stream. Guards both halves of the restored
+    // support: the ported WavPack reader in the Symphonia fork, and its
+    // handover of the probe-supplied APEv2 block into the reader's log.
+    assert_eq!(song.tag("title"), Some("Test Song WV"));
+    assert_eq!(song.tag("artist"), Some("Test Artist WV"));
+    assert_eq!(song.tag("album"), Some("Test Album WV"));
 }
 
 #[test]

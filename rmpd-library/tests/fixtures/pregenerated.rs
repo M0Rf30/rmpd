@@ -39,6 +39,10 @@ pub fn basic_wav() -> PathBuf {
     get_fixture("basic.wav")
 }
 
+pub fn basic_wv() -> PathBuf {
+    get_fixture("basic.wv")
+}
+
 pub fn unicode_flac() -> PathBuf {
     get_fixture("unicode.flac")
 }
@@ -63,6 +67,7 @@ mod tests {
         assert!(basic_opus().exists(), "basic.opus not found");
         assert!(basic_m4a().exists(), "basic.m4a not found");
         assert!(basic_wav().exists(), "basic.wav not found");
+        assert!(basic_wv().exists(), "basic.wv not found");
         assert!(unicode_flac().exists(), "unicode.flac not found");
         assert!(minimal_flac().exists(), "minimal.flac not found");
         assert!(extended_flac().exists(), "extended.flac not found");

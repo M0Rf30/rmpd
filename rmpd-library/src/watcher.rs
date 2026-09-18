@@ -136,13 +136,7 @@ async fn handle_fs_event(
 
         path.extension()
             .and_then(|ext| ext.to_str())
-            .map(|ext| {
-                matches!(
-                    ext.to_lowercase().as_str(),
-                    "mp3" | "flac" | "ogg" | "opus" | "m4a" | "aac" | "wav" | "wv" | "ape" | "mpc"
-                )
-            })
-            .unwrap_or(false)
+            .is_some_and(crate::metadata::MetadataExtractor::is_supported_extension)
     };
 
     match event.kind {

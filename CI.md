@@ -205,7 +205,7 @@ Automated dependency updates with intelligent grouping:
 - High priority for security updates
 - Smart grouping:
   - Async runtime (tokio, futures)
-  - Audio stack (symphonia, cpal, lofty)
+  - Audio stack (symphonia, cpal)
   - Database (rusqlite, tantivy)
   - GitHub Actions
 

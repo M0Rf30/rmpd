@@ -79,7 +79,6 @@ allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 allow-git = [
     # Allow these git sources (from workspace dependencies)
     "https://github.com/M0Rf30/Symphonia",
-    "https://github.com/M0Rf30/lofty-rs",
     "https://github.com/RustAudio/cpal",
 ]
 
