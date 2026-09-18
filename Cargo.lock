@@ -2964,7 +2964,7 @@ dependencies = [
 
 [[package]]
 name = "rmpd"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -2982,7 +2982,7 @@ dependencies = [
 
 [[package]]
 name = "rmpd-core"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "camino",
  "cpal",
@@ -3002,7 +3002,7 @@ dependencies = [
 
 [[package]]
 name = "rmpd-library"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "base64 0.23.1",
  "camino",
@@ -3026,7 +3026,7 @@ dependencies = [
 
 [[package]]
 name = "rmpd-macros"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "quote",
  "syn 3.0.6",
@@ -3034,7 +3034,7 @@ dependencies = [
 
 [[package]]
 name = "rmpd-player"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "approx",
  "audioadapter-buffers",
@@ -3053,7 +3053,7 @@ dependencies = [
 
 [[package]]
 name = "rmpd-plugin"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "async-trait",
  "rmpd-core",
@@ -3061,7 +3061,7 @@ dependencies = [
 
 [[package]]
 name = "rmpd-protocol"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "async-trait",
  "bytes",
@@ -3084,7 +3084,7 @@ dependencies = [
 
 [[package]]
 name = "rmpd-source"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "async-trait",
  "camino",
@@ -3102,7 +3102,7 @@ dependencies = [
 
 [[package]]
 name = "rmpd-stream"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "parking_lot",
  "reqwest",

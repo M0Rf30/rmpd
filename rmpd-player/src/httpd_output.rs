@@ -20,7 +20,7 @@ use std::sync::Arc;
 use std::sync::RwLock as StdRwLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 // ──────────────────────────────────────────────────────────────────────────────
 
@@ -275,14 +275,18 @@ impl AudioOutput for HttpdOutput {
                 }
                 match listener.accept() {
                     Ok((mut stream, _)) => {
-                        // Read the request head with a short timeout so a silent
-                        // client cannot stall this loop indefinitely.
+                        // Poll for the request head with a short per-read timeout so a
+                        // silent client cannot stall this loop, but keep polling until an
+                        // overall deadline: the head can arrive late, or split across TCP
+                        // segments, and treating the first WouldBlock as "no header" would
+                        // silently downgrade an ICY client to a plain HTTP greeting.
                         let _ = stream.set_read_timeout(Some(Duration::from_millis(200)));
                         let wants_meta = {
+                            let deadline = Instant::now() + Duration::from_secs(2);
                             let mut buf: Vec<u8> = Vec::with_capacity(256);
                             let mut tmp = [0u8; 128];
                             let mut found_end = false;
-                            while buf.len() < 4096 {
+                            while buf.len() < 4096 && Instant::now() < deadline {
                                 match stream.read(&mut tmp) {
                                     Ok(0) => break,
                                     Ok(n) => {
@@ -292,7 +296,15 @@ impl AudioOutput for HttpdOutput {
                                             break;
                                         }
                                     }
-                                    // Timeout or other read error → treat as non-meta.
+                                    // A read timeout just means the rest of the head has
+                                    // not arrived yet; keep waiting until the deadline.
+                                    Err(e)
+                                        if matches!(
+                                            e.kind(),
+                                            std::io::ErrorKind::WouldBlock
+                                                | std::io::ErrorKind::TimedOut
+                                                | std::io::ErrorKind::Interrupted
+                                        ) => {}
                                     Err(_) => break,
                                 }
                             }
@@ -600,6 +612,43 @@ mod tests {
                 .windows(b"icy-metaint: 16000".len())
                 .any(|w| w.eq_ignore_ascii_case(b"icy-metaint: 16000")),
             "icy-metaint: 16000 header missing from ICY response"
+        );
+
+        output.stop().unwrap();
+    }
+
+    /// A request head that arrives in two segments separated by more than the
+    /// accept loop's per-read timeout must still be recognised as ICY. The read
+    /// loop used to treat its first timeout as "no more headers" and downgrade
+    /// the client to a plain HTTP greeting, which is how this surfaced: as a
+    /// load-dependent CI failure on all four test legs at once.
+    #[test]
+    fn icy_greeting_survives_split_request_head() {
+        let mut output = make_pcm_output(0);
+        output.start().expect("start failed");
+        let port = output.local_addr().unwrap().port();
+        thread::sleep(Duration::from_millis(30));
+
+        let mut icy_client = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
+        icy_client
+            .set_read_timeout(Some(Duration::from_millis(3000)))
+            .unwrap();
+
+        // First segment only: no terminator, no Icy-MetaData header yet.
+        icy_client.write_all(b"GET / HTTP/1.0\r\n").unwrap();
+        // Longer than the accept loop's 200ms per-read timeout.
+        thread::sleep(Duration::from_millis(350));
+        icy_client.write_all(b"Icy-MetaData: 1\r\n\r\n").unwrap();
+
+        wait_for_clients(&output, 1);
+        output.write(&[0.0_f32; 8]).unwrap();
+
+        let received = read_until(&mut icy_client, |b| b.windows(4).any(|w| w == b"\r\n\r\n"));
+
+        assert!(
+            received.starts_with(b"ICY 200 OK"),
+            "a split request head must still yield an ICY greeting, got: {:?}",
+            &received[..received.len().min(32)]
         );
 
         output.stop().unwrap();
