@@ -35,7 +35,7 @@ rayon = "1.12"
 # Audio stack
 # Use remote Symphonia fork (branch dsd-support-0.6.1: upstream v0.6.1 + DSD, WAV
 # metadata fixes, and ported APE/WavPack support)
-symphonia = { git = "https://github.com/M0Rf30/Symphonia", rev = "f9247ddfadfca3a5651913ce05da9e1ad5bbfaf4", features = ["all", "dsd"] }
+symphonia = { git = "https://github.com/M0Rf30/Symphonia", rev = "16cda8295d26b7fc8c9dc92930f9234afd87d722", features = ["all", "dsd"] }
 cpal = { git = "https://github.com/RustAudio/cpal", rev = "a7f56fff9d9ae325a3c9c8c44194bc10eb60d7ee", default-features = false }
 rubato = "5.0"                   # High-quality (anti-aliased) sample-rate conversion
 audioadapter-buffers = "5.0"     # Buffer wrappers (InterleavedSlice) for rubato 5.x
