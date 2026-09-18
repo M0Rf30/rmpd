@@ -425,9 +425,21 @@ pub async fn handle_decoders_command() -> String {
     resp.field("mime_type", "audio/ogg");
     resp.field("mime_type", "audio/vorbis");
 
-    resp.field("plugin", "opus");
-    resp.field("suffix", "opus");
-    resp.field("mime_type", "audio/opus");
+    // No `opus` plugin: symphonia demuxes Ogg Opus but ships no Opus decoder,
+    // so rmpd cannot decode it and must not advertise it here.
+
+    resp.field("plugin", "ape");
+    resp.field("suffix", "ape");
+    resp.field("mime_type", "audio/x-ape");
+
+    resp.field("plugin", "wavpack");
+    resp.field("suffix", "wv");
+    resp.field("mime_type", "audio/x-wavpack");
+
+    resp.field("plugin", "dsd");
+    resp.field("suffix", "dsf");
+    resp.field("suffix", "dff");
+    resp.field("mime_type", "audio/x-dsd");
 
     resp.field("plugin", "aac");
     resp.field("suffix", "aac");

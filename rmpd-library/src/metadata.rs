@@ -525,29 +525,33 @@ impl MetadataExtractor {
     }
 
     pub fn is_supported_file(path: &Utf8PathBuf) -> bool {
-        if let Some(ext) = path.extension() {
-            matches!(
-                ext.to_lowercase().as_str(),
-                "mp3"
-                    | "flac"
-                    | "ogg"
-                    | "oga"
-                    | "opus"
-                    | "m4a"
-                    | "aac"
-                    | "wav"
-                    | "aiff"
-                    | "aif"
-                    | "mka"
-                    | "webm"
-                    | "ape"
-                    | "wv"
-                    | "dsf"
-                    | "dff"
-            )
-        } else {
-            false
-        }
+        path.extension()
+            .is_some_and(MetadataExtractor::is_supported_extension)
+    }
+
+    /// Whether `ext` (without a leading dot, any case) names a format rmpd can
+    /// scan. The single source of truth for every extension filter in rmpd --
+    /// the filesystem watcher shares it so it cannot drift from the scanner.
+    pub fn is_supported_extension(ext: &str) -> bool {
+        matches!(
+            ext.to_lowercase().as_str(),
+            "mp3"
+                | "flac"
+                | "ogg"
+                | "oga"
+                | "opus"
+                | "m4a"
+                | "aac"
+                | "wav"
+                | "aiff"
+                | "aif"
+                | "mka"
+                | "webm"
+                | "ape"
+                | "wv"
+                | "dsf"
+                | "dff"
+        )
     }
 
     /// Read raw key-value pairs directly from the audio file.

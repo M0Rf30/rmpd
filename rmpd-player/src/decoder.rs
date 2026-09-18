@@ -413,18 +413,23 @@ pub struct DecoderPlugin {
     pub mime_types: &'static [&'static str],
 }
 
-/// The Symphonia-backed decoder handles all of rmpd's supported formats.
+/// The Symphonia-backed decoder handles all of rmpd's playable formats.
+///
+/// Opus and Musepack are deliberately absent: symphonia demuxes Ogg Opus (so
+/// `.opus` files are still scanned, tagged and listed by the library) but the
+/// facade ships no Opus decoder, and Musepack has neither. Advertising a
+/// suffix here that `get_codecs()` cannot satisfy makes rmpd promise playback
+/// it would then fail to deliver.
 pub static SYMPHONIA_DECODER: DecoderPlugin = DecoderPlugin {
     name: "symphonia",
     suffixes: &[
-        "flac", "mp3", "ogg", "oga", "opus", "wav", "wave", "aiff", "aif", "m4a", "mp4", "aac",
-        "alac", "ape", "wv", "mpc", "dsf", "dff", "webm", "mka", "caf",
+        "flac", "mp3", "ogg", "oga", "wav", "wave", "aiff", "aif", "m4a", "mp4", "aac", "alac",
+        "ape", "wv", "dsf", "dff", "webm", "mka", "caf",
     ],
     mime_types: &[
         "audio/flac",
         "audio/mpeg",
         "audio/ogg",
-        "audio/opus",
         "audio/wav",
         "audio/x-wav",
         "audio/aac",
