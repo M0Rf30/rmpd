@@ -5,19 +5,20 @@ Pre-generated minimal audio files for rmpd compatibility tests.
 ## Files
 
 ### Basic Format Tests
-- `basic.flac` - FLAC with standard metadata (21KB)
+- `basic.flac` - FLAC with standard metadata (20KB)
 - `basic.mp3` - MP3 with ID3v2 tags (8KB)
 - `basic.ogg` - OGG Vorbis with comments (7KB)
 - `basic.opus` - Opus at 48kHz (18KB)
 - `basic.m4a` - M4A/AAC with iTunes tags (25KB)
-- `basic.wav` - WAV PCM (173KB)
+- `basic.wav` - WAV PCM (172KB)
+- `basic.wv` - WavPack (v1-v5) with APEv2 tags (43KB)
 
 ### Special Cases
-- `unicode.flac` - Unicode metadata (Japanese, Russian, Greek, Arabic) (21KB)
-- `minimal.flac` - Minimal metadata (title, artist, album only) (21KB)
-- `extended.flac` - Extended metadata (composer, album artist, disc, track) (21KB)
+- `unicode.flac` - Unicode metadata (Japanese, Russian, Greek, Arabic) (20KB)
+- `minimal.flac` - Minimal metadata (title, artist, album only) (20KB)
+- `extended.flac` - Extended metadata (composer, album artist, disc, track) (20KB)
 
-**Total size: 344KB**
+**Total size: 354KB (362,312 bytes across 10 fixtures)**
 
 ## Metadata Reference
 
@@ -29,6 +30,16 @@ Album:  Test Album
 Genre:  Rock
 Date:   2024
 Track:  1
+Duration: 1 second
+Sample Rate: 44100 Hz
+Channels: 2 (stereo)
+```
+
+### basic.wv
+```
+Title:  Test Song WV
+Artist: Test Artist WV
+Album:  Test Album WV
 Duration: 1 second
 Sample Rate: 44100 Hz
 Channels: 2 (stereo)
@@ -57,13 +68,24 @@ Disc:        2
 
 ## Generation
 
-These files were generated using FFmpeg with 1 second of 440Hz sine wave:
+`basic.flac`, `basic.mp3`, `basic.ogg`, `basic.opus`, `basic.m4a`, `basic.wav`, `unicode.flac`,
+`minimal.flac` and `extended.flac` were generated using FFmpeg with 1 second of 440Hz sine wave:
 
 ```bash
 ./generate_fixtures.sh
 ```
 
-The generation script is included for reproducibility but is **not required** for running tests. All fixtures are committed to the repository.
+`basic.wv` is **not** covered by that script; it was generated separately with:
+
+```bash
+ffmpeg -f lavfi -i "sine=frequency=440:duration=1:sample_rate=44100" -ac 2 -c:a wavpack \
+  -metadata title="Test Song WV" -metadata artist="Test Artist WV" \
+  -metadata album="Test Album WV" basic.wv
+```
+
+The generation scripts/commands are included for reproducibility but are **not required** for
+running tests. All fixtures are committed to the repository; only regenerate if adding new test
+scenarios, changing metadata requirements, or updating audio properties.
 
 ## Usage in Tests
 
@@ -78,15 +100,3 @@ let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 
 No FFmpeg installation required for running tests!
 
-## Regeneration
-
-To regenerate fixtures (requires FFmpeg):
-```bash
-cd tests/fixtures/samples
-./generate_fixtures.sh
-```
-
-Only needed if:
-- Adding new test scenarios
-- Changing metadata requirements
-- Updating audio properties

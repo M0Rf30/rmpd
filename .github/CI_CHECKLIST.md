@@ -2,11 +2,12 @@
 
 ## ✅ Initial Setup (Completed)
 
-- [x] GitHub Actions workflows created
-- [x] Linting configuration files created
-- [x] Renovate configuration created
-- [x] All files validated with linters
-- [x] Documentation written
+- [x] GitHub Actions workflows created (`ci.yml`, `lint.yml`, `security.yml`, `renovate.yml`,
+      `release.yml`)
+- [x] Linting configuration files created (`clippy.toml`, `rustfmt.toml`, `.cargo/config.toml`)
+- [x] Renovate configuration created (`.github/renovate.json`)
+- [x] Dependabot explicitly disabled (`.github/dependabot.yml`)
+- [x] Documentation written (see `CI.md`)
 
 ## 🔧 Repository Configuration (TODO)
 
@@ -18,11 +19,12 @@
 
 ### 2. Secrets Configuration
 
-- [ ] Add `CODECOV_TOKEN` (optional)
+- [ ] Add `CODECOV_TOKEN` (optional; coverage upload failure is non-fatal)
   - Sign up at https://codecov.io
   - Add repository
   - Copy token
   - Go to Settings → Secrets → Actions → New secret
+- [ ] Add `RENOVATE_TOKEN` (required for the `renovate.yml` workflow to open PRs)
 
 ### 3. Renovate Bot
 
@@ -38,30 +40,31 @@
 ### 4. Branch Protection
 
 - [ ] Go to Settings → Branches
-- [ ] Add rule for `main` branch:
-  - [x] Require status checks to pass
-    - [x] Check / clippy
-    - [x] Check / formatting
-    - [x] Test Suite (ubuntu-latest, stable)
-    - [x] Security Audit
-  - [x] Require review before merge (recommended: 1 approver)
-  - [x] Require linear history
-  - [x] Include administrators (optional)
+- [ ] Add rule for `main` branch, requiring these status checks (job names from `ci.yml` /
+      `security.yml`):
+  - [ ] Check
+  - [ ] Test Suite (ubuntu-latest, stable)
+  - [ ] Compatibility Tests
+  - [ ] Security Audit
+  - [ ] Cargo Deny
+  - [ ] Require review before merge (recommended: 1 approver)
+  - [ ] Require linear history
+  - [ ] Include administrators (optional)
 
 ### 5. Issue Templates
 
 - [ ] Verify issue templates work:
   - Go to Issues → New Issue
-  - Check templates appear
+  - Check `bug_report.md` and `feature_request.md` appear
 
 ### 6. Badges (Optional)
 
 Add to README.md:
 
 ```markdown
-[![CI](https://github.com/M0Rf30/rmpd/workflows/CI/badge.svg)](https://github.com/M0Rf30/rmpd/actions/workflows/ci.yml)
-[![Security](https://github.com/M0Rf30/rmpd/workflows/Security%20Audit/badge.svg)](https://github.com/M0Rf30/rmpd/actions/workflows/security.yml)
-[![Lint](https://github.com/M0Rf30/rmpd/workflows/Lint/badge.svg)](https://github.com/M0Rf30/rmpd/actions/workflows/lint.yml)
+[![CI](https://github.com/M0Rf30/rmpd/actions/workflows/ci.yml/badge.svg)](https://github.com/M0Rf30/rmpd/actions/workflows/ci.yml)
+[![Security](https://github.com/M0Rf30/rmpd/actions/workflows/security.yml/badge.svg)](https://github.com/M0Rf30/rmpd/actions/workflows/security.yml)
+[![Lint](https://github.com/M0Rf30/rmpd/actions/workflows/lint.yml/badge.svg)](https://github.com/M0Rf30/rmpd/actions/workflows/lint.yml)
 [![codecov](https://codecov.io/gh/M0Rf30/rmpd/branch/main/graph/badge.svg)](https://codecov.io/gh/M0Rf30/rmpd)
 ```
 
@@ -78,21 +81,21 @@ cargo fmt --all
 # Check formatting (dry run)
 cargo fmt --all -- --check
 
-# Run clippy
+# Run clippy (matches the Check job)
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-# Run tests
-cargo test --workspace --all-features
+# Run tests (matches the Test Suite job)
+cargo test --workspace --all-features -- --test-threads=1
 
-# Check docs
+# Check docs (matches the Check job, RUSTDOCFLAGS="-D warnings")
 cargo doc --workspace --no-deps --all-features
 
-# Security audit
+# Security audit (matches the Security workflow)
 cargo install cargo-audit cargo-deny
-cargo audit
+cargo audit --deny warnings
 cargo deny check
 
-# Find unused deps
+# Find unused deps (matches Lint Dependencies)
 cargo install cargo-machete
 cargo machete
 ```
@@ -135,11 +138,11 @@ chmod +x .git/hooks/pre-commit
 - [ ] Review Renovate PRs weekly
 - [ ] Check security workflow daily runs
 - [ ] Monitor CI performance/costs
-- [ ] Update MSRV if needed
 
 ## 🔒 Security Best Practices
 
-- [ ] Enable Dependabot alerts (Security → Code security → Dependabot)
+- [ ] Enable Dependabot alerts (Security → Code security → Dependabot) - note: update PRs stay
+      disabled via `.github/dependabot.yml`, only alerts are relevant
 - [ ] Enable secret scanning (Security → Code security → Secret scanning)
 - [ ] Review security advisories regularly
 - [ ] Keep dependencies up to date via Renovate
@@ -160,27 +163,23 @@ Your CI/CD is working correctly when:
 
 ### CI Failing on Clippy
 
-If too many clippy warnings, temporarily allow specific lints:
-
-```rust
-#![allow(clippy::unwrap_used)]  // At crate level
-```
-
-or edit `.cargo/config.toml` to add more `-A` flags.
+If too many clippy warnings, discuss adding the lint to the `-A` list in `.cargo/config.toml`
+(under `[target.'cfg(all())']`) rather than scattering per-site `#[allow(...)]`.
 
 ### Build Failing on ARM64
 
 Install cross-compilation tools:
 
 ```bash
-sudo apt-get install gcc-aarch64-linux-gnu
+sudo apt-get install gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
 ```
 
 ### Renovate Not Creating PRs
 
 1. Check Renovate logs in the dependency dashboard issue
-2. Verify `renovate.json` is valid JSON
-3. Check repository settings allow app access
+2. Verify `.github/renovate.json` is valid JSON
+3. Verify the `RENOVATE_TOKEN` secret is set
+4. Check repository settings allow app access
 
 ### Coverage Upload Failing
 
@@ -203,13 +202,9 @@ Future improvements to consider:
 - [ ] Add benchmarking (criterion.rs)
 - [ ] Add mutation testing (cargo-mutants)
 - [ ] Add fuzzing (cargo-fuzz)
-- [ ] Automated releases (cargo-release)
-- [ ] Changelog generation (git-cliff)
+- [ ] Automated releases (cargo-release) - note: `release.yml` already builds and publishes
+      tagged releases; this item would be about automating the version bump/tag itself
+- [ ] Changelog generation (git-cliff) - note: `release.yml` already generates release notes
+      from `git log` between tags; this item would be about a persisted `CHANGELOG.md`
 - [ ] Docker image builds
 - [ ] Performance regression detection
-- [ ] Nightly Rust testing with allow-failures
-
----
-
-**Last Updated:** 2026-01-31
-**Status:** ✅ Setup Complete - Ready for Repository Configuration

@@ -12,32 +12,35 @@
 
 ## Features
 
-- 🎵 **MPD Protocol Compatible** - Works with existing MPD clients (ncmpcpp, mpc, Cantata)
-- 🦀 **Pure Rust** - Memory-safe, fast, and reliable
-- 🔌 **Extensible** - Plugin system for decoders, outputs, and inputs
-- 🎧 **High-Quality Audio** - DSD support, ReplayGain, gapless playback, crossfade
-- 🎼 **Format Support** - FLAC, MP3, Ogg Vorbis, WAV, AAC, DSD (DoP and native)
-- 🏠 **Multi-Room** - Plays to all enabled outputs at once; stream over HTTP (`httpd` output) or feed an external Snapcast server via FIFO
-- 🖥️ **Desktop Integration** - Native MPRIS D-Bus interface (media keys, `playerctl`, GNOME/KDE) plus mDNS auto-discovery
-- 🌐 **Remote Libraries** - Browse and stream from OpenSubsonic servers (Navidrome, Airsonic, gonic) as a music source, built behind the `subsonic` Cargo feature
-- ⚡ **Efficient** - Runs on everything from Raspberry Pi to high-end servers
+- 🎵 **MPD Protocol Compatible** — works with existing MPD clients (ncmpcpp, mpc, Cantata, rmpc)
+- 🦀 **Pure Rust** — memory-safe; even APE and WavPack decode without C bindings
+- 🔌 **Extensible** — compile-time plugin registries for outputs, decoders, and music sources
+- 🎧 **High-Quality Audio** — DSD (DoP + PCM fallback), ReplayGain, gapless playback, crossfade
+- 🎼 **Format Support** — FLAC, MP3, Ogg Vorbis, WAV, AAC, ALAC, APE, WavPack, DSD and more; see [Format Support](#format-support)
+- 🏠 **Multi-Room** — HTTP streaming and Snapcast; see [Integrations](#integrations)
+- 🖥️ **Desktop Integration** — MPRIS D-Bus and mDNS auto-discovery; see [Integrations](#integrations)
+- 🌐 **Remote Libraries** — OpenSubsonic servers as a music source; see [Integrations](#integrations)
 
 ## Architecture
 
 ```
 rmpd/
-├── rmpd/               # Main binary
-├── rmpd-core/          # Core types and traits
-├── rmpd-protocol/      # MPD protocol implementation
-├── rmpd-player/        # Audio playback engine
-├── rmpd-library/       # Music library/database
-├── rmpd-plugin/        # Plugin system
-└── rmpd-stream/        # Streaming support
+├── rmpd/            # CLI entry point / main binary
+├── rmpd-core/       # Config, error, event bus, queue, song/tag, state — shared by every crate
+├── rmpd-macros/     # #[derive(CommandMetadata)] proc macro for MPD command dispatch
+├── rmpd-protocol/   # MPD wire protocol: parser, command dispatch, connection/server, MPRIS
+├── rmpd-player/     # Audio engine: symphonia decoding, DSD/DoP, outputs, resampling
+├── rmpd-library/    # Filesystem scanner, SQLite database, tag/artwork extraction, search
+├── rmpd-plugin/     # Cross-cutting plugin SPI (currently the MusicSource trait)
+├── rmpd-source/     # Music-source registry + backends (filesystem, OpenSubsonic)
+└── rmpd-stream/     # HTTP(S) streaming input source for internet radio (ICY metadata)
 ```
 
 ## Quick Start
 
 ### Prerequisites
+
+Requires Rust 1.85+ (the workspace uses edition 2024).
 
 **System dependencies:**
 
@@ -79,6 +82,34 @@ mpc add https://stream.example/radio.mp3
 mpc play
 mpc current   # shows the live ICY "now playing" title for streams
 ```
+
+## Format Support
+
+Library scanning/tagging and playback both go through `symphonia`, but they are not the same list: a file can scan and tag without a decoder to play it.
+
+| Extension(s)                 | Scan / tag / browse | Playback |
+| ----------------------------- | :---: | :---: |
+| `flac`                        | ✅ | ✅ |
+| `mp3`                          | ✅ | ✅ |
+| `ogg`, `oga`                   | ✅ | ✅ |
+| `opus`                         | ✅ | ❌ — demuxed, no Opus decoder |
+| `wav`                          | ✅ | ✅ |
+| `aiff`, `aif`                  | ✅ | ✅ |
+| `m4a`                          | ✅ | ✅ |
+| `aac`                          | ✅ | ✅ |
+| `ape` (Monkey's Audio)         | ✅ | ✅ — pure-Rust decoder |
+| `wv` (WavPack)                 | ✅ | ✅ — pure-Rust decoder |
+| `dsf`, `dff` (DSD)             | ✅ | ✅ — see [DSD](#dsd) |
+| `mka`, `webm`                  | ✅ | ✅ |
+| `wave`, `mp4`, `alac`, `caf`    | ❌ (not scanned into the library) | ✅ — playable if referenced directly |
+
+Musepack (`.mpc`) is not supported at all: no scan, no tag, no playback.
+
+### DSD
+
+- `.dsf`/`.dff`, DSD64 through DSD256 and higher, all scan, tag, and play.
+- DoP (DSD over PCM) sends a native DSD64/DSD128 bitstream to a bit-perfect DAC over a raw ALSA `hw:` device. Opt in with `audio.dop = "yes"` (or `"auto"` to use DoP only when `audio.device` is set) or `RMPD_DOP=1`. DSD256 and higher cannot use DoP (would need 705.6kHz PCM) and always use PCM fallback.
+- PCM fallback (the default) decodes DSD to a 44.1kHz-family rate and resamples to the output device's native rate via the configured `resampler_quality`, so a sound server such as PipeWire never resamples internally — avoiding underruns and keeping DSD's ultrasonic noise out of the audible band.
 
 ## Configuration
 
@@ -162,7 +193,20 @@ warning naming each one:
 - `database.cache_size`
 - `database.fts_enabled`
 
-### Music Sources (OpenSubsonic)
+## Integrations
+
+### MPRIS & mDNS
+
+rmpd exposes a native [MPRIS](https://specifications.freedesktop.org/mpris-spec/latest/) interface on the session D-Bus as `org.mpris.MediaPlayer2.rmpd`. This lets Linux desktops (GNOME Shell, KDE Plasma), `playerctl`, lock screens, and multimedia keys discover and control rmpd directly — no external bridge such as `mpDris2` required. It is enabled by default and can be toggled with `mpris` under `[network]`.
+
+```bash
+playerctl -p rmpd metadata
+busctl --user introspect org.mpris.MediaPlayer2.rmpd /org/mpris/MediaPlayer2
+```
+
+rmpd also advertises itself over **mDNS/Zeroconf** so MPD clients on the local network can auto-discover the server.
+
+### OpenSubsonic Music Sources
 
 rmpd can aggregate a remote [OpenSubsonic](https://opensubsonic.netlify.app/)
 server (Navidrome, Airsonic, gonic, …) into its library as a *music source*.
@@ -192,36 +236,44 @@ password = "secret"                # or use `api_key = "..."` instead
 Credentials are never written to logs. An unreachable server is skipped at
 startup without aborting (previously-synced tracks remain browsable).
 
-## Desktop Integration (MPRIS)
+### Multi-Room, HTTP Streaming & Snapcast
 
-rmpd exposes a native [MPRIS](https://specifications.freedesktop.org/mpris-spec/latest/) interface on the session D-Bus as `org.mpris.MediaPlayer2.rmpd`. This lets Linux desktops (GNOME Shell, KDE Plasma), `playerctl`, lock screens, and multimedia keys discover and control rmpd directly — no external bridge such as `mpDris2` required.
+rmpd plays to **all enabled outputs simultaneously**, so local audio and a
+network stream can run at once. Two routes to networked/multi-room playback:
 
-It is enabled by default and can be toggled with `mpris` under `[network]`. Verify it with:
+- **HTTP streaming** — enable a `type = "httpd"` output (default port 8000) and
+  point any browser, phone, or another MPD/VLC client at `http://<host>:8000`.
+  Works today, no extra daemon required (`encoder = "wav"` or `"pcm"`). The same
+  output also serves Shoutcast/Icecast clients (`ICY 200 OK` greeting plus
+  interleaved `StreamTitle` metadata).
+- **Snapcast (synchronized)** — enable a `type = "fifo"` output writing to
+  `/tmp/snapfifo` and run an external [Snapcast](https://github.com/badaix/snapcast)
+  `snapserver` reading that FIFO for sample-accurate multi-room sync.
 
-```bash
-playerctl -p rmpd metadata
-busctl --user introspect org.mpris.MediaPlayer2.rmpd /org/mpris/MediaPlayer2
-```
+## Status & Roadmap
 
-rmpd also advertises itself over **mDNS/Zeroconf** so MPD clients on the local network can auto-discover the server.
+### Implemented
 
-## Audio Format Support
+- **Core**: MPD protocol server (TCP/Unix sockets), event bus, configuration management, logging via `tracing`
+- **Library**: filesystem scanning + watcher, SQLite database, metadata/artwork extraction via `symphonia`, full-text search via `tantivy`
+- **MPD protocol**: playback commands (play/pause/stop/seek), queue management (add/delete/move/shuffle), database queries (find/search/list), status/statistics, playlist management (`.m3u`, `.pls`, XSPF/ASX; `.cue` sheets expand into range-restricted virtual tracks), output control
+- **Audio**: gapless playback, crossfade and MixRamp transitions, ReplayGain, internet radio input with Shoutcast/Icecast (ICY) "now playing" metadata — see [Format Support](#format-support) for codec coverage and [Integrations](#integrations) for multi-room, MPRIS, and OpenSubsonic
 
-### Supported Formats
+### In Progress
 
-- **Lossless**: FLAC, WAV, AIFF, ALAC, APE (Monkey's Audio), WavPack
-- **Lossy**: MP3, Ogg Vorbis, Opus, AAC, MP4, Matroska/WebM
-- **High-Resolution**: DSD (DSF, DFF) with DoP and native playback
-- **Streaming**: HTTP streams, Icecast, internet radio
+- Compressed stream encoders (FLAC / Opus / Vorbis) for the `httpd` output
+- Network storage backends (SMB / NFS)
 
-### DSD Support
+## Compatibility
 
-rmpd includes comprehensive DSD support:
-- DSD64, DSD128, DSD256 and higher sample rates
-- DoP (DSD over PCM) for wider DAC compatibility
-- Native DSD playback for compatible hardware
-- Automatic format detection and conversion
-- DSD-to-PCM fallback decodes to a 44.1 kHz-family rate and resamples to the output device's native rate using the configured `resampler_quality`, so a sound server (e.g. PipeWire) never resamples internally — avoiding underruns and keeping DSD's ultrasonic noise out of the audible band
+### Tested MPD Clients
+
+- ✅ **mpc** — command-line client
+- ✅ **ncmpcpp** — TUI client
+- ✅ **Cantata** — Qt GUI client
+- ✅ **rmpc** — modern TUI client
+- 🚧 **MPDroid** — Android client (testing in progress)
+- 🚧 **MPDluxe** — iOS client (testing in progress)
 
 ## Development
 
@@ -243,102 +295,14 @@ cargo clippy --workspace --all-targets --all-features
 
 ### CI/CD
 
-This project uses GitHub Actions for CI/CD with:
-- Multi-platform testing (Ubuntu, macOS)
-- Multi-architecture builds (x86_64, ARM64)
-- Strict linting with Clippy
-- Security audits with cargo-audit and cargo-deny
-- Code coverage reporting
-- Automated dependency updates via Renovate
-
-See [CI.md](CI.md) for detailed CI/CD documentation.
-
-## Current Status
-
-### Implemented ✅
-
-- **Core Infrastructure**
-  - MPD protocol server (TCP/Unix sockets)
-  - Event bus system
-  - Configuration management
-  - Logging with tracing
-
-- **Audio Playback**
-  - Multi-format decoding (FLAC, MP3, Vorbis, WAV, AAC, DSD)
-  - High-rate DSD support (DSD128, DSD256+)
-  - Multiple output types (ALSA, PulseAudio, PipeWire)
-  - Gapless playback
-  - Crossfade and MixRamp transitions
-  - ReplayGain support
-  - Internet radio: HTTP(S) streaming input with Shoutcast/Icecast (ICY) "now playing" metadata
-  - `httpd` output streams to browsers (`HTTP/1.0`) and to Shoutcast/Icecast clients (`ICY 200 OK` greeting + interleaved ICY `StreamTitle` metadata)
-
-- **Library Management**
-  - Filesystem scanning
-  - SQLite database
-  - Metadata extraction with symphonia
-  - Full-text search with tantivy
-  - Album art support
-
-- **MPD Protocol**
-  - Core playback commands (play, pause, stop, seek)
-  - Queue management (add, delete, move, shuffle)
-  - Database queries (find, search, list)
-  - Status and statistics
-  - Playlist management (`.m3u`, `.pls`, XSPF/ASX; `.cue` sheets expand into range-restricted virtual tracks)
-  - Output control
-
-- **Desktop Integration**
-  - Native MPRIS D-Bus interface (`org.mpris.MediaPlayer2.rmpd`)
-  - Media keys, `playerctl`, and GNOME/KDE media controls
-  - mDNS/Zeroconf service advertisement for client auto-discovery
-
-- **Remote Libraries**
-  - OpenSubsonic music sources (Navidrome, Airsonic, gonic) via the `subsonic` Cargo feature
-
-### In Progress 🚧
-
-- Compressed stream encoders (FLAC / Opus / Vorbis) for the `httpd` output
-- Network storage backends (SMB / NFS)
-
-## Compatibility
-
-### Tested MPD Clients
-
-- ✅ **mpc** - Command-line client
-- ✅ **ncmpcpp** - TUI client
-- ✅ **Cantata** - Qt GUI client
-- ✅ **rmpc** - Modern TUI client
-- 🚧 **MPDroid** - Android client (testing in progress)
-- 🚧 **MPDluxe** - iOS client (testing in progress)
-
-### Multi-Room Audio
-
-rmpd plays to **all enabled outputs simultaneously**, so local audio and a
-network stream can run at once. Two routes to networked/multi-room playback:
-
-- **HTTP streaming** — enable a `type = "httpd"` output (default port 8000) and
-  point any browser, phone, or another MPD/VLC at `http://<host>:8000`. Works
-  today, no extra daemon required (`encoder = "wav"` or `"pcm"`).
-- **Snapcast (synchronized)** — enable a `type = "fifo"` output writing to
-  `/tmp/snapfifo` and run an external [Snapcast](https://github.com/badaix/snapcast)
-  `snapserver` reading that FIFO for sample-accurate multi-room sync.
-
-## Performance
-
-rmpd is designed for efficiency:
-- **Startup time**: < 500ms with 100k song library
-- **Memory usage**: < 20MB idle, < 150MB with 100k songs loaded
-- **CPU usage**: < 5% during FLAC playback
-- **MSRV**: Rust 1.75.0+
-
-## Project Goals
-
-1. **100% MPD Compatibility** - Drop-in replacement for MPD
-2. **Modern Architecture** - Clean, modular, testable code
-3. **Extensibility** - Plugin system for community contributions
-4. **Performance** - Efficient resource usage
-5. **Multi-Protocol** - MPD, OpenSubsonic support
+GitHub Actions runs formatting/clippy/`cargo doc` checks, a cross-platform test
+matrix (Ubuntu + macOS, stable + nightly), a compatibility suite (state
+persistence, database compatibility, decoder validation), a dependency-pruning
+lint (`cargo-machete`), coverage reporting (Codecov), and release builds for 3
+targets (x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu,
+aarch64-apple-darwin — no x86_64 macOS build). A separate workflow runs
+`cargo-audit`/`cargo-deny` security audits, and Renovate keeps dependencies
+current. See [CI.md](CI.md) for details.
 
 ## Contributing
 
