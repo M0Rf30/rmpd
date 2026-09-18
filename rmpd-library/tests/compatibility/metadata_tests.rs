@@ -104,6 +104,24 @@ fn test_wav_metadata_extraction() {
 }
 
 #[test]
+fn test_wavpack_metadata_extraction() {
+    let harness = RmpdTestHarness::new().unwrap();
+    let path = pregenerated::basic_wv();
+    let song = harness.extract_metadata(path.to_str().unwrap()).unwrap();
+
+    assert_eq!(song.sample_rate, Some(44100));
+    assert_eq!(song.channels, Some(2));
+    assert!(song.duration.is_some());
+
+    // APEv2 tags on a WavPack stream. Guards both halves of the restored
+    // support: the ported WavPack reader in the Symphonia fork, and its
+    // handover of the probe-supplied APEv2 block into the reader's log.
+    assert_eq!(song.tag("title"), Some("Test Song WV"));
+    assert_eq!(song.tag("artist"), Some("Test Artist WV"));
+    assert_eq!(song.tag("album"), Some("Test Album WV"));
+}
+
+#[test]
 fn test_unicode_metadata_extraction() {
     let harness = RmpdTestHarness::new().unwrap();
     let path = pregenerated::unicode_flac();

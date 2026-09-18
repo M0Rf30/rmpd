@@ -209,7 +209,7 @@ rmpd also advertises itself over **mDNS/Zeroconf** so MPD clients on the local n
 
 ### Supported Formats
 
-- **Lossless**: FLAC, WAV, AIFF, ALAC
+- **Lossless**: FLAC, WAV, AIFF, ALAC, APE (Monkey's Audio), WavPack
 - **Lossy**: MP3, Ogg Vorbis, Opus, AAC, MP4, Matroska/WebM
 - **High-Resolution**: DSD (DSF, DFF) with DoP and native playback
 - **Streaming**: HTTP streams, Icecast, internet radio

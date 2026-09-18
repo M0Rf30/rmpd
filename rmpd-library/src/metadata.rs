@@ -540,6 +540,8 @@ impl MetadataExtractor {
                     | "aif"
                     | "mka"
                     | "webm"
+                    | "ape"
+                    | "wv"
                     | "dsf"
                     | "dff"
             )
