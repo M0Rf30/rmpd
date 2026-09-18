@@ -1,0 +1,24 @@
+[Unit]
+Description=Rust music player daemon
+Documentation=https://github.com/M0Rf30/rmpd
+After=sound.target pipewire.service pipewire-pulse.service wireplumber.service pulseaudio.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/rmpd
+Restart=on-failure
+RestartSec=5
+KillSignal=SIGINT
+TimeoutStopSec=20
+ConfigurationDirectory=rmpd
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+
+[Install]
+WantedBy=default.target
