@@ -46,6 +46,16 @@ base64.workspace = true
 rayon.workspace = true
 icu_collator = "2.3.1"
 regex = "1"
+
+# Statically link chromaprint on macOS. The shared build aborts at launch with
+# "Library not loaded: @rpath/libchromaprint.1.dylib": the vendored dylib carries
+# no rpath a binary outside the build tree can resolve. The static build embeds
+# the library, so the released binary needs nothing at runtime.
+# `optional` keeps the `fingerprint` feature in charge of whether chromaprint is
+# built at all, on macOS as well as elsewhere.
+[target.'cfg(target_os = "macos")'.dependencies]
+chromaprint-sys-next = { workspace = true, optional = true, features = ["static"] }
+
 [dev-dependencies]
 rmpd-core = { workspace = true, features = ["test-utils"] }
 tempfile = "3"
