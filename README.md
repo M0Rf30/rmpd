@@ -47,11 +47,13 @@ Requires Rust 1.85+ (the workspace uses edition 2024).
 
 ```bash
 # Ubuntu/Debian
-sudo apt-get install libasound2-dev pkg-config
+sudo apt-get install libasound2-dev pkg-config cmake
 
 # macOS
-brew install pkg-config
+brew install pkg-config cmake
 ```
+
+`cmake` is needed because `chromaprint` is built from source on every platform.
 
 ### Build
 
