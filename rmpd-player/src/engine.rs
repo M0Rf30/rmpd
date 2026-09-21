@@ -94,6 +94,13 @@ pub struct PlaybackEngine {
     replay_gain_preamp: f32,
     replay_gain_missing_preamp: f32,
     volume_normalization: bool,
+    /// Random (shuffle) mode, mirrored from `PlayerStatus::random`.
+    ///
+    /// `Arc<AtomicBool>` (not a plain `bool`) because the decode thread reads
+    /// this alongside its own copied replay-gain settings to recompute
+    /// per-song gain on every track transition; a plain copy would go stale
+    /// if `random` is toggled mid-playback (see MPD `ReplayGainMode::AUTO`).
+    random: Arc<AtomicBool>,
     resampler_quality: ResamplerQuality,
     dop_mode: DopMode,
     output_slot: Arc<crate::output_slot::OutputSlot>,
@@ -135,6 +142,7 @@ impl PlaybackEngine {
             replay_gain_preamp: 0.0,
             replay_gain_missing_preamp: 0.0,
             volume_normalization: false,
+            random: Arc::new(AtomicBool::new(false)),
             resampler_quality: ResamplerQuality::default(),
             dop_mode: DopMode::default(),
             output_slot: Arc::new(crate::output_slot::OutputSlot::new()),
@@ -161,6 +169,13 @@ impl PlaybackEngine {
         self.replay_gain_mode = mode;
         self.replay_gain_preamp = preamp;
         self.replay_gain_missing_preamp = missing_preamp;
+    }
+
+    /// Set random (shuffle) mode. Mirrors `set_replay_gain` above but uses
+    /// `&self` / an atomic store since it must be callable while the decode
+    /// thread concurrently reads it for `Auto` replay-gain recomputation.
+    pub fn set_random(&self, random: bool) {
+        self.random.store(random, Ordering::Relaxed);
     }
 
     pub fn set_volume_normalization(&mut self, on: bool) {
@@ -248,6 +263,7 @@ impl PlaybackEngine {
             self.replay_gain_preamp,
             self.replay_gain_missing_preamp,
             self.volume_normalization,
+            self.random.load(Ordering::Relaxed),
         );
         let resampler_quality = self.resampler_quality;
         let dop_mode = self.dop_mode;
@@ -255,6 +271,7 @@ impl PlaybackEngine {
         let next_song = self.next_song.clone();
         let crossfade_secs = self.crossfade;
         let current_song = self.current_song.clone();
+        let random = self.random.clone();
         let replay_gain_mode = self.replay_gain_mode;
         let replay_gain_preamp = self.replay_gain_preamp;
         let replay_gain_missing_preamp = self.replay_gain_missing_preamp;
@@ -287,6 +304,7 @@ impl PlaybackEngine {
                 replay_gain_preamp,
                 replay_gain_missing_preamp,
                 volume_normalization,
+                random,
                 mixramp_db,
                 mixramp_delay,
                 range,
@@ -433,6 +451,7 @@ impl PlaybackEngine {
         replay_gain_preamp: f32,
         replay_gain_missing_preamp: f32,
         volume_normalization: bool,
+        random: Arc<AtomicBool>,
         mixramp_db: f32,
         mixramp_delay: f32,
         range: Option<(f64, f64)>,
@@ -705,6 +724,7 @@ impl PlaybackEngine {
                                 replay_gain_preamp,
                                 replay_gain_missing_preamp,
                                 volume_normalization,
+                                random.load(Ordering::Relaxed),
                             );
                             // MixRamp: derive overlap window from tags; fall
                             // back to time-based crossfade if either tag is
@@ -922,6 +942,7 @@ impl PlaybackEngine {
                                 replay_gain_preamp,
                                 replay_gain_missing_preamp,
                                 volume_normalization,
+                                random.load(Ordering::Relaxed),
                             );
                             break 'buf; // continue 'song
                         }
@@ -1055,6 +1076,7 @@ impl PlaybackEngine {
         preamp: f32,
         missing_preamp: f32,
         normalization: bool,
+        random: bool,
     ) -> f32 {
         if mode == ReplayGainMode::Off {
             return 1.0;
@@ -1063,11 +1085,17 @@ impl PlaybackEngine {
             ReplayGainMode::Off => unreachable!(),
             ReplayGainMode::Track => (song.replay_gain_track_gain, song.replay_gain_track_peak),
             ReplayGainMode::Album => (song.replay_gain_album_gain, song.replay_gain_album_peak),
+            // MPD `ReplayGainMode::AUTO`: random mode breaks album context (the
+            // songs no longer play in album order), so use track gain while
+            // shuffled and album gain otherwise. See mpd `src/ReplayGainMode.hxx`
+            // and `doc/user.rst` ("replaygain auto"). No cross-fallback to the
+            // other gain when the selected one is missing — that's MPD's
+            // behaviour too, it just falls through to `missing_preamp` below.
             ReplayGainMode::Auto => {
-                if song.replay_gain_album_gain.is_some() {
-                    (song.replay_gain_album_gain, song.replay_gain_album_peak)
-                } else {
+                if random {
                     (song.replay_gain_track_gain, song.replay_gain_track_peak)
+                } else {
+                    (song.replay_gain_album_gain, song.replay_gain_album_peak)
                 }
             }
         };
@@ -1315,5 +1343,51 @@ mod tests {
         // should still decode to 88200 Hz; only the cpal stream opens at 48000.
         let rate = select_dsd_pcm_rate(48000, |r| r == 88200);
         assert_eq!(rate, 88200);
+    }
+
+    // ── compute_gain_scale tests (Finding C1: ReplayGain `auto` mode) ───────
+
+    #[test]
+    fn compute_gain_scale_auto_random_uses_track_gain() {
+        let mut song = rmpd_core::test_utils::create_test_song(1, "auto-random");
+        song.replay_gain_track_gain = Some(-3.0);
+        song.replay_gain_album_gain = Some(-6.0);
+        // Random mode: `auto` must select track gain, not album gain, even
+        // though both are present (mpd `ReplayGainMode::AUTO`, random on).
+        let scale =
+            PlaybackEngine::compute_gain_scale(&song, ReplayGainMode::Auto, 0.0, 0.0, false, true);
+        let expected = 10f32.powf(-3.0 / 20.0);
+        assert!((scale - expected).abs() < 1e-6);
+    }
+
+    #[test]
+    fn compute_gain_scale_auto_not_random_uses_album_gain() {
+        let mut song = rmpd_core::test_utils::create_test_song(2, "auto-sequential");
+        song.replay_gain_track_gain = Some(-3.0);
+        song.replay_gain_album_gain = Some(-6.0);
+        // Sequential (non-random) mode: `auto` must select album gain.
+        let scale =
+            PlaybackEngine::compute_gain_scale(&song, ReplayGainMode::Auto, 0.0, 0.0, false, false);
+        let expected = 10f32.powf(-6.0 / 20.0);
+        assert!((scale - expected).abs() < 1e-6);
+    }
+
+    #[test]
+    fn compute_gain_scale_auto_not_random_missing_album_gain_falls_back_to_missing_preamp() {
+        let mut song = rmpd_core::test_utils::create_test_song(3, "auto-no-album-gain");
+        song.replay_gain_track_gain = Some(-3.0);
+        song.replay_gain_album_gain = None;
+        // No cross-fallback to track gain: a missing album gain in
+        // non-random `auto` mode uses `missing_preamp`, matching MPD.
+        let scale = PlaybackEngine::compute_gain_scale(
+            &song,
+            ReplayGainMode::Auto,
+            0.0,
+            -9.0,
+            false,
+            false,
+        );
+        let expected = 10f32.powf(-9.0 / 20.0);
+        assert!((scale - expected).abs() < 1e-6);
     }
 }

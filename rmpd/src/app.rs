@@ -170,17 +170,51 @@ pub async fn run(bind_address: String, config: Config) -> Result<()> {
     let shutdown_state = state.clone();
     let shutdown_state_file_path = state_file_path.clone();
 
-    // Spawn task to handle shutdown signals
+    // Spawn task to handle shutdown signals. Listens for both SIGINT and
+    // SIGTERM so state is saved regardless of which signal a supervisor
+    // sends (systemd's default stop signal is SIGTERM, not SIGINT) — see
+    // mpd src/unix/SignalHandlers.cxx, which handles both.
     let _shutdown_handler = tokio::spawn(async move {
-        match signal::ctrl_c().await {
-            Ok(()) => {
-                info!("received SIGINT, saving state");
-                save_state_on_shutdown(&shutdown_state, &shutdown_state_file_path).await;
-                // Send shutdown signal
-                let _ = shutdown_tx.send(());
+        #[cfg(unix)]
+        {
+            let mut sigterm = match signal::unix::signal(signal::unix::SignalKind::terminate()) {
+                Ok(s) => Some(s),
+                Err(err) => {
+                    error!("unable to register SIGTERM handler: {}", err);
+                    None
+                }
+            };
+            let sig = match sigterm.as_mut() {
+                Some(sigterm) => {
+                    tokio::select! {
+                        result = signal::ctrl_c() => result.map(|()| "SIGINT"),
+                        _ = sigterm.recv() => Ok("SIGTERM"),
+                    }
+                }
+                None => signal::ctrl_c().await.map(|()| "SIGINT"),
+            };
+            match sig {
+                Ok(sig) => {
+                    info!("received {}, saving state", sig);
+                    save_state_on_shutdown(&shutdown_state, &shutdown_state_file_path).await;
+                    let _ = shutdown_tx.send(());
+                }
+                Err(err) => {
+                    error!("unable to listen for shutdown signal: {}", err);
+                }
             }
-            Err(err) => {
-                error!("unable to listen for shutdown signal: {}", err);
+        }
+        #[cfg(not(unix))]
+        {
+            match signal::ctrl_c().await {
+                Ok(()) => {
+                    info!("received SIGINT, saving state");
+                    save_state_on_shutdown(&shutdown_state, &shutdown_state_file_path).await;
+                    let _ = shutdown_tx.send(());
+                }
+                Err(err) => {
+                    error!("unable to listen for shutdown signal: {}", err);
+                }
             }
         }
     });
@@ -263,10 +297,13 @@ async fn restore_state(
     }
 
     // Keep the engine's crossfade + MixRamp settings in sync with restored state.
+    // `random` matters to the engine too: ReplayGain `auto` picks track gain when
+    // random is on, album gain when it is off (mpd ReplayGainMode).
     {
         let mut engine = state.engine.write().await;
         engine.set_crossfade(saved_state.crossfade);
         engine.set_mixramp(saved_state.mixramp_db, saved_state.mixramp_delay);
+        engine.set_random(saved_state.random);
     }
 
     // Restore per-output enabled state, then point the engine at the first

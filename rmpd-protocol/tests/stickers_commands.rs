@@ -239,14 +239,25 @@ async fn test_stickernamestypes_lists_name_and_type_pairs() {
 async fn test_sticker_types_command() {
     let (_server, mut client) = setup().await;
     let response = client.command("stickertypes").await;
-    assert!(
-        response.starts_with("stickertype: filter\n"),
-        "got: {response}"
-    );
-    assert!(
-        response.contains("stickertype: playlist\n"),
-        "got: {response}"
-    );
+    // Deliberate divergence from MPD's handle_sticker_types
+    // (StickerCommands.cxx:504), which always advertises `filter` and
+    // `playlist` because it backs them. rmpd only stores song stickers, and
+    // `require_song_domain` ACKs every other domain, so advertising them
+    // would promise clients (myMPD probes `stickertypes`) a feature that
+    // always fails. Re-add these lines when the domains gain storage.
     assert!(response.contains("stickertype: song\n"), "got: {response}");
+    assert!(
+        !response.contains("stickertype: filter\n"),
+        "got: {response}"
+    );
+    assert!(
+        !response.contains("stickertype: playlist\n"),
+        "got: {response}"
+    );
+    // Tag-name domains from STICKER_ALLOWED_TAGS are still listed.
+    assert!(
+        response.contains("stickertype: Artist\n"),
+        "got: {response}"
+    );
     assert_ok(&response);
 }

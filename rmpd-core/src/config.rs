@@ -501,7 +501,7 @@ fn mpd_migration_hint(key: &str) -> Option<String> {
         }
         "pid_file" => {
             return Some(
-                "`pid_file` is mpd.conf syntax; rmpd does not daemonize and has no config equivalent"
+                "`pid_file` is mpd.conf syntax; rmpd daemonizes via the `--daemonize` flag and writes no pid file, so there is no config equivalent"
                     .to_owned(),
             );
         }

@@ -22,6 +22,7 @@ static VORBIS_TAG_MAP_HASH: LazyLock<HashMap<&'static str, &'static str>> = Lazy
     m.insert("work", "work");
     m.insert("movement", "movement");
     m.insert("movementnumber", "movementnumber");
+    m.insert("showmovement", "showmovement");
     m.insert("ensemble", "ensemble");
     m.insert("location", "location");
     m.insert("grouping", "grouping");
@@ -29,6 +30,7 @@ static VORBIS_TAG_MAP_HASH: LazyLock<HashMap<&'static str, &'static str>> = Lazy
     m.insert("tracknumber", "track");
     m.insert("disc", "disc");
     m.insert("discnumber", "disc");
+    m.insert("discsubtitle", "discsubtitle");
     m.insert("date", "date");
     m.insert("originaldate", "originaldate");
     m.insert("label", "label");
@@ -105,4 +107,18 @@ pub fn normalize_decimal(s: &str) -> Option<String> {
 /// Returns the tag name for a given VorbisComment key, or None if not found.
 pub fn vorbis_tag_map_get(key: &str) -> Option<&'static str> {
     VORBIS_TAG_MAP_HASH.get(key).copied()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn composersort_falls_back_to_composer() {
+        // mpd's Fallback.hxx falls ComposerSort back to Composer.
+        assert_eq!(
+            tag_fallback_chain("composersort"),
+            vec!["composersort", "composer"]
+        );
+    }
 }
