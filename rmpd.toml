@@ -22,6 +22,21 @@ music_directory = "~/Music"
 log_level = "info"
 follow_symlinks = false
 filesystem_charset = "UTF-8"
+# Auto-save the state file this many seconds after each state change.
+# 0 disables periodic saving (the state file is still written on a clean
+# shutdown). Matches mpd.conf's state_file_interval.
+state_file_interval = 120
+# Write logs to this file instead of stdout. Matches mpd.conf's log_file.
+# log_file = "~/.config/rmpd/rmpd.log"
+# Maximum number of songs allowed in the queue. Matches mpd.conf's max_playlist_length.
+max_playlist_length = 16384
+# Store absolute paths (instead of paths relative to music_directory) when
+# saving .m3u playlists. Matches mpd.conf's save_absolute_paths_in_playlists.
+save_absolute_paths_in_playlists = false
+# Restrict which tag types are read/stored during library scans, e.g.
+# ["artist", "album", "title"]. Unset = keep every supported tag. Matches
+# mpd.conf's metadata_to_use.
+# metadata_to_use = ["artist", "album", "title", "track", "genre", "date"]
 
 [network]
 bind_address = "127.0.0.1"
@@ -35,6 +50,32 @@ mpris = true
 # auto-discover it. Disable if you don't want the daemon's presence and
 # hostname broadcast on the network (e.g. bind_address = "127.0.0.1").
 zeroconf_enabled = true
+# Restrict access with passwords, each granting its own permission set
+# (one of "read", "add", "control", "admin", "player"). Matches mpd.conf's
+# repeatable `password "pw@perms"` directive.
+# [[network.passwords]]
+# password = "secret"
+# permissions = ["read", "add", "control"]
+# Permissions granted to a client that hasn't authenticated. Unset = every
+# permission when no password is configured at all (matches MPD).
+# default_permissions = ["read"]
+# Permissions granted to clients connecting over the Unix domain socket.
+# Unset = falls back to default_permissions.
+# local_permissions = ["read", "add", "control", "admin"]
+# Permissions granted to clients by source address, optionally with a CIDR
+# mask. Matches mpd.conf's repeatable `host_permissions "host perms"`.
+# [[network.host_permissions]]
+# host = "192.168.1.0/24"
+# permissions = ["read", "control"]
+# Maximum size, in bytes, of a single MPD command list. Matches mpd.conf's
+# max_command_list_size (specified there in KiB).
+max_command_list_size = 16777216
+# Maximum size, in bytes, of the outgoing response buffer to a client.
+# Matches mpd.conf's max_output_buffer_size (specified there in KiB).
+max_output_buffer_size = 8388608
+# Service name advertised via mDNS/Zeroconf; %h is replaced with the
+# machine hostname. Matches mpd.conf's zeroconf_name.
+zeroconf_name = "rmpd@%h"
 
 [audio]
 default_output = "default"

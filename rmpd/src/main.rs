@@ -150,6 +150,28 @@ fn main() -> Result<()> {
     } else {
         config.general.log_level.clone()
     };
+
+    // Open the configured log file up front, if any, so every branch below
+    // that doesn't use journald can write to it instead of stdout/stderr.
+    // Opening failure falls back to the default destination rather than
+    // aborting startup — losing the preferred log destination is not worth
+    // refusing to start the daemon over. Log rotation on SIGHUP is not
+    // implemented here (mpd's LogInit.cxx reopens the log file on SIGHUP);
+    // the file is opened once and kept for the process lifetime.
+    let log_file_writer = config.general.log_file.as_ref().and_then(|path| {
+        match std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path.as_std_path())
+        {
+            Ok(file) => Some(file),
+            Err(e) => {
+                eprintln!("warning: unable to open log file {path} ({e}), logging to stdout");
+                None
+            }
+        }
+    });
+
     if args.syslog || args.daemonize {
         #[cfg(target_os = "linux")]
         {
@@ -164,24 +186,46 @@ fn main() -> Result<()> {
                 }
                 Err(e) => {
                     eprintln!("warning: journald unavailable ({e}), logging to stderr");
-                    tracing_subscriber::fmt()
-                        .with_ansi(false)
-                        .with_writer(std::io::stderr)
-                        .with_env_filter(env_filter)
-                        .init();
+                    match log_file_writer {
+                        Some(file) => tracing_subscriber::fmt()
+                            .with_ansi(false)
+                            .with_writer(std::sync::Mutex::new(file))
+                            .with_env_filter(env_filter)
+                            .init(),
+                        None => tracing_subscriber::fmt()
+                            .with_ansi(false)
+                            .with_writer(std::io::stderr)
+                            .with_env_filter(env_filter)
+                            .init(),
+                    }
                 }
             }
         }
         #[cfg(not(target_os = "linux"))]
-        tracing_subscriber::fmt()
-            .with_ansi(false)
-            .with_writer(std::io::stderr)
-            .with_env_filter(default_env_filter(&log_level))
-            .init();
+        {
+            let env_filter = default_env_filter(&log_level);
+            match log_file_writer {
+                Some(file) => tracing_subscriber::fmt()
+                    .with_ansi(false)
+                    .with_writer(std::sync::Mutex::new(file))
+                    .with_env_filter(env_filter)
+                    .init(),
+                None => tracing_subscriber::fmt()
+                    .with_ansi(false)
+                    .with_writer(std::io::stderr)
+                    .with_env_filter(env_filter)
+                    .init(),
+            }
+        }
     } else {
-        tracing_subscriber::fmt()
-            .with_env_filter(default_env_filter(&log_level))
-            .init();
+        let env_filter = default_env_filter(&log_level);
+        match log_file_writer {
+            Some(file) => tracing_subscriber::fmt()
+                .with_writer(std::sync::Mutex::new(file))
+                .with_env_filter(env_filter)
+                .init(),
+            None => tracing_subscriber::fmt().with_env_filter(env_filter).init(),
+        }
     }
 
     info!("starting rmpd v{}", env!("CARGO_PKG_VERSION"));

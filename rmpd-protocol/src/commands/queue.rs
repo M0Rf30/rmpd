@@ -9,8 +9,8 @@ use crate::state::AppState;
 
 use super::utils::{
     ACK_ERROR_ARG, ACK_ERROR_NO_EXIST, ACK_ERROR_PERMISSION, ACK_ERROR_PLAYER_SYNC,
-    ACK_ERROR_PLAYLIST_MAX, ACK_ERROR_SYS, MAX_QUEUE_LEN, add_at_checked, add_queue_item_metadata,
-    apply_range, open_db, prepare_song_for_playback, update_next_song,
+    ACK_ERROR_PLAYLIST_MAX, ACK_ERROR_SYS, add_at_checked, add_queue_item_metadata, apply_range,
+    open_db, prepare_song_for_playback, update_next_song,
 };
 
 fn number_too_large(command: &str, n: u32) -> String {
@@ -264,7 +264,8 @@ pub async fn handle_add_command(
         AddOutcome::Directory(songs) => {
             let mut queue = state.queue.write().await;
             let old_size = queue.len() as u32;
-            if old_size >= MAX_QUEUE_LEN || old_size as usize + songs.len() > MAX_QUEUE_LEN as usize
+            if old_size >= state.max_playlist_length
+                || old_size as usize + songs.len() > state.max_playlist_length as usize
             {
                 return ResponseBuilder::error(
                     ACK_ERROR_PLAYLIST_MAX,

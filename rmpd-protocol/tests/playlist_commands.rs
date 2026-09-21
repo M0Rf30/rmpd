@@ -329,7 +329,7 @@ async fn test_load_rejects_when_queue_at_max_size() {
 
     {
         let mut queue = state.queue.write().await;
-        for i in 0..rmpd_protocol::commands::utils::MAX_QUEUE_LEN {
+        for i in 0..rmpd_protocol::commands::utils::DEFAULT_MAX_QUEUE_LEN {
             queue.add(rmpd_core::test_utils::make_test_song(
                 &format!("filler{i}.mp3"),
                 i,

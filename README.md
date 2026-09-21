@@ -160,6 +160,18 @@ replay_gain = "auto"
 
 See [rmpd.toml](rmpd.toml) for a complete, annotated configuration example.
 
+Additional `[general]`/`[network]` keys (see [rmpd.toml](rmpd.toml) for full examples):
+
+- `state_file_interval` — seconds between periodic state-file saves; `0` disables periodic saving (default 120)
+- `log_file` — write logs to this file instead of stdout (default: stdout)
+- `max_playlist_length` — maximum number of songs in the queue (default 16384)
+- `save_absolute_paths_in_playlists` — store absolute paths in saved `.m3u` playlists (default false)
+- `metadata_to_use` — restrict which tags are read/stored during scans (default: all tags)
+- `network.passwords` — array of `password`/`permissions` pairs granting scoped access (default: none)
+- `network.default_permissions` / `network.local_permissions` / `network.host_permissions` — permission sets for unauthenticated, local-socket, and per-host clients, mirroring MPD's access control (default: unrestricted)
+- `network.max_command_list_size` / `network.max_output_buffer_size` — per-client buffer caps in bytes (defaults 16 MiB / 8 MiB)
+- `network.zeroconf_name` — mDNS/Zeroconf service name, `%h` expands to the hostname (default `rmpd@%h`)
+
 ### Diagnostics
 
 Unrecognized keys are reported at startup instead of being silently

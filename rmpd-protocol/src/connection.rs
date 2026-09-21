@@ -3,6 +3,7 @@
 //! This module manages state that is specific to each client connection,
 //! including tag type masks and protocol feature negotiation.
 
+use rmpd_core::config::HostPermission;
 use std::collections::HashSet;
 
 /// Permission level constants matching MPD's permission system.
@@ -14,6 +15,81 @@ pub const PERMISSION_ADMIN: u8 = 8;
 pub const PERMISSION_PLAYER: u8 = 16;
 pub const PERMISSION_ALL: u8 =
     PERMISSION_READ | PERMISSION_ADD | PERMISSION_CONTROL | PERMISSION_ADMIN | PERMISSION_PLAYER;
+
+/// Map a single MPD permission-string ("read"|"add"|"control"|"admin"|
+/// "player") to its bitflag. Unknown names return `None` — validating that
+/// every configured permission string is one of these five is
+/// `rmpd_core::config`'s job at load time (Contract); this is purely the
+/// string -> bit lookup MPD's `Permission.cxx` `permission_map` performs.
+pub fn permission_from_str(name: &str) -> Option<u8> {
+    match name {
+        "read" => Some(PERMISSION_READ),
+        "add" => Some(PERMISSION_ADD),
+        "control" => Some(PERMISSION_CONTROL),
+        "admin" => Some(PERMISSION_ADMIN),
+        "player" => Some(PERMISSION_PLAYER),
+        _ => None,
+    }
+}
+
+/// Fold a list of permission-name strings into a bitmask, applying the
+/// `control` implies `player` rule (see `grant_permissions`). Names that
+/// don't map to a known permission are silently skipped — they were already
+/// rejected at config-load time. Used both for a `PasswordEntry`'s
+/// permission set and for the plain `Vec<String>` permission lists
+/// (`default_permissions`, `local_permissions`, `HostPermission::permissions`).
+pub fn permission_bits_from_names<S: AsRef<str>>(names: &[S]) -> u8 {
+    let mut bits = PERMISSION_NONE;
+    for name in names {
+        if let Some(bit) = permission_from_str(name.as_ref()) {
+            bits |= bit;
+        }
+    }
+    if bits & PERMISSION_CONTROL != 0 {
+        bits |= PERMISSION_PLAYER;
+    }
+    bits
+}
+
+/// Resolve the pre-auth (no `password` command issued yet) permission bits
+/// for a newly accepted connection, in MPD's precedence order:
+///
+/// 1. `local_permissions`, if the connection came in over the local Unix
+///    domain socket (`is_local`).
+/// 2. A `host_permissions` entry whose `host` exactly matches the peer's
+///    address, for remote (TCP) connections. Only exact IP-literal matches
+///    are supported — no CIDR/subnet matching, since that would need a new
+///    dependency; see `HostPermission` in `rmpd_core::config`.
+/// 3. `default_permissions`, if configured.
+/// 4. `PERMISSION_ALL` when no password is configured at all (rmpd's
+///    historical "wide open" default); otherwise `PERMISSION_NONE`, forcing
+///    the client to authenticate via `password`.
+pub fn resolve_initial_permissions(
+    is_local: bool,
+    peer_host: Option<&str>,
+    local_permissions: Option<&[String]>,
+    host_permissions: &[HostPermission],
+    default_permissions: Option<&[String]>,
+    any_password_configured: bool,
+) -> u8 {
+    if is_local && let Some(names) = local_permissions {
+        return permission_bits_from_names(names);
+    }
+    if !is_local
+        && let Some(host) = peer_host
+        && let Some(entry) = host_permissions.iter().find(|h| h.host == host)
+    {
+        return permission_bits_from_names(&entry.permissions);
+    }
+    if let Some(names) = default_permissions {
+        return permission_bits_from_names(names);
+    }
+    if any_password_configured {
+        PERMISSION_NONE
+    } else {
+        PERMISSION_ALL
+    }
+}
 
 /// Per-client connection state
 ///
@@ -113,6 +189,19 @@ impl ConnectionState {
             perms |= PERMISSION_PLAYER;
         }
         self.permissions |= perms;
+    }
+
+    /// Replace the connection's permission set outright, rather than
+    /// OR-ing bits in. MPD's `password` command resets permissions to
+    /// exactly the matched password entry's set (`Client::SetPermission`,
+    /// not `AddPermission`); `control` still implies `player` for MPD 0.22
+    /// compatibility.
+    pub fn set_permissions(&mut self, perms: u8) {
+        let mut perms = perms;
+        if perms & PERMISSION_CONTROL != 0 {
+            perms |= PERMISSION_PLAYER;
+        }
+        self.permissions = perms;
     }
 
     /// Check if a tag type is enabled for this connection
@@ -405,6 +494,97 @@ mod tests {
                 | PERMISSION_CONTROL
                 | PERMISSION_ADMIN
                 | PERMISSION_PLAYER
+        );
+    }
+
+    #[test]
+    fn test_permission_from_str_mapping() {
+        assert_eq!(permission_from_str("read"), Some(PERMISSION_READ));
+        assert_eq!(permission_from_str("add"), Some(PERMISSION_ADD));
+        assert_eq!(permission_from_str("control"), Some(PERMISSION_CONTROL));
+        assert_eq!(permission_from_str("admin"), Some(PERMISSION_ADMIN));
+        assert_eq!(permission_from_str("player"), Some(PERMISSION_PLAYER));
+        assert_eq!(permission_from_str("bogus"), None);
+    }
+
+    #[test]
+    fn test_permission_bits_from_names_control_implies_player() {
+        let bits = permission_bits_from_names(&["read".to_string(), "control".to_string()]);
+        assert_eq!(
+            bits,
+            PERMISSION_READ | PERMISSION_CONTROL | PERMISSION_PLAYER
+        );
+    }
+
+    #[test]
+    fn test_permission_bits_from_names_ignores_unknown() {
+        let bits = permission_bits_from_names(&["read".to_string(), "bogus".to_string()]);
+        assert_eq!(bits, PERMISSION_READ);
+    }
+
+    #[test]
+    fn test_resolve_initial_permissions_precedence() {
+        let host_perms = vec![HostPermission {
+            host: "10.0.0.5".to_string(),
+            permissions: vec!["read".to_string()],
+        }];
+        let local_perms = vec!["admin".to_string()];
+        let default_perms = vec!["add".to_string()];
+
+        // Local connection: local_permissions wins even though
+        // host_permissions/default_permissions are also configured.
+        assert_eq!(
+            resolve_initial_permissions(
+                true,
+                None,
+                Some(local_perms.as_slice()),
+                &host_perms,
+                Some(default_perms.as_slice()),
+                true,
+            ),
+            PERMISSION_ADMIN
+        );
+
+        // Remote connection matching a host entry: host_permissions wins
+        // over default_permissions.
+        assert_eq!(
+            resolve_initial_permissions(
+                false,
+                Some("10.0.0.5"),
+                Some(local_perms.as_slice()),
+                &host_perms,
+                Some(default_perms.as_slice()),
+                true,
+            ),
+            PERMISSION_READ
+        );
+
+        // Remote connection with no matching host entry: falls back to
+        // default_permissions.
+        assert_eq!(
+            resolve_initial_permissions(
+                false,
+                Some("10.0.0.9"),
+                Some(local_perms.as_slice()),
+                &host_perms,
+                Some(default_perms.as_slice()),
+                true,
+            ),
+            PERMISSION_ADD
+        );
+
+        // Nothing configured at all and no password: historical wide-open
+        // default.
+        assert_eq!(
+            resolve_initial_permissions(false, None, None, &[], None, false),
+            PERMISSION_ALL
+        );
+
+        // A password is configured but no default_permissions: unauthenticated
+        // clients get nothing until they `password` in.
+        assert_eq!(
+            resolve_initial_permissions(false, None, None, &[], None, true),
+            PERMISSION_NONE
         );
     }
 }

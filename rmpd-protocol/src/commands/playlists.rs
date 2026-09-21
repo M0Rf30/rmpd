@@ -5,8 +5,8 @@ use crate::state::AppState;
 
 use super::utils::{
     ACK_ERROR_ARG, ACK_ERROR_EXIST, ACK_ERROR_NO_EXIST, ACK_ERROR_PLAYER_SYNC,
-    ACK_ERROR_PLAYLIST_MAX, ACK_ERROR_SYS, MAX_QUEUE_LEN, apply_range, format_iso8601_timestamp,
-    open_db, parse_sort_tag, sort_songs,
+    ACK_ERROR_PLAYLIST_MAX, ACK_ERROR_SYS, apply_range, format_iso8601_timestamp, open_db,
+    parse_sort_tag, sort_songs,
 };
 use crate::parser::InsertPosition;
 use std::path::Path;
@@ -558,7 +558,7 @@ pub async fn handle_load_command(
     };
     {
         let queue_len = state.queue.read().await.len() as u32;
-        if queue_len + songs.len() as u32 > MAX_QUEUE_LEN {
+        if queue_len + songs.len() as u32 > state.max_playlist_length {
             return ResponseBuilder::error(
                 ACK_ERROR_PLAYLIST_MAX,
                 0,

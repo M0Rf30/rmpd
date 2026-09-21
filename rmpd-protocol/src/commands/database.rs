@@ -45,7 +45,7 @@ fn directory_lookup_ack(command: &str, err: &rmpd_core::error::RmpdError) -> Str
     }
 }
 use super::utils::{
-    ACK_ERROR_ARG, ACK_ERROR_NO_EXIST, ACK_ERROR_PLAYLIST_MAX, ACK_ERROR_SYS, MAX_QUEUE_LEN,
+    ACK_ERROR_ARG, ACK_ERROR_NO_EXIST, ACK_ERROR_PLAYLIST_MAX, ACK_ERROR_SYS,
     add_songs_at_position, apply_range, filter_parse_ack, format_iso8601_timestamp, open_db,
     parse_filter_args, parse_sort_tag, resolve_add_position, sort_songs,
 };
@@ -1133,7 +1133,7 @@ async fn handle_match_add_core(
 
     let windowed = apply_range(&songs, window).to_vec();
     let queue_len = state.queue.read().await.len() as u32;
-    if queue_len + windowed.len() as u32 > MAX_QUEUE_LEN {
+    if queue_len + windowed.len() as u32 > state.max_playlist_length {
         return ResponseBuilder::error(
             ACK_ERROR_PLAYLIST_MAX,
             0,

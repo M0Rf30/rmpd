@@ -44,6 +44,37 @@ pub struct AppState {
     pub shutdown_tx: Option<broadcast::Sender<()>>,
     pub disable_actual_mount: bool,
     pub password: Option<String>,
+    /// Multiple named passwords, each granting its own permission set
+    /// (MPD's `password` config directive can repeat; see
+    /// `rmpd_core::config::NetworkConfig::passwords`). The legacy `password`
+    /// field above still means "one password granting every permission".
+    pub passwords: Vec<rmpd_core::config::PasswordEntry>,
+    /// Permissions granted to a connection before it authenticates, when no
+    /// more specific rule (`local_permissions`/`host_permissions`) applies.
+    /// `None` means "all, unless a password is configured" — see
+    /// `crate::connection::resolve_initial_permissions`.
+    pub default_permissions: Option<Vec<String>>,
+    /// Permissions granted to unauthenticated connections over the local
+    /// Unix domain socket. Takes precedence over `host_permissions` and
+    /// `default_permissions`.
+    pub local_permissions: Option<Vec<String>>,
+    /// Per-peer-address permissions for unauthenticated remote (TCP)
+    /// connections. Exact IP-literal match only (see `HostPermission`).
+    pub host_permissions: Vec<rmpd_core::config::HostPermission>,
+    /// Cap on an in-flight command-list batch's total byte size (MPD's
+    /// `max_command_list_size`). Defaults to
+    /// `crate::server::MAX_COMMAND_LIST_BYTES`.
+    pub max_command_list_size: usize,
+    /// Cap on a single response's byte size before the connection is
+    /// closed (MPD's `max_output_buffer_size`). Defaults to
+    /// `crate::server::DEFAULT_MAX_OUTPUT_BUFFER_BYTES`.
+    pub max_output_buffer_size: usize,
+    /// Cap on queue length (MPD's `max_playlist_length`), enforced with
+    /// ACK 51. Defaults to `crate::commands::utils::DEFAULT_MAX_QUEUE_LEN`.
+    pub max_playlist_length: u32,
+    /// mDNS/Zeroconf instance-name template (`%h` expands to the
+    /// hostname), matching MPD's `zeroconf_name`. Default `"rmpd@%h"`.
+    pub zeroconf_name: String,
     /// Music-source registry built from `[[source]]` config blocks.
     pub sources: std::sync::Arc<rmpd_source::SourceRegistry>,
     /// Latest ICY "now playing" title for a remote stream (None when not
@@ -141,6 +172,14 @@ impl AppState {
                 .map(|v| v == "1" || v.to_lowercase() == "true")
                 .unwrap_or(false),
             password: None,
+            passwords: Vec::new(),
+            default_permissions: None,
+            local_permissions: None,
+            host_permissions: Vec::new(),
+            max_command_list_size: crate::server::MAX_COMMAND_LIST_BYTES,
+            max_output_buffer_size: crate::server::DEFAULT_MAX_OUTPUT_BUFFER_BYTES,
+            max_playlist_length: crate::commands::utils::DEFAULT_MAX_QUEUE_LEN,
+            zeroconf_name: "rmpd@%h".to_string(),
             stream_title: Arc::new(RwLock::new(None)),
             sources: std::sync::Arc::new(rmpd_source::SourceRegistry::from_config(&[])),
             follow_symlinks: false,
@@ -170,6 +209,46 @@ impl AppState {
         self.password = password;
     }
 
+    /// Configure multiple named passwords (`[[network.passwords]]`), each
+    /// granting its own permission set. Complements `set_password`, which
+    /// stays for the legacy single "grants everything" password.
+    pub fn set_passwords(&mut self, passwords: Vec<rmpd_core::config::PasswordEntry>) {
+        self.passwords = passwords;
+    }
+
+    /// Configure the pre-auth permission rules (see
+    /// `crate::connection::resolve_initial_permissions` for precedence).
+    pub fn set_permission_rules(
+        &mut self,
+        default_permissions: Option<Vec<String>>,
+        local_permissions: Option<Vec<String>>,
+        host_permissions: Vec<rmpd_core::config::HostPermission>,
+    ) {
+        self.default_permissions = default_permissions;
+        self.local_permissions = local_permissions;
+        self.host_permissions = host_permissions;
+    }
+
+    /// Set the `network.max_command_list_size` cap (bytes).
+    pub fn set_max_command_list_size(&mut self, n: usize) {
+        self.max_command_list_size = n;
+    }
+
+    /// Set the `network.max_output_buffer_size` cap (bytes).
+    pub fn set_max_output_buffer_size(&mut self, n: usize) {
+        self.max_output_buffer_size = n;
+    }
+
+    /// Set the `general.max_playlist_length` queue cap (songs).
+    pub fn set_max_playlist_length(&mut self, n: u32) {
+        self.max_playlist_length = n;
+    }
+
+    /// Set the mDNS/Zeroconf instance-name template (`network.zeroconf_name`).
+    pub fn set_zeroconf_name(&mut self, name: String) {
+        self.zeroconf_name = name;
+    }
+
     /// Set the music-source registry. Call at startup after building the
     /// registry from `[[source]]` config blocks.
     pub fn set_sources(&mut self, sources: std::sync::Arc<rmpd_source::SourceRegistry>) {
@@ -181,8 +260,8 @@ impl AppState {
     }
 
     pub fn advertise_mdns(&self, port: u16) {
-        if let Some(ref discovery) = self.discovery
-            && let Err(e) = discovery.advertise(port)
+        if let Some(discovery) = &self.discovery
+            && let Err(e) = discovery.advertise(port, &self.zeroconf_name)
         {
             tracing::warn!("mDNS advertisement failed: {}", e);
         }

@@ -138,8 +138,12 @@ impl DiscoveryService {
 
     /// Advertise this rmpd instance on the local network via mDNS.
     ///
-    /// Registers a `_mpd._tcp.local.` service so MPD clients can auto-discover this server.
-    pub fn advertise(&self, port: u16) -> rmpd_core::error::Result<()> {
+    /// Registers a `_mpd._tcp.local.` service so MPD clients can auto-discover
+    /// this server. `zeroconf_name` is the configured instance-name template
+    /// (`network.zeroconf_name`, default `"rmpd@%h"`); any `%h` in it is
+    /// expanded to the local hostname here, mirroring MPD's `ZeroconfGlue.cxx`
+    /// `%h` substitution for `zeroconf_name`.
+    pub fn advertise(&self, port: u16, zeroconf_name: &str) -> rmpd_core::error::Result<()> {
         use mdns_sd::ServiceInfo;
 
         let hostname = std::fs::read_to_string("/etc/hostname")
@@ -152,7 +156,7 @@ impl DiscoveryService {
             hostname
         };
 
-        let instance_name = format!("rmpd@{}", hostname);
+        let instance_name = zeroconf_name.replace("%h", &hostname);
         let host_name = format!("{}.local.", hostname);
 
         let service_info = ServiceInfo::new(

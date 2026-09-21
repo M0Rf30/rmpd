@@ -2,7 +2,7 @@ use rmpd_core::error::Result;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UnixStream};
 use tokio::sync::broadcast;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::commands::utils::{ACK_ERROR_ARG, ACK_ERROR_PERMISSION, ACK_ERROR_UNKNOWN};
 use crate::commands::{
@@ -33,10 +33,21 @@ const DEFAULT_CONNECTION_TIMEOUT_SECS: u64 = 60;
 const MAX_LINE_BYTES: usize = 64 * 1024;
 
 /// Hard cap on the total size of an in-flight `command_list_begin` /
-/// `command_list_ok_begin` batch (MPD's default `max_command_list_size`),
-/// so an unterminated command list can't grow `batch_commands` without
-/// bound.
-const MAX_COMMAND_LIST_BYTES: usize = 2 * 1024 * 1024;
+/// `command_list_ok_begin` batch, so an unterminated command list can't
+/// grow `batch_commands` without bound. This is only the *fallback*
+/// default for `AppState::max_command_list_size` (used when nothing
+/// overrides it, e.g. tests constructing `AppState` directly); the
+/// configured default (`network.max_command_list_size`, mirroring
+/// `mpd.conf`'s `max_command_list_size`) is MPD's actual default of
+/// 16 MiB — see `rmpd_core::config::NetworkConfig`.
+pub(crate) const MAX_COMMAND_LIST_BYTES: usize = 2 * 1024 * 1024;
+
+/// Fallback default for `AppState::max_output_buffer_size` (MPD's
+/// `max_output_buffer_size`, `mpd.conf`, default 8 MiB) — the cap on a
+/// single response's byte size before the connection is closed. See
+/// `AppState::max_output_buffer_size` for why this only approximates
+/// MPD's real per-connection output-queue accounting.
+pub(crate) const DEFAULT_MAX_OUTPUT_BUFFER_BYTES: usize = 8 * 1024 * 1024;
 
 /// Convert a `parse_command` error into the correct ACK response string.
 /// `parse_command` returns one of three message shapes: the complete,
@@ -141,7 +152,25 @@ impl MpdServer {
         let unix_listener = if let Some(path) = &self.unix_socket {
             // Remove stale socket file if present
             let _ = std::fs::remove_file(path);
-            Some(tokio::net::UnixListener::bind(path)?)
+            let listener = tokio::net::UnixListener::bind(path)?;
+            // bind() creates the socket file using the process umask, which
+            // typically leaves it world-connectable — any local user could
+            // then control playback and read the library over it. mpd's
+            // Listen.cxx `ListenXdgRuntimeDir` chmods its socket to 0600 for
+            // the same reason. This is a deliberate tightening versus
+            // rmpd's previous umask-derived permissions; a config key to
+            // relax it for intentional cross-user access could be added if
+            // ever needed.
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if let Err(e) =
+                    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+                {
+                    error!("failed to set permissions on unix socket {}: {}", path, e);
+                }
+            }
+            Some(listener)
         } else {
             None
         };
@@ -272,6 +301,11 @@ async fn handle_client(
     // Enable TCP_NODELAY for low-latency responses (disable Nagle's algorithm)
     stream.set_nodelay(true)?;
 
+    // Peer address, used to resolve `host_permissions` for this connection.
+    // Best effort: an error here just means no host_permissions entry can
+    // match, same as an unconfigured one.
+    let peer_host = stream.peer_addr().ok().map(|addr| addr.ip().to_string());
+
     // Send greeting
     stream
         .write_all(format!("OK MPD {PROTOCOL_VERSION}\n").as_bytes())
@@ -284,6 +318,7 @@ async fn handle_client(
         state,
         timeout,
         false,
+        peer_host,
     )
     .await
 }
@@ -305,6 +340,7 @@ async fn handle_unix_client(
         state,
         timeout,
         true,
+        None,
     )
     .await
 }
@@ -315,6 +351,7 @@ async fn handle_client_inner(
     state: AppState,
     timeout: std::time::Duration,
     is_local: bool,
+    peer_host: Option<String>,
 ) -> Result<()> {
     let mut line = String::new();
 
@@ -326,13 +363,18 @@ async fn handle_client_inner(
     // Mirrors MPD's Client::IsLocal(): true only for the Unix domain socket,
     // never for TCP (gates `config` and the `file://` line of `urlhandlers`).
     conn_state.is_local = is_local;
-    // Grant full permissions immediately when no password is configured;
-    // otherwise the client starts with zero permissions and must `password` in.
-    if state.password.is_none() {
-        conn_state.grant_all_permissions();
-    } else {
-        conn_state.permissions = 0;
-    }
+    // Resolve this connection's pre-auth permissions (see
+    // `resolve_initial_permissions` for the local/host/default precedence
+    // order); a subsequent successful `password` command replaces this set.
+    let any_password_configured = state.password.is_some() || !state.passwords.is_empty();
+    conn_state.permissions = crate::connection::resolve_initial_permissions(
+        is_local,
+        peer_host.as_deref(),
+        state.local_permissions.as_deref(),
+        &state.host_permissions,
+        state.default_permissions.as_deref(),
+        any_password_configured,
+    );
 
     // Command batching state
     let mut batch_mode = false;
@@ -492,7 +534,7 @@ async fn handle_client_inner(
                 Ok(_cmd) if batch_mode => {
                     // Accumulate commands in batch, capped so an unterminated
                     // command list can't grow `batch_commands` without bound.
-                    if batch_bytes + trimmed.len() > MAX_COMMAND_LIST_BYTES {
+                    if batch_bytes + trimmed.len() > state.max_command_list_size {
                         batch_mode = false;
                         batch_ok_mode = false;
                         batch_commands.clear();
@@ -527,7 +569,23 @@ async fn handle_client_inner(
                 Err(e) => Response::Text(parse_error_to_ack(trimmed, &e, 0)),
             };
 
-            writer.write_all(response.as_bytes()).await?;
+            let response_bytes = response.as_bytes();
+            if response_bytes.len() > state.max_output_buffer_size {
+                // MPD closes a client whose queued output exceeds
+                // max_output_buffer_size (Client::Write) rather than growing
+                // its output buffer without bound. rmpd builds each response
+                // fully in memory before writing it instead of truly
+                // streaming it, so this approximates that accounting: the
+                // one response about to be flushed is treated as the
+                // "pending output".
+                warn!(
+                    "response of {} bytes exceeds max_output_buffer_size ({} bytes); closing connection",
+                    response_bytes.len(),
+                    state.max_output_buffer_size
+                );
+                break;
+            }
+            writer.write_all(response_bytes).await?;
             writer.flush().await?; // Flush immediately to ensure low latency
         }
         Ok(())
