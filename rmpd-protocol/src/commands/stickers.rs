@@ -582,12 +582,15 @@ pub async fn handle_sticker_names_command(state: &AppState) -> String {
     .unwrap_or_else(|_| ResponseBuilder::error(ACK_ERROR_SYS, 0, "stickernames", "internal error"))
 }
 
+/// List available sticker types. Only `song` and the tag-name domains in
+/// `STICKER_ALLOWED_TAGS` are backed by storage (see `require_song_domain`
+/// above), so unlike MPD's `handle_sticker_types` (StickerCommands.cxx),
+/// which also advertises `filter` and `playlist`
+/// (`sticker/AllowedTags.cxx`), this list reflects what rmpd actually
+/// implements rather than the full MPD 0.24 domain set — advertising a
+/// domain that always ACKs would mislead clients that probe `stickertypes`.
 pub async fn handle_sticker_types_command() -> String {
-    // List available sticker types, matching MPD's handle_sticker_types output order.
-    // MPD outputs: filter, playlist, song, then sticker_allowed_tags intersected with tag_mask.
     let mut resp = ResponseBuilder::new();
-    resp.field("stickertype", "filter");
-    resp.field("stickertype", "playlist");
     resp.field("stickertype", "song");
     for tag in STICKER_ALLOWED_TAGS {
         resp.field("stickertype", *tag);
@@ -596,12 +599,18 @@ pub async fn handle_sticker_types_command() -> String {
 }
 
 /// `stickernamestypes [TYPE]`: unique sticker names and their domain type.
-/// Mirrors MPD's `handle_sticker_names_types`: `song`, `playlist`, `filter`
-/// and any tag in `sticker_allowed_tags` are all valid TYPEs and simply
-/// filter the listing, so a domain with no stored stickers yields a bare
-/// `OK`. Only a TYPE that is not a tag name at all (`no such tag`) or a tag
-/// outside the allowed set (`unsupported tag`) is an error. rmpd stores song
-/// stickers only, so every other valid domain lists nothing.
+/// Mirrors MPD's `handle_sticker_names_types` (StickerCommands.cxx): `song`,
+/// `playlist`, `filter`, and any tag in `sticker_allowed_tags` are all valid
+/// TYPEs there and simply filter the listing, so a domain with no stored
+/// stickers yields a bare `OK`. That is deliberately different from
+/// `require_song_domain` (used by `sticker get`/`set`/etc.), which ACKs
+/// `playlist`/`filter` as "not supported" instead of accepting them — MPD's
+/// own `stickernamestypes` never rejects a recognized domain outright, it
+/// just lists nothing, so rmpd matches that here even though `stickertypes`
+/// no longer advertises `playlist`/`filter` as working domains. Only a TYPE
+/// that is not a tag name at all (`no such tag`) or a tag outside the
+/// allowed set (`unsupported tag`) is an error. rmpd stores song stickers
+/// only, so every other valid domain lists nothing.
 pub async fn handle_sticker_namestypes_command(
     state: &AppState,
     sticker_type: Option<&str>,

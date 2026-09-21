@@ -45,6 +45,10 @@ pub async fn handle_repeat_command(state: &AppState, enabled: bool) -> String {
 
 pub async fn handle_random_command(state: &AppState, enabled: bool) -> String {
     state.status.write().await.random = enabled;
+    // The decode thread reads this to pick track vs. album gain for
+    // ReplayGainMode::Auto (mpd `ReplayGainMode::AUTO`): shuffled playback
+    // breaks album context, so `auto` uses track gain while random is on.
+    state.engine.write().await.set_random(enabled);
     notify_options(state);
     ResponseBuilder::new().ok()
 }

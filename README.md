@@ -258,11 +258,11 @@ network stream can run at once. Two routes to networked/multi-room playback:
 - **Library**: filesystem scanning + watcher, SQLite database, metadata/artwork extraction via `symphonia`, full-text search via `tantivy`
 - **MPD protocol**: playback commands (play/pause/stop/seek), queue management (add/delete/move/shuffle), database queries (find/search/list), status/statistics, playlist management (`.m3u`, `.pls`, XSPF/ASX; `.cue` sheets expand into range-restricted virtual tracks), output control
 - **Audio**: gapless playback, crossfade and MixRamp transitions, ReplayGain, internet radio input with Shoutcast/Icecast (ICY) "now playing" metadata — see [Format Support](#format-support) for codec coverage and [Integrations](#integrations) for multi-room, MPRIS, and OpenSubsonic
+- **Network storage**: `mount`/`unmount` shell out to the system `mount(8)` for NFS and SMB/CIFS shares (Linux and macOS), exposed under the music directory like MPD's storage plugins — no in-process NFS/SMB client
 
 ### In Progress
 
 - Compressed stream encoders (FLAC / Opus / Vorbis) for the `httpd` output
-- Network storage backends (SMB / NFS)
 
 ## Compatibility
 
