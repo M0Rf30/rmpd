@@ -32,17 +32,117 @@ struct ExtractedMetadata {
 pub struct Scanner {
     event_bus: EventBus,
     music_directory: Option<Utf8PathBuf>,
-    follow_symlinks: bool,
+    /// Follow a symlink whose target resolves inside `music_directory`.
+    /// Matches mpd.conf's `follow_inside_symlinks` (mpd
+    /// `src/db/update/Config.cxx`, default yes).
+    follow_inside_symlinks: bool,
+    /// Follow a symlink whose target resolves outside `music_directory`.
+    /// Matches mpd.conf's `follow_outside_symlinks` (default yes).
+    follow_outside_symlinks: bool,
     force_rescan: bool,
 }
 
+/// A single `.mpdignore` glob pattern, matched against a file/directory's
+/// NAME only (never the full path) — mpd `src/db/update/ExcludeList.cxx`
+/// checks the bare entry name, not a path relative to the scan root.
+type IgnorePattern = String;
+
+/// Shell-style glob match supporting `*` (any run of characters) and `?`
+/// (any single character), matching mpd's `Glob::Check`, which is backed by
+/// `fnmatch(pattern, name, 0)` (mpd `src/fs/Glob.hxx`). No character
+/// classes or brace expansion: MPD's own patterns don't use them either.
+pub(crate) fn glob_match(pattern: &str, name: &str) -> bool {
+    let p: Vec<char> = pattern.chars().collect();
+    let n: Vec<char> = name.chars().collect();
+    let (mut pi, mut ni) = (0usize, 0usize);
+    let mut star: Option<usize> = None;
+    let mut star_match = 0usize;
+
+    while ni < n.len() {
+        if pi < p.len() && (p[pi] == '?' || p[pi] == n[ni]) {
+            pi += 1;
+            ni += 1;
+        } else if pi < p.len() && p[pi] == '*' {
+            star = Some(pi);
+            star_match = ni;
+            pi += 1;
+        } else if let Some(si) = star {
+            pi = si + 1;
+            star_match += 1;
+            ni = star_match;
+        } else {
+            return false;
+        }
+    }
+    while pi < p.len() && p[pi] == '*' {
+        pi += 1;
+    }
+    pi == p.len()
+}
+
+/// Parses a `.mpdignore` file's contents into glob patterns. Blank lines and
+/// lines starting with `#` are skipped; every other line is stripped and
+/// used verbatim, mirroring `ExcludeList::ParseLine`
+/// (mpd `src/db/update/ExcludeList.cxx`).
+pub(crate) fn parse_mpdignore(content: &str) -> Vec<IgnorePattern> {
+    content
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Reads and parses `dir`'s own `.mpdignore`, if any. A missing file is not
+/// an error (most directories don't have one); any other read error is
+/// logged and treated as "no patterns", matching mpd's
+/// `LoadExcludeListOrLog`.
+pub(crate) fn load_mpdignore(dir: &Path) -> Vec<IgnorePattern> {
+    match fs::read_to_string(dir.join(".mpdignore")) {
+        Ok(content) => parse_mpdignore(&content),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(e) => {
+            warn!("failed to read {:?}/.mpdignore: {}", dir, e);
+            Vec::new()
+        }
+    }
+}
+
+/// Whether `name` matches any pattern in `patterns`. `patterns` is the
+/// flattened union of a directory's own `.mpdignore` and every ancestor's,
+/// which is equivalent to mpd's parent-chained `ExcludeList::Check`
+/// (mpd `src/db/update/ExcludeList.cxx`): a match at any level excludes.
+pub(crate) fn is_mpdignore_excluded(patterns: &[IgnorePattern], name: &str) -> bool {
+    patterns.iter().any(|p| glob_match(p, name))
+}
+
 impl Scanner {
+    /// `follow_symlinks` sets both the inside- and outside-`music_directory`
+    /// policies to the same value. Use `with_symlink_policy` to set them
+    /// independently (mpd's `follow_inside_symlinks`/`follow_outside_symlinks`).
     pub fn new(event_bus: EventBus, follow_symlinks: bool) -> Self {
         Self {
             event_bus,
             music_directory: None,
-            follow_symlinks,
+            follow_inside_symlinks: follow_symlinks,
+            follow_outside_symlinks: follow_symlinks,
             force_rescan: false,
+        }
+    }
+
+    /// Configure the two independent MPD-style symlink-follow flags (mpd
+    /// `src/db/update/Config.cxx`: both default to yes).
+    pub fn with_symlink_policy(
+        &self,
+        follow_inside_symlinks: bool,
+        follow_outside_symlinks: bool,
+    ) -> Self {
+        Self {
+            event_bus: self.event_bus.clone(),
+            music_directory: self.music_directory.clone(),
+            follow_inside_symlinks,
+            follow_outside_symlinks,
+            force_rescan: self.force_rescan,
         }
     }
 
@@ -54,7 +154,8 @@ impl Scanner {
         Self {
             event_bus: self.event_bus.clone(),
             music_directory: Some(dir),
-            follow_symlinks: self.follow_symlinks,
+            follow_inside_symlinks: self.follow_inside_symlinks,
+            follow_outside_symlinks: self.follow_outside_symlinks,
             force_rescan: self.force_rescan,
         }
     }
@@ -67,7 +168,8 @@ impl Scanner {
         Self {
             event_bus: self.event_bus.clone(),
             music_directory: self.music_directory.clone(),
-            follow_symlinks: self.follow_symlinks,
+            follow_inside_symlinks: self.follow_inside_symlinks,
+            follow_outside_symlinks: self.follow_outside_symlinks,
             force_rescan: force,
         }
     }
@@ -205,21 +307,53 @@ impl Scanner {
         }
     }
 
-    /// Whether `path` is excluded because it's a symlink and the scan doesn't follow them,
-    /// mirroring the entry-skip in `collect_audio_files`.
-    fn is_symlink_excluded(&self, path: &Path) -> bool {
-        !self.follow_symlinks
-            && fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink())
+    /// Whether a symlink at `path` should be followed, applying the split
+    /// inside/outside policy (mpd `src/db/update/Config.cxx`): a target
+    /// that resolves inside `music_directory` obeys `follow_inside_symlinks`,
+    /// one that resolves outside obeys `follow_outside_symlinks`. Only
+    /// meaningful when `path` is actually a symlink; callers check that first.
+    fn should_follow_symlink(&self, path: &Path) -> bool {
+        if self.follow_inside_symlinks && self.follow_outside_symlinks {
+            return true;
+        }
+        if !self.follow_inside_symlinks && !self.follow_outside_symlinks {
+            return false;
+        }
+        let Some(music_dir) = &self.music_directory else {
+            return self.follow_outside_symlinks;
+        };
+        let Ok(target) = fs::canonicalize(path) else {
+            // Dangling symlink: target can't be resolved, so it can't be
+            // "inside" music_directory either.
+            return self.follow_outside_symlinks;
+        };
+        let inside =
+            fs::canonicalize(music_dir.as_std_path()).is_ok_and(|root| target.starts_with(root));
+        if inside {
+            self.follow_inside_symlinks
+        } else {
+            self.follow_outside_symlinks
+        }
     }
 
-    /// Whether `path` is a regular file the scan would have visited: symlinks
-    /// only count when `follow_symlinks` is set, like `collect_audio_files`.
+    /// Whether `path` is excluded because it's a symlink the effective
+    /// policy doesn't follow, mirroring the entry-skip in
+    /// `collect_audio_files`.
+    fn is_symlink_excluded(&self, path: &Path) -> bool {
+        fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink())
+            && !self.should_follow_symlink(path)
+    }
+
+    /// Whether `path` is a regular file the scan would have visited: a
+    /// symlink only counts when the effective policy follows it, like
+    /// `collect_audio_files`.
     fn file_is_present(&self, path: &Path) -> bool {
         !self.is_symlink_excluded(path) && path.is_file()
     }
 
-    /// Whether `path` is a directory the scan would have visited: symlinks
-    /// only count when `follow_symlinks` is set, like `collect_audio_files`.
+    /// Whether `path` is a directory the scan would have visited: a
+    /// symlink only counts when the effective policy follows it, like
+    /// `collect_audio_files`.
     fn dir_is_present(&self, path: &Path) -> bool {
         !self.is_symlink_excluded(path) && path.is_dir()
     }
@@ -248,7 +382,7 @@ impl Scanner {
         // Step 1: Collect all audio files and their metadata (sequential directory walk).
         // `visited_dirs` tracks (dev, ino) pairs already recursed into, shared across the
         // whole tree walk, so a symlink cycle (or any other filesystem loop) can't cause
-        // unbounded recursion when `follow_symlinks` is enabled.
+        // unbounded recursion regardless of the symlink-follow policy.
         let mut files_to_process = Vec::new();
         let mut visited_dirs = std::collections::HashSet::new();
         // Seed with the root itself so a symlink cycle that loops back to the
@@ -256,7 +390,14 @@ impl Scanner {
         if let Ok(root_meta) = fs::metadata(path) {
             visited_dirs.insert((root_meta.dev(), root_meta.ino()));
         }
-        self.collect_audio_files(db, path, &mut files_to_process, stats, &mut visited_dirs)?;
+        self.collect_audio_files(
+            db,
+            path,
+            &mut files_to_process,
+            stats,
+            &mut visited_dirs,
+            &[],
+        )?;
 
         // Step 2: Extract metadata in parallel
         let extracted: Vec<ExtractedMetadata> = files_to_process
@@ -345,9 +486,16 @@ impl Scanner {
         files: &mut Vec<FileInfo>,
         stats: &mut ScanStats,
         visited_dirs: &mut std::collections::HashSet<(u64, u64)>,
+        inherited_patterns: &[IgnorePattern],
     ) -> Result<()> {
         let entries = fs::read_dir(path)
             .map_err(|e| RmpdError::Library(format!("Failed to read directory: {e}")))?;
+
+        // `.mpdignore` patterns are inherited by subdirectories (mpd
+        // `src/db/update/ExcludeList.cxx`), so this directory's effective
+        // pattern set is its own file's patterns plus every ancestor's.
+        let mut patterns = inherited_patterns.to_vec();
+        patterns.extend(load_mpdignore(path));
 
         for entry in entries {
             let entry = match entry {
@@ -361,36 +509,50 @@ impl Scanner {
 
             let entry_path = entry.path();
 
+            let file_name = entry_path.file_name().and_then(|n| n.to_str());
+
             // Skip hidden files and directories
-            if let Some(file_name) = entry_path.file_name().and_then(|n| n.to_str())
-                && file_name.starts_with('.')
+            if let Some(name) = file_name
+                && name.starts_with('.')
             {
                 continue;
             }
 
-            // When follow_symlinks is disabled, skip any entry that is itself a
-            // symlink (DirEntry::file_type does not follow symlinks on Linux).
-            if !self.follow_symlinks {
-                match entry.file_type() {
-                    Ok(ft) if ft.is_symlink() => continue,
-                    Err(e) => {
-                        warn!("failed to get file type for {:?}: {}", entry_path, e);
-                        stats.errors += 1;
-                        continue;
-                    }
-                    _ => {}
+            // Skip entries matched by a `.mpdignore` pattern (own or
+            // inherited from an ancestor directory), mirroring mpd's
+            // `UpdateDirectoryChild` exclude check (`src/db/update/Walk.cxx`).
+            if let Some(name) = file_name
+                && is_mpdignore_excluded(&patterns, name)
+            {
+                continue;
+            }
+
+            // A symlink is skipped unless the split inside/outside policy
+            // says to follow it (mpd `src/db/update/Config.cxx`). Determine
+            // whether this entry is itself a symlink first (DirEntry::file_type
+            // never follows one, i.e. it's an lstat).
+            let is_symlink = match entry.file_type() {
+                Ok(ft) => ft.is_symlink(),
+                Err(e) => {
+                    warn!("failed to get file type for {:?}: {}", entry_path, e);
+                    stats.errors += 1;
+                    continue;
                 }
+            };
+            if is_symlink && !self.should_follow_symlink(&entry_path) {
+                continue;
             }
 
             // `entry.metadata()` never traverses a symlink (it's equivalent to `lstat`), so
-            // a symlinked directory/file would otherwise be silently ignored even with
-            // `follow_symlinks` enabled. Use `fs::metadata` (which follows symlinks, i.e.
-            // `stat`) in that case so `is_dir()`/`is_file()` reflect the link's target.
-            let metadata = if self.follow_symlinks {
+            // a symlinked directory/file would otherwise be silently ignored even when
+            // followed. Use `fs::metadata` (which follows symlinks, i.e. `stat`) for a
+            // symlink we do follow, so `is_dir()`/`is_file()` reflect the link's target.
+            let metadata = if is_symlink {
                 fs::metadata(&entry_path)
             } else {
                 entry.metadata()
             };
+
             let metadata = match metadata {
                 Ok(m) => m,
                 Err(e) => {
@@ -404,7 +566,7 @@ impl Scanner {
                 // Cycle guard: skip directories we've already recursed into (identified by
                 // (dev, ino)). This catches symlink cycles (an ancestor pointing at itself
                 // or a descendant) as well as any other hard/soft-link loop, regardless of
-                // whether `follow_symlinks` is enabled.
+                // whether a symlink is followed.
                 let dir_key = (metadata.dev(), metadata.ino());
                 if !visited_dirs.insert(dir_key) {
                     warn!(
@@ -431,7 +593,7 @@ impl Scanner {
                 }
                 // Recurse into subdirectory
                 if let Err(e) =
-                    self.collect_audio_files(db, &entry_path, files, stats, visited_dirs)
+                    self.collect_audio_files(db, &entry_path, files, stats, visited_dirs, &patterns)
                 {
                     warn!("failed to scan directory {:?}: {}", entry_path, e);
                     stats.errors += 1;
@@ -529,4 +691,149 @@ pub struct ScanStats {
     pub updated: u32,
     pub removed: u32,
     pub errors: u32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::database::Database;
+    use tempfile::TempDir;
+
+    fn fixture_flac() -> std::path::PathBuf {
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/samples/basic.flac")
+    }
+
+    #[test]
+    fn glob_match_literal() {
+        assert!(glob_match("foo.tmp", "foo.tmp"));
+        assert!(!glob_match("foo.tmp", "foo.tmp2"));
+        assert!(!glob_match("foo.tmp", "xfoo.tmp"));
+    }
+
+    #[test]
+    fn glob_match_star_wildcard() {
+        assert!(glob_match("*.tmp", "anything.tmp"));
+        assert!(glob_match("*.tmp", ".tmp"));
+        assert!(!glob_match("*.tmp", "anything.tmp2"));
+        assert!(glob_match("a*b*c", "aXbYYc"));
+        assert!(!glob_match("a*b*c", "aXbYY"));
+    }
+
+    #[test]
+    fn glob_match_question_wildcard() {
+        assert!(glob_match("track?.mp3", "track1.mp3"));
+        assert!(!glob_match("track?.mp3", "track12.mp3"));
+        assert!(!glob_match("track?.mp3", "track.mp3"));
+    }
+
+    #[test]
+    fn glob_match_combined_wildcards() {
+        assert!(glob_match("*.?lac", "cover.flac"));
+        assert!(!glob_match("*.?lac", "cover.flacx"));
+    }
+
+    #[test]
+    fn parse_mpdignore_skips_blank_and_comment_lines() {
+        let content = "# comment\n\n*.tmp\n  # indented comment\n  *.bak  \n";
+        assert_eq!(parse_mpdignore(content), vec!["*.tmp", "*.bak"]);
+    }
+
+    /// A `.mpdignore` at the music-directory root excludes matching files in
+    /// every subdirectory (inheritance), while a pattern declared only in one
+    /// subdirectory's own `.mpdignore` never leaks to a sibling directory —
+    /// mirroring mpd's parent-chained `ExcludeList` (`src/db/update/ExcludeList.cxx`).
+    #[test]
+    fn mpdignore_patterns_are_inherited_by_subdirectories() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let music_dir = temp_dir.path().join("music");
+        std::fs::create_dir(&music_dir).expect("create music dir");
+        let fixture = fixture_flac();
+
+        // Root .mpdignore: excludes any "ignored.flac", anywhere under music_dir.
+        std::fs::write(music_dir.join(".mpdignore"), "ignored.flac\n").unwrap();
+        std::fs::copy(&fixture, music_dir.join("keep.flac")).unwrap();
+
+        let sub = music_dir.join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        std::fs::copy(&fixture, sub.join("ignored.flac")).unwrap();
+        std::fs::copy(&fixture, sub.join("kept2.flac")).unwrap();
+
+        // "other"'s own .mpdignore pattern must not leak to its sibling "other2".
+        let other = music_dir.join("other");
+        std::fs::create_dir(&other).unwrap();
+        std::fs::write(other.join(".mpdignore"), "local_only.flac\n").unwrap();
+        std::fs::copy(&fixture, other.join("local_only.flac")).unwrap();
+
+        let other2 = music_dir.join("other2");
+        std::fs::create_dir(&other2).unwrap();
+        std::fs::copy(&fixture, other2.join("local_only.flac")).unwrap();
+
+        let db_path = temp_dir.path().join("test.db");
+        let database = Database::open(db_path.to_str().unwrap()).expect("open database");
+        let scanner = Scanner::new(EventBus::new(), false);
+
+        let stats = scanner.scan_directory(&database, &music_dir).expect("scan");
+
+        assert_eq!(
+            stats.added, 3,
+            "keep.flac, sub/kept2.flac, other2/local_only.flac"
+        );
+        assert!(database.get_song_by_path("keep.flac").unwrap().is_some());
+        assert!(
+            database
+                .get_song_by_path("sub/kept2.flac")
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            database
+                .get_song_by_path("other2/local_only.flac")
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            database
+                .get_song_by_path("sub/ignored.flac")
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            database
+                .get_song_by_path("other/local_only.flac")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    /// A symlink resolving inside `music_directory` obeys
+    /// `follow_inside_symlinks`; one resolving outside obeys
+    /// `follow_outside_symlinks`, independently of the other flag.
+    #[test]
+    fn should_follow_symlink_respects_inside_outside_split() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let music_dir = temp_dir.path().join("music");
+        std::fs::create_dir(&music_dir).unwrap();
+        let outside_dir = temp_dir.path().join("outside");
+        std::fs::create_dir(&outside_dir).unwrap();
+
+        let inside_target = music_dir.join("real.flac");
+        std::fs::write(&inside_target, b"x").unwrap();
+        let outside_target = outside_dir.join("real.flac");
+        std::fs::write(&outside_target, b"x").unwrap();
+
+        let inside_link = music_dir.join("inside_link");
+        let outside_link = music_dir.join("outside_link");
+        std::os::unix::fs::symlink(&inside_target, &inside_link).unwrap();
+        std::os::unix::fs::symlink(&outside_target, &outside_link).unwrap();
+
+        let music_utf8 = Utf8PathBuf::try_from(music_dir.clone()).unwrap();
+        // Follow inside-pointing symlinks only.
+        let scanner = Scanner::new(EventBus::new(), false)
+            .with_symlink_policy(true, false)
+            .with_music_dir(music_utf8);
+
+        assert!(scanner.should_follow_symlink(&inside_link));
+        assert!(!scanner.should_follow_symlink(&outside_link));
+    }
 }

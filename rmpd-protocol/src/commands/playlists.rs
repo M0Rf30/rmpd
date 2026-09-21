@@ -57,6 +57,77 @@ fn read_m3u_playlist(playlist_dir: &str, name: &str) -> Result<Vec<String>, Stri
     Ok(paths)
 }
 
+/// Per-entry metadata parsed from an extended M3U's `#EXTINF` lines.
+/// Mirrors the `Tag` MPD attaches in `ExtM3uPlaylistPlugin.cxx`. Only used
+/// as a fallback for entries the database has no record of (typically
+/// remote URLs) — a database hit always has better tags and wins.
+struct ExtM3uMeta {
+    title: Option<String>,
+    duration_secs: Option<u32>,
+}
+
+/// Parse the payload of an `#EXTINF:` line (everything after the prefix),
+/// mirroring MPD's `extm3u_parse_tag()`: `<duration>,<title>` split on the
+/// first comma. No comma, or a non-numeric duration, means the line is
+/// malformed and carries no metadata. A duration <= 0 means "unknown"
+/// (ExtM3uPlaylistPlugin.cxx keeps the title, if any, but drops it).
+fn extm3u_parse_tag(line: &str) -> Option<ExtM3uMeta> {
+    let comma = line.find(',')?;
+    let duration: i64 = line[..comma].trim().parse().ok()?;
+    let duration_secs = if duration > 0 {
+        Some(duration as u32)
+    } else {
+        None
+    };
+    let title = line[comma + 1..].trim_start();
+    let title = if title.is_empty() {
+        None
+    } else {
+        Some(title.to_string())
+    };
+    if title.is_none() && duration_secs.is_none() {
+        // No information available at all — don't allocate a tag.
+        return None;
+    }
+    Some(ExtM3uMeta {
+        title,
+        duration_secs,
+    })
+}
+
+/// Parse `#EXTINF` metadata out of an extended M3U playlist, mirroring
+/// MPD's `ExtM3uPlaylist::NextSong()`. Returns `None` when the file's very
+/// first line isn't exactly `#EXTM3U` — MPD then falls back to the plain
+/// `M3uPlaylistPlugin`, which carries no metadata at all.
+///
+/// The returned vec is index-aligned with `read_m3u_playlist`'s output:
+/// element `i` is the metadata (if any) for the `i`th returned path. An
+/// `#EXTINF` with no following URI (e.g. at end of file) contributes no
+/// element, matching `NextSong()` returning end-of-stream without ever
+/// producing a song for it.
+fn parse_extm3u_metadata(playlist_dir: &str, name: &str) -> Option<Vec<Option<ExtM3uMeta>>> {
+    let path = std::path::Path::new(playlist_dir).join(format!("{name}.m3u"));
+    let content = std::fs::read_to_string(&path).ok()?;
+    let mut lines = content.lines();
+    if lines.next()?.trim_end() != "#EXTM3U" {
+        return None;
+    }
+
+    let mut result = Vec::new();
+    let mut pending: Option<ExtM3uMeta> = None;
+    for line in lines {
+        if let Some(rest) = line.strip_prefix("#EXTINF:") {
+            pending = extm3u_parse_tag(rest);
+            continue;
+        }
+        if line.trim_start().starts_with('#') || line.trim().is_empty() {
+            continue;
+        }
+        result.push(pending.take());
+    }
+    Some(result)
+}
+
 fn read_pls_playlist(playlist_dir: &str, name: &str) -> Result<Vec<String>, String> {
     let path = std::path::Path::new(playlist_dir).join(format!("{name}.pls"));
     let content = std::fs::read_to_string(&path).map_err(|_| "No such playlist".to_string())?;
@@ -834,6 +905,9 @@ pub async fn handle_listplaylistinfo_command(
                 );
             }
         };
+        // Extended M3U (#EXTINF) metadata, used only as a fallback below for
+        // entries the database doesn't know about (typically remote URLs).
+        let ext_meta = parse_extm3u_metadata(&playlist_dir, &name);
         let db = match open_db(&state, "listplaylistinfo") {
             Ok(d) => d,
             Err(e) => return e,
@@ -845,17 +919,41 @@ pub async fn handle_listplaylistinfo_command(
         } else {
             (0, total)
         };
-        let slice = &paths[start.min(total)..end.min(total)];
+        let start = start.min(total);
+        let end = end.min(total);
 
         let mut resp = ResponseBuilder::new();
-        for path in slice {
+        for (i, path) in paths.iter().enumerate().take(end).skip(start) {
             match db.find_songs("file", path) {
                 Ok(songs) if !songs.is_empty() => {
+                    // Database entry always wins over playlist-provided metadata.
                     resp.song(&songs[0], None, None, None);
                 }
                 _ => {
-                    // Song not in DB — emit just the file path like MPD does for unknown tracks
-                    resp.field("file", path);
+                    match ext_meta
+                        .as_ref()
+                        .and_then(|m| m.get(i))
+                        .and_then(|e| e.as_ref())
+                    {
+                        Some(meta) => {
+                            // No database record (e.g. a remote URL): fall back to
+                            // the playlist's own #EXTINF title/duration, mirroring
+                            // MPD's ExtM3uPlaylistPlugin.
+                            let mut song = crate::helpers::create_stream_song(path);
+                            if let Some(secs) = meta.duration_secs {
+                                song.duration = Some(std::time::Duration::from_secs(secs as u64));
+                            }
+                            if let Some(title) = &meta.title {
+                                song.tags
+                                    .push((std::borrow::Cow::Borrowed("title"), title.clone()));
+                            }
+                            resp.song(&song, None, None, None);
+                        }
+                        None => {
+                            // Song not in DB — emit just the file path like MPD does for unknown tracks
+                            resp.field("file", path);
+                        }
+                    }
                 }
             }
         }
@@ -1412,5 +1510,120 @@ pub async fn handle_playlistlength_command(state: &AppState, name: &str) -> Stri
     {
         Ok(resp) => resp,
         Err(_) => ResponseBuilder::error(ACK_ERROR_SYS, 0, "playlistlength", "internal error"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_playlist(dir: &std::path::Path, name: &str, content: &str) {
+        std::fs::write(dir.join(format!("{name}.m3u")), content).unwrap();
+    }
+
+    #[test]
+    fn extended_m3u_attaches_title_and_duration_to_remote_url() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        write_playlist(
+            tmp.path(),
+            "radio",
+            "#EXTM3U\n#EXTINF:123,Artist - Title\nhttp://example.com/stream.mp3\n",
+        );
+        let dir = tmp.path().to_str().unwrap();
+
+        let paths = read_m3u_playlist(dir, "radio").unwrap();
+        assert_eq!(paths, vec!["http://example.com/stream.mp3".to_string()]);
+
+        let meta = parse_extm3u_metadata(dir, "radio").unwrap();
+        assert_eq!(meta.len(), 1);
+        let entry = meta[0].as_ref().unwrap();
+        assert_eq!(entry.title.as_deref(), Some("Artist - Title"));
+        assert_eq!(entry.duration_secs, Some(123));
+    }
+
+    #[test]
+    fn extended_m3u_negative_or_zero_duration_is_unknown() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        write_playlist(
+            tmp.path(),
+            "radio",
+            "#EXTM3U\n#EXTINF:-1,Live Stream\nhttp://a.example/1\n#EXTINF:0,Zero Duration\nhttp://a.example/2\n",
+        );
+        let dir = tmp.path().to_str().unwrap();
+
+        let meta = parse_extm3u_metadata(dir, "radio").unwrap();
+        assert_eq!(meta.len(), 2);
+        let first = meta[0].as_ref().unwrap();
+        assert_eq!(first.duration_secs, None);
+        assert_eq!(first.title.as_deref(), Some("Live Stream"));
+        let second = meta[1].as_ref().unwrap();
+        assert_eq!(second.duration_secs, None);
+        assert_eq!(second.title.as_deref(), Some("Zero Duration"));
+    }
+
+    #[test]
+    fn extended_m3u_extinf_without_following_uri_is_dropped() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        write_playlist(tmp.path(), "radio", "#EXTM3U\n#EXTINF:120,Dangling Entry\n");
+        let dir = tmp.path().to_str().unwrap();
+
+        let paths = read_m3u_playlist(dir, "radio").unwrap();
+        assert!(paths.is_empty());
+        let meta = parse_extm3u_metadata(dir, "radio").unwrap();
+        assert!(meta.is_empty());
+    }
+
+    #[test]
+    fn plain_m3u_parsing_is_unchanged() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        write_playlist(tmp.path(), "list", "# a comment\nsong1.mp3\n\nsong2.mp3\n");
+        let dir = tmp.path().to_str().unwrap();
+
+        let paths = read_m3u_playlist(dir, "list").unwrap();
+        assert_eq!(
+            paths,
+            vec!["song1.mp3".to_string(), "song2.mp3".to_string()]
+        );
+        // No #EXTM3U header: no extended metadata parsed at all (falls back
+        // to the plain M3uPlaylistPlugin path, exactly like before).
+        assert!(parse_extm3u_metadata(dir, "list").is_none());
+    }
+
+    #[tokio::test]
+    async fn listplaylistinfo_uses_extm3u_fallback_only_for_unknown_entries() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let db_path = tmp.path().join("test.db");
+        let music_dir = tmp.path().join("music");
+        let playlist_dir = tmp.path().join("playlists");
+        std::fs::create_dir_all(&music_dir).unwrap();
+        std::fs::create_dir_all(&playlist_dir).unwrap();
+
+        {
+            let db = rmpd_library::Database::open(db_path.to_str().unwrap()).unwrap();
+            db.add_song(&rmpd_core::test_utils::make_test_song("song1.flac", 1))
+                .unwrap();
+        }
+
+        write_playlist(
+            &playlist_dir,
+            "mixed",
+            "#EXTM3U\n#EXTINF:999,Ignored Title\nsong1.flac\n#EXTINF:123,Remote Title\nhttp://example.com/stream.mp3\n",
+        );
+
+        let state = AppState::with_all_paths(
+            db_path.to_str().unwrap().to_string(),
+            music_dir.to_str().unwrap().to_string(),
+            playlist_dir.to_str().unwrap().to_string(),
+        );
+
+        let resp = handle_listplaylistinfo_command(&state, "mixed", None).await;
+
+        // Library song's own tags win over the playlist's #EXTINF metadata.
+        assert!(resp.contains("Title: Track 1"));
+        assert!(!resp.contains("Ignored Title"));
+        // Remote entry, absent from the DB, falls back to #EXTINF metadata.
+        assert!(resp.contains("file: http://example.com/stream.mp3"));
+        assert!(resp.contains("Title: Remote Title"));
+        assert!(resp.contains("Time: 123"));
     }
 }

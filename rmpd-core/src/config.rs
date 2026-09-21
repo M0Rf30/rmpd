@@ -42,8 +42,18 @@ pub struct GeneralConfig {
     /// `log_file`. `None` (the default) logs to stdout via `tracing`.
     #[serde(default)]
     pub log_file: Option<Utf8PathBuf>,
-    #[serde(default)]
-    pub follow_symlinks: bool,
+    /// Follow a symlink whose target resolves inside `music_directory`
+    /// during library scans. Matches mpd.conf's `follow_inside_symlinks`
+    /// (mpd default: yes). See mpd `src/db/update/Config.cxx`.
+    #[serde(default = "default_true")]
+    pub follow_inside_symlinks: bool,
+    /// Follow a symlink whose target resolves outside `music_directory`
+    /// during library scans. Matches mpd.conf's `follow_outside_symlinks`
+    /// (mpd default: yes). See mpd `src/db/update/Config.cxx`. The old
+    /// single `follow_symlinks` key is still accepted as a deprecated
+    /// alias that sets both flags (see `Config::apply_follow_symlinks_alias`).
+    #[serde(default = "default_true")]
+    pub follow_outside_symlinks: bool,
     #[serde(default = "default_charset")]
     pub filesystem_charset: String,
     /// Maximum number of songs allowed in the queue. Matches mpd.conf's
@@ -261,6 +271,11 @@ pub struct DatabaseConfig {
     pub auto_update: bool,
     #[serde(default = "default_true")]
     pub filesystem_watch: bool,
+    /// Maximum directory depth watched by the filesystem watcher, below
+    /// `music_directory`. `None` (the default) is unlimited. Matches
+    /// mpd.conf's `auto_update_depth` (mpd `src/db/update/InotifyUpdate.cxx`).
+    #[serde(default)]
+    pub auto_update_depth: Option<u32>,
 }
 
 impl Default for DatabaseConfig {
@@ -268,6 +283,7 @@ impl Default for DatabaseConfig {
         Self {
             auto_update: true,
             filesystem_watch: true,
+            auto_update_depth: None,
         }
     }
 }
@@ -502,6 +518,8 @@ const GENERAL_KEYS: &[&str] = &[
     "state_file_interval",
     "log_level",
     "log_file",
+    "follow_inside_symlinks",
+    "follow_outside_symlinks",
     "follow_symlinks",
     "filesystem_charset",
     "max_playlist_length",
@@ -543,7 +561,7 @@ const AUDIO_KEYS: &[&str] = &[
     "restore_paused",
 ];
 
-const DATABASE_KEYS: &[&str] = &["auto_update", "filesystem_watch"];
+const DATABASE_KEYS: &[&str] = &["auto_update", "filesystem_watch", "auto_update_depth"];
 
 /// Levenshtein edit distance between two strings (two-row DP, no allocation
 /// beyond the two rows).
@@ -599,8 +617,10 @@ fn mpd_migration_hint(key: &str) -> Option<String> {
         "max_connections" => Some(("network", "max_connections")),
         "connection_timeout" => Some(("network", "connection_timeout")),
         "filesystem_charset" => Some(("general", "filesystem_charset")),
-        "follow_outside_symlinks" => Some(("general", "follow_symlinks")),
+        "follow_inside_symlinks" => Some(("general", "follow_inside_symlinks")),
+        "follow_outside_symlinks" => Some(("general", "follow_outside_symlinks")),
         "auto_update" => Some(("database", "auto_update")),
+        "auto_update_depth" => Some(("database", "auto_update_depth")),
         "replaygain" => Some(("audio", "replay_gain")),
         "volume_normalization" => Some(("audio", "volume_normalization")),
         "state_file_interval" => Some(("general", "state_file_interval")),
@@ -632,6 +652,33 @@ fn mpd_migration_hint(key: &str) -> Option<String> {
     target.map(|(section, rmpd_key)| {
         format!("`{key}` is mpd.conf syntax; rmpd uses `{rmpd_key}` in the `[{section}]` section")
     })
+}
+
+/// Applies the deprecated `general.follow_symlinks` config key: rmpd used a
+/// single flag before splitting it into `follow_inside_symlinks`/
+/// `follow_outside_symlinks` (mirroring mpd's own two independent options,
+/// mpd `src/db/update/Config.cxx`). If present, the old key sets both new
+/// flags and a deprecation diagnostic is recorded. `follow_symlinks` is no
+/// longer a `GeneralConfig` field, so this re-parses the raw TOML rather
+/// than relying on serde.
+fn apply_follow_symlinks_alias(
+    content: &str,
+    config: &mut Config,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let Ok(toml::Value::Table(root)) = toml::from_str::<toml::Value>(content) else {
+        return;
+    };
+    let Some(toml::Value::Table(general)) = root.get("general") else {
+        return;
+    };
+    if let Some(toml::Value::Boolean(v)) = general.get("follow_symlinks") {
+        config.general.follow_inside_symlinks = *v;
+        config.general.follow_outside_symlinks = *v;
+        diagnostics.push(Diagnostic::warn(
+            "general.follow_symlinks is deprecated; use general.follow_inside_symlinks and general.follow_outside_symlinks instead",
+        ));
+    }
 }
 
 fn lint_section(
@@ -836,6 +883,7 @@ impl Config {
         })?;
 
         let mut diagnostics = Self::lint(&content);
+        apply_follow_symlinks_alias(&content, &mut config, &mut diagnostics);
         config.expand_paths();
         config.ensure_directories();
         Self::validate_and_normalize(&mut config, &mut diagnostics)?;
@@ -1102,7 +1150,8 @@ impl Default for GeneralConfig {
             state_file_interval: default_state_file_interval(),
             log_level: default_log_level(),
             log_file: None,
-            follow_symlinks: false,
+            follow_inside_symlinks: true,
+            follow_outside_symlinks: true,
             filesystem_charset: default_charset(),
             max_playlist_length: default_max_playlist_length(),
             save_absolute_paths_in_playlists: false,
@@ -1392,8 +1441,12 @@ max_bitrate = 320
         assert_eq!(parsed.general.state_file, default.general.state_file);
         assert_eq!(parsed.general.log_level, default.general.log_level);
         assert_eq!(
-            parsed.general.follow_symlinks,
-            default.general.follow_symlinks
+            parsed.general.follow_inside_symlinks,
+            default.general.follow_inside_symlinks
+        );
+        assert_eq!(
+            parsed.general.follow_outside_symlinks,
+            default.general.follow_outside_symlinks
         );
         assert_eq!(
             parsed.general.filesystem_charset,
@@ -1668,6 +1721,32 @@ some_backend_specific_key = 1
             load.diagnostics
                 .iter()
                 .any(|d| d.level == DiagLevel::Warn && d.message.contains("log_level")),
+            "got: {:?}",
+            load.diagnostics
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn deprecated_follow_symlinks_alias_sets_both_flags_and_warns() {
+        let base = unique_temp_dir("followsymlinks-alias");
+        let music = base.join("music");
+        std::fs::create_dir_all(&music).unwrap();
+        let path = base.join("rmpd.toml");
+        std::fs::write(
+            &path,
+            format!("[general]\nmusic_directory = \"{music}\"\nfollow_symlinks = false\n",),
+        )
+        .unwrap();
+
+        let load = Config::discover(Some(path.as_std_path()), DiscoverOptions::default()).unwrap();
+        assert!(!load.config.general.follow_inside_symlinks);
+        assert!(!load.config.general.follow_outside_symlinks);
+        assert!(
+            load.diagnostics
+                .iter()
+                .any(|d| d.level == DiagLevel::Warn && d.message.contains("follow_symlinks")),
             "got: {:?}",
             load.diagnostics
         );

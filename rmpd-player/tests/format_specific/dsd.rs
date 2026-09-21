@@ -5,7 +5,7 @@
 /// - DoP marker generation and alternation
 /// - Bit order handling (LSB-first vs MSB-first)
 /// - Channel layout (planar vs interleaved)
-/// - Sample rate conversions (DSD64 → 176.4kHz, DSD128 → 352.8kHz)
+/// - Sample rate conversions (DSD64 → 176.4kHz, DSD128 → 352.8kHz, DSD256 → 705.6kHz)
 use rmpd_player::dop::DopEncoder;
 use symphonia::core::codecs::audio::{BitOrder, ChannelDataLayout};
 
@@ -31,12 +31,16 @@ fn test_dop_encoder_creation_dsd128() {
 }
 
 #[test]
-fn test_dop_encoder_rejects_dsd256() {
+fn test_dop_encoder_accepts_dsd256() {
+    // DoP framing is rate-independent (16 DSD bits per 24-bit PCM frame),
+    // so DSD256 builds an encoder like DSD64/DSD128; the output device
+    // decides at open time whether it can do the resulting 705.6kHz PCM
+    // rate (mirrors mpd's `src/pcm/Dop.cxx`, which imposes no such cap).
     let encoder = DopEncoder::new(11289600, 2, ChannelDataLayout::Planar, BitOrder::MsbFirst);
-    assert!(
-        encoder.is_err(),
-        "Should reject DSD256 (requires 705.6kHz PCM, not practical)"
-    );
+    assert!(encoder.is_ok(), "Should create DSD256 encoder");
+
+    let encoder = encoder.unwrap();
+    assert_eq!(encoder.pcm_sample_rate(), 705600, "DSD256 → 705.6kHz PCM");
 }
 
 #[test]

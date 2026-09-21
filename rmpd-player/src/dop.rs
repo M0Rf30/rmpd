@@ -6,6 +6,16 @@
 /// DoP Format:
 /// - DSD64 (2.8224 MHz) → 176.4 kHz PCM (2.8224 / 16 = 176.4)
 /// - DSD128 (5.6448 MHz) → 352.8 kHz PCM (5.6448 / 16 = 352.8)
+/// - DSD256 (11.2896 MHz) → 705.6 kHz PCM (11.2896 / 16 = 705.6)
+/// - DSD512 (22.5792 MHz) → 1411.2 kHz PCM (22.5792 / 16 = 1411.2)
+///
+/// The DoP framing itself is rate-independent (16 DSD bits per 24-bit PCM
+/// frame), so any DSD rate that is an integer multiple of the DSD64 base
+/// rate is accepted here; mpd's `src/pcm/Dop.cxx` imposes no upper cap
+/// either and lets the output device decide what it can open. A device
+/// that cannot open the resulting PCM rate fails cleanly when the DoP
+/// output stream is started, and playback falls back to DSD->PCM
+/// conversion (see `rmpd-player/src/engine.rs::setup_dop`).
 ///
 /// Each PCM sample contains:
 /// - Byte 0: Marker (0x05 or 0xFA alternating)
@@ -18,6 +28,10 @@ use symphonia::core::codecs::audio::{BitOrder, ChannelDataLayout};
 
 const DOP_MARKER_1: u8 = 0x05;
 const DOP_MARKER_2: u8 = 0xFA;
+
+/// Base DSD sample rate (DSD64 = 44.1 kHz x 64). Every standard DSD rate
+/// (DSD128, DSD256, DSD512, ...) is a power-of-two multiple of this.
+const DSD64_RATE: u32 = 2_822_400;
 
 /// Lookup table for bit reversal (LSB-first to MSB-first).
 /// Generated at compile time. Each index maps to its bit-reversed value.
@@ -62,20 +76,22 @@ impl DopEncoder {
         channel_layout: ChannelDataLayout,
         bit_order: BitOrder,
     ) -> Result<Self> {
-        // Validate DSD sample rate
-        match dsd_sample_rate {
-            2822400 => {} // DSD64
-            5644800 => {} // DSD128
-            11289600 => {
-                return Err(RmpdError::Player(
-                    "DSD256 not supported via DoP (would require 705.6kHz PCM)".to_owned(),
-                ));
-            }
-            _ => {
-                return Err(RmpdError::Player(format!(
-                    "Unsupported DSD sample rate: {dsd_sample_rate}"
-                )));
-            }
+        // Validate DSD sample rate: must be a power-of-two multiple of
+        // DSD64 (2.8224 MHz) — DSD128, DSD256, DSD512, etc. The DoP framing
+        // (16 DSD bits per 24-bit PCM frame) is rate-independent, so unlike
+        // a hand-picked list this accepts DSD256/DSD512 too; mpd's
+        // `src/pcm/Dop.cxx` imposes no such cap either. The output device
+        // gets the final say: opening the resulting PCM rate fails cleanly
+        // (`DopOutput::new`) if the DAC can't do it, and the caller reverts
+        // to DSD->PCM conversion (see `engine.rs::setup_dop`).
+        let dsd_multiple = dsd_sample_rate / DSD64_RATE;
+        if dsd_sample_rate == 0
+            || !dsd_sample_rate.is_multiple_of(DSD64_RATE)
+            || !dsd_multiple.is_power_of_two()
+        {
+            return Err(RmpdError::Player(format!(
+                "Unsupported DSD sample rate: {dsd_sample_rate}"
+            )));
         }
 
         Ok(Self {
@@ -306,5 +322,27 @@ mod tests {
         let produced_frames = output.len() / 2; // 2 channels per frame
         assert!(produced_frames < naive_frames);
         assert_eq!(produced_frames, 2); // floor(11 / (2 channels * 2 bytes)) == 2
+    }
+
+    #[test]
+    fn dop_encoder_construction_succeeds_for_dsd64_dsd128_dsd256() {
+        for (dsd_rate, expected_pcm_rate) in
+            [(2822400, 176400), (5644800, 352800), (11289600, 705600)]
+        {
+            let encoder =
+                DopEncoder::new(dsd_rate, 2, ChannelDataLayout::Planar, BitOrder::MsbFirst);
+            assert!(
+                encoder.is_ok(),
+                "DSD rate {dsd_rate} Hz should build a DoP encoder"
+            );
+            assert_eq!(encoder.unwrap().pcm_sample_rate(), expected_pcm_rate);
+        }
+    }
+
+    #[test]
+    fn dop_encoder_construction_rejects_non_dsd_rate() {
+        // 48000 Hz is ordinary PCM, not a power-of-two multiple of DSD64.
+        let encoder = DopEncoder::new(48000, 2, ChannelDataLayout::Planar, BitOrder::MsbFirst);
+        assert!(encoder.is_err());
     }
 }

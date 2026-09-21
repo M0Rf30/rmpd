@@ -21,6 +21,10 @@ pub struct FilesystemWatcher {
     db: Arc<Mutex<Database>>,
     event_bus: EventBus,
     debouncer: Option<Debouncer<RecommendedWatcher, RecommendedCache>>,
+    /// Maximum directory depth watched below `music_dir`. `None` (the
+    /// default) is unlimited. Matches mpd.conf's `auto_update_depth`
+    /// (mpd `src/db/update/InotifyUpdate.cxx`).
+    max_depth: Option<u32>,
 }
 
 impl fmt::Debug for FilesystemWatcher {
@@ -40,7 +44,15 @@ impl FilesystemWatcher {
             db,
             event_bus,
             debouncer: None,
+            max_depth: None,
         })
+    }
+
+    /// Bounds event processing to `depth` directory levels below the music
+    /// directory (`None` = unlimited, the default). Matches mpd.conf's
+    /// `auto_update_depth`.
+    pub fn set_max_depth(&mut self, depth: Option<u32>) {
+        self.max_depth = depth;
     }
 
     /// Start watching the music directory
@@ -51,6 +63,7 @@ impl FilesystemWatcher {
         let db = Arc::clone(&self.db);
         let event_bus = self.event_bus.clone();
         let music_dir = self.music_dir.clone();
+        let max_depth = self.max_depth;
 
         // Create debouncer
         let debouncer = new_debouncer(
@@ -86,7 +99,8 @@ impl FilesystemWatcher {
                     Ok(events) => {
                         for event in events {
                             if let Err(e) =
-                                handle_fs_event(&event, &music_dir, &db, &event_bus).await
+                                handle_fs_event(&event, &music_dir, &db, &event_bus, max_depth)
+                                    .await
                             {
                                 error!("failed to handle filesystem event: {}", e);
                             }
@@ -120,11 +134,61 @@ impl Drop for FilesystemWatcher {
     }
 }
 
+/// Whether `path`'s directory depth below `music_dir` exceeds `max_depth`
+/// levels. Approximates mpd's inotify `remaining_depth` cutoff (mpd
+/// `src/db/update/InotifyUpdate.cxx`): beyond that depth mpd stops
+/// maintaining individual directory watches and relies on the next full
+/// scan instead. rmpd uses one recursive `notify` watch rather than
+/// per-directory ones, so the equivalent here is simply ignoring events
+/// past the configured depth (a periodic or manual full scan still picks
+/// such changes up).
+fn exceeds_max_depth(music_dir: &Path, path: &Path, max_depth: Option<u32>) -> bool {
+    let Some(max_depth) = max_depth else {
+        return false;
+    };
+    let Ok(rel) = path.strip_prefix(music_dir) else {
+        return false;
+    };
+    let depth = rel.components().count().saturating_sub(1) as u32;
+    depth > max_depth
+}
+
+/// Whether `path`, somewhere under `music_dir`, is excluded by a
+/// `.mpdignore` file along its ancestor chain — the same parent-inherited
+/// semantics `Scanner::collect_audio_files` applies during a full scan (mpd
+/// `src/db/update/ExcludeList.cxx`), so a watched change under an ignored
+/// path never resurrects it between scans.
+fn is_path_mpdignore_excluded(music_dir: &Path, path: &Path) -> bool {
+    let Ok(rel) = path.strip_prefix(music_dir) else {
+        return false;
+    };
+
+    let mut dir = music_dir.to_path_buf();
+    let mut patterns = crate::scanner::load_mpdignore(&dir);
+    let components: Vec<_> = rel.components().collect();
+
+    for (i, component) in components.iter().enumerate() {
+        let name = component.as_os_str().to_string_lossy();
+        if crate::scanner::is_mpdignore_excluded(&patterns, &name) {
+            return true;
+        }
+        if i + 1 < components.len() {
+            // Not the leaf yet: `component` is a directory we're about to
+            // descend into, so pick up its own `.mpdignore` for the next level.
+            dir.push(component.as_os_str());
+            patterns.extend(crate::scanner::load_mpdignore(&dir));
+        }
+    }
+
+    false
+}
+
 async fn handle_fs_event(
     event: &Event,
     music_dir: &Path,
     db: &Arc<Mutex<Database>>,
     event_bus: &EventBus,
+    max_depth: Option<u32>,
 ) -> Result<()> {
     // Filter out non-audio files and hidden files
     let is_audio_file = |path: &Path| -> bool {
@@ -142,6 +206,11 @@ async fn handle_fs_event(
     match event.kind {
         EventKind::Create(_) | EventKind::Modify(_) => {
             for path in &event.paths {
+                if exceeds_max_depth(music_dir, path, max_depth)
+                    || is_path_mpdignore_excluded(music_dir, path)
+                {
+                    continue;
+                }
                 if !is_audio_file(path) {
                     prune_if_vanished_directory(path, music_dir, db, event_bus).await?;
                     continue;
@@ -227,6 +296,11 @@ async fn handle_fs_event(
         }
         EventKind::Remove(_) => {
             for path in &event.paths {
+                if exceeds_max_depth(music_dir, path, max_depth)
+                    || is_path_mpdignore_excluded(music_dir, path)
+                {
+                    continue;
+                }
                 if !is_audio_file(path) {
                     prune_if_vanished_directory(path, music_dir, db, event_bus).await?;
                     continue;
@@ -394,7 +468,7 @@ mod tests {
         // The file was never created on disk: the path no longer exists.
         let event = Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::From)))
             .add_path(music_dir.join("song.flac"));
-        handle_fs_event(&event, &music_dir, &db, &event_bus)
+        handle_fs_event(&event, &music_dir, &db, &event_bus, None)
             .await
             .expect("handle the synthetic event");
 
@@ -439,7 +513,7 @@ mod tests {
 
         // `dir` was never created on disk: the directory no longer exists.
         let event = Event::new(kind).add_path(music_dir.join("dir"));
-        handle_fs_event(&event, &music_dir, &db, &event_bus)
+        handle_fs_event(&event, &music_dir, &db, &event_bus, None)
             .await
             .expect("handle the synthetic event");
 
@@ -525,7 +599,7 @@ mod tests {
         std::fs::remove_dir(&music_dir).expect("remove music dir to simulate vanish");
         let event = Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::From)))
             .add_path(music_dir.clone());
-        handle_fs_event(&event, &music_dir, &db, &event_bus)
+        handle_fs_event(&event, &music_dir, &db, &event_bus, None)
             .await
             .expect("handle the synthetic event");
 

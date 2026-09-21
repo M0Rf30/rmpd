@@ -108,7 +108,7 @@ Musepack (`.mpc`) is not supported at all: no scan, no tag, no playback.
 ### DSD
 
 - `.dsf`/`.dff`, DSD64 through DSD256 and higher, all scan, tag, and play.
-- DoP (DSD over PCM) sends a native DSD64/DSD128 bitstream to a bit-perfect DAC over a raw ALSA `hw:` device. Opt in with `audio.dop = "yes"` (or `"auto"` to use DoP only when `audio.device` is set) or `RMPD_DOP=1`. DSD256 and higher cannot use DoP (would need 705.6kHz PCM) and always use PCM fallback.
+- DoP (DSD over PCM) sends a native DSD bitstream to a bit-perfect DAC over a raw ALSA `hw:` device. Opt in with `audio.dop = "yes"` (or `"auto"` to use DoP only when `audio.device` is set) or `RMPD_DOP=1`. DSD64, DSD128 and DSD256 are all supported; DoP always needs a PCM rate of `dsd_rate / 16` (176.4kHz for DSD64, 705.6kHz for DSD256), so a DAC that cannot accept that rate falls back to PCM automatically.
 - PCM fallback (the default) decodes DSD to a 44.1kHz-family rate and resamples to the output device's native rate via the configured `resampler_quality`, so a sound server such as PipeWire never resamples internally — avoiding underruns and keeping DSD's ultrasonic noise out of the audible band.
 
 ## Configuration

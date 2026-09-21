@@ -80,9 +80,12 @@ pub struct AppState {
     /// Latest ICY "now playing" title for a remote stream (None when not
     /// streaming or no metadata has arrived). Injected into `currentsong`.
     pub stream_title: Arc<RwLock<Option<String>>>,
-    /// Whether to follow symlinks when scanning the music directory.
-    /// Mirrors `general.follow_symlinks` from the config file.
-    pub follow_symlinks: bool,
+    /// Follow a symlink resolving inside `music_directory` when scanning.
+    /// Mirrors `general.follow_inside_symlinks` from the config file.
+    pub follow_inside_symlinks: bool,
+    /// Follow a symlink resolving outside `music_directory` when scanning.
+    /// Mirrors `general.follow_outside_symlinks` from the config file.
+    pub follow_outside_symlinks: bool,
     /// Monotonic counter for library-scan job ids (MPD-style `updating_db`
     /// job numbers).
     job_counter: Arc<std::sync::atomic::AtomicU32>,
@@ -182,7 +185,8 @@ impl AppState {
             zeroconf_name: "rmpd@%h".to_string(),
             stream_title: Arc::new(RwLock::new(None)),
             sources: std::sync::Arc::new(rmpd_source::SourceRegistry::from_config(&[])),
-            follow_symlinks: false,
+            follow_inside_symlinks: true,
+            follow_outside_symlinks: true,
             job_counter: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             source_sync_running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
@@ -255,8 +259,15 @@ impl AppState {
         self.sources = sources;
     }
 
-    pub fn set_follow_symlinks(&mut self, v: bool) {
-        self.follow_symlinks = v;
+    /// Configure the two independent MPD-style symlink-follow flags
+    /// (`general.follow_inside_symlinks`/`general.follow_outside_symlinks`).
+    pub fn set_symlink_policy(
+        &mut self,
+        follow_inside_symlinks: bool,
+        follow_outside_symlinks: bool,
+    ) {
+        self.follow_inside_symlinks = follow_inside_symlinks;
+        self.follow_outside_symlinks = follow_outside_symlinks;
     }
 
     pub fn advertise_mdns(&self, port: u16) {
@@ -287,7 +298,8 @@ impl AppState {
             tracing::warn!("library update requested but database/music_dir not configured");
             return None;
         };
-        let follow_symlinks = self.follow_symlinks;
+        let follow_inside_symlinks = self.follow_inside_symlinks;
+        let follow_outside_symlinks = self.follow_outside_symlinks;
         let event_bus = self.event_bus.clone();
         let status = self.status.clone();
 
@@ -310,7 +322,8 @@ impl AppState {
             tracing::info!("starting library update (job {job_id})");
             let result = tokio::task::spawn_blocking(move || {
                 let db = rmpd_library::Database::open(&db_path)?;
-                let scanner = rmpd_library::Scanner::new(event_bus, follow_symlinks)
+                let scanner = rmpd_library::Scanner::new(event_bus, false)
+                    .with_symlink_policy(follow_inside_symlinks, follow_outside_symlinks)
                     .with_force_rescan(discard);
                 scanner.scan_directory(&db, std::path::Path::new(&music_dir))
             })

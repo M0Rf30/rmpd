@@ -20,6 +20,11 @@ use tracing::{debug, error, info, warn};
 
 const BUFFER_SIZE: usize = 4096;
 
+/// Songs shorter than this never cross-fade, regardless of the configured
+/// crossfade duration. Mirrors mpd `CrossFadeSettings::MIN_TOTAL_TIME`
+/// (`src/player/CrossFade.hxx`).
+const CROSSFADE_MIN_TOTAL_SECS: u64 = 20;
+
 /// Valid DSD-to-PCM decode rates, ascending. DSD decimates cleanly only by an
 /// integer power of two, so every target is 44.1 kHz-family.
 const DSD_PCM_RATES: [u32; 4] = [44100, 88200, 176400, 352800];
@@ -700,11 +705,39 @@ impl PlaybackEngine {
                     // Sample offset at which the overlap window begins
                     let cf_window = crossfade_secs as u64 * samples_per_second as u64;
                     let cf_start = end_samples.saturating_sub(cf_window);
+                    // mpd refuses to cross-fade a track too short to fit the
+                    // window (mirrors `CrossFadeSettings::CanCrossFadeSong`,
+                    // src/player/CrossFade.cxx): otherwise the fade would
+                    // cover the whole song starting at sample 0.
+                    let cf_eligible =
+                        Self::can_cross_fade_song(end_samples, cf_window, samples_per_second);
 
-                    if total_samples_played >= cf_start {
+                    if cf_eligible && total_samples_played >= cf_start {
                         // Claim the pre-fetched next song (destructive take —
                         // only the first crossing of cf_start ever finds a value).
                         let cf_next = next_song.lock().take().and_then(|ps| {
+                            // Same rule applied to the incoming track: mpd
+                            // requires both songs to individually satisfy
+                            // `CanCrossFadeSong`. Unknown duration is treated
+                            // as ineligible, matching the current-track arm
+                            // above (`decoder.duration()` being `None` also
+                            // disables crossfade entirely).
+                            let next_ok = ps
+                                .song
+                                .duration
+                                .map(|d| {
+                                    let next_samples =
+                                        (d.as_secs_f64() * samples_per_second as f64) as u64;
+                                    Self::can_cross_fade_song(
+                                        next_samples,
+                                        cf_window,
+                                        samples_per_second,
+                                    )
+                                })
+                                .unwrap_or(false);
+                            if !next_ok {
+                                return None;
+                            }
                             SymphoniaDecoder::open(ps.resolved_path.as_std_path())
                                 .ok()
                                 .filter(|dec| {
@@ -1115,6 +1148,17 @@ impl PlaybackEngine {
         scale
     }
 
+    /// Whether a song of `total_samples` length is eligible to cross-fade
+    /// with a `cf_window`-sample overlap. Mirrors mpd
+    /// `CrossFadeSettings::CanCrossFadeSong` (`src/player/CrossFade.cxx`):
+    /// the song must be at least `CROSSFADE_MIN_TOTAL_SECS` long, and the
+    /// crossfade window must fit strictly within it. `total_samples` and
+    /// `cf_window` are both interleaved sample counts at `samples_per_second`.
+    fn can_cross_fade_song(total_samples: u64, cf_window: u64, samples_per_second: u64) -> bool {
+        let min_total_samples = CROSSFADE_MIN_TOTAL_SECS * samples_per_second;
+        total_samples >= min_total_samples && cf_window < total_samples
+    }
+
     /// Build the DoP encoder and start the DoP output for `decoder`. Building and
     /// starting the stream here means any failure (configured device can't do the
     /// DoP rate, device busy, no DoP DAC) surfaces as an error so the caller can
@@ -1389,5 +1433,49 @@ mod tests {
         );
         let expected = 10f32.powf(-9.0 / 20.0);
         assert!((scale - expected).abs() < 1e-6);
+    }
+
+    #[test]
+    fn crossfade_normal_length_track_is_eligible() {
+        // 3 minute track at 44.1kHz stereo, 5s crossfade window: comfortably
+        // longer than both `CROSSFADE_MIN_TOTAL_SECS` and the fade window.
+        let samples_per_second = 44100u64 * 2;
+        let total_samples = 180 * samples_per_second;
+        let cf_window = 5 * samples_per_second;
+        assert!(PlaybackEngine::can_cross_fade_song(
+            total_samples,
+            cf_window,
+            samples_per_second
+        ));
+    }
+
+    #[test]
+    fn crossfade_too_short_track_is_not_eligible() {
+        // A 3s track can't fit a 5s crossfade window, and is also below
+        // mpd's 20s `MIN_TOTAL_TIME` floor either way — mirrors
+        // `CrossFadeSettings::CanCrossFadeSong` (src/player/CrossFade.cxx).
+        let samples_per_second = 44100u64 * 2;
+        let total_samples = 3 * samples_per_second;
+        let cf_window = 5 * samples_per_second;
+        assert!(!PlaybackEngine::can_cross_fade_song(
+            total_samples,
+            cf_window,
+            samples_per_second
+        ));
+    }
+
+    #[test]
+    fn crossfade_track_above_min_time_but_shorter_than_window_is_not_eligible() {
+        // 15s track (over no minimum by itself) with a 20s crossfade window:
+        // the window would cover the entire song, which mpd also refuses
+        // (`duration < total_time` must hold strictly).
+        let samples_per_second = 44100u64 * 2;
+        let total_samples = 25 * samples_per_second;
+        let cf_window = 25 * samples_per_second;
+        assert!(!PlaybackEngine::can_cross_fade_song(
+            total_samples,
+            cf_window,
+            samples_per_second
+        ));
     }
 }
