@@ -17,6 +17,13 @@ workspace = true
 # thiserror used for error handling macros
 ignored = ["bytes", "thiserror"]
 
+[features]
+# Forwards to rmpd-library's `fingerprint` feature (see that crate's
+# Cargo.toml) so `getfingerprint` can be compiled out along with its
+# chromaprint C dependency. Default-on to match rmpd-library's default.
+default = ["fingerprint"]
+fingerprint = ["rmpd-library/fingerprint"]
+
 [dependencies]
 rmpd-core = { workspace = true, features = ["protocol-errors"] }
 rmpd-macros.workspace = true

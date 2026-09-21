@@ -46,8 +46,8 @@ fn directory_lookup_ack(command: &str, err: &rmpd_core::error::RmpdError) -> Str
 }
 use super::utils::{
     ACK_ERROR_ARG, ACK_ERROR_NO_EXIST, ACK_ERROR_PLAYLIST_MAX, ACK_ERROR_SYS,
-    add_songs_at_position, apply_range, filter_parse_ack, format_iso8601_timestamp, open_db,
-    parse_filter_args, parse_sort_tag, resolve_add_position, sort_songs,
+    add_songs_at_position, apply_range, filter_parse_ack, format_iso8601_timestamp, internal_error,
+    open_db, parse_filter_args, parse_sort_tag, resolve_add_position, sort_songs,
 };
 
 /// Resolve a client-supplied relative URI to a path within `music_dir`,
@@ -120,7 +120,7 @@ async fn handle_find_search_core(
     .await
     {
         Ok(s) => s,
-        Err(_) => ResponseBuilder::error(ACK_ERROR_SYS, 0, cmd, "internal error"),
+        Err(_) => internal_error(cmd),
     }
 }
 
@@ -300,7 +300,7 @@ pub async fn handle_list_command(
     .await
     {
         Ok(s) => s,
-        Err(_) => ResponseBuilder::error(ACK_ERROR_SYS, 0, "list", "internal error"),
+        Err(_) => internal_error("list"),
     }
 }
 
@@ -423,7 +423,7 @@ async fn handle_count_core(
     .await
     {
         Ok(s) => s,
-        Err(_) => ResponseBuilder::error(ACK_ERROR_SYS, 0, cmd, "internal error"),
+        Err(_) => internal_error(cmd),
     }
 }
 
@@ -509,12 +509,7 @@ pub async fn handle_albumart_command(
             Ok(Ok(d)) => d,
             Ok(Err(e)) => return Response::Text(e),
             Err(_) => {
-                return Response::Text(ResponseBuilder::error(
-                    ACK_ERROR_SYS,
-                    0,
-                    "albumart",
-                    "internal error",
-                ));
+                return Response::Text(internal_error("albumart"));
             }
         };
 
@@ -528,12 +523,7 @@ pub async fn handle_albumart_command(
         {
             Ok(v) => v,
             Err(_) => {
-                return Response::Text(ResponseBuilder::error(
-                    ACK_ERROR_SYS,
-                    0,
-                    "albumart",
-                    "internal error",
-                ));
+                return Response::Text(internal_error("albumart"));
             }
         };
 
@@ -547,12 +537,7 @@ pub async fn handle_albumart_command(
             {
                 Ok(e) => e,
                 Err(_) => {
-                    return Response::Text(ResponseBuilder::error(
-                        ACK_ERROR_SYS,
-                        0,
-                        "albumart",
-                        "internal error",
-                    ));
+                    return Response::Text(internal_error("albumart"));
                 }
             }
         } else {
@@ -588,12 +573,7 @@ pub async fn handle_albumart_command(
                 "albumart",
                 "No file exists",
             )),
-            Err(_) => Response::Text(ResponseBuilder::error(
-                ACK_ERROR_SYS,
-                0,
-                "albumart",
-                "internal error",
-            )),
+            Err(_) => Response::Text(internal_error("albumart")),
         };
     }
 
@@ -663,12 +643,7 @@ pub async fn handle_albumart_command(
             "albumart",
             "Offset too large",
         )),
-        Err(_) => Response::Text(ResponseBuilder::error(
-            ACK_ERROR_SYS,
-            0,
-            "albumart",
-            "internal error",
-        )),
+        Err(_) => Response::Text(internal_error("albumart")),
     }
 }
 
@@ -685,12 +660,7 @@ pub async fn handle_readpicture_command(
         Ok(Ok(d)) => d,
         Ok(Err(e)) => return Response::Text(e),
         Err(_) => {
-            return Response::Text(ResponseBuilder::error(
-                ACK_ERROR_SYS,
-                0,
-                "readpicture",
-                "internal error",
-            ));
+            return Response::Text(internal_error("readpicture"));
         }
     };
 
@@ -707,12 +677,7 @@ pub async fn handle_readpicture_command(
         {
             Ok(v) => v,
             Err(_) => {
-                return Response::Text(ResponseBuilder::error(
-                    ACK_ERROR_SYS,
-                    0,
-                    "readpicture",
-                    "internal error",
-                ));
+                return Response::Text(internal_error("readpicture"));
             }
         };
 
@@ -726,12 +691,7 @@ pub async fn handle_readpicture_command(
             {
                 Ok(e) => e,
                 Err(_) => {
-                    return Response::Text(ResponseBuilder::error(
-                        ACK_ERROR_SYS,
-                        0,
-                        "readpicture",
-                        "internal error",
-                    ));
+                    return Response::Text(internal_error("readpicture"));
                 }
             }
         } else {
@@ -758,12 +718,7 @@ pub async fn handle_readpicture_command(
             Ok(Ok(rmpd_library::ArtLookup::OffsetTooLarge)) => Response::Text(
                 ResponseBuilder::error(ACK_ERROR_ARG, 0, "readpicture", "Bad file offset"),
             ),
-            Err(_) => Response::Text(ResponseBuilder::error(
-                ACK_ERROR_SYS,
-                0,
-                "readpicture",
-                "internal error",
-            )),
+            Err(_) => Response::Text(internal_error("readpicture")),
         };
     }
 
@@ -834,12 +789,7 @@ pub async fn handle_readpicture_command(
                 ))
             }
         }
-        Err(_) => Response::Text(ResponseBuilder::error(
-            ACK_ERROR_SYS,
-            0,
-            "readpicture",
-            "internal error",
-        )),
+        Err(_) => Response::Text(internal_error("readpicture")),
     }
 }
 
@@ -969,7 +919,7 @@ pub async fn handle_lsinfo_command(state: &AppState, path: Option<&str>) -> Stri
     .await
     {
         Ok(s) => s,
-        Err(_) => ResponseBuilder::error(ACK_ERROR_SYS, 0, "lsinfo", "internal error"),
+        Err(_) => internal_error("lsinfo"),
     }
 }
 
@@ -1021,7 +971,7 @@ pub async fn handle_listall_command(state: &AppState, path: Option<&str>) -> Str
     .await
     {
         Ok(s) => s,
-        Err(_) => ResponseBuilder::error(ACK_ERROR_SYS, 0, "listall", "internal error"),
+        Err(_) => internal_error("listall"),
     }
 }
 
@@ -1081,7 +1031,7 @@ pub async fn handle_listallinfo_command(state: &AppState, path: Option<&str>) ->
     .await
     {
         Ok(s) => s,
-        Err(_) => ResponseBuilder::error(ACK_ERROR_SYS, 0, "listallinfo", "internal error"),
+        Err(_) => internal_error("listallinfo"),
     }
 }
 
@@ -1123,7 +1073,7 @@ async fn handle_match_add_core(
     {
         Ok(Ok(s)) => s,
         Ok(Err(e)) => return e,
-        Err(_) => return ResponseBuilder::error(ACK_ERROR_SYS, 0, cmd, "internal error"),
+        Err(_) => return internal_error(cmd),
     };
 
     let position = match resolve_add_position(state, position, cmd).await {
@@ -1259,7 +1209,7 @@ pub async fn handle_listfiles_command(state: &AppState, uri: Option<&str>) -> St
             Ok(Some(resp)) => return resp,
             Ok(None) => {} // For empty path (root), fall through to DB-based listing
             Err(_) => {
-                return ResponseBuilder::error(ACK_ERROR_SYS, 0, "listfiles", "internal error");
+                return internal_error("listfiles");
             }
         }
     }
@@ -1304,7 +1254,7 @@ pub async fn handle_listfiles_command(state: &AppState, uri: Option<&str>) -> St
     .await
     {
         Ok(s) => s,
-        Err(_) => ResponseBuilder::error(ACK_ERROR_SYS, 0, "listfiles", "internal error"),
+        Err(_) => internal_error("listfiles"),
     }
 }
 
@@ -1395,6 +1345,6 @@ pub async fn handle_readcomments_command(state: &AppState, uri: &str) -> String 
     {
         Ok(Ok(s)) => s,
         Ok(Err(s)) => s,
-        Err(_) => ResponseBuilder::error(ACK_ERROR_SYS, 0, "readcomments", "internal error"),
+        Err(_) => internal_error("readcomments"),
     }
 }

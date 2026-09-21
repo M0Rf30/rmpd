@@ -75,7 +75,10 @@ rmpd-core = { path = "rmpd-core" }
 rmpd-macros = { path = "rmpd-macros" }
 rmpd-protocol = { path = "rmpd-protocol" }
 rmpd-player = { path = "rmpd-player" }
-rmpd-library = { path = "rmpd-library" }
+# default-features = false: rmpd-library's `fingerprint` feature (chromaprint)
+# is opt-in per consumer via feature forwarding (see rmpd-protocol's
+# Cargo.toml), not inherited automatically by every dependent.
+rmpd-library = { path = "rmpd-library", default-features = false }
 rmpd-plugin = { path = "rmpd-plugin" }
 rmpd-stream = { path = "rmpd-stream" }
 rmpd-source = { path = "rmpd-source" }
@@ -84,9 +87,14 @@ rmpd-source = { path = "rmpd-source" }
 too_many_arguments = "allow"
 type_complexity = "allow"
 empty_line_after_doc_comments = "allow"
-redundant_field_names = "allow"
-unnecessary_cast = "allow"
-same_item_push = "allow"
+
+# This is a DSP-heavy workspace (symphonia, rubato, rayon, tantivy); building
+# their dependency tree at the default -O0 makes even `cargo test`/`cargo
+# check` crawl through real decode/resample/index work. Opt dependencies
+# into -O2 under the dev profile while leaving workspace-member crates (and
+# incremental compilation) at debug speed.
+[profile.dev.package."*"]
+opt-level = 2
 
 [profile.release]
 opt-level = 3

@@ -10,87 +10,87 @@ type PResult<O> = Result<O, ErrMode<ContextError>>;
 #[derive(Debug, Clone, PartialEq, rmpd_macros::CommandMetadata)]
 pub enum Command {
     // Playback control
-    #[command(name = "play", permission = 16)]
+    #[command(name = "play", permission = 16, args = "0..1")]
     Play { position: Option<u32> },
-    #[command(name = "playid", permission = 16)]
+    #[command(name = "playid", permission = 16, args = "0..1")]
     PlayId { id: Option<u32> },
-    #[command(name = "pause", permission = 16)]
+    #[command(name = "pause", permission = 16, args = "0..1")]
     Pause { state: Option<bool> },
-    #[command(name = "stop", permission = 16)]
+    #[command(name = "stop", permission = 16, args = "0..0")]
     Stop,
-    #[command(name = "next", permission = 16)]
+    #[command(name = "next", permission = 16, args = "0..0")]
     Next,
-    #[command(name = "previous", permission = 16)]
+    #[command(name = "previous", permission = 16, args = "0..0")]
     Previous,
-    #[command(name = "seek", permission = 16)]
+    #[command(name = "seek", permission = 16, args = "2..2")]
     Seek { position: u32, time: f64 },
-    #[command(name = "seekid", permission = 16)]
+    #[command(name = "seekid", permission = 16, args = "2..2")]
     SeekId { id: u32, time: f64 },
-    #[command(name = "seekcur", permission = 16)]
+    #[command(name = "seekcur", permission = 16, args = "1..1")]
     SeekCur { time: f64, relative: bool },
 
     // Queue management
-    #[command(name = "add", permission = 2)]
+    #[command(name = "add", permission = 2, args = "1..2")]
     Add {
         uri: String,
         position: Option<InsertPosition>,
     },
-    #[command(name = "addid", permission = 2)]
+    #[command(name = "addid", permission = 2, args = "1..2")]
     AddId {
         uri: String,
         position: Option<InsertPosition>,
     },
-    #[command(name = "delete", permission = 16)]
+    #[command(name = "delete", permission = 16, args = "1..1")]
     Delete { target: DeleteTarget },
-    #[command(name = "deleteid", permission = 16)]
+    #[command(name = "deleteid", permission = 16, args = "1..1")]
     DeleteId { id: u32 },
-    #[command(name = "clear", permission = 16)]
+    #[command(name = "clear", permission = 16, args = "0..0")]
     Clear,
-    #[command(name = "move", permission = 16)]
+    #[command(name = "move", permission = 16, args = "2..2")]
     Move { from: MoveFrom, to: InsertPosition },
-    #[command(name = "moveid", permission = 16)]
+    #[command(name = "moveid", permission = 16, args = "2..2")]
     MoveId { id: u32, to: InsertPosition },
-    #[command(name = "shuffle", permission = 16)]
+    #[command(name = "shuffle", permission = 16, args = "0..1")]
     Shuffle { range: Option<(u32, u32)> },
-    #[command(name = "swap", permission = 16)]
+    #[command(name = "swap", permission = 16, args = "2..2")]
     Swap { pos1: u32, pos2: u32 },
-    #[command(name = "swapid", permission = 16)]
+    #[command(name = "swapid", permission = 16, args = "2..2")]
     SwapId { id1: u32, id2: u32 },
 
     // Status
-    #[command(name = "status", permission = 1)]
+    #[command(name = "status", permission = 1, args = "0..0")]
     Status,
-    #[command(name = "currentsong", permission = 1)]
+    #[command(name = "currentsong", permission = 1, args = "0..0")]
     CurrentSong,
-    #[command(name = "stats", permission = 1)]
+    #[command(name = "stats", permission = 1, args = "0..0")]
     Stats,
-    #[command(name = "clearerror", permission = 16)]
+    #[command(name = "clearerror", permission = 16, args = "0..0")]
     ClearError,
 
     // Queue inspection
-    #[command(name = "playlistinfo", permission = 1)]
+    #[command(name = "playlistinfo", permission = 1, args = "0..1")]
     PlaylistInfo { range: Option<(u32, u32)> },
-    #[command(name = "playlistid", permission = 1)]
+    #[command(name = "playlistid", permission = 1, args = "0..1")]
     PlaylistId { id: Option<u32> },
-    #[command(name = "playlist", permission = 1)]
+    #[command(name = "playlist", permission = 1, args = "0..0")]
     Playlist,
-    #[command(name = "plchanges", permission = 1)]
+    #[command(name = "plchanges", permission = 1, args = "1..2")]
     PlChanges {
         version: u32,
         range: Option<(u32, u32)>,
     },
-    #[command(name = "plchangesposid", permission = 1)]
+    #[command(name = "plchangesposid", permission = 1, args = "1..2")]
     PlChangesPosId {
         version: u32,
         range: Option<(u32, u32)>,
     },
-    #[command(name = "playlistfind", permission = 1)]
+    #[command(name = "playlistfind", permission = 1, args = "1..-1")]
     PlaylistFind {
         filters: Vec<(String, String)>,
         sort: Option<String>,
         window: Option<(u32, u32)>,
     },
-    #[command(name = "playlistsearch", permission = 1)]
+    #[command(name = "playlistsearch", permission = 1, args = "1..-1")]
     PlaylistSearch {
         filters: Vec<(String, String)>,
         sort: Option<String>,
@@ -98,178 +98,178 @@ pub enum Command {
     },
 
     // Volume
-    #[command(name = "setvol", permission = 16)]
+    #[command(name = "setvol", permission = 16, args = "1..1")]
     SetVol { volume: u8 },
-    #[command(name = "volume", permission = 16)]
+    #[command(name = "volume", permission = 16, args = "1..1")]
     Volume { change: i32 },
-    #[command(name = "getvol", permission = 1)]
+    #[command(name = "getvol", permission = 1, args = "0..0")]
     GetVol,
 
     // Options
-    #[command(name = "repeat", permission = 16)]
+    #[command(name = "repeat", permission = 16, args = "1..1")]
     Repeat { enabled: bool },
-    #[command(name = "random", permission = 16)]
+    #[command(name = "random", permission = 16, args = "1..1")]
     Random { enabled: bool },
-    #[command(name = "single", permission = 16)]
+    #[command(name = "single", permission = 16, args = "1..1")]
     Single { mode: String },
-    #[command(name = "consume", permission = 16)]
+    #[command(name = "consume", permission = 16, args = "1..1")]
     Consume { mode: String },
-    #[command(name = "crossfade", permission = 16)]
+    #[command(name = "crossfade", permission = 16, args = "1..1")]
     Crossfade { seconds: u32 },
-    #[command(name = "replay_gain_mode", permission = 16)]
+    #[command(name = "replay_gain_mode", permission = 16, args = "1..1")]
     ReplayGainMode { mode: String },
-    #[command(name = "replay_gain_status", permission = 1)]
+    #[command(name = "replay_gain_status", permission = 1, args = "0..0")]
     ReplayGainStatus,
 
     // Connection
     #[command(name = "close")]
     Close,
-    #[command(name = "ping")]
+    #[command(name = "ping", args = "0..0")]
     Ping,
-    #[command(name = "password")]
+    #[command(name = "password", args = "1..1")]
     Password { password: String },
-    #[command(name = "binarylimit")]
+    #[command(name = "binarylimit", args = "1..1")]
     BinaryLimit { size: u32 },
-    #[command(name = "protocol")]
+    #[command(name = "protocol", args = "0..-1")]
     Protocol {
         subcommand: Option<ProtocolSubcommand>,
     },
 
     // Reflection
-    #[command(name = "commands")]
+    #[command(name = "commands", args = "0..0")]
     Commands,
-    #[command(name = "notcommands")]
+    #[command(name = "notcommands", args = "0..0")]
     NotCommands,
-    #[command(name = "tagtypes")]
+    #[command(name = "tagtypes", args = "0..-1")]
     TagTypes {
         subcommand: Option<TagTypesSubcommand>,
     },
-    #[command(name = "urlhandlers", permission = 1)]
+    #[command(name = "urlhandlers", permission = 1, args = "0..0")]
     UrlHandlers,
-    #[command(name = "decoders", permission = 1)]
+    #[command(name = "decoders", permission = 1, args = "0..0")]
     Decoders,
-    #[command(name = "stringnormalization")]
+    #[command(name = "stringnormalization", args = "0..-1")]
     StringNormalization {
         subcommand: Option<StringNormalizationSubcommand>,
     },
 
     // Database
-    #[command(name = "update", permission = 4)]
+    #[command(name = "update", permission = 4, args = "0..1")]
     Update { path: Option<String> },
-    #[command(name = "rescan", permission = 4)]
+    #[command(name = "rescan", permission = 4, args = "0..1")]
     Rescan { path: Option<String> },
-    #[command(name = "find", permission = 1)]
+    #[command(name = "find", permission = 1, args = "1..-1")]
     Find {
         filters: Vec<(String, String)>,
         sort: Option<String>,
         window: Option<(u32, u32)>,
     },
-    #[command(name = "search", permission = 1)]
+    #[command(name = "search", permission = 1, args = "1..-1")]
     Search {
         filters: Vec<(String, String)>,
         sort: Option<String>,
         window: Option<(u32, u32)>,
     },
-    #[command(name = "list", permission = 1)]
+    #[command(name = "list", permission = 1, args = "1..-1")]
     List {
         tag: String,
         filters: Vec<(String, String)>,
         groups: Vec<String>,
         window: Option<(u32, u32)>,
     },
-    #[command(name = "listall", permission = 1)]
+    #[command(name = "listall", permission = 1, args = "0..1")]
     ListAll { path: Option<String> },
-    #[command(name = "listallinfo", permission = 1)]
+    #[command(name = "listallinfo", permission = 1, args = "0..1")]
     ListAllInfo { path: Option<String> },
-    #[command(name = "lsinfo", permission = 1)]
+    #[command(name = "lsinfo", permission = 1, args = "0..1")]
     LsInfo { path: Option<String> },
-    #[command(name = "count", permission = 1)]
+    #[command(name = "count", permission = 1, args = "1..-1")]
     Count {
         filters: Vec<(String, String)>,
         group: Option<String>,
     },
-    #[command(name = "searchcount", permission = 1)]
+    #[command(name = "searchcount", permission = 1, args = "1..-1")]
     SearchCount {
         filters: Vec<(String, String)>,
         group: Option<String>,
     },
-    #[command(name = "getfingerprint", permission = 1)]
+    #[command(name = "getfingerprint", permission = 1, args = "1..1")]
     GetFingerprint { uri: String },
-    #[command(name = "readcomments", permission = 1)]
+    #[command(name = "readcomments", permission = 1, args = "1..1")]
     ReadComments { uri: String },
 
     // Album art
-    #[command(name = "albumart", permission = 1)]
+    #[command(name = "albumart", permission = 1, args = "2..2")]
     AlbumArt { uri: String, offset: usize },
-    #[command(name = "readpicture", permission = 1)]
+    #[command(name = "readpicture", permission = 1, args = "2..2")]
     ReadPicture { uri: String, offset: usize },
 
     // Stored playlists
-    #[command(name = "save", permission = 4)]
+    #[command(name = "save", permission = 4, args = "1..2")]
     Save { name: String, mode: Option<String> },
-    #[command(name = "load", permission = 2)]
+    #[command(name = "load", permission = 2, args = "1..3")]
     Load {
         name: String,
         range: Option<(u32, u32)>,
         position: Option<InsertPosition>,
     },
-    #[command(name = "listplaylists", permission = 1)]
+    #[command(name = "listplaylists", permission = 1, args = "0..0")]
     ListPlaylists,
-    #[command(name = "listplaylist", permission = 1)]
+    #[command(name = "listplaylist", permission = 1, args = "1..2")]
     ListPlaylist {
         name: String,
         range: Option<(u32, u32)>,
     },
-    #[command(name = "listplaylistinfo", permission = 1)]
+    #[command(name = "listplaylistinfo", permission = 1, args = "1..2")]
     ListPlaylistInfo {
         name: String,
         range: Option<(u32, u32)>,
     },
-    #[command(name = "playlistadd", permission = 4)]
+    #[command(name = "playlistadd", permission = 4, args = "2..3")]
     PlaylistAdd {
         name: String,
         uri: String,
         position: Option<u32>,
     },
-    #[command(name = "playlistclear", permission = 4)]
+    #[command(name = "playlistclear", permission = 4, args = "1..1")]
     PlaylistClear { name: String },
-    #[command(name = "playlistdelete", permission = 4)]
+    #[command(name = "playlistdelete", permission = 4, args = "2..2")]
     PlaylistDelete { name: String, range: (u32, u32) },
-    #[command(name = "playlistmove", permission = 4)]
+    #[command(name = "playlistmove", permission = 4, args = "3..3")]
     PlaylistMove {
         name: String,
         from: (u32, u32),
         to: u32,
     },
-    #[command(name = "rm", permission = 4)]
+    #[command(name = "rm", permission = 4, args = "1..1")]
     Rm { name: String },
-    #[command(name = "rename", permission = 4)]
+    #[command(name = "rename", permission = 4, args = "2..2")]
     Rename { from: String, to: String },
-    #[command(name = "searchplaylist", permission = 1)]
+    #[command(name = "searchplaylist", permission = 1, args = "2..4")]
     SearchPlaylist {
         name: String,
         filters: Vec<(String, String)>,
         window: Option<(u32, u32)>,
     },
-    #[command(name = "playlistlength", permission = 1)]
+    #[command(name = "playlistlength", permission = 1, args = "1..1")]
     PlaylistLength { name: String },
 
     // Idle notifications
-    #[command(name = "idle", permission = 1)]
+    #[command(name = "idle", permission = 1, args = "0..-1")]
     Idle { subsystems: Vec<String> },
     #[command(name = "noidle")]
     NoIdle,
 
     // Output control
-    #[command(name = "outputs", permission = 1)]
+    #[command(name = "outputs", permission = 1, args = "0..0")]
     Outputs,
-    #[command(name = "enableoutput", permission = 8)]
+    #[command(name = "enableoutput", permission = 8, args = "1..1")]
     EnableOutput { id: u32 },
-    #[command(name = "disableoutput", permission = 8)]
+    #[command(name = "disableoutput", permission = 8, args = "1..1")]
     DisableOutput { id: u32 },
-    #[command(name = "toggleoutput", permission = 8)]
+    #[command(name = "toggleoutput", permission = 8, args = "1..1")]
     ToggleOutput { id: u32 },
-    #[command(name = "outputset", permission = 8)]
+    #[command(name = "outputset", permission = 8, args = "3..3")]
     OutputSet {
         id: u32,
         name: String,
@@ -285,14 +285,14 @@ pub enum Command {
     CommandListEnd,
 
     // Advanced database
-    #[command(name = "searchadd", permission = 2)]
+    #[command(name = "searchadd", permission = 2, args = "1..-1")]
     SearchAdd {
         filters: Vec<(String, String)>,
         sort: Option<String>,
         window: Option<(u32, u32)>,
         position: Option<InsertPosition>,
     },
-    #[command(name = "searchaddpl", permission = 4)]
+    #[command(name = "searchaddpl", permission = 4, args = "2..-1")]
     SearchAddPl {
         name: String,
         filters: Vec<(String, String)>,
@@ -300,18 +300,18 @@ pub enum Command {
         window: Option<(u32, u32)>,
         position: Option<u32>,
     },
-    #[command(name = "findadd", permission = 2)]
+    #[command(name = "findadd", permission = 2, args = "1..-1")]
     FindAdd {
         filters: Vec<(String, String)>,
         sort: Option<String>,
         window: Option<(u32, u32)>,
         position: Option<InsertPosition>,
     },
-    #[command(name = "listfiles", permission = 1)]
+    #[command(name = "listfiles", permission = 1, args = "0..1")]
     ListFiles { uri: Option<String> },
 
     // Sticker database
-    #[command(name = "sticker", permission = 8)]
+    #[command(name = "sticker", permission = 8, args = "3..-1")]
     StickerGet {
         sticker_type: String,
         uri: String,
@@ -362,70 +362,70 @@ pub enum Command {
     /// the domain itself is valid.
     #[command(name = "sticker", permission = 8)]
     StickerInvalid { sticker_type: String },
-    #[command(name = "stickernames", permission = 8)]
+    #[command(name = "stickernames", permission = 8, args = "0..0")]
     StickerNames,
-    #[command(name = "stickertypes", permission = 8)]
+    #[command(name = "stickertypes", permission = 8, args = "0..0")]
     StickerTypes,
-    #[command(name = "stickernamestypes", permission = 8)]
+    #[command(name = "stickernamestypes", permission = 8, args = "0..1")]
     StickerNamesTypes { sticker_type: Option<String> },
 
     // Partitions
-    #[command(name = "partition", permission = 1)]
+    #[command(name = "partition", permission = 1, args = "1..1")]
     Partition { name: String },
-    #[command(name = "listpartitions", permission = 1)]
+    #[command(name = "listpartitions", permission = 1, args = "0..0")]
     ListPartitions,
-    #[command(name = "newpartition", permission = 8)]
+    #[command(name = "newpartition", permission = 8, args = "1..1")]
     NewPartition { name: String },
-    #[command(name = "delpartition", permission = 8)]
+    #[command(name = "delpartition", permission = 8, args = "1..1")]
     DelPartition { name: String },
-    #[command(name = "moveoutput", permission = 8)]
+    #[command(name = "moveoutput", permission = 8, args = "1..1")]
     MoveOutput { name: String },
 
     // Mounts
-    #[command(name = "mount", permission = 8)]
+    #[command(name = "mount", permission = 8, args = "2..2")]
     Mount { path: String, uri: String },
-    #[command(name = "unmount", permission = 8)]
+    #[command(name = "unmount", permission = 8, args = "1..1")]
     Unmount { path: String },
-    #[command(name = "listmounts", permission = 1)]
+    #[command(name = "listmounts", permission = 1, args = "0..0")]
     ListMounts,
-    #[command(name = "listneighbors", permission = 1)]
+    #[command(name = "listneighbors", permission = 1, args = "0..0")]
     ListNeighbors,
 
     // Client-to-client messaging
-    #[command(name = "subscribe", permission = 1)]
+    #[command(name = "subscribe", permission = 1, args = "1..1")]
     Subscribe { channel: String },
-    #[command(name = "unsubscribe", permission = 1)]
+    #[command(name = "unsubscribe", permission = 1, args = "1..1")]
     Unsubscribe { channel: String },
-    #[command(name = "channels", permission = 1)]
+    #[command(name = "channels", permission = 1, args = "0..0")]
     Channels,
-    #[command(name = "readmessages", permission = 1)]
+    #[command(name = "readmessages", permission = 1, args = "0..0")]
     ReadMessages,
-    #[command(name = "sendmessage", permission = 4)]
+    #[command(name = "sendmessage", permission = 4, args = "2..2")]
     SendMessage { channel: String, message: String },
 
     // Advanced queue operations
-    #[command(name = "prio", permission = 16)]
+    #[command(name = "prio", permission = 16, args = "2..-1")]
     Prio {
         priority: u8,
         ranges: Vec<(u32, u32)>,
     },
-    #[command(name = "prioid", permission = 16)]
+    #[command(name = "prioid", permission = 16, args = "2..-1")]
     PrioId { priority: u8, ids: Vec<u32> },
-    #[command(name = "rangeid", permission = 2)]
+    #[command(name = "rangeid", permission = 2, args = "2..2")]
     RangeId { id: u32, range: Option<(f64, f64)> },
-    #[command(name = "addtagid", permission = 2)]
+    #[command(name = "addtagid", permission = 2, args = "3..3")]
     AddTagId { id: u32, tag: String, value: String },
-    #[command(name = "cleartagid", permission = 2)]
+    #[command(name = "cleartagid", permission = 2, args = "1..2")]
     ClearTagId { id: u32, tag: Option<String> },
 
     // Miscellaneous
-    #[command(name = "config", permission = 8)]
+    #[command(name = "config", permission = 8, args = "0..0")]
     Config,
     #[command(name = "kill", permission = 8)]
     Kill,
-    #[command(name = "mixrampdb", permission = 16)]
+    #[command(name = "mixrampdb", permission = 16, args = "1..1")]
     MixRampDb { decibels: f32 },
-    #[command(name = "mixrampdelay", permission = 16)]
+    #[command(name = "mixrampdelay", permission = 16, args = "1..1")]
     MixRampDelay { seconds: f32 },
 
     // Unknown/Invalid
@@ -585,48 +585,6 @@ fn count_args(rest: &str) -> Option<usize> {
         parse_quoted_or_unquoted.parse_next(&mut rest).ok()?;
         n += 1;
     }
-}
-
-/// Per-command `(min, max)` argument-count bounds, mirroring the `commands[]`
-/// table in MPD's `src/command/AllCommands.cxx` (`max == -1` means
-/// unlimited). `close` and `kill` have unchecked arity in MPD (`min: -1`,
-/// "don't check args") and are omitted; their parser arms consume any
-/// trailing arguments instead of failing on them.
-fn command_arity(name: &str) -> Option<(i32, i32)> {
-    Some(match name {
-        "add" | "addid" | "cleartagid" | "listplaylist" | "listplaylistinfo" => (1, 2),
-        "addtagid" | "outputset" => (3, 3),
-        "albumart" | "readpicture" => (2, 2),
-        "binarylimit" | "consume" | "crossfade" | "delete" | "deleteid" | "delpartition"
-        | "disableoutput" | "enableoutput" | "getfingerprint" | "mixrampdb" | "mixrampdelay"
-        | "moveoutput" | "newpartition" | "partition" | "password" | "playlistclear"
-        | "playlistlength" | "random" | "readcomments" | "repeat" | "replay_gain_mode" | "rm"
-        | "setvol" | "single" | "subscribe" | "toggleoutput" | "unmount" | "unsubscribe"
-        | "volume" => (1, 1),
-        "channels" | "clear" | "clearerror" | "commands" | "config" | "currentsong"
-        | "decoders" | "getvol" | "listmounts" | "listneighbors" | "listpartitions"
-        | "listplaylists" | "next" | "notcommands" | "outputs" | "playlist" | "previous"
-        | "ping" | "readmessages" | "replay_gain_status" | "stats" | "status" | "stickernames"
-        | "stickertypes" | "stop" | "urlhandlers" => (0, 0),
-        "count" | "find" | "findadd" | "list" | "playlistfind" | "playlistsearch" | "search"
-        | "searchadd" | "searchcount" => (1, -1),
-        "idle" | "protocol" | "stringnormalization" | "tagtypes" => (0, -1),
-        "listall" | "listallinfo" | "listfiles" | "lsinfo" | "pause" | "play" | "playid"
-        | "playlistid" | "playlistinfo" | "rescan" | "shuffle" | "stickernamestypes" | "update" => {
-            (0, 1)
-        }
-        "load" => (1, 3),
-        "mount" | "move" | "moveid" | "playlistdelete" | "rangeid" | "rename" | "seek"
-        | "seekid" | "sendmessage" | "swap" | "swapid" => (2, 2),
-        "plchanges" | "plchangesposid" | "save" => (1, 2),
-        "playlistadd" => (2, 3),
-        "playlistmove" => (3, 3),
-        "sticker" => (3, -1),
-        "prio" | "prioid" | "searchaddpl" => (2, -1),
-        "searchplaylist" => (2, 4),
-        "seekcur" => (1, 1),
-        _ => return None,
-    })
 }
 
 fn command_parser(input: &mut &str) -> PResult<Command> {
@@ -2252,6 +2210,24 @@ mod tests {
             parse_command("play 5").unwrap(),
             Command::Play { position: Some(5) }
         );
+    }
+
+    #[test]
+    fn test_command_arity_spot_check() {
+        // One representative command per (min, max) shape, verbatim from the
+        // old hand-written `command_arity` table (now generated from the
+        // `#[command(args = "...")]` attributes on `Command`'s variants).
+        assert_eq!(command_arity("stop"), Some((0, 0)));
+        assert_eq!(command_arity("setvol"), Some((1, 1)));
+        assert_eq!(command_arity("play"), Some((0, 1)));
+        assert_eq!(command_arity("find"), Some((1, -1)));
+        assert_eq!(command_arity("prio"), Some((2, -1)));
+        assert_eq!(command_arity("searchplaylist"), Some((2, 4)));
+        assert_eq!(command_arity("load"), Some((1, 3)));
+        // Commands with unchecked/no arity stay `None`.
+        assert_eq!(command_arity("close"), None);
+        assert_eq!(command_arity("kill"), None);
+        assert_eq!(command_arity("nosuchcommand"), None);
     }
 
     #[test]

@@ -66,6 +66,25 @@ deny = [
 skip = [
     # Skip duplicate version warnings for these crates
     # (they may have multiple versions in the dep tree)
+    #
+    # base64 0.22 is pinned internally by hyper-util (part of reqwest's
+    # HTTP stack) and by tantivy; both are third-party crates whose
+    # Cargo.toml we don't control from this workspace. Our own dependents
+    # (reqwest itself, rmpd-library) already pull the current major via
+    # `base64 = "0.23"` in [workspace.dependencies] — nothing to bump here.
+    { name = "base64", version = "0.22" },
+    # rand 0.9 is pinned internally by opensubsonic-rs (a separate git repo,
+    # only pulled in when the `subsonic` feature is enabled). We don't
+    # control that repo's Cargo.toml from here. Our own crates use
+    # `rand = "0.10"` (rmpd-core, via [workspace.dependencies]). Do not
+    # force-patch a transitive dependency to work around this.
+    { name = "rand", version = "0.9" },
+    #
+    # NOTE: thiserror 1.0.69 also appears in Cargo.lock (pulled by ndk, an
+    # Android-only dependency of the RustAudio/cpal fork we pin) alongside
+    # our thiserror = "2". It is not listed here because it never resolves
+    # for any target in `[graph] targets` above (none of them is Android),
+    # so cargo-deny's bans check never sees it as a duplicate in practice.
 ]
 
 skip-tree = [

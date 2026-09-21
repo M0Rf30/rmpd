@@ -125,8 +125,7 @@ to every build including `cargo clippy`:
 
 - `-W clippy::all` - the only lint group enabled by default (`clippy::pedantic`, `clippy::nursery`
   and `clippy::cargo` are **not** turned on anywhere in the workspace)
-- Explicit allows: `too_many_arguments`, `type_complexity`, `empty_line_after_doc_comments`,
-  `redundant_field_names`, `unnecessary_cast`, `same_item_push`
+- Explicit allows: `too_many_arguments`, `type_complexity`, `empty_line_after_doc_comments`
 - Each crate's `lib.rs` additionally has `#![allow(clippy::cargo_common_metadata)]`
 
 `clippy.toml` sets thresholds and denylists, not lint groups:

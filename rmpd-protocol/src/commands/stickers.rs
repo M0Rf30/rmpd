@@ -13,7 +13,10 @@
 use crate::response::ResponseBuilder;
 use crate::state::AppState;
 
-use super::utils::{ACK_ERROR_ARG, ACK_ERROR_NO_EXIST, ACK_ERROR_SYS, apply_range, open_db};
+use super::utils::{
+    ACK_ERROR_ARG, ACK_ERROR_NO_EXIST, ACK_ERROR_SYS, apply_range, internal_error, open_db,
+    sys_error,
+};
 
 /// Tags MPD allows stickers on, in `sticker/AllowedTags.cxx` enum order.
 const STICKER_ALLOWED_TAGS: &[&str] = &[
@@ -229,11 +232,11 @@ pub async fn handle_sticker_get_command(
                 "sticker",
                 &format!("no such sticker: {:?}", name),
             ),
-            Err(e) => ResponseBuilder::error(ACK_ERROR_SYS, 0, "sticker", &format!("Error: {e}")),
+            Err(e) => sys_error("sticker", e),
         }
     })
     .await
-    .unwrap_or_else(|_| ResponseBuilder::error(ACK_ERROR_SYS, 0, "sticker", "internal error"))
+    .unwrap_or_else(|_| internal_error("sticker"))
 }
 
 pub async fn handle_sticker_set_command(
@@ -265,19 +268,11 @@ pub async fn handle_sticker_set_command(
 
         match db.set_sticker(&uri, &name, &value) {
             Ok(_) => (true, ResponseBuilder::new().ok()),
-            Err(e) => (
-                false,
-                ResponseBuilder::error(ACK_ERROR_SYS, 0, "sticker", &format!("Error: {e}")),
-            ),
+            Err(e) => (false, sys_error("sticker", e)),
         }
     })
     .await
-    .unwrap_or_else(|_| {
-        (
-            false,
-            ResponseBuilder::error(ACK_ERROR_SYS, 0, "sticker", "internal error"),
-        )
-    });
+    .unwrap_or_else(|_| (false, internal_error("sticker")));
     if changed {
         notify_sticker_changed(state);
     }
@@ -329,10 +324,7 @@ pub async fn handle_sticker_delete_command(
                     );
                 }
                 Err(e) => {
-                    return (
-                        false,
-                        ResponseBuilder::error(ACK_ERROR_SYS, 0, "sticker", &format!("Error: {e}")),
-                    );
+                    return (false, sys_error("sticker", e));
                 }
                 Ok(Some(_)) => {}
             }
@@ -340,19 +332,11 @@ pub async fn handle_sticker_delete_command(
 
         match db.delete_sticker(&uri, name) {
             Ok(_) => (true, ResponseBuilder::new().ok()),
-            Err(e) => (
-                false,
-                ResponseBuilder::error(ACK_ERROR_SYS, 0, "sticker", &format!("Error: {e}")),
-            ),
+            Err(e) => (false, sys_error("sticker", e)),
         }
     })
     .await
-    .unwrap_or_else(|_| {
-        (
-            false,
-            ResponseBuilder::error(ACK_ERROR_SYS, 0, "sticker", "internal error"),
-        )
-    });
+    .unwrap_or_else(|_| (false, internal_error("sticker")));
     if changed {
         notify_sticker_changed(state);
     }
@@ -388,11 +372,11 @@ pub async fn handle_sticker_list_command(
                 }
                 resp.ok()
             }
-            Err(e) => ResponseBuilder::error(ACK_ERROR_SYS, 0, "sticker", &format!("Error: {e}")),
+            Err(e) => sys_error("sticker", e),
         }
     })
     .await
-    .unwrap_or_else(|_| ResponseBuilder::error(ACK_ERROR_SYS, 0, "sticker", "internal error"))
+    .unwrap_or_else(|_| internal_error("sticker"))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -478,11 +462,11 @@ pub async fn handle_sticker_find_command(
                 }
                 resp.ok()
             }
-            Err(e) => ResponseBuilder::error(ACK_ERROR_SYS, 0, "sticker", &format!("Error: {e}")),
+            Err(e) => sys_error("sticker", e),
         }
     })
     .await
-    .unwrap_or_else(|_| ResponseBuilder::error(ACK_ERROR_SYS, 0, "sticker", "internal error"))
+    .unwrap_or_else(|_| internal_error("sticker"))
 }
 
 /// Shared core for `sticker inc` / `sticker dec`.
@@ -516,19 +500,11 @@ async fn adjust_sticker_value(
             // MPD's Inc/Dec (StickerCommands.cxx) never print the new
             // value: just OK, unlike Get/Find's `sticker_print_value`.
             Ok(_) => (true, ResponseBuilder::new().ok()),
-            Err(e) => (
-                false,
-                ResponseBuilder::error(ACK_ERROR_SYS, 0, "sticker", &format!("Error: {e}")),
-            ),
+            Err(e) => (false, sys_error("sticker", e)),
         }
     })
     .await
-    .unwrap_or_else(|_| {
-        (
-            false,
-            ResponseBuilder::error(ACK_ERROR_SYS, 0, "sticker", "internal error"),
-        )
-    });
+    .unwrap_or_else(|_| (false, internal_error("sticker")));
     if changed {
         notify_sticker_changed(state);
     }
@@ -573,13 +549,11 @@ pub async fn handle_sticker_names_command(state: &AppState) -> String {
                 }
                 resp.ok()
             }
-            Err(e) => {
-                ResponseBuilder::error(ACK_ERROR_SYS, 0, "stickernames", &format!("Error: {e}"))
-            }
+            Err(e) => sys_error("stickernames", e),
         }
     })
     .await
-    .unwrap_or_else(|_| ResponseBuilder::error(ACK_ERROR_SYS, 0, "stickernames", "internal error"))
+    .unwrap_or_else(|_| internal_error("stickernames"))
 }
 
 /// List available sticker types. Only `song` and the tag-name domains in
@@ -648,16 +622,9 @@ pub async fn handle_sticker_namestypes_command(
                 }
                 resp.ok()
             }
-            Err(e) => ResponseBuilder::error(
-                ACK_ERROR_SYS,
-                0,
-                "stickernamestypes",
-                &format!("Error: {e}"),
-            ),
+            Err(e) => sys_error("stickernamestypes", e),
         }
     })
     .await
-    .unwrap_or_else(|_| {
-        ResponseBuilder::error(ACK_ERROR_SYS, 0, "stickernamestypes", "internal error")
-    })
+    .unwrap_or_else(|_| internal_error("stickernamestypes"))
 }

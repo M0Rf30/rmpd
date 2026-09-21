@@ -703,7 +703,7 @@ impl PlaybackEngine {
                 };
                 if let Some(end_samples) = cf_end_samples {
                     // Sample offset at which the overlap window begins
-                    let cf_window = crossfade_secs as u64 * samples_per_second as u64;
+                    let cf_window = crossfade_secs as u64 * samples_per_second;
                     let cf_start = end_samples.saturating_sub(cf_window);
                     // mpd refuses to cross-fade a track too short to fit the
                     // window (mirrors `CrossFadeSettings::CanCrossFadeSong`,

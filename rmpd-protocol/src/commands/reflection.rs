@@ -127,10 +127,22 @@ const COMMAND_PERMISSIONS: &[(&str, u8)] = &[
     ("volume", PERMISSION_PLAYER),
 ];
 
+/// `getfingerprint` is only dispatchable when the `fingerprint` feature is
+/// compiled in; without it the handler always ACKs. Hide it from `commands`
+/// so clients don't advertise a command this build can't run.
+fn command_is_compiled_in(cmd: &str) -> bool {
+    #[cfg(not(feature = "fingerprint"))]
+    if cmd == "getfingerprint" {
+        return false;
+    }
+    let _ = cmd;
+    true
+}
+
 pub async fn handle_commands_command(conn_state: &ConnectionState) -> String {
     let mut resp = ResponseBuilder::new();
     for (cmd, perm) in COMMAND_PERMISSIONS {
-        if conn_state.has_permission(*perm) {
+        if conn_state.has_permission(*perm) && command_is_compiled_in(cmd) {
             resp.field("command", *cmd);
         }
     }
@@ -140,7 +152,7 @@ pub async fn handle_commands_command(conn_state: &ConnectionState) -> String {
 pub async fn handle_notcommands_command(conn_state: &ConnectionState) -> String {
     let mut resp = ResponseBuilder::new();
     for (cmd, perm) in COMMAND_PERMISSIONS {
-        if !conn_state.has_permission(*perm) {
+        if !conn_state.has_permission(*perm) && command_is_compiled_in(cmd) {
             resp.field("command", *cmd);
         }
     }

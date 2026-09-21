@@ -17,6 +17,21 @@ pub const ACK_ERROR_EXIST: i32 = 56;
 pub const DEFAULT_MAX_QUEUE_LEN: u32 = 16384;
 pub const ACK_ERROR_PLAYLIST_MAX: i32 = 51;
 
+/// Wrap an operation failure as an `ACK_ERROR_SYS` response, using the
+/// common `"Error: {e}"` wording repeated at dozens of call sites. Sites
+/// with a more specific message keep their own `ResponseBuilder::error`
+/// call instead of normalizing through this helper.
+pub fn sys_error(command: &str, e: impl std::fmt::Display) -> String {
+    ResponseBuilder::error(ACK_ERROR_SYS, 0, command, &format!("Error: {e}"))
+}
+
+/// Wrap a `spawn_blocking` join failure (the blocking task panicked or was
+/// cancelled) as an `ACK_ERROR_SYS` "internal error" response — the common
+/// shape used at every plain join-error site.
+pub fn internal_error(command: &str) -> String {
+    ResponseBuilder::error(ACK_ERROR_SYS, 0, command, "internal error")
+}
+
 /// Borrow a pooled database connection, returning an error response string on
 /// failure. Reuses connections from the shared pool instead of opening a fresh
 /// SQLite connection (and re-running schema init) on every command.

@@ -4,6 +4,7 @@
 pub mod artwork;
 pub mod cue;
 pub mod database;
+#[cfg(feature = "fingerprint")]
 pub mod fingerprint;
 pub mod metadata;
 pub mod scanner;
@@ -14,6 +15,7 @@ pub use artwork::{
 };
 pub use cue::{CueTrack, parse_cue};
 pub use database::{Database, DbPool, DirectoryListing, PlaylistInfo, WalkEntry};
+#[cfg(feature = "fingerprint")]
 pub use fingerprint::Fingerprinter;
 pub use metadata::{Artwork, MetadataExtractor};
 pub use scanner::{ScanStats, Scanner};
