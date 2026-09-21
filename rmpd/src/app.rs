@@ -31,7 +31,10 @@ pub async fn run(bind_address: String, config: Config) -> Result<()> {
     state.set_max_output_buffer_size(config.network.max_output_buffer_size);
     state.set_max_playlist_length(config.general.max_playlist_length as u32);
     state.set_zeroconf_name(config.network.zeroconf_name.clone());
-    state.set_follow_symlinks(config.general.follow_symlinks);
+    state.set_symlink_policy(
+        config.general.follow_inside_symlinks,
+        config.general.follow_outside_symlinks,
+    );
     if !config
         .general
         .filesystem_charset
@@ -210,7 +213,14 @@ pub async fn run(bind_address: String, config: Config) -> Result<()> {
     // changes. Kept alive (`_watcher`) for the lifetime of the server; dropping
     // it would stop watching.
     let _watcher = if config.database.filesystem_watch && music_dir_exists {
-        match start_filesystem_watch(&state, &db_path, &music_dir).await {
+        match start_filesystem_watch(
+            &state,
+            &db_path,
+            &music_dir,
+            config.database.auto_update_depth,
+        )
+        .await
+        {
             Ok(w) => Some(w),
             Err(e) => {
                 warn!("filesystem watch disabled: {}", e);
@@ -327,6 +337,7 @@ async fn start_filesystem_watch(
     state: &AppState,
     db_path: &str,
     music_dir: &str,
+    auto_update_depth: Option<u32>,
 ) -> Result<rmpd_library::FilesystemWatcher> {
     use std::sync::Arc;
     use tokio::sync::Mutex;
@@ -337,6 +348,7 @@ async fn start_filesystem_watch(
         Arc::new(Mutex::new(db)),
         state.event_bus.clone(),
     )?;
+    watcher.set_max_depth(auto_update_depth);
     watcher.start().await?;
     info!("filesystem watcher started for {}", music_dir);
     Ok(watcher)

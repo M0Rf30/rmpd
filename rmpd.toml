@@ -20,7 +20,10 @@ music_directory = "~/Music"
 # db_file = "~/.config/rmpd/database.db"
 # state_file = "~/.config/rmpd/state"
 log_level = "info"
-follow_symlinks = false
+# Follow symlinks that resolve inside/outside music_directory, independently.
+# Matches mpd.conf's follow_inside_symlinks/follow_outside_symlinks.
+follow_inside_symlinks = true
+follow_outside_symlinks = true
 filesystem_charset = "UTF-8"
 # Auto-save the state file this many seconds after each state change.
 # 0 disables periodic saving (the state file is still written on a clean
@@ -133,6 +136,9 @@ enabled = true
 [database]
 auto_update = true
 filesystem_watch = true
+# Maximum directory depth watched below music_directory by the filesystem
+# watcher. Unset = unlimited. Matches mpd.conf's auto_update_depth.
+# auto_update_depth = 4
 
 # ── Music Sources ────────────────────────────────────────────────────────────
 # Remote catalogs are declared as [[source]] blocks. Each enabled source is
