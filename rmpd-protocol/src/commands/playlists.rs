@@ -5,8 +5,8 @@ use crate::state::AppState;
 
 use super::utils::{
     ACK_ERROR_ARG, ACK_ERROR_EXIST, ACK_ERROR_NO_EXIST, ACK_ERROR_PLAYER_SYNC,
-    ACK_ERROR_PLAYLIST_MAX, ACK_ERROR_SYS, apply_range, format_iso8601_timestamp, open_db,
-    parse_sort_tag, sort_songs,
+    ACK_ERROR_PLAYLIST_MAX, ACK_ERROR_SYS, apply_range, format_iso8601_timestamp, internal_error,
+    open_db, parse_sort_tag, sort_songs, sys_error,
 };
 use crate::parser::InsertPosition;
 use std::path::Path;
@@ -386,7 +386,7 @@ pub async fn handle_listplaylists_command(state: &AppState) -> String {
     .await
     {
         Ok(resp) => resp,
-        Err(_) => ResponseBuilder::error(ACK_ERROR_SYS, 0, "listplaylists", "internal error"),
+        Err(_) => internal_error("listplaylists"),
     }
 }
 
@@ -496,7 +496,7 @@ pub async fn handle_save_command(state: &AppState, name: &str, mode: Option<Stri
             "save",
             &format!("Error writing playlist: {e}"),
         ),
-        Err(_) => ResponseBuilder::error(ACK_ERROR_SYS, 0, "save", "internal error"),
+        Err(_) => internal_error("save"),
     }
 }
 
@@ -625,7 +625,7 @@ pub async fn handle_load_command(
     {
         Ok(Ok(songs)) => songs,
         Ok(Err(e)) => return e,
-        Err(_) => return ResponseBuilder::error(ACK_ERROR_SYS, 0, "load", "internal error"),
+        Err(_) => return internal_error("load"),
     };
     {
         let queue_len = state.queue.read().await.len() as u32;
@@ -683,7 +683,7 @@ async fn load_cue_virtual_tracks(
         Ok(Err(_)) => {
             return ResponseBuilder::error(ACK_ERROR_NO_EXIST, 0, "load", "No such playlist");
         }
-        Err(_) => return ResponseBuilder::error(ACK_ERROR_SYS, 0, "load", "internal error"),
+        Err(_) => return internal_error("load"),
     };
 
     if let Some((start, end)) = range {
@@ -746,7 +746,7 @@ pub async fn handle_searchaddpl_command(
     {
         Ok(Ok(s)) => s,
         Ok(Err(e)) => return e,
-        Err(_) => return ResponseBuilder::error(ACK_ERROR_SYS, 0, "searchaddpl", "internal error"),
+        Err(_) => return internal_error("searchaddpl"),
     };
     let new_paths: Vec<String> = apply_range(&songs, window)
         .iter()
@@ -803,15 +803,13 @@ pub async fn handle_searchaddpl_command(
                 notify_stored_playlist(&state);
                 ResponseBuilder::new().ok()
             }
-            Err(e) => {
-                ResponseBuilder::error(ACK_ERROR_SYS, 0, "searchaddpl", &format!("Error: {e}"))
-            }
+            Err(e) => sys_error("searchaddpl", e),
         }
     })
     .await
     {
         Ok(resp) => resp,
-        Err(_) => ResponseBuilder::error(ACK_ERROR_SYS, 0, "searchaddpl", "internal error"),
+        Err(_) => internal_error("searchaddpl"),
     }
 }
 
@@ -867,7 +865,7 @@ pub async fn handle_listplaylist_command(
     .await
     {
         Ok(resp) => resp,
-        Err(_) => ResponseBuilder::error(ACK_ERROR_SYS, 0, "listplaylist", "internal error"),
+        Err(_) => internal_error("listplaylist"),
     }
 }
 pub async fn handle_listplaylistinfo_command(
@@ -962,7 +960,7 @@ pub async fn handle_listplaylistinfo_command(
     .await
     {
         Ok(resp) => resp,
-        Err(_) => ResponseBuilder::error(ACK_ERROR_SYS, 0, "listplaylistinfo", "internal error"),
+        Err(_) => internal_error("listplaylistinfo"),
     }
 }
 
@@ -1025,12 +1023,7 @@ pub async fn handle_playlistadd_command(
                 );
             }
             Err(e) => {
-                return ResponseBuilder::error(
-                    ACK_ERROR_SYS,
-                    0,
-                    "playlistadd",
-                    &format!("Error: {e}"),
-                );
+                return sys_error("playlistadd", e);
             }
         };
 
@@ -1060,15 +1053,13 @@ pub async fn handle_playlistadd_command(
                 notify_stored_playlist(&state);
                 ResponseBuilder::new().ok()
             }
-            Err(e) => {
-                ResponseBuilder::error(ACK_ERROR_SYS, 0, "playlistadd", &format!("Error: {e}"))
-            }
+            Err(e) => sys_error("playlistadd", e),
         }
     })
     .await
     {
         Ok(resp) => resp,
-        Err(_) => ResponseBuilder::error(ACK_ERROR_SYS, 0, "playlistadd", "internal error"),
+        Err(_) => internal_error("playlistadd"),
     }
 }
 
@@ -1105,15 +1096,13 @@ pub async fn handle_playlistclear_command(state: &AppState, name: &str) -> Strin
                 notify_stored_playlist(&state);
                 ResponseBuilder::new().ok()
             }
-            Err(e) => {
-                ResponseBuilder::error(ACK_ERROR_SYS, 0, "playlistclear", &format!("Error: {e}"))
-            }
+            Err(e) => sys_error("playlistclear", e),
         }
     })
     .await
     {
         Ok(resp) => resp,
-        Err(_) => ResponseBuilder::error(ACK_ERROR_SYS, 0, "playlistclear", "internal error"),
+        Err(_) => internal_error("playlistclear"),
     }
 }
 
@@ -1177,15 +1166,13 @@ pub async fn handle_playlistdelete_command(
                 notify_stored_playlist(&state);
                 ResponseBuilder::new().ok()
             }
-            Err(e) => {
-                ResponseBuilder::error(ACK_ERROR_SYS, 0, "playlistdelete", &format!("Error: {e}"))
-            }
+            Err(e) => sys_error("playlistdelete", e),
         }
     })
     .await
     {
         Ok(resp) => resp,
-        Err(_) => ResponseBuilder::error(ACK_ERROR_SYS, 0, "playlistdelete", "internal error"),
+        Err(_) => internal_error("playlistdelete"),
     }
 }
 
@@ -1272,15 +1259,13 @@ pub async fn handle_playlistmove_command(
                 notify_stored_playlist(&state);
                 ResponseBuilder::new().ok()
             }
-            Err(e) => {
-                ResponseBuilder::error(ACK_ERROR_SYS, 0, "playlistmove", &format!("Error: {e}"))
-            }
+            Err(e) => sys_error("playlistmove", e),
         }
     })
     .await
     {
         Ok(resp) => resp,
-        Err(_) => ResponseBuilder::error(ACK_ERROR_SYS, 0, "playlistmove", "internal error"),
+        Err(_) => internal_error("playlistmove"),
     }
 }
 
@@ -1312,13 +1297,13 @@ pub async fn handle_rm_command(state: &AppState, name: &str) -> String {
                 notify_stored_playlist(&state);
                 ResponseBuilder::new().ok()
             }
-            Err(e) => ResponseBuilder::error(ACK_ERROR_SYS, 0, "rm", &format!("Error: {e}")),
+            Err(e) => sys_error("rm", e),
         }
     })
     .await
     {
         Ok(resp) => resp,
-        Err(_) => ResponseBuilder::error(ACK_ERROR_SYS, 0, "rm", "internal error"),
+        Err(_) => internal_error("rm"),
     }
 }
 
@@ -1358,13 +1343,13 @@ pub async fn handle_rename_command(state: &AppState, from: &str, to: &str) -> St
                 notify_stored_playlist(&state);
                 ResponseBuilder::new().ok()
             }
-            Err(e) => ResponseBuilder::error(ACK_ERROR_SYS, 0, "rename", &format!("Error: {e}")),
+            Err(e) => sys_error("rename", e),
         }
     })
     .await
     {
         Ok(resp) => resp,
-        Err(_) => ResponseBuilder::error(ACK_ERROR_SYS, 0, "rename", "internal error"),
+        Err(_) => internal_error("rename"),
     }
 }
 
@@ -1451,7 +1436,7 @@ pub async fn handle_searchplaylist_command(
     .await
     {
         Ok(resp) => resp,
-        Err(_) => ResponseBuilder::error(ACK_ERROR_SYS, 0, "searchplaylist", "internal error"),
+        Err(_) => internal_error("searchplaylist"),
     }
 }
 
@@ -1509,7 +1494,7 @@ pub async fn handle_playlistlength_command(state: &AppState, name: &str) -> Stri
     .await
     {
         Ok(resp) => resp,
-        Err(_) => ResponseBuilder::error(ACK_ERROR_SYS, 0, "playlistlength", "internal error"),
+        Err(_) => internal_error("playlistlength"),
     }
 }
 

@@ -10,7 +10,7 @@ use crate::state::AppState;
 use super::utils::{
     ACK_ERROR_ARG, ACK_ERROR_NO_EXIST, ACK_ERROR_PERMISSION, ACK_ERROR_PLAYER_SYNC,
     ACK_ERROR_PLAYLIST_MAX, ACK_ERROR_SYS, add_at_checked, add_queue_item_metadata, apply_range,
-    open_db, prepare_song_for_playback, update_next_song,
+    internal_error, open_db, prepare_song_for_playback, update_next_song,
 };
 
 fn number_too_large(command: &str, n: u32) -> String {
@@ -243,7 +243,7 @@ pub async fn handle_add_command(
     {
         Ok(res) => res,
         Err(_) => {
-            return ResponseBuilder::error(ACK_ERROR_SYS, 0, "add", "internal error");
+            return internal_error("add");
         }
     };
 
@@ -404,7 +404,7 @@ pub async fn handle_addid_command(
         {
             Ok(res) => res,
             Err(_) => {
-                return ResponseBuilder::error(ACK_ERROR_SYS, 0, "addid", "internal error");
+                return internal_error("addid");
             }
         };
 

@@ -1,8 +1,13 @@
 use super::ResponseBuilder;
+#[cfg(not(feature = "fingerprint"))]
+use super::utils::ACK_ERROR_UNKNOWN;
+#[cfg(feature = "fingerprint")]
 use super::utils::{ACK_ERROR_NO_EXIST, ACK_ERROR_SYS, ACK_ERROR_UNKNOWN};
 use crate::state::AppState;
+#[cfg(feature = "fingerprint")]
 use rmpd_library::Fingerprinter;
 use std::path::PathBuf;
+#[cfg(feature = "fingerprint")]
 use tracing::{debug, error};
 
 /// Generate an audio fingerprint for a file
@@ -12,6 +17,7 @@ use tracing::{debug, error};
 ///
 /// This operation is CPU-intensive and runs in a blocking task pool.
 /// Only the first 120 seconds of audio are processed.
+#[cfg(feature = "fingerprint")]
 pub async fn handle_getfingerprint_command(state: &AppState, uri: &str) -> String {
     // Resolve the URI to an actual file path
     let path = match resolve_music_path(state, uri) {
@@ -67,7 +73,24 @@ pub async fn handle_getfingerprint_command(state: &AppState, uri: &str) -> Strin
     }
 }
 
+/// Built without the `fingerprint` feature (chromaprint's C library not
+/// linked); returns a "not supported" ACK instead of failing to build. See
+/// `rmpd-library/Cargo.toml`'s `fingerprint` feature for how to enable this
+/// command.
+#[cfg(not(feature = "fingerprint"))]
+pub async fn handle_getfingerprint_command(_state: &AppState, _uri: &str) -> String {
+    ResponseBuilder::error(
+        ACK_ERROR_UNKNOWN,
+        0,
+        "getfingerprint",
+        "not supported, rmpd was built without the fingerprint feature",
+    )
+}
+
 /// Resolve a URI to an absolute file path
+// Only the fingerprint-enabled handler calls this, but its unit tests run in
+// both configurations, so keep it compiled rather than cfg-ing it out.
+#[cfg_attr(not(feature = "fingerprint"), allow(dead_code))]
 fn resolve_music_path(state: &AppState, uri: &str) -> Result<PathBuf, String> {
     let music_dir = state
         .music_dir
@@ -129,6 +152,7 @@ mod tests {
         assert!(result.is_ok());
     }
 
+    #[cfg(feature = "fingerprint")]
     #[tokio::test]
     async fn test_getfingerprint_no_music_dir() {
         let state = AppState::new();
@@ -140,6 +164,7 @@ mod tests {
         assert!(response.contains("Music directory"));
     }
 
+    #[cfg(feature = "fingerprint")]
     #[tokio::test]
     async fn test_getfingerprint_nonexistent_file() {
         let state = AppState::with_paths("/tmp/db".to_string(), "/tmp".to_string());

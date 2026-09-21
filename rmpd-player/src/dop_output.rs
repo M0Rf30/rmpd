@@ -149,7 +149,7 @@ impl DopOutput {
         for frame in 0..primer_frames {
             let marker = if frame % 2 == 0 { 0x05 } else { 0xFA };
             for _ in 0..self.config.channels {
-                let dop_silence = (marker as i32) << 24;
+                let dop_silence = marker << 24;
                 primer_samples.push(dop_silence);
             }
         }
@@ -222,12 +222,7 @@ impl DopOutput {
 
         if let Some(ref sender) = self.sample_sender {
             let reset_frames = self.config.sample_rate as usize / 10;
-            let mut reset_samples =
-                Vec::with_capacity(reset_frames * self.config.channels as usize);
-
-            for _ in 0..(reset_frames * self.config.channels as usize) {
-                reset_samples.push(0);
-            }
+            let reset_samples = vec![0; reset_frames * self.config.channels as usize];
 
             // Best-effort: never block shutdown if the callback isn't draining.
             let _ = sender.try_send(reset_samples);

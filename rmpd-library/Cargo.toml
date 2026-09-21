@@ -18,6 +18,16 @@ workspace = true
 # base64 used in fingerprint module for encoding
 ignored = ["tantivy", "thiserror", "base64"]
 
+[features]
+# Chromaprint audio fingerprinting (`getfingerprint`). chromaprint-sys-next is
+# a C binding that requires the system libchromaprint library at build time;
+# gating it behind this feature keeps that C build dependency out of builds
+# that don't need fingerprinting. Default-on so a normal build keeps
+# `getfingerprint` working exactly as before; opt out with
+# `cargo build --no-default-features` to drop the libchromaprint dependency.
+default = ["fingerprint"]
+fingerprint = ["dep:chromaprint-sys-next"]
+
 [dependencies]
 rmpd-core = { workspace = true, features = ["database-errors", "library-errors"] }
 rmpd-player.workspace = true
@@ -31,7 +41,7 @@ thiserror.workspace = true
 tracing.workspace = true
 camino.workspace = true
 sha2.workspace = true
-chromaprint-sys-next.workspace = true
+chromaprint-sys-next = { workspace = true, optional = true }
 base64.workspace = true
 rayon.workspace = true
 icu_collator = "2.2.0"
