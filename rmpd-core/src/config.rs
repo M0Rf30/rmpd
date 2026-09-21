@@ -29,12 +29,37 @@ pub struct GeneralConfig {
     pub db_file: Utf8PathBuf,
     #[serde(default = "default_state_file")]
     pub state_file: Utf8PathBuf,
+    /// Auto-save the state file this many seconds after each state change.
+    /// Matches mpd.conf's `state_file_interval` (MPD's
+    /// `DEFAULT_STATE_FILE_INTERVAL` default is 120, i.e. 2 minutes). `0`
+    /// disables periodic saving; the state file is still written on a clean
+    /// shutdown.
+    #[serde(default = "default_state_file_interval")]
+    pub state_file_interval: u64,
     #[serde(default = "default_log_level")]
     pub log_level: String,
+    /// Write logs to this file instead of stdout. Matches mpd.conf's
+    /// `log_file`. `None` (the default) logs to stdout via `tracing`.
+    #[serde(default)]
+    pub log_file: Option<Utf8PathBuf>,
     #[serde(default)]
     pub follow_symlinks: bool,
     #[serde(default = "default_charset")]
     pub filesystem_charset: String,
+    /// Maximum number of songs allowed in the queue. Matches mpd.conf's
+    /// `max_playlist_length`.
+    #[serde(default = "default_max_playlist_length")]
+    pub max_playlist_length: usize,
+    /// Store absolute filesystem paths (instead of paths relative to
+    /// `music_directory`) when saving `.m3u` playlists. Matches mpd.conf's
+    /// `save_absolute_paths_in_playlists`.
+    #[serde(default)]
+    pub save_absolute_paths_in_playlists: bool,
+    /// Restrict which tag types are read and stored during library scans.
+    /// Matches mpd.conf's `metadata_to_use`. `None` (the default) keeps
+    /// every supported tag.
+    #[serde(default)]
+    pub metadata_to_use: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -49,7 +74,42 @@ pub struct NetworkConfig {
     pub max_connections: usize,
     #[serde(default = "default_connection_timeout")]
     pub connection_timeout: u64,
+    /// Legacy single password granting full access to any client that sends
+    /// it. Matches mpd.conf's `password` when it carries every permission.
+    /// Kept alongside `passwords` below for backwards compatibility.
     pub password: Option<String>,
+    /// Additional passwords, each granting its own permission set. Matches
+    /// mpd.conf's repeatable `password "pw@perm1,perm2"` directive, split
+    /// here into an array of tables. Coexists with the legacy `password`
+    /// field above.
+    #[serde(default)]
+    pub passwords: Vec<PasswordEntry>,
+    /// Permissions granted to a client that has not authenticated. Matches
+    /// mpd.conf's `default_permissions`. `None` (the default) grants every
+    /// permission when no password is configured at all, matching MPD.
+    #[serde(default)]
+    pub default_permissions: Option<Vec<String>>,
+    /// Permissions granted to clients connecting over the Unix domain
+    /// socket. Matches mpd.conf's `local_permissions`. `None` (the default)
+    /// falls back to `default_permissions`.
+    #[serde(default)]
+    pub local_permissions: Option<Vec<String>>,
+    /// Permissions granted to clients by source address (optionally with a
+    /// CIDR mask). Matches mpd.conf's repeatable `host_permissions`.
+    #[serde(default)]
+    pub host_permissions: Vec<HostPermission>,
+    /// Maximum size, in bytes, of a single MPD command list. Matches
+    /// mpd.conf's `max_command_list_size` (specified there in KiB).
+    #[serde(default = "default_max_command_list_size")]
+    pub max_command_list_size: usize,
+    /// Maximum size, in bytes, of the outgoing response buffer to a client.
+    /// Matches mpd.conf's `max_output_buffer_size` (specified there in KiB).
+    #[serde(default = "default_max_output_buffer_size")]
+    pub max_output_buffer_size: usize,
+    /// Advertise mDNS/Zeroconf under this service name; `%h` is replaced
+    /// with the machine hostname. Matches mpd.conf's `zeroconf_name`.
+    #[serde(default = "default_zeroconf_name")]
+    pub zeroconf_name: String,
     /// Advertise the daemon on the session D-Bus via the MPRIS interface
     /// (`org.mpris.MediaPlayer2.rmpd`) so desktop environments, `playerctl`,
     /// and media keys can discover and control rmpd.
@@ -59,6 +119,24 @@ pub struct NetworkConfig {
     /// clients can auto-discover it. Matches MPD's `zeroconf_enabled`.
     #[serde(default = "default_true")]
     pub zeroconf_enabled: bool,
+}
+
+/// One `[[network.passwords]]` entry: a password string plus the
+/// permissions it grants. Mirrors mpd.conf's `password "pw@perm1,perm2"`
+/// directive, split into separate fields for TOML.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct PasswordEntry {
+    pub password: String,
+    pub permissions: Vec<String>,
+}
+
+/// One `[[network.host_permissions]]` entry: a host (IP, optionally with a
+/// CIDR mask, or hostname) plus the permissions granted to clients
+/// connecting from it. Mirrors mpd.conf's `host_permissions "host perms"`.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct HostPermission {
+    pub host: String,
+    pub permissions: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -356,6 +434,14 @@ fn default_charset() -> String {
     "UTF-8".to_owned()
 }
 
+const fn default_state_file_interval() -> u64 {
+    120
+}
+
+const fn default_max_playlist_length() -> usize {
+    16384
+}
+
 fn default_bind_address() -> String {
     "127.0.0.1".to_owned()
 }
@@ -370,6 +456,18 @@ const fn default_max_connections() -> usize {
 
 const fn default_connection_timeout() -> u64 {
     60
+}
+
+const fn default_max_command_list_size() -> usize {
+    16 * 1024 * 1024
+}
+
+const fn default_max_output_buffer_size() -> usize {
+    8 * 1024 * 1024
+}
+
+fn default_zeroconf_name() -> String {
+    "rmpd@%h".to_owned()
 }
 
 fn default_output() -> String {
@@ -401,9 +499,14 @@ const GENERAL_KEYS: &[&str] = &[
     "playlist_directory",
     "db_file",
     "state_file",
+    "state_file_interval",
     "log_level",
+    "log_file",
     "follow_symlinks",
     "filesystem_charset",
+    "max_playlist_length",
+    "save_absolute_paths_in_playlists",
+    "metadata_to_use",
 ];
 
 const NETWORK_KEYS: &[&str] = &[
@@ -413,6 +516,13 @@ const NETWORK_KEYS: &[&str] = &[
     "max_connections",
     "connection_timeout",
     "password",
+    "passwords",
+    "default_permissions",
+    "local_permissions",
+    "host_permissions",
+    "max_command_list_size",
+    "max_output_buffer_size",
+    "zeroconf_name",
     "mpris",
     "zeroconf_enabled",
 ];
@@ -493,12 +603,17 @@ fn mpd_migration_hint(key: &str) -> Option<String> {
         "auto_update" => Some(("database", "auto_update")),
         "replaygain" => Some(("audio", "replay_gain")),
         "volume_normalization" => Some(("audio", "volume_normalization")),
-        "log_file" => {
-            return Some(
-                "`log_file` is mpd.conf syntax; rmpd logs to stdout via tracing and has no config equivalent"
-                    .to_owned(),
-            );
-        }
+        "state_file_interval" => Some(("general", "state_file_interval")),
+        "log_file" => Some(("general", "log_file")),
+        "max_playlist_length" => Some(("general", "max_playlist_length")),
+        "save_absolute_paths_in_playlists" => Some(("general", "save_absolute_paths_in_playlists")),
+        "metadata_to_use" => Some(("general", "metadata_to_use")),
+        "max_command_list_size" => Some(("network", "max_command_list_size")),
+        "max_output_buffer_size" => Some(("network", "max_output_buffer_size")),
+        "zeroconf_name" => Some(("network", "zeroconf_name")),
+        "default_permissions" => Some(("network", "default_permissions")),
+        "local_permissions" => Some(("network", "local_permissions")),
+        "host_permissions" => Some(("network", "host_permissions")),
         "pid_file" => {
             return Some(
                 "`pid_file` is mpd.conf syntax; rmpd daemonizes via the `--daemonize` flag and writes no pid file, so there is no config equivalent"
@@ -872,6 +987,47 @@ impl Config {
             ));
         }
 
+        const VALID_PERMISSIONS: &[&str] = &["read", "add", "control", "admin", "player"];
+        fn validate_permission_list(key: &str, permissions: &[String]) -> Result<()> {
+            for p in permissions {
+                if !VALID_PERMISSIONS.contains(&p.as_str()) {
+                    return Err(RmpdError::Config(format!(
+                        "{key} contains invalid permission {p:?}; valid permissions are read, add, control, admin, player"
+                    )));
+                }
+            }
+            Ok(())
+        }
+
+        for (i, entry) in config.network.passwords.iter().enumerate() {
+            if entry.password.is_empty() {
+                return Err(RmpdError::Config(format!(
+                    "network.passwords[{i}].password must not be empty"
+                )));
+            }
+            if entry.permissions.is_empty() {
+                return Err(RmpdError::Config(format!(
+                    "network.passwords[{i}].permissions must not be empty (a password granting no permissions is always a mistake)"
+                )));
+            }
+            validate_permission_list(
+                &format!("network.passwords[{i}].permissions"),
+                &entry.permissions,
+            )?;
+        }
+        if let Some(perms) = &config.network.default_permissions {
+            validate_permission_list("network.default_permissions", perms)?;
+        }
+        if let Some(perms) = &config.network.local_permissions {
+            validate_permission_list("network.local_permissions", perms)?;
+        }
+        for (i, entry) in config.network.host_permissions.iter().enumerate() {
+            validate_permission_list(
+                &format!("network.host_permissions[{i}].permissions"),
+                &entry.permissions,
+            )?;
+        }
+
         if !config.general.music_directory.exists() {
             diagnostics.push(Diagnostic::warn(format!(
                 "music directory {} does not exist; library scanning is disabled until it exists",
@@ -943,9 +1099,14 @@ impl Default for GeneralConfig {
             playlist_directory: default_playlist_dir(),
             db_file: default_db_file(),
             state_file: default_state_file(),
+            state_file_interval: default_state_file_interval(),
             log_level: default_log_level(),
+            log_file: None,
             follow_symlinks: false,
             filesystem_charset: default_charset(),
+            max_playlist_length: default_max_playlist_length(),
+            save_absolute_paths_in_playlists: false,
+            metadata_to_use: None,
         }
     }
 }
@@ -959,6 +1120,13 @@ impl Default for NetworkConfig {
             max_connections: default_max_connections(),
             connection_timeout: default_connection_timeout(),
             password: None,
+            passwords: Vec::new(),
+            default_permissions: None,
+            local_permissions: None,
+            host_permissions: Vec::new(),
+            max_command_list_size: default_max_command_list_size(),
+            max_output_buffer_size: default_max_output_buffer_size(),
+            zeroconf_name: default_zeroconf_name(),
             mpris: true,
             zeroconf_enabled: true,
         }
@@ -1230,6 +1398,23 @@ max_bitrate = 320
         assert_eq!(
             parsed.general.filesystem_charset,
             default.general.filesystem_charset
+        );
+        assert_eq!(
+            parsed.general.state_file_interval,
+            default.general.state_file_interval
+        );
+        assert_eq!(parsed.general.log_file, default.general.log_file);
+        assert_eq!(
+            parsed.general.max_playlist_length,
+            default.general.max_playlist_length
+        );
+        assert_eq!(
+            parsed.general.save_absolute_paths_in_playlists,
+            default.general.save_absolute_paths_in_playlists
+        );
+        assert_eq!(
+            parsed.general.metadata_to_use,
+            default.general.metadata_to_use
         );
         assert_eq!(
             format!("{:?}", parsed.network),

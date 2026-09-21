@@ -21,6 +21,16 @@ pub async fn run(bind_address: String, config: Config) -> Result<()> {
     let source_registry = Arc::new(rmpd_source::SourceRegistry::from_config(&config.source));
     state.set_sources(source_registry);
     state.set_password(config.network.password.clone());
+    state.set_passwords(config.network.passwords.clone());
+    state.set_permission_rules(
+        config.network.default_permissions.clone(),
+        config.network.local_permissions.clone(),
+        config.network.host_permissions.clone(),
+    );
+    state.set_max_command_list_size(config.network.max_command_list_size);
+    state.set_max_output_buffer_size(config.network.max_output_buffer_size);
+    state.set_max_playlist_length(config.general.max_playlist_length as u32);
+    state.set_zeroconf_name(config.network.zeroconf_name.clone());
     state.set_follow_symlinks(config.general.follow_symlinks);
     if !config
         .general
@@ -110,6 +120,51 @@ pub async fn run(bind_address: String, config: Config) -> Result<()> {
     // Set shutdown sender in state for kill command
     state.set_shutdown_sender(shutdown_tx.clone());
 
+    // Shared handle for periodic + shutdown state saves. StateFile::save
+    // remembers its own last-written content and serializes writes behind
+    // an internal lock, so the ticker below and the shutdown paths can
+    // safely share this one instance (see StateFile::save in
+    // rmpd-protocol/src/statefile.rs).
+    let state_file = Arc::new(StateFile::new(state_file_path.clone()));
+
+    // Kept so the final save (after the server loop) can force any
+    // in-flight ticker to observe shutdown before it saves, even on
+    // shutdown paths that never go through the signal handler below (e.g.
+    // the `kill` command).
+    let final_shutdown_tx = shutdown_tx.clone();
+
+    // Periodic state save (mpd src/StateFile.cxx ticks every
+    // state_file_interval seconds, default 120, so a crash/OOM-kill/power
+    // loss between clean shutdowns loses at most one interval's worth of
+    // queue contents, position, volume and options). `0` disables it,
+    // matching mpd.conf's documented "never" for this setting.
+    let state_save_ticker = if config.general.state_file_interval > 0 {
+        let interval_secs = config.general.state_file_interval;
+        let ticker_state = state.clone();
+        let ticker_state_file = state_file.clone();
+        let mut ticker_shutdown_rx = shutdown_tx.subscribe();
+        Some(tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+            interval.tick().await; // first tick fires immediately; nothing to save yet
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {
+                        save_state(&ticker_state, &ticker_state_file).await;
+                    }
+                    _ = ticker_shutdown_rx.recv() => {
+                        // Stop as soon as shutdown starts. Joining this
+                        // handle below (before the final save) then makes it
+                        // impossible for a periodic write to land after the
+                        // definitive shutdown save and resurrect stale state.
+                        break;
+                    }
+                }
+            }
+        }))
+    } else {
+        None
+    };
+
     // Expose rmpd on the session D-Bus via MPRIS so desktop environments,
     // `playerctl`, and media keys can discover and control it. Kept alive
     // (`_mpris`) for the lifetime of the server; dropping it releases the
@@ -168,7 +223,7 @@ pub async fn run(bind_address: String, config: Config) -> Result<()> {
 
     // Clone state for shutdown handler
     let shutdown_state = state.clone();
-    let shutdown_state_file_path = state_file_path.clone();
+    let shutdown_state_file = state_file.clone();
 
     // Spawn task to handle shutdown signals. Listens for both SIGINT and
     // SIGTERM so state is saved regardless of which signal a supervisor
@@ -196,7 +251,7 @@ pub async fn run(bind_address: String, config: Config) -> Result<()> {
             match sig {
                 Ok(sig) => {
                     info!("received {}, saving state", sig);
-                    save_state_on_shutdown(&shutdown_state, &shutdown_state_file_path).await;
+                    save_state(&shutdown_state, &shutdown_state_file).await;
                     let _ = shutdown_tx.send(());
                 }
                 Err(err) => {
@@ -209,7 +264,7 @@ pub async fn run(bind_address: String, config: Config) -> Result<()> {
             match signal::ctrl_c().await {
                 Ok(()) => {
                     info!("received SIGINT, saving state");
-                    save_state_on_shutdown(&shutdown_state, &shutdown_state_file_path).await;
+                    save_state(&shutdown_state, &shutdown_state_file).await;
                     let _ = shutdown_tx.send(());
                 }
                 Err(err) => {
@@ -245,9 +300,21 @@ pub async fn run(bind_address: String, config: Config) -> Result<()> {
     // Run server and handle result
     let server_result = server.run_with_listener(listener).await;
 
+    // Stop the periodic ticker before the final save. This send is a no-op
+    // if the signal handler above already sent it; it exists as a fallback
+    // for shutdown paths that never go through that handler (e.g. the
+    // `kill` command, or the listener loop returning on its own). Joining
+    // the ticker task guarantees it has fully stopped — not just been
+    // asked to — before the save below runs, so it cannot race a stale
+    // write after the definitive shutdown save completes.
+    let _ = final_shutdown_tx.send(());
+    if let Some(ticker) = state_save_ticker {
+        let _ = ticker.await;
+    }
+
     // Save state on clean shutdown
     info!("server stopped, saving state");
-    save_state_on_shutdown(&state, &state_file_path).await;
+    save_state(&state, &state_file).await;
 
     server_result?;
     Ok(())
@@ -474,7 +541,11 @@ async fn restore_state(
     info!("state restoration complete");
 }
 
-async fn save_state_on_shutdown(state: &AppState, state_file_path: &str) {
+/// Serialize and save current player state. Shared by the periodic ticker
+/// and the shutdown paths in `run()`; `state_file` is expected to be one
+/// `Arc<StateFile>` shared across all callers so StateFile::save's internal
+/// last-written-content check and lock apply across all of them.
+async fn save_state(state: &AppState, state_file: &StateFile) {
     let status = state.status.read().await;
     let queue = state.queue.read().await;
     let disabled_outputs: Vec<String> = state
@@ -486,7 +557,6 @@ async fn save_state_on_shutdown(state: &AppState, state_file_path: &str) {
         .map(|o| o.name.clone())
         .collect();
 
-    let state_file = StateFile::new(state_file_path.to_string());
     if let Err(e) = state_file.save(&status, &queue, &disabled_outputs).await {
         error!("failed to save state: {}", e);
     }

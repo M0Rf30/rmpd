@@ -3,26 +3,39 @@ use rmpd_core::queue::Queue;
 use rmpd_core::state::{PlayerState, PlayerStatus, ReplayGainMode};
 use std::fs;
 use std::path::Path;
+use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
 /// Save and restore MPD-compatible state file
 #[derive(Debug)]
 pub struct StateFile {
     path: String,
+    /// Content written by the last successful `save()`, and the lock that
+    /// serializes saves end-to-end (check + blocking write). Lets periodic
+    /// ticks skip rewriting unchanged state (mpd's `StateFile::CheckModified`,
+    /// src/StateFile.cxx) and, when one `StateFile` is shared between the
+    /// periodic ticker and a shutdown save, guarantees the shutdown save can
+    /// never be clobbered by a tick that was already in flight.
+    last_saved: Mutex<Option<String>>,
 }
 
 impl StateFile {
     pub fn new(path: String) -> Self {
-        Self { path }
+        Self {
+            path,
+            last_saved: Mutex::new(None),
+        }
     }
 
-    /// Save current state to file
+    /// Save current state to file. Returns `Ok(true)` if the file was
+    /// actually rewritten, `Ok(false)` if the serialized content was
+    /// identical to the last save and the write was skipped.
     pub async fn save(
         &self,
         status: &PlayerStatus,
         queue: &Queue,
         disabled_outputs: &[String],
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let mut content = String::new();
 
         // Volume (sw_volume for software volume)
@@ -92,20 +105,34 @@ impl StateFile {
         }
         content.push_str("playlist_end\n");
 
+        // Hold the lock across the whole check-and-write so saves are
+        // serialized end-to-end: a periodic tick and a shutdown save
+        // sharing this StateFile can never interleave their writes in
+        // reverse order.
+        let mut last_saved = self.last_saved.lock().await;
+        if last_saved.as_deref() == Some(content.as_str()) {
+            debug!("state unchanged, skipping save to {}", self.path);
+            return Ok(false);
+        }
+
         // Write to file atomically (write to temp, then rename). Runs on a
         // blocking-pool thread since fs::write/fs::rename block the caller.
         let path = self.path.clone();
+        let write_content = content.clone();
         tokio::task::spawn_blocking(move || -> Result<()> {
             let temp_path = format!("{path}.tmp");
-            fs::write(&temp_path, content)?;
+            fs::write(&temp_path, write_content)?;
             fs::rename(&temp_path, &path)?;
             Ok(())
         })
         .await
         .map_err(|e| RmpdError::Protocol(format!("spawn_blocking panicked: {e}")))??;
 
-        info!("state saved to {}", self.path);
-        Ok(())
+        *last_saved = Some(content);
+        // Downgraded from info!: with a periodic ticker (state_file_interval,
+        // default 120s) this now fires far more often than on shutdown alone.
+        debug!("state saved to {}", self.path);
+        Ok(true)
     }
 
     /// Load state from file
@@ -592,6 +619,48 @@ mod tests {
 
         // Verify main file exists
         assert!(std::path::Path::new(&state_path).exists());
+    }
+
+    #[tokio::test]
+    async fn test_unchanged_state_is_not_rewritten() {
+        let temp_dir = TempDir::new().unwrap();
+        let state_path = temp_dir.path().join("state").to_str().unwrap().to_string();
+        let statefile = StateFile::new(state_path);
+
+        let queue = Queue::new();
+        let status = PlayerStatus {
+            volume: 50,
+            state: PlayerState::Stop,
+            current_song: None,
+            next_song: None,
+            elapsed: None,
+            duration: None,
+            bitrate: None,
+            audio_format: None,
+            random: false,
+            repeat: false,
+            single: SingleMode::Off,
+            consume: ConsumeMode::Off,
+            crossfade: 0,
+            mixramp_db: 0.0,
+            mixramp_delay: -1.0,
+            playlist_version: 1,
+            playlist_length: 0,
+            updating_db: None,
+            error: None,
+            replay_gain_mode: ReplayGainMode::Off,
+        };
+
+        // First save always writes.
+        assert!(statefile.save(&status, &queue, &[]).await.unwrap());
+        // Same status/queue/outputs again: nothing changed, so the write
+        // (and therefore a periodic ticker's rewrite) is skipped.
+        assert!(!statefile.save(&status, &queue, &[]).await.unwrap());
+
+        // A real change is detected and written again.
+        let mut changed = status.clone();
+        changed.volume = 51;
+        assert!(statefile.save(&changed, &queue, &[]).await.unwrap());
     }
 
     #[test]

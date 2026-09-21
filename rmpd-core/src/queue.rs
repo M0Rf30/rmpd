@@ -140,7 +140,7 @@ impl<'de> Deserialize<'de> for QueueItem {
     }
 }
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Queue {
     items: Vec<QueueItem>,
     next_id: u32,
@@ -150,11 +150,54 @@ pub struct Queue {
     /// Empty when none has been loaded since the last `clear`.
     #[serde(default)]
     last_loaded_playlist: String,
+    /// Maximum number of songs allowed in the queue, mirroring MPD's
+    /// `max_playlist_length` (`mpd.conf`). Historically a hardcoded
+    /// `16384` (added in dc9a30b; enforced as ACK 51
+    /// `ACK_ERROR_PLAYLIST_MAX` by the command handlers); now configurable
+    /// via `set_max_length`, defaulting to the same `16384`.
+    /// `#[serde(default)]` so queues serialized before this field existed
+    /// keep loading.
+    #[serde(default = "default_max_length")]
+    max_length: u32,
+}
+
+/// MPD's default `max_playlist_length` (`mpd.conf`).
+pub const DEFAULT_MAX_LENGTH: u32 = 16384;
+
+fn default_max_length() -> u32 {
+    DEFAULT_MAX_LENGTH
+}
+
+impl Default for Queue {
+    fn default() -> Self {
+        Self {
+            items: Vec::new(),
+            next_id: 0,
+            version: 0,
+            last_loaded_playlist: String::new(),
+            max_length: DEFAULT_MAX_LENGTH,
+        }
+    }
 }
 
 impl Queue {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Current configured maximum queue length (`general.max_playlist_length`).
+    pub fn max_length(&self) -> u32 {
+        self.max_length
+    }
+
+    /// Configure the maximum queue length (`general.max_playlist_length`).
+    /// Note: as of this change, the command-layer enforcement that produces
+    /// ACK 51 (`rmpd-protocol`'s `commands/{queue,database,playlists}.rs`,
+    /// via `commands/utils.rs`'s `MAX_QUEUE_LEN` constant) has not yet been
+    /// switched to read this value — it still uses the hardcoded `16384`.
+    /// This getter/setter is the configuration surface for that follow-up.
+    pub fn set_max_length(&mut self, max_length: u32) {
+        self.max_length = max_length;
     }
 
     /// Allocate the next queue-item id. Mirrors MPD's `IdTable`, whose
@@ -560,5 +603,13 @@ mod tests {
     fn test_weighted_random_pos_empty_queue() {
         let queue = Queue::new();
         assert_eq!(queue.weighted_random_pos(None), None);
+    }
+
+    #[test]
+    fn test_max_length_default_and_override() {
+        let mut queue = Queue::new();
+        assert_eq!(queue.max_length(), DEFAULT_MAX_LENGTH);
+        queue.set_max_length(10);
+        assert_eq!(queue.max_length(), 10);
     }
 }

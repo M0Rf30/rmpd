@@ -12,9 +12,9 @@ pub const ACK_ERROR_NO_EXIST: i32 = 50;
 pub const ACK_ERROR_SYS: i32 = 52;
 pub const ACK_ERROR_PLAYER_SYNC: i32 = 55;
 pub const ACK_ERROR_EXIST: i32 = 56;
-/// MPD's default `max_playlist_length` (mpd.conf), enforced since no such
-/// config knob exists in rmpd yet.
-pub const MAX_QUEUE_LEN: u32 = 16384;
+/// MPD's default `max_playlist_length` (mpd.conf). The effective cap is
+/// `AppState::max_playlist_length`, which this seeds.
+pub const DEFAULT_MAX_QUEUE_LEN: u32 = 16384;
 pub const ACK_ERROR_PLAYLIST_MAX: i32 = 51;
 
 /// Borrow a pooled database connection, returning an error response string on
@@ -249,7 +249,7 @@ pub async fn add_at_checked(
     command: &str,
 ) -> Result<u32, String> {
     let mut queue = state.queue.write().await;
-    if queue.len() as u32 >= MAX_QUEUE_LEN {
+    if queue.len() as u32 >= state.max_playlist_length {
         return Err(ResponseBuilder::error(
             ACK_ERROR_PLAYLIST_MAX,
             0,
