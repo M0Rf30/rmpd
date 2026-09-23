@@ -421,47 +421,20 @@ pub async fn handle_urlhandlers_command(conn_state: &ConnectionState) -> String 
 pub async fn handle_decoders_command() -> String {
     let mut resp = ResponseBuilder::new();
 
-    // All decoders provided by Symphonia
+    // Derived at runtime from every container/format reader Symphonia's probe has registered
+    // (`rmpd_player::format_registry`), so this can never drift from what the scanner and
+    // decoder actually accept. One `plugin:` block per registered reader, keyed by its
+    // Symphonia `FormatInfo::short_name`.
     // Note: Unlike outputs, decoders are NOT separate entities - no blank lines between them
-    resp.field("plugin", "flac");
-    resp.field("suffix", "flac");
-    resp.field("mime_type", "audio/flac");
-
-    resp.field("plugin", "mp3");
-    resp.field("suffix", "mp3");
-    resp.field("mime_type", "audio/mpeg");
-
-    resp.field("plugin", "vorbis");
-    resp.field("suffix", "ogg");
-    resp.field("suffix", "oga");
-    resp.field("mime_type", "audio/ogg");
-    resp.field("mime_type", "audio/vorbis");
-
-    // No `opus` plugin: symphonia demuxes Ogg Opus but ships no Opus decoder,
-    // so rmpd cannot decode it and must not advertise it here.
-
-    resp.field("plugin", "ape");
-    resp.field("suffix", "ape");
-    resp.field("mime_type", "audio/x-ape");
-
-    resp.field("plugin", "wavpack");
-    resp.field("suffix", "wv");
-    resp.field("mime_type", "audio/x-wavpack");
-
-    resp.field("plugin", "dsd");
-    resp.field("suffix", "dsf");
-    resp.field("suffix", "dff");
-    resp.field("mime_type", "audio/x-dsd");
-
-    resp.field("plugin", "aac");
-    resp.field("suffix", "aac");
-    resp.field("suffix", "m4a");
-    resp.field("mime_type", "audio/aac");
-    resp.field("mime_type", "audio/mp4");
-
-    resp.field("plugin", "wav");
-    resp.field("suffix", "wav");
-    resp.field("mime_type", "audio/wav");
+    for format in rmpd_player::format_registry::FORMAT_PLUGINS.iter() {
+        resp.field("plugin", format.plugin);
+        for suffix in &format.extensions {
+            resp.field("suffix", suffix);
+        }
+        for mime in &format.mime_types {
+            resp.field("mime_type", mime);
+        }
+    }
 
     resp.ok()
 }

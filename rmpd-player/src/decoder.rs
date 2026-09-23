@@ -1,6 +1,7 @@
 use rmpd_core::error::{Result, RmpdError};
 use rmpd_core::song::AudioFormat;
 use std::path::Path;
+use std::sync::LazyLock;
 use symphonia::core::audio::GenericAudioBufferRef;
 use symphonia::core::codecs::CodecParameters;
 use symphonia::core::codecs::audio::{
@@ -466,39 +467,32 @@ impl Decoder for SymphoniaDecoder {
 /// A decoder plugin descriptor: how to recognise files it can decode.
 pub struct DecoderPlugin {
     pub name: &'static str,
-    pub suffixes: &'static [&'static str],
-    pub mime_types: &'static [&'static str],
+    pub suffixes: Vec<&'static str>,
+    pub mime_types: Vec<&'static str>,
 }
 
 /// The Symphonia-backed decoder handles all of rmpd's playable formats.
 ///
-/// Opus and Musepack are deliberately absent: symphonia demuxes Ogg Opus (so
-/// `.opus` files are still scanned, tagged and listed by the library) but the
-/// facade ships no Opus decoder, and Musepack has neither. Advertising a
-/// suffix here that `get_codecs()` cannot satisfy makes rmpd promise playback
-/// it would then fail to deliver.
-pub static SYMPHONIA_DECODER: DecoderPlugin = DecoderPlugin {
+/// Suffixes and MIME types are derived at runtime from every container/format reader
+/// Symphonia's probe has registered (see `crate::format_registry`), so this list can never drift
+/// from what the probe (and therefore the library scanner) actually accepts.
+///
+/// Opus and Musepack are deliberately absent from *playback*: symphonia demuxes Ogg Opus but the
+/// facade ships no Opus decoder, and Musepack has neither. Advertising a suffix here that
+/// `get_codecs()` cannot satisfy makes rmpd promise playback it would then fail to deliver.
+/// `.opus` still shows up under "ogg"'s extensions (the Ogg container reader does handle it),
+/// but `rmpd-library`'s scan-time decodability check (`get_codecs().make_audio_decoder`) rejects
+/// Opus tracks before they're ever inserted, so `.opus` files are not scanned/tagged either --
+/// only formats this decoder can actually play make it into the library.
+pub static SYMPHONIA_DECODER: LazyLock<DecoderPlugin> = LazyLock::new(|| DecoderPlugin {
     name: "symphonia",
-    suffixes: &[
-        "flac", "mp3", "ogg", "oga", "wav", "wave", "aiff", "aif", "m4a", "mp4", "aac", "alac",
-        "ape", "wv", "dsf", "dff", "webm", "mka", "caf",
-    ],
-    mime_types: &[
-        "audio/flac",
-        "audio/mpeg",
-        "audio/ogg",
-        "audio/wav",
-        "audio/x-wav",
-        "audio/aac",
-        "audio/mp4",
-        "audio/x-ape",
-        "audio/x-wavpack",
-        "audio/x-dsd",
-    ],
-};
+    suffixes: crate::format_registry::SUPPORTED_EXTENSIONS.clone(),
+    mime_types: crate::format_registry::SUPPORTED_MIME_TYPES.clone(),
+});
 
-/// All compiled-in decoder plugins (compile-time registry, MPD-style).
-pub static DECODER_PLUGINS: &[&DecoderPlugin] = &[&SYMPHONIA_DECODER];
+/// All compiled-in decoder plugins (runtime registry, MPD-style).
+pub static DECODER_PLUGINS: LazyLock<Vec<&'static DecoderPlugin>> =
+    LazyLock::new(|| vec![&*SYMPHONIA_DECODER]);
 
 /// Find a decoder plugin that lists `suffix` (case-insensitive, no leading dot).
 #[must_use]
