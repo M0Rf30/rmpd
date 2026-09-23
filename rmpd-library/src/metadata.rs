@@ -72,6 +72,25 @@ fn probe_file(path: &Utf8PathBuf, want_visuals: bool) -> Result<Probed> {
             Some(CodecParameters::Audio(a)) => Some(a),
             _ => None,
         });
+
+        // A container may probe successfully while carrying a codec Symphonia has no decoder
+        // for (e.g. an Ogg stream that turns out to be Opus, or an AAC-in-MP4 build without the
+        // aac feature). Reject those up front so they are never inserted into the library only
+        // to fail at playback time. A later rescan re-evaluates them: files that were never
+        // inserted are re-probed from scratch since there is no stored mtime/size to match.
+        if let Some(params) = audio {
+            if let Err(e) =
+                symphonia::default::get_codecs().make_audio_decoder(params, &Default::default())
+            {
+                if matches!(e, symphonia::core::errors::Error::Unsupported(_)) {
+                    tracing::info!("skipping {}: codec not decodable by symphonia ({})", path, e);
+                    return Err(RmpdError::Library(format!(
+                        "unsupported codec, skipping: {e}"
+                    )));
+                }
+            }
+        }
+
         let sample_rate = audio.and_then(|a| a.sample_rate);
         let channels = audio.and_then(|a| a.channels.as_ref().map(|c| c.count() as u8));
         let bit_depth = audio.and_then(|a| a.bits_per_sample).map(|b| b as u8);
@@ -533,25 +552,7 @@ impl MetadataExtractor {
     /// scan. The single source of truth for every extension filter in rmpd --
     /// the filesystem watcher shares it so it cannot drift from the scanner.
     pub fn is_supported_extension(ext: &str) -> bool {
-        matches!(
-            ext.to_lowercase().as_str(),
-            "mp3"
-                | "flac"
-                | "ogg"
-                | "oga"
-                | "opus"
-                | "m4a"
-                | "aac"
-                | "wav"
-                | "aiff"
-                | "aif"
-                | "mka"
-                | "webm"
-                | "ape"
-                | "wv"
-                | "dsf"
-                | "dff"
-        )
+        rmpd_player::format_registry::is_supported_extension(ext)
     }
 
     /// Read raw key-value pairs directly from the audio file.

@@ -63,16 +63,21 @@ fn test_ogg_vorbis_metadata_extraction() {
 
 #[test]
 fn test_opus_metadata_extraction() {
+    // Symphonia's facade demuxes Ogg Opus but ships no Opus decoder. The scanner now runs a
+    // decodability check (`get_codecs().make_audio_decoder`) right after probing and skips any
+    // file whose codec it cannot instantiate a decoder for, so `.opus` files are no longer
+    // scanned/tagged either -- rmpd can't play them, and keeping tags for a stub that can never
+    // sound would (a) contradict the "single source of truth" registry, and (b) confuse clients
+    // that expect `decoders`/scan results to match playability.
     let harness = RmpdTestHarness::new().unwrap();
     let path = pregenerated::basic_opus();
-    let song = harness.extract_metadata(path.to_str().unwrap()).unwrap();
-
-    assert_eq!(song.tag("title"), Some("Test Song Opus"));
-    assert_eq!(song.tag("artist"), Some("Test Artist Opus"));
-    assert_eq!(song.tag("album"), Some("Test Album Opus"));
-
-    // Opus has specific sample rate (48kHz)
-    assert_eq!(song.sample_rate, Some(48000));
+    let err = harness
+        .extract_metadata(path.to_str().unwrap())
+        .expect_err("opus has no symphonia decoder and should be skipped at scan time");
+    assert!(
+        err.to_string().contains("unsupported codec"),
+        "unexpected error: {err}"
+    );
 }
 
 #[test]
