@@ -37,6 +37,10 @@ const EXTRA_EXTENSION_ALIASES: &[(&str, &str)] = &[("alac", "isomp4"), ("mka", "
 
 /// Every format reader Symphonia's default probe has registered, grouped by plugin (reader)
 /// name, sorted for deterministic output.
+#[allow(
+    clippy::disallowed_types,
+    reason = "ordering is required: `decoders` output must be deterministic"
+)]
 pub static FORMAT_PLUGINS: LazyLock<Vec<RegisteredFormat>> = LazyLock::new(|| {
     use std::collections::BTreeMap;
     use symphonia::core::formats::probe::RegisteredFormatInfo;
@@ -84,8 +88,10 @@ pub static FORMAT_PLUGINS: LazyLock<Vec<RegisteredFormat>> = LazyLock::new(|| {
 
 /// Every file extension (lowercase, no leading dot) any registered format reader will match.
 pub static SUPPORTED_EXTENSIONS: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
-    let mut exts: Vec<&'static str> =
-        FORMAT_PLUGINS.iter().flat_map(|f| f.extensions.iter().copied()).collect();
+    let mut exts: Vec<&'static str> = FORMAT_PLUGINS
+        .iter()
+        .flat_map(|f| f.extensions.iter().copied())
+        .collect();
     exts.sort_unstable();
     exts.dedup();
     exts
@@ -93,8 +99,10 @@ pub static SUPPORTED_EXTENSIONS: LazyLock<Vec<&'static str>> = LazyLock::new(|| 
 
 /// Every MIME type any registered format reader declares.
 pub static SUPPORTED_MIME_TYPES: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
-    let mut mimes: Vec<&'static str> =
-        FORMAT_PLUGINS.iter().flat_map(|f| f.mime_types.iter().copied()).collect();
+    let mut mimes: Vec<&'static str> = FORMAT_PLUGINS
+        .iter()
+        .flat_map(|f| f.mime_types.iter().copied())
+        .collect();
     mimes.sort_unstable();
     mimes.dedup();
     mimes
@@ -115,11 +123,17 @@ mod tests {
     #[test]
     fn covers_expected_extensions() {
         for ext in [
-            "flac", "mp3", "ogg", "oga", "wav", "wave", "aiff", "aif", "m4a", "mov", "caf",
-            "ape", "wv", "dsf", "dff", "mka", "webm",
+            "flac", "mp3", "ogg", "oga", "wav", "wave", "aiff", "aif", "m4a", "mov", "caf", "ape",
+            "wv", "dsf", "dff", "mka", "webm",
         ] {
-            assert!(is_supported_extension(ext), "expected {ext} to be supported");
-            assert!(is_supported_extension(&ext.to_uppercase()), "case-insensitive: {ext}");
+            assert!(
+                is_supported_extension(ext),
+                "expected {ext} to be supported"
+            );
+            assert!(
+                is_supported_extension(&ext.to_uppercase()),
+                "case-insensitive: {ext}"
+            );
         }
     }
 
@@ -130,8 +144,10 @@ mod tests {
 
     #[test]
     fn alac_alias_resolves_to_isomp4() {
-        let isomp4 =
-            FORMAT_PLUGINS.iter().find(|f| f.plugin == "isomp4").expect("isomp4 registered");
+        let isomp4 = FORMAT_PLUGINS
+            .iter()
+            .find(|f| f.plugin == "isomp4")
+            .expect("isomp4 registered");
         assert!(isomp4.extensions.contains(&"alac"));
     }
 }

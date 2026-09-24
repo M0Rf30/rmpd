@@ -78,17 +78,19 @@ fn probe_file(path: &Utf8PathBuf, want_visuals: bool) -> Result<Probed> {
         // aac feature). Reject those up front so they are never inserted into the library only
         // to fail at playback time. A later rescan re-evaluates them: files that were never
         // inserted are re-probed from scratch since there is no stored mtime/size to match.
-        if let Some(params) = audio {
-            if let Err(e) =
+        if let Some(params) = audio
+            && let Err(e) =
                 symphonia::default::get_codecs().make_audio_decoder(params, &Default::default())
-            {
-                if matches!(e, symphonia::core::errors::Error::Unsupported(_)) {
-                    tracing::info!("skipping {}: codec not decodable by symphonia ({})", path, e);
-                    return Err(RmpdError::Library(format!(
-                        "unsupported codec, skipping: {e}"
-                    )));
-                }
-            }
+            && matches!(e, symphonia::core::errors::Error::Unsupported(_))
+        {
+            tracing::info!(
+                "skipping {}: codec not decodable by symphonia ({})",
+                path,
+                e
+            );
+            return Err(RmpdError::Library(format!(
+                "unsupported codec, skipping: {e}"
+            )));
         }
 
         let sample_rate = audio.and_then(|a| a.sample_rate);
