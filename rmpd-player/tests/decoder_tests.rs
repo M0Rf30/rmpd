@@ -91,7 +91,6 @@ fn test_ogg_format_detection() {
 }
 
 #[test]
-#[ignore] // Opus requires additional Symphonia features not enabled by default
 fn test_opus_format_detection() {
     let path = pregenerated::sine_1khz_opus();
     if !path.exists() {
@@ -104,6 +103,28 @@ fn test_opus_format_detection() {
     let format = decoder.format();
     assert_eq!(format.sample_rate, 48000, "Opus uses 48kHz");
     assert_eq!(format.channels, 2);
+}
+
+#[test]
+fn test_opus_decodes_gapless() {
+    let path = pregenerated::sine_1khz_opus();
+    if !path.exists() {
+        eprintln!("Skipping test: fixture not found");
+        return;
+    }
+
+    let (samples, sample_rate, channels) = decode_entire_file(&path).expect("decode opus");
+    assert_eq!(sample_rate, 48000);
+    let frames = samples.len() / channels as usize;
+    // The fixture is 1 s long; with pre-skip trimmed the frame count must be ~48000.
+    assert!(
+        (frames as i64 - 48000).abs() <= 960,
+        "unexpected opus frame count: {frames}"
+    );
+    assert!(
+        calculate_rms(&samples) > 0.1,
+        "opus output is silent or too quiet"
+    );
 }
 
 #[test]

@@ -477,13 +477,9 @@ pub struct DecoderPlugin {
 /// Symphonia's probe has registered (see `crate::format_registry`), so this list can never drift
 /// from what the probe (and therefore the library scanner) actually accepts.
 ///
-/// Opus and Musepack are deliberately absent from *playback*: symphonia demuxes Ogg Opus but the
-/// facade ships no Opus decoder, and Musepack has neither. Advertising a suffix here that
-/// `get_codecs()` cannot satisfy makes rmpd promise playback it would then fail to deliver.
-/// `.opus` still shows up under "ogg"'s extensions (the Ogg container reader does handle it),
-/// but `rmpd-library`'s scan-time decodability check (`get_codecs().make_audio_decoder`) rejects
-/// Opus tracks before they're ever inserted, so `.opus` files are not scanned/tagged either --
-/// only formats this decoder can actually play make it into the library.
+/// Files whose codec has no registered decoder (e.g. Musepack) are rejected by `rmpd-library`'s
+/// scan-time decodability check (`get_codecs().make_audio_decoder`), so only formats this decoder
+/// can actually play make it into the library.
 pub static SYMPHONIA_DECODER: LazyLock<DecoderPlugin> = LazyLock::new(|| DecoderPlugin {
     name: "symphonia",
     suffixes: crate::format_registry::SUPPORTED_EXTENSIONS.clone(),
