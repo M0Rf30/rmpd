@@ -8,6 +8,11 @@ use std::borrow::Cow;
 use std::fs;
 use std::time::{Duration, SystemTime};
 use symphonia::core::codecs::CodecParameters;
+use symphonia::core::codecs::audio::AudioCodecId;
+use symphonia::core::codecs::audio::well_known::{
+    CODEC_ID_AAC, CODEC_ID_ALAC, CODEC_ID_MP1, CODEC_ID_MP2, CODEC_ID_MP3, CODEC_ID_OPUS,
+    CODEC_ID_VORBIS,
+};
 use symphonia::core::formats::probe::Hint;
 use symphonia::core::formats::{FormatOptions, MediaInfo, Track, TrackType};
 use symphonia::core::io::MediaSourceStream;
@@ -19,6 +24,46 @@ use symphonia::core::units::Duration as SymDuration;
 fn is_bogus_dsf_comment(s: &str) -> bool {
     let trimmed = s.trim();
     trimmed.len() >= 16 && trimmed.chars().all(|c| c.is_ascii_hexdigit() || c == ' ')
+}
+
+/// Lossy codecs that Symphonia (like MPD's own decoder plugins) decodes to floating-point PCM
+/// rather than a fixed-width integer of a meaningful "source" bit depth. MPD reports the sample
+/// format for these as `f` (see `sample_format_to_string(SampleFormat::FLOAT)` in
+/// `src/pcm/SampleFormat.cxx`) instead of a bit count. `Song::bits_per_sample` uses `0` as the
+/// sentinel for that (see `ResponseBuilder::song`/`status` in rmpd-protocol, which render it as
+/// `f`). Classification is by codec ID, not container or file extension, so e.g. Opus-in-WebM
+/// and Opus-in-Ogg report the same thing.
+fn is_float_lossy_codec(codec: AudioCodecId) -> bool {
+    matches!(
+        codec,
+        CODEC_ID_OPUS | CODEC_ID_VORBIS | CODEC_ID_AAC | CODEC_ID_MP1 | CODEC_ID_MP2 | CODEC_ID_MP3
+    )
+}
+
+/// Recover the source bit depth from an ALAC "magic cookie" (`ALACSpecificConfig`).
+///
+/// Symphonia's container demuxers don't surface ALAC's bit depth via
+/// `AudioCodecParameters::bits_per_sample`: `symphonia-format-isomp4`'s `AlacAtom` never sets it,
+/// and `symphonia-format-caf` reports a bogus `0` for every compressed codec (see its demuxer's
+/// "TODO: Bits per sample ... wrong for compressed" comment). The value is still available in the
+/// codec's `extra_data`, which every ALAC-capable demuxer forwards unmodified as the raw magic
+/// cookie. This mirrors the atom-skipping `symphonia_common::apple::audio::alac::MagicCookie::read`
+/// performs, which isn't reachable here without a new direct dependency on that internal crate.
+fn alac_bit_depth_from_cookie(extra_data: &[u8]) -> Option<u8> {
+    let mut buf = extra_data;
+    // CAF (and some MP4 muxers) prefix the cookie with an 8-byte `frma`/`alac` atom header plus
+    // a 4-byte payload (codec four-cc, or version+flags); skip up to one of each.
+    if buf.len() >= 8 && &buf[4..8] == b"frma" {
+        buf = buf.get(12..)?;
+    }
+    if buf.len() >= 8 && &buf[4..8] == b"alac" {
+        buf = buf.get(12..)?;
+    }
+    // frame_length: u32, compatible_version: u8, bit_depth: u8, ...
+    if buf.len() < 24 {
+        return None;
+    }
+    Some(buf[5])
 }
 
 #[derive(Debug, Clone)]
@@ -72,9 +117,45 @@ fn probe_file(path: &Utf8PathBuf, want_visuals: bool) -> Result<Probed> {
             Some(CodecParameters::Audio(a)) => Some(a),
             _ => None,
         });
+
+        // A container may probe successfully while carrying a codec Symphonia has no decoder
+        // for (e.g. an Ogg stream that turns out to be Opus, or an AAC-in-MP4 build without the
+        // aac feature). Reject those up front so they are never inserted into the library only
+        // to fail at playback time. A later rescan re-evaluates them: files that were never
+        // inserted are re-probed from scratch since there is no stored mtime/size to match.
+        if let Some(params) = audio
+            && let Err(e) =
+                symphonia::default::get_codecs().make_audio_decoder(params, &Default::default())
+            && matches!(e, symphonia::core::errors::Error::Unsupported(_))
+        {
+            tracing::info!(
+                "skipping {}: codec not decodable by symphonia ({})",
+                path,
+                e
+            );
+            return Err(RmpdError::Library(format!(
+                "unsupported codec, skipping: {e}"
+            )));
+        }
+
         let sample_rate = audio.and_then(|a| a.sample_rate);
         let channels = audio.and_then(|a| a.channels.as_ref().map(|c| c.count() as u8));
-        let bit_depth = audio.and_then(|a| a.bits_per_sample).map(|b| b as u8);
+        let bit_depth = audio.and_then(|a| {
+            if is_float_lossy_codec(a.codec) {
+                return Some(0);
+            }
+            // A container-reported `0` (e.g. CAF's "bits per channel" for a compressed codec)
+            // is a placeholder, not a real bit depth -- fall through to codec-specific recovery.
+            a.bits_per_sample
+                .filter(|&b| b > 0)
+                .map(|b| b as u8)
+                .or_else(|| {
+                    (a.codec == CODEC_ID_ALAC)
+                        .then_some(a.extra_data.as_deref())
+                        .flatten()
+                        .and_then(alac_bit_depth_from_cookie)
+                })
+        });
         let duration = track_duration(track, reader.media_info());
         let track_id = track.map(|t| u64::from(t.id));
         (sample_rate, channels, bit_depth, duration, track_id)
@@ -502,13 +583,12 @@ impl MetadataExtractor {
             duration: probed.duration,
             sample_rate: probed.sample_rate,
             channels: probed.channels,
-            bits_per_sample: {
-                let ext = path.extension().map(|e| e.to_lowercase());
-                match ext.as_deref() {
-                    Some("m4a" | "aac") => Some(0),
-                    _ => Some(probed.bit_depth.unwrap_or(16) as u16),
-                }
-            },
+            // `probed.bit_depth` already applies MPD's sample-format semantics: lossy/float
+            // codecs (Opus, Vorbis, AAC, MP3/MP2/MP1) report `0` here (rendered as `f` by
+            // rmpd-protocol), lossless codecs report their real source bit depth (including ALAC,
+            // whose depth is recovered from its magic cookie when the container doesn't surface
+            // it), and anything else (e.g. DSD) falls back to `16` as before.
+            bits_per_sample: Some(probed.bit_depth.unwrap_or(16) as u16),
             bitrate: probed.bitrate,
             replay_gain_track_gain: rg_track_gain,
             replay_gain_track_peak: rg_track_peak,
@@ -533,25 +613,7 @@ impl MetadataExtractor {
     /// scan. The single source of truth for every extension filter in rmpd --
     /// the filesystem watcher shares it so it cannot drift from the scanner.
     pub fn is_supported_extension(ext: &str) -> bool {
-        matches!(
-            ext.to_lowercase().as_str(),
-            "mp3"
-                | "flac"
-                | "ogg"
-                | "oga"
-                | "opus"
-                | "m4a"
-                | "aac"
-                | "wav"
-                | "aiff"
-                | "aif"
-                | "mka"
-                | "webm"
-                | "ape"
-                | "wv"
-                | "dsf"
-                | "dff"
-        )
+        rmpd_player::format_registry::is_supported_extension(ext)
     }
 
     /// Read raw key-value pairs directly from the audio file.
@@ -630,5 +692,67 @@ impl MetadataExtractor {
         }
 
         Ok(pairs)
+    }
+}
+
+#[cfg(test)]
+mod bit_depth_tests {
+    use super::*;
+    use symphonia::core::codecs::audio::well_known::{CODEC_ID_FLAC, CODEC_ID_WAVPACK};
+
+    #[test]
+    fn lossy_float_codecs_are_classified_as_float() {
+        for codec in [
+            CODEC_ID_OPUS,
+            CODEC_ID_VORBIS,
+            CODEC_ID_AAC,
+            CODEC_ID_MP1,
+            CODEC_ID_MP2,
+            CODEC_ID_MP3,
+        ] {
+            assert!(
+                is_float_lossy_codec(codec),
+                "{codec} should map to MPD's `f`"
+            );
+        }
+    }
+
+    #[test]
+    fn lossless_codecs_are_not_classified_as_float() {
+        for codec in [CODEC_ID_FLAC, CODEC_ID_ALAC, CODEC_ID_WAVPACK] {
+            assert!(
+                !is_float_lossy_codec(codec),
+                "{codec} should report a real bit depth"
+            );
+        }
+    }
+
+    /// Real magic cookie captured from `ffmpeg -c:a alac` output (ALAC-in-MP4): a bare 24-byte
+    /// `ALACSpecificConfig` with `bit_depth == 0x18` (24) at byte offset 5.
+    #[test]
+    fn alac_bit_depth_from_bare_mp4_cookie() {
+        let cookie: [u8; 24] = [
+            0x00, 0x00, 0x10, 0x00, 0x00, 0x18, 0x28, 0x0a, 0x0e, 0x02, 0x00, 0x00, 0x00, 0x00,
+            0x60, 0x04, 0x00, 0x23, 0x28, 0x00, 0x00, 0x00, 0xbb, 0x80,
+        ];
+        assert_eq!(alac_bit_depth_from_cookie(&cookie), Some(24));
+    }
+
+    /// Real magic cookie captured from `ffmpeg -c:a alac -f caf` output: the same config wrapped
+    /// in `frma`/`alac` atom headers, as CAF's `kuki` chunk stores it.
+    #[test]
+    fn alac_bit_depth_from_wrapped_caf_cookie() {
+        let cookie: [u8; 48] = [
+            0x00, 0x00, 0x00, 0x0c, 0x66, 0x72, 0x6d, 0x61, 0x61, 0x6c, 0x61, 0x63, 0x00, 0x00,
+            0x00, 0x24, 0x61, 0x6c, 0x61, 0x63, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00,
+            0x00, 0x18, 0x28, 0x0a, 0x0e, 0x02, 0x00, 0x00, 0x00, 0x00, 0x60, 0x04, 0x00, 0x23,
+            0x28, 0x00, 0x00, 0x00, 0xbb, 0x80,
+        ];
+        assert_eq!(alac_bit_depth_from_cookie(&cookie), Some(24));
+    }
+
+    #[test]
+    fn alac_bit_depth_from_undersized_cookie_is_none() {
+        assert_eq!(alac_bit_depth_from_cookie(&[0u8; 10]), None);
     }
 }

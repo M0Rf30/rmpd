@@ -24,6 +24,12 @@ fn test_flac_metadata_extraction() {
     // Verify audio properties
     assert_eq!(song.sample_rate, Some(44100));
     assert_eq!(song.channels, Some(2));
+    // FLAC is lossless; MPD reports its real bit depth, never the `f` sentinel.
+    assert!(
+        matches!(song.bits_per_sample, Some(b) if b > 0),
+        "expected a real bit depth, got {:?}",
+        song.bits_per_sample
+    );
     assert!(song.duration.is_some());
 
     // Duration should be ~1 second (±100ms tolerance)
@@ -48,6 +54,10 @@ fn test_mp3_metadata_extraction() {
 
     // MP3 should have bitrate
     assert!(song.bitrate.is_some());
+
+    // MPD reports lossy/float-decoded codecs as `f` (Format/audio's bits field), not a bit
+    // depth; rmpd uses `0` as that sentinel (see rmpd_library::metadata::is_float_lossy_codec).
+    assert_eq!(song.bits_per_sample, Some(0));
 }
 
 #[test]
@@ -59,6 +69,9 @@ fn test_ogg_vorbis_metadata_extraction() {
     assert_eq!(song.tag("title"), Some("Test Song OGG"));
     assert_eq!(song.tag("artist"), Some("Test Artist OGG"));
     assert_eq!(song.tag("album"), Some("Test Album OGG"));
+
+    // Vorbis is float-decoded; MPD reports `f`, not a bit depth.
+    assert_eq!(song.bits_per_sample, Some(0));
 }
 
 #[test]
@@ -71,8 +84,19 @@ fn test_opus_metadata_extraction() {
     assert_eq!(song.tag("artist"), Some("Test Artist Opus"));
     assert_eq!(song.tag("album"), Some("Test Album Opus"));
 
-    // Opus has specific sample rate (48kHz)
+    // Opus is float-decoded; MPD reports `f`, not a bit depth (regardless of what the
+    // container happens to set -- see the Opus-in-WebM/MKA `BitDepth` quirk).
+    assert_eq!(song.bits_per_sample, Some(0));
+
+    // Opus always decodes at 48 kHz.
     assert_eq!(song.sample_rate, Some(48000));
+
+    // The fixture is 1 s of audio; pre-skip must not inflate the reported duration.
+    let secs = song.duration.expect("opus duration").as_secs_f64();
+    assert!(
+        (secs - 1.0).abs() < 0.03,
+        "unexpected opus duration: {secs}"
+    );
 }
 
 #[test]
@@ -84,6 +108,9 @@ fn test_m4a_metadata_extraction() {
     assert_eq!(song.tag("title"), Some("Test Song M4A"));
     assert_eq!(song.tag("artist"), Some("Test Artist M4A"));
     assert_eq!(song.tag("album"), Some("Test Album M4A"));
+
+    // AAC is float-decoded; MPD reports `f`, not a bit depth (this fixture is not ALAC).
+    assert_eq!(song.bits_per_sample, Some(0));
 }
 
 #[test]

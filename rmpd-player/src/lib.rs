@@ -10,6 +10,7 @@ pub mod encoder;
 pub mod engine;
 pub mod fifo_output;
 pub mod filter;
+pub mod format_registry;
 pub mod httpd_output;
 pub mod multi_output;
 pub mod null_output;

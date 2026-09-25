@@ -136,9 +136,15 @@ impl AlbumArtExtractor {
 
             let mime_type = art.mime_type.clone();
 
-            // Store in cache using relative path as key
-            self.db
-                .store_artwork(cache_key, "front", &mime_type, data, &hash)?;
+            // Store in cache using relative path as key. A cache failure (e.g. the
+            // song row doesn't exist, which the artwork table's foreign key rejects)
+            // must not hide artwork we already extracted.
+            if let Err(e) = self
+                .db
+                .store_artwork(cache_key, "front", &mime_type, data, &hash)
+            {
+                tracing::warn!("could not cache artwork for {cache_key}: {e}");
+            }
 
             Ok(Some((data.to_vec(), mime_type)))
         } else {

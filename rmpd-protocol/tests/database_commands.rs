@@ -270,3 +270,87 @@ async fn albumart_respects_binarylimit() {
     assert_eq!(TestClient::get_field(&resp, "size"), Some("4096"));
     assert_eq!(TestClient::get_field(&resp, "binary"), Some("1024"));
 }
+
+/// Send one command over a raw socket and return the full binary-safe response
+/// (the harness client reads UTF-8 lines, which a JPEG payload is not).
+async fn raw_command(port: u16, cmd: &str) -> Vec<u8> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut s = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .unwrap();
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 4096];
+    // Greeting.
+    while !buf.ends_with(b"\n") {
+        let n = s.read(&mut chunk).await.unwrap();
+        buf.extend_from_slice(&chunk[..n]);
+    }
+    buf.clear();
+    s.write_all(format!("{cmd}\n").as_bytes()).await.unwrap();
+    loop {
+        let n = tokio::time::timeout(std::time::Duration::from_secs(5), s.read(&mut chunk))
+            .await
+            .expect("read timed out")
+            .unwrap();
+        if n == 0 {
+            break;
+        }
+        buf.extend_from_slice(&chunk[..n]);
+        if buf.ends_with(b"\nOK\n") || buf == b"OK\n" || buf.starts_with(b"ACK ") {
+            break;
+        }
+    }
+    buf
+}
+
+#[tokio::test]
+async fn readpicture_returns_embedded_art_for_scanned_song() {
+    // Regression: the artwork cache was keyed by absolute path, which violates the
+    // artwork table's foreign key on songs(path) (relative), so every lookup failed
+    // and readpicture silently answered an empty OK.
+    let (server, _client, tmp) = tcp_harness::setup_with_db(0).await;
+    let music = tmp.path().join("music");
+    let cover = tmp.path().join("cover.png");
+    let ok = std::process::Command::new("ffmpeg")
+        .args([
+            "-v",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=red:s=64x64:d=1",
+        ])
+        .args(["-frames:v", "1"])
+        .arg(&cover)
+        .status()
+        .is_ok_and(|s| s.success())
+        && std::process::Command::new("ffmpeg")
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i", "sine=d=1", "-i"])
+            .arg(&cover)
+            .args(["-map", "0:a", "-map", "1", "-c:a", "flac", "-c:v", "png"])
+            .args(["-disposition:v", "attached_pic"])
+            .arg(music.join("art.flac"))
+            .status()
+            .is_ok_and(|s| s.success());
+    if !ok {
+        eprintln!("Skipping test: ffmpeg not available");
+        return;
+    }
+    {
+        let db =
+            rmpd_library::Database::open(tmp.path().join("test.db").to_str().unwrap()).unwrap();
+        db.add_song(&rmpd_core::test_utils::make_test_song("art.flac", 1))
+            .unwrap();
+    }
+
+    for pass in ["extract", "cache hit"] {
+        let resp = raw_command(server.port(), "readpicture \"art.flac\" 0").await;
+        let head = String::from_utf8_lossy(&resp[..resp.len().min(64)]).into_owned();
+        assert!(
+            head.starts_with("size: "),
+            "{pass}: expected picture, got: {head:?}"
+        );
+        assert!(head.contains("type: image/png"), "{pass}: got: {head:?}");
+    }
+}

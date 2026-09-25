@@ -745,11 +745,21 @@ pub async fn handle_readpicture_command(
         }
     };
 
-    // Key the artwork cache by the canonicalized on-disk path rather than
-    // the raw client URI, so differing URI spellings (case, `.`/`..`
-    // segments already stripped by resolve_safe_music_path, symlinks) of
-    // the same file share one cache entry instead of poisoning/duplicating it.
-    let cache_key = absolute_path.clone();
+    // Key the artwork cache by the canonicalized path *relative to the music
+    // directory*: that is what `songs.path` stores, and the `artwork` table has
+    // a foreign key on it. Canonicalizing first still makes differing URI
+    // spellings (symlinks, `.`/`..` already rejected by resolve_safe_music_path)
+    // share one cache entry.
+    let cache_key = std::path::Path::new(&music_dir)
+        .canonicalize()
+        .ok()
+        .and_then(|root| {
+            std::path::Path::new(&absolute_path)
+                .strip_prefix(root)
+                .ok()
+                .map(|rel| rel.to_string_lossy().into_owned())
+        })
+        .unwrap_or_else(|| uri.to_string());
     let absolute_path_for_check = absolute_path.clone();
     match tokio::task::spawn_blocking(move || {
         let extractor = rmpd_library::AlbumArtExtractor::new(db);
