@@ -213,12 +213,18 @@ impl ResponseBuilder {
             );
 
             if let Some(fmt) = status.audio_format {
+                // `bits_per_sample == 0` is the sentinel MPD uses for lossy/float-decoded codecs
+                // (Opus, Vorbis, AAC, MP3/MP2/MP1): it reports the sample *format* `f` instead of
+                // a bit count there (see `sample_format_to_string(SampleFormat::FLOAT)` in MPD's
+                // `src/pcm/SampleFormat.cxx`), matching the `Format:` tag in `song()` below.
+                let bits = if fmt.bits_per_sample == 0 {
+                    "f".to_string()
+                } else {
+                    fmt.bits_per_sample.to_string()
+                };
                 self.field(
                     "audio",
-                    format!(
-                        "{}:{}:{}",
-                        fmt.sample_rate, fmt.bits_per_sample, fmt.channels
-                    ),
+                    format!("{}:{}:{}", fmt.sample_rate, bits, fmt.channels),
                 );
             }
         }
@@ -471,6 +477,36 @@ mod tests {
                 "unexpected '{field}' when stopped:\n{out}"
             );
         }
+    }
+
+    /// `bits_per_sample == 0` is the sentinel `Song`/`AudioFormat` use for lossy/float-decoded
+    /// codecs (Opus, Vorbis, AAC, MP3/MP2/MP1; see `rmpd_library::metadata`); `audio:` must
+    /// render it as `f` (MPD's `SampleFormat::FLOAT`), while a real bit depth (lossless codecs)
+    /// renders as a plain number.
+    #[test]
+    fn status_audio_field_renders_float_sentinel_and_bit_depth() {
+        let mut status = base_status();
+        status.state = rmpd_core::state::PlayerState::Play;
+
+        status.audio_format = Some(rmpd_core::song::AudioFormat {
+            sample_rate: 48_000,
+            channels: 2,
+            bits_per_sample: 0,
+        });
+        let mut rb = ResponseBuilder::new();
+        rb.status(&status, "default", "");
+        let out = rb.ok();
+        assert!(out.contains("audio: 48000:f:2\n"), "got:\n{out}");
+
+        status.audio_format = Some(rmpd_core::song::AudioFormat {
+            sample_rate: 44_100,
+            channels: 2,
+            bits_per_sample: 24,
+        });
+        let mut rb = ResponseBuilder::new();
+        rb.status(&status, "default", "");
+        let out = rb.ok();
+        assert!(out.contains("audio: 44100:24:2\n"), "got:\n{out}");
     }
 
     /// `Range` is positioned right after `file` (SongPrint.cxx PrintRange),
