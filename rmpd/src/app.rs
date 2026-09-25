@@ -35,6 +35,10 @@ pub async fn run(bind_address: String, config: Config) -> Result<()> {
         config.general.follow_inside_symlinks,
         config.general.follow_outside_symlinks,
     );
+    state.set_playlist_options(
+        config.playlist.embedded_cue_as_directory,
+        config.database.hide_playlist_targets,
+    );
     if !config
         .general
         .filesystem_charset
@@ -349,6 +353,7 @@ async fn start_filesystem_watch(
         state.event_bus.clone(),
     )?;
     watcher.set_max_depth(auto_update_depth);
+    watcher.set_embedded_cue_as_directory(state.embedded_cue_as_directory);
     watcher.start().await?;
     info!("filesystem watcher started for {}", music_dir);
     Ok(watcher)

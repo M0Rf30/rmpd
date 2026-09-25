@@ -86,6 +86,16 @@ pub struct AppState {
     /// Follow a symlink resolving outside `music_directory` when scanning.
     /// Mirrors `general.follow_outside_symlinks` from the config file.
     pub follow_outside_symlinks: bool,
+    /// Show a FLAC's embedded CUESHEET as a browsable virtual directory of
+    /// per-track songs during library scans. Mirrors
+    /// `playlist.embedded_cue_as_directory` from the config file (see
+    /// `rmpd_core::config::PlaylistConfig`); `load`/`listplaylist(info)`
+    /// expansion of an embedded cue is unaffected by this flag.
+    pub embedded_cue_as_directory: bool,
+    /// Hide a song from directory listings/`find`/`search` when it is the
+    /// physical file underlying embedded-cue virtual tracks. Mirrors
+    /// `database.hide_playlist_targets` from the config file.
+    pub hide_playlist_targets: bool,
     /// Monotonic counter for library-scan job ids (MPD-style `updating_db`
     /// job numbers).
     job_counter: Arc<std::sync::atomic::AtomicU32>,
@@ -187,6 +197,8 @@ impl AppState {
             sources: std::sync::Arc::new(rmpd_source::SourceRegistry::from_config(&[])),
             follow_inside_symlinks: true,
             follow_outside_symlinks: true,
+            embedded_cue_as_directory: true,
+            hide_playlist_targets: true,
             job_counter: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             source_sync_running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
@@ -270,6 +282,17 @@ impl AppState {
         self.follow_outside_symlinks = follow_outside_symlinks;
     }
 
+    /// Configure `[playlist].embedded_cue_as_directory` and
+    /// `[database].hide_playlist_targets`.
+    pub fn set_playlist_options(
+        &mut self,
+        embedded_cue_as_directory: bool,
+        hide_playlist_targets: bool,
+    ) {
+        self.embedded_cue_as_directory = embedded_cue_as_directory;
+        self.hide_playlist_targets = hide_playlist_targets;
+    }
+
     pub fn advertise_mdns(&self, port: u16) {
         if let Some(discovery) = &self.discovery
             && let Err(e) = discovery.advertise(port, &self.zeroconf_name)
@@ -300,6 +323,7 @@ impl AppState {
         };
         let follow_inside_symlinks = self.follow_inside_symlinks;
         let follow_outside_symlinks = self.follow_outside_symlinks;
+        let embedded_cue_as_directory = self.embedded_cue_as_directory;
         let event_bus = self.event_bus.clone();
         let status = self.status.clone();
 
@@ -324,7 +348,8 @@ impl AppState {
                 let db = rmpd_library::Database::open(&db_path)?;
                 let scanner = rmpd_library::Scanner::new(event_bus, false)
                     .with_symlink_policy(follow_inside_symlinks, follow_outside_symlinks)
-                    .with_force_rescan(discard);
+                    .with_force_rescan(discard)
+                    .with_embedded_cue_as_directory(embedded_cue_as_directory);
                 scanner.scan_directory(&db, std::path::Path::new(&music_dir))
             })
             .await;

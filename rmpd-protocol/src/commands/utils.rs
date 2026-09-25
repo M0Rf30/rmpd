@@ -42,9 +42,11 @@ pub fn open_db(
     let pool = state.db_pool.as_ref().ok_or_else(|| {
         ResponseBuilder::error(ACK_ERROR_SYS, 0, command, "database not configured")
     })?;
-    rmpd_library::Database::from_pool(pool).map_err(|e| {
-        ResponseBuilder::error(ACK_ERROR_SYS, 0, command, &format!("database error: {e}"))
-    })
+    rmpd_library::Database::from_pool(pool)
+        .map(|db| db.with_hide_playlist_targets(state.hide_playlist_targets))
+        .map_err(|e| {
+            ResponseBuilder::error(ACK_ERROR_SYS, 0, command, &format!("database error: {e}"))
+        })
 }
 
 pub use rmpd_core::time::format_iso8601 as format_iso8601_timestamp;
