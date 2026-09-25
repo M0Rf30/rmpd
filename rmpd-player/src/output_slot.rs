@@ -88,6 +88,7 @@ impl OutputSlot {
 mod tests {
     use super::*;
     use crate::null_output::NullOutput;
+    use crate::output_control::OutputControl;
     use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 
     fn build_null() -> Result<Arc<MultiOutput>> {
@@ -96,6 +97,7 @@ mod tests {
             vec![Box::new(NullOutput::new())],
             4,
             volume,
+            Arc::new(OutputControl::new()),
         )?))
     }
 

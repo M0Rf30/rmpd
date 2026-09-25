@@ -15,6 +15,7 @@ pub mod httpd_output;
 pub mod multi_output;
 pub mod null_output;
 pub mod output;
+pub mod output_control;
 pub mod output_registry;
 pub mod output_slot;
 pub mod pipe_output;
@@ -36,6 +37,7 @@ pub use httpd_output::HttpdOutput;
 pub use multi_output::MultiOutput;
 pub use null_output::NullOutput;
 pub use output::CpalOutput;
+pub use output_control::OutputControl;
 pub use output_registry::{OUTPUT_PLUGINS, create_output};
 pub use output_slot::{OutputKey, OutputSlot};
 #[cfg(all(feature = "pipewire", target_os = "linux"))]

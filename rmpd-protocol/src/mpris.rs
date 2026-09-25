@@ -445,7 +445,15 @@ impl PlayerInterface for MprisPlayer {
     }
 
     async fn position(&self) -> fdo::Result<Time> {
-        let elapsed = self.state.status.read().await.elapsed;
+        // Live at query time (see server.rs Command::Status for the
+        // rationale): avoids MPRIS clients (media key widgets, OSD seek
+        // bars) reading a position up to ~1s stale from the last
+        // periodic PositionChanged event.
+        let elapsed = self.state.engine.read().await.get_elapsed_live();
+        let elapsed = match elapsed {
+            Some(d) => Some(d),
+            None => self.state.status.read().await.elapsed,
+        };
         Ok(elapsed.map_or(Time::ZERO, |d| Time::from_micros(d.as_micros() as i64)))
     }
 

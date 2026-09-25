@@ -7,34 +7,41 @@
 //! secondary can never block the primary.
 //!
 //! Chunks are shared as `Arc<[f32]>` — a single ref-count bump per secondary,
-//! no deep copies.
+//! no deep copies. Each chunk carries the [`OutputControl`] flush generation
+//! it was produced under.
 //!
-//! ## Pause/stop responsiveness
+//! ## Pause / flush responsiveness
 //!
-//! `Pause`/`Resume`/`Stop` are queued on the SAME per-worker channel as audio
-//! chunks, so a control message can land behind up to `depth` already-queued
-//! chunks. If workers only acted on the enum message, pausing would have to
-//! wait for the worker to actually *play out* that whole backlog first (worst
-//! case, `depth` chunks at real-time pace — hundreds of ms). To keep control
-//! instantaneous, `active` is a shared atomic checked before writing every
-//! dequeued `Samples` chunk: `pause()`/`stop()`/`Drop` clear it immediately,
-//! so any already-queued chunk is discarded (not played) the moment the
-//! worker next dequeues it, draining the backlog in one recv-loop pass rather
-//! than in real time. The `Pause`/`Resume` enum messages still flow through
-//! for the hardware-level `AudioOutput::pause`/`resume` call (device state),
-//! but the audible effect no longer waits on their queue position.
+//! Every output constructed for this `MultiOutput` shares the SAME
+//! `Arc<OutputControl>` as the engine, so `pause()`/`seek()`/`stop()` are
+//! visible here (and in every backend's own real-time callback) the instant
+//! the engine sets them — no round trip through the decode thread required.
+//!
+//! A backend that reports [`AudioOutput::self_managed`] owns a real-time
+//! callback (cpal, PipeWire) that itself holds position on pause and drops
+//! stale-generation audio (including a partially-consumed chunk); its
+//! worker here just forwards every chunk unconditionally (subject to normal
+//! backpressure/drop-on-full for secondaries). A backend WITHOUT its own
+//! real-time callback (null/fifo/pipe/recorder/httpd) has pause-hold and
+//! flush-drop applied right here: the worker skips (does not call
+//! `AudioOutput::write`) a dequeued chunk while `control.is_paused()` or
+//! once its generation is stale — draining the backlog in one recv-loop
+//! pass rather than in real time, and still gets the legacy write-time
+//! [`VolumeFilter`].
 
 use crate::audio_output::AudioOutput;
 use crate::filter::{AudioFilter, VolumeFilter};
+use crate::output_control::OutputControl;
 use rmpd_core::error::{Result, RmpdError};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::AtomicU8;
 use std::sync::mpsc::{SyncSender, sync_channel};
 use std::thread::{self, JoinHandle};
 use tracing::{debug, warn};
 
 enum OutputMsg {
-    Samples(Arc<[f32]>),
+    /// `(flush_generation, samples)`.
+    Samples(u64, Arc<[f32]>),
     Pause,
     Resume,
     Stop,
@@ -48,9 +55,9 @@ struct Worker {
 
 pub struct MultiOutput {
     workers: Vec<Worker>,
-    /// Shared, checked by every worker before writing a dequeued `Samples`
-    /// chunk. `false` while paused or stopping — see module docs.
-    active: Arc<AtomicBool>,
+    /// Shared with the engine and every backend's own callback. `write()`
+    /// tags outgoing chunks with the live generation.
+    control: Arc<OutputControl>,
 }
 
 impl MultiOutput {
@@ -65,15 +72,15 @@ impl MultiOutput {
         outputs: Vec<Box<dyn AudioOutput>>,
         depth: usize,
         volume: Arc<AtomicU8>,
+        control: Arc<OutputControl>,
     ) -> Result<Self> {
-        let active = Arc::new(AtomicBool::new(true));
         let mut workers = Vec::with_capacity(outputs.len());
 
         for (idx, mut out) in outputs.into_iter().enumerate() {
             let primary = idx == 0;
             let (tx, rx) = sync_channel::<OutputMsg>(depth);
             let vol_arc = volume.clone();
-            let worker_active = active.clone();
+            let worker_control = control.clone();
 
             let handle = thread::Builder::new()
                 .name(if primary {
@@ -94,19 +101,46 @@ impl MultiOutput {
                         "{} output worker started",
                         if primary { "primary" } else { "secondary" }
                     );
+                    let self_managed = out.self_managed();
                     let mut vol = VolumeFilter::new(vol_arc);
                     loop {
                         match rx.recv() {
-                            Ok(OutputMsg::Samples(arc)) => {
-                                if !worker_active.load(Ordering::Acquire) {
-                                    // Paused/stopping: discard rather than play out a
-                                    // chunk queued before the transition — see module
-                                    // docs. Keeps the backlog drain instantaneous
-                                    // instead of real-time-paced.
+                            Ok(OutputMsg::Samples(generation, arc)) => {
+                                // Stale (pre-flush) audio must never reach
+                                // ANY backend, self-managed or not — a
+                                // self-managed backend's own write() re-tags
+                                // outgoing chunks with WHATEVER generation is
+                                // current AT WRITE TIME (it has no way to
+                                // know this chunk's original one), which
+                                // would otherwise "revive" a stale chunk
+                                // sitting in this worker's queue as if it
+                                // were fresh once forwarded after a flush —
+                                // silently leaking up to `depth` chunks of
+                                // pre-flush audio back in (this was
+                                // measurable as ~680ms of the seek latency:
+                                // exactly this channel's depth-16 backlog).
+                                if generation != worker_control.generation() {
+                                    continue;
+                                }
+                                // Pause-hold: only a non-self-managed
+                                // backend (no real-time callback of its own)
+                                // needs the worker to skip here. A
+                                // self-managed backend must keep receiving
+                                // current-generation audio while paused so
+                                // it is queued and ready the instant its own
+                                // callback resumes draining it.
+                                if !self_managed && worker_control.is_paused() {
+                                    // Paused: discard rather than play out a
+                                    // chunk queued before the transition —
+                                    // see module docs. Keeps the backlog
+                                    // drain instantaneous instead of
+                                    // real-time-paced.
                                     continue;
                                 }
                                 let mut buf = arc.to_vec();
-                                vol.apply(&mut buf);
+                                if !self_managed {
+                                    vol.apply(&mut buf);
+                                }
                                 if let Err(e) = out.write(&buf) {
                                     // A persistent write failure (device
                                     // disconnected) must stop the worker so
@@ -155,37 +189,46 @@ impl MultiOutput {
             });
         }
 
-        Ok(MultiOutput { workers, active })
+        Ok(MultiOutput { workers, control })
     }
 
-    /// Fan one chunk to all outputs.
+    /// Fan one chunk to all outputs, tagged with the live flush generation.
     ///
     /// Blocks on the primary for back-pressure; uses `try_send` (drop-on-full)
     /// for every secondary.  Returns `Err` only if the primary worker is gone.
     pub fn write(&self, chunk: Arc<[f32]>) -> Result<()> {
+        let generation = self.control.generation();
         for w in &self.workers {
             if w.primary {
-                w.tx.send(OutputMsg::Samples(chunk.clone()))
+                w.tx.send(OutputMsg::Samples(generation, chunk.clone()))
                     .map_err(|_| RmpdError::Player("primary output stopped".into()))?;
             } else {
                 // Best-effort: silently drop on Full or Disconnected.
-                let _ = w.tx.try_send(OutputMsg::Samples(chunk.clone()));
+                let _ = w.tx.try_send(OutputMsg::Samples(generation, chunk.clone()));
             }
         }
         Ok(())
     }
 
-    /// Pause all outputs (best-effort, non-blocking).
+    /// The shared control block (pause / flush-generation / gain / played-frames).
+    pub fn control(&self) -> &Arc<OutputControl> {
+        &self.control
+    }
+
+    /// Pause all outputs: sets the shared control flag (instant, read
+    /// directly by every self-managed backend's real-time callback and by
+    /// non-self-managed workers above) and best-effort notifies the
+    /// hardware layer (e.g. `cpal::Stream::pause`).
     pub fn pause(&self) {
-        self.active.store(false, Ordering::Release);
+        self.control.set_paused(true);
         for w in &self.workers {
             let _ = w.tx.try_send(OutputMsg::Pause);
         }
     }
 
-    /// Resume all outputs (best-effort, non-blocking).
+    /// Resume all outputs (instant control flag + best-effort hardware call).
     pub fn resume(&self) {
-        self.active.store(true, Ordering::Release);
+        self.control.set_paused(false);
         for w in &self.workers {
             let _ = w.tx.try_send(OutputMsg::Resume);
         }
@@ -197,13 +240,28 @@ impl MultiOutput {
     /// Secondaries are sent `Stop` on a best-effort basis (the channel may be
     /// full if the secondary is stalled) and their threads are detached — they
     /// will exit on their own once any blocking write returns.
-    pub fn stop(mut self) {
-        // Stop feeding audio to the device immediately; without this the
-        // primary worker would play out its entire backlog (up to `depth`
-        // chunks) before it even reaches the Stop message behind them.
-        self.active.store(false, Ordering::Release);
+    pub fn stop(self) {
         // Send Stop: blocking for primary (ensures it is received), try for
         // secondaries (their channel may be full if they are stalled).
+        Self::send_stop_and_join(&self.workers);
+    }
+
+    fn send_stop_and_join(workers: &[Worker]) {
+        for w in workers {
+            if w.primary {
+                let _ = w.tx.send(OutputMsg::Stop);
+            } else {
+                let _ = w.tx.try_send(OutputMsg::Stop);
+            }
+        }
+    }
+}
+
+impl Drop for MultiOutput {
+    fn drop(&mut self) {
+        // Mirror stop(): a flush just before this (engine-side, on seek/stop/
+        // song-change) already makes self-managed callbacks silence almost
+        // instantly; this still sends Stop so workers exit promptly.
         for w in &self.workers {
             if w.primary {
                 let _ = w.tx.send(OutputMsg::Stop);
@@ -211,7 +269,6 @@ impl MultiOutput {
                 let _ = w.tx.try_send(OutputMsg::Stop);
             }
         }
-        // Join primary; drop secondary handles (threads detach).
         for w in &mut self.workers {
             if w.primary {
                 if let Some(h) = w.handle.take() {
@@ -224,35 +281,17 @@ impl MultiOutput {
     }
 }
 
-impl Drop for MultiOutput {
-    fn drop(&mut self) {
-        // Mirror stop() — handles may be None if stop() was already called.
-        self.active.store(false, Ordering::Release);
-        for w in &self.workers {
-            if w.primary {
-                let _ = w.tx.send(OutputMsg::Stop);
-            } else {
-                let _ = w.tx.try_send(OutputMsg::Stop);
-            }
-        }
-        for w in &mut self.workers {
-            if w.primary {
-                if let Some(h) = w.handle.take() {
-                    let _ = h.join();
-                }
-            } else {
-                w.handle.take();
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::audio_output::PauseState;
+    use parking_lot::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
+
+    fn control() -> Arc<OutputControl> {
+        Arc::new(OutputControl::new())
+    }
 
     // ── Test outputs ──────────────────────────────────────────────────────────
 
@@ -267,6 +306,34 @@ mod tests {
         }
         fn write(&mut self, _samples: &[f32]) -> rmpd_core::error::Result<()> {
             self.count.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+        fn stop(&mut self) -> rmpd_core::error::Result<()> {
+            Ok(())
+        }
+        fn pause_state(&self) -> &PauseState {
+            &self.state
+        }
+        fn pause_state_mut(&mut self) -> &mut PauseState {
+            &mut self.state
+        }
+    }
+
+    /// Records the first sample of every buffer it's asked to write, so a
+    /// test can distinguish "old" from "new" generation audio by content.
+    struct RecordingOutput {
+        log: Arc<Mutex<Vec<f32>>>,
+        state: PauseState,
+    }
+
+    impl AudioOutput for RecordingOutput {
+        fn start(&mut self) -> rmpd_core::error::Result<()> {
+            Ok(())
+        }
+        fn write(&mut self, samples: &[f32]) -> rmpd_core::error::Result<()> {
+            if let Some(&first) = samples.first() {
+                self.log.lock().push(first);
+            }
             Ok(())
         }
         fn stop(&mut self) -> rmpd_core::error::Result<()> {
@@ -377,7 +444,8 @@ mod tests {
         let multi = MultiOutput::spawn(
             vec![Box::new(primary), Box::new(secondary)],
             4,
-            Arc::new(std::sync::atomic::AtomicU8::new(100)),
+            Arc::new(AtomicU8::new(100)),
+            control(),
         )
         .expect("spawn failed");
 
@@ -404,6 +472,7 @@ mod tests {
             "primary must have received all 100 chunks"
         );
     }
+
     /// Pausing must not wait for already-queued chunks to be *played*: it
     /// should discard them so the audible effect is near-instant instead of
     /// paced out over `depth` chunks worth of real time.
@@ -421,7 +490,8 @@ mod tests {
         let multi = MultiOutput::spawn(
             vec![Box::new(primary)],
             depth,
-            Arc::new(std::sync::atomic::AtomicU8::new(100)),
+            Arc::new(AtomicU8::new(100)),
+            control(),
         )
         .expect("spawn failed");
 
@@ -451,6 +521,57 @@ mod tests {
         multi.stop();
     }
 
+    /// A flush (generation bump) must drop chunks tagged with the OLD
+    /// generation still sitting in a non-self-managed output's queue, even
+    /// though it isn't paused — the same mechanism seek/stop/song-change
+    /// relies on for backends with no real-time callback of their own.
+    #[test]
+    fn flush_drops_stale_generation_chunks_for_non_self_managed_outputs() {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let ctl = control();
+
+        let primary = RecordingOutput {
+            log: Arc::clone(&log),
+            state: PauseState::new(),
+        };
+
+        let multi = MultiOutput::spawn(
+            vec![Box::new(primary)],
+            16,
+            Arc::new(AtomicU8::new(100)),
+            Arc::clone(&ctl),
+        )
+        .expect("spawn failed");
+
+        // Queue a batch of old-generation ("stale") chunks, each starting
+        // with a distinctive 1.0 sample.
+        for _ in 0..8 {
+            let chunk: Arc<[f32]> = Arc::from(vec![1.0f32; 64].as_slice());
+            multi.write(chunk).expect("write must not fail");
+        }
+
+        // Flush: bump the generation as the engine does before a
+        // seek/stop/song-change, THEN queue fresh audio (2.0-tagged).
+        ctl.flush();
+        for _ in 0..2 {
+            let chunk: Arc<[f32]> = Arc::from(vec![2.0f32; 64].as_slice());
+            multi.write(chunk).expect("write must not fail");
+        }
+
+        multi.stop();
+
+        let seen = log.lock();
+        assert!(
+            !seen.contains(&1.0),
+            "stale (pre-flush) chunks must never reach the backend, saw: {seen:?}"
+        );
+        assert_eq!(
+            seen.iter().filter(|&&s| s == 2.0).count(),
+            2,
+            "the fresh post-flush chunks must all reach the backend, saw: {seen:?}"
+        );
+    }
+
     /// A persistent `write()` failure (disconnected device) must stop the
     /// worker rather than loop forever discarding chunks — otherwise the
     /// decode thread races through the queue at full CPU speed instead of
@@ -464,7 +585,8 @@ mod tests {
         let multi = MultiOutput::spawn(
             vec![Box::new(primary)],
             4,
-            Arc::new(std::sync::atomic::AtomicU8::new(100)),
+            Arc::new(AtomicU8::new(100)),
+            control(),
         )
         .expect("spawn failed");
 

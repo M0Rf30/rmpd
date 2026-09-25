@@ -45,6 +45,20 @@ pub trait AudioOutput: Send {
     /// Mutable access to the embedded [`PauseState`].
     fn pause_state_mut(&mut self) -> &mut PauseState;
 
+    /// Whether this backend owns a real-time callback that itself applies
+    /// pause-hold, flush-generation dropping, and gain (e.g. [`crate::output::CpalOutput`]
+    /// via [`crate::conversion::SampleBuffer`]).
+    ///
+    /// `MultiOutput`'s worker uses this to decide how to treat a dequeued
+    /// chunk: a self-managed backend gets every chunk forwarded unconditionally
+    /// (its own callback decides what to do with pause/stale generations), while
+    /// a non-self-managed backend (no real-time callback of its own — e.g. null,
+    /// fifo, pipe, recorder, httpd) has pause-hold and flush-drop applied by the
+    /// worker itself, and still gets the legacy write-time [`crate::filter::VolumeFilter`].
+    fn self_managed(&self) -> bool {
+        false
+    }
+
     /// Pause: stop consuming samples (silence / no-op writes).
     fn pause(&mut self) -> Result<()> {
         self.pause_state_mut().set_paused(true);

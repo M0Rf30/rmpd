@@ -8,23 +8,32 @@ use crate::fifo_output::FifoOutput;
 use crate::httpd_output::HttpdOutput;
 use crate::null_output::NullOutput;
 use crate::output::CpalOutput;
+use crate::output_control::OutputControl;
 use crate::pipe_output::PipeOutput;
 use crate::recorder_output::RecorderOutput;
 use rmpd_core::config::{OutputConfig, ResamplerQuality};
 use rmpd_core::error::{Result, RmpdError};
 use rmpd_core::song::AudioFormat;
+use std::sync::Arc;
 
 pub type OutputFactory =
     fn(AudioFormat, ResamplerQuality, &OutputConfig) -> Result<Box<dyn AudioOutput>>;
 
 // cpal_factory is kept for the OutputPlugins table but is not used by
-// create_output (which routes cpal directly to carry buffer_time_ms).
+// create_output (which routes cpal directly to carry buffer_time_ms and the
+// shared OutputControl). It builds a standalone control block since callers
+// reaching it through the table have no engine-shared one to pass in.
 fn cpal_factory(
     format: AudioFormat,
     quality: ResamplerQuality,
     _cfg: &OutputConfig,
 ) -> Result<Box<dyn AudioOutput>> {
-    Ok(Box::new(CpalOutput::new(format, quality, 500)?))
+    Ok(Box::new(CpalOutput::new(
+        format,
+        quality,
+        500,
+        Arc::new(OutputControl::new()),
+    )?))
 }
 
 fn null_factory(
@@ -87,7 +96,11 @@ fn jack_factory(
     _quality: ResamplerQuality,
     _cfg: &OutputConfig,
 ) -> Result<Box<dyn AudioOutput>> {
-    Ok(Box::new(CpalOutput::new_jack(format, 500)?))
+    Ok(Box::new(CpalOutput::new_jack(
+        format,
+        500,
+        Arc::new(OutputControl::new()),
+    )?))
 }
 
 #[cfg(all(feature = "asio", target_os = "windows"))]
@@ -96,7 +109,11 @@ fn asio_factory(
     _quality: ResamplerQuality,
     _cfg: &OutputConfig,
 ) -> Result<Box<dyn AudioOutput>> {
-    Ok(Box::new(CpalOutput::new_asio(format, 500)?))
+    Ok(Box::new(CpalOutput::new_asio(
+        format,
+        500,
+        Arc::new(OutputControl::new()),
+    )?))
 }
 
 fn httpd_factory(
@@ -127,6 +144,7 @@ pub fn create_output(
     cfg: &OutputConfig,
     buffer_time_ms: u32,
     dsd_target_rate: Option<u32>,
+    control: Arc<OutputControl>,
 ) -> Result<Box<dyn AudioOutput>> {
     let type_lower = cfg.output_type.to_lowercase();
     // When the native PipeWire backend isn't compiled in, route a
@@ -142,12 +160,15 @@ pub fn create_output(
     } else {
         type_lower
     };
-    // Route cpal-family types directly so buffer_time_ms is forwarded.
+    // Route cpal-family types directly so buffer_time_ms and the shared
+    // OutputControl are forwarded.
     match type_lower.as_str() {
         "cpal" | "default" => {
             let out = match dsd_target_rate {
-                Some(rate) => CpalOutput::with_target_rate(format, quality, buffer_time_ms, rate)?,
-                None => CpalOutput::new(format, quality, buffer_time_ms)?,
+                Some(rate) => {
+                    CpalOutput::with_target_rate(format, quality, buffer_time_ms, rate, control)?
+                }
+                None => CpalOutput::new(format, quality, buffer_time_ms, control)?,
             };
             return Ok(Box::new(out));
         }
@@ -159,12 +180,25 @@ pub fn create_output(
                 format,
                 cfg,
                 buffer_time_ms,
+                control,
             )?));
         }
         #[cfg(feature = "jack")]
-        "jack" => return Ok(Box::new(CpalOutput::new_jack(format, buffer_time_ms)?)),
+        "jack" => {
+            return Ok(Box::new(CpalOutput::new_jack(
+                format,
+                buffer_time_ms,
+                control,
+            )?));
+        }
         #[cfg(all(feature = "asio", target_os = "windows"))]
-        "asio" => return Ok(Box::new(CpalOutput::new_asio(format, buffer_time_ms)?)),
+        "asio" => {
+            return Ok(Box::new(CpalOutput::new_asio(
+                format,
+                buffer_time_ms,
+                control,
+            )?));
+        }
         _ => {}
     }
     OUTPUT_PLUGINS

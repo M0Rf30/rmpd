@@ -17,21 +17,25 @@
 //! (it crosses into the engine as `Box<dyn AudioOutput>`) by holding only the
 //! cross-thread handles:
 //!
-//! * PCM frames flow over a bounded [`SyncSender<Vec<f32>>`]; the matching
+//! * PCM frames flow over a bounded [`SyncSender<Chunk<f32>>`]; the matching
 //!   `Receiver` is wrapped in [`crate::conversion::SampleBuffer`] on the loop
-//!   thread (it yields `0.0` silence on underrun, exactly like the cpal path).
+//!   thread. It shares the SAME `Arc<OutputControl>` as the engine, so it
+//!   holds position on pause and drops stale-generation audio exactly like
+//!   the cpal path, and applies gain (with a short ramp) at playback time.
 //! * Termination is signalled over a [`pipewire::channel`] whose `Receiver` is
 //!   attached to the loop and calls `MainLoop::quit`.
 //! * Startup success/failure is reported back over a one-shot
 //!   [`std::sync::mpsc`] channel so `start()` can surface connection errors.
 
 use crate::audio_output::{AudioOutput, PauseState};
-use crate::conversion::SampleBuffer;
+use crate::conversion::{Chunk, GainRamp, SampleBuffer};
+use crate::output_control::OutputControl;
 use pipewire as pw;
 use pw::properties::properties;
 use rmpd_core::config::OutputConfig;
 use rmpd_core::error::{Result, RmpdError};
 use rmpd_core::song::AudioFormat;
+use std::sync::Arc;
 use std::sync::mpsc::{SyncSender, sync_channel};
 use std::thread::JoinHandle;
 
@@ -51,10 +55,13 @@ pub struct PipeWireOutput {
     /// Requested output buffer time; sizes the PCM sync-channel depth.
     buffer_time_ms: u32,
     pause_state: PauseState,
+    /// Shared, lock-free pause/flush/gain state read directly by the
+    /// process callback on the loop thread.
+    control: Arc<OutputControl>,
 
     // Runtime handles, populated by `start()` and cleared by `stop()`.
     /// Sends decoded PCM chunks to the loop thread's `SampleBuffer`.
-    sample_sender: Option<SyncSender<Vec<f32>>>,
+    sample_sender: Option<SyncSender<Chunk<f32>>>,
     /// Asks the loop thread to quit its `MainLoop`.
     terminate: Option<pw::channel::Sender<()>>,
     /// Handle to the spawned PipeWire loop thread.
@@ -64,7 +71,12 @@ pub struct PipeWireOutput {
 impl PipeWireOutput {
     /// Create an output for `format`, advertising `cfg.name` (or `"rmpd"`) as
     /// the PipeWire node name. No PipeWire objects are created until `start()`.
-    pub fn new(format: AudioFormat, cfg: &OutputConfig, buffer_time_ms: u32) -> Result<Self> {
+    pub fn new(
+        format: AudioFormat,
+        cfg: &OutputConfig,
+        buffer_time_ms: u32,
+        control: Arc<OutputControl>,
+    ) -> Result<Self> {
         let node_name = if cfg.name.trim().is_empty() {
             "rmpd".to_owned()
         } else {
@@ -75,6 +87,7 @@ impl PipeWireOutput {
             node_name,
             buffer_time_ms,
             pause_state: PauseState::new(),
+            control,
             sample_sender: None,
             terminate: None,
             loop_thread: None,
@@ -92,7 +105,8 @@ impl PipeWireOutput {
 
         // PCM channel sized from buffer_time_ms, matching CpalOutput::start.
         let depth = channel_depth(self.buffer_time_ms, sample_rate, channel_count);
-        let (tx, rx) = sync_channel::<Vec<f32>>(depth);
+        let (tx, rx) = sync_channel::<Chunk<f32>>(depth);
+        let control = self.control.clone();
 
         // Terminate signal (Send) kept here; Receiver moves into the loop thread.
         let (term_tx, term_rx) = pw::channel::channel::<()>();
@@ -144,13 +158,18 @@ impl PipeWireOutput {
                     "create pipewire stream"
                 );
 
-                // The process callback consumes the channel via SampleBuffer.
-                // `channel_count`/`stride` are copied into the closure; the RT
-                // callback stays allocation- and lock-free (next_sample() is a
-                // non-blocking try_recv that returns 0.0 silence on underrun).
+                // The process callback consumes the channel via SampleBuffer,
+                // holding pause and dropping stale-generation audio itself
+                // (same contract as CpalOutput), and applies gain with a
+                // short ramp. It stays allocation- and lock-free.
+                let mut gain_ramp = GainRamp::new(sample_rate, channel_count);
                 let _listener = bail!(
                     stream
-                        .add_local_listener_with_user_data(SampleBuffer::new(rx))
+                        .add_local_listener_with_user_data(SampleBuffer::new(
+                            rx,
+                            control.clone(),
+                            channel_count,
+                        ))
                         .process(move |stream, samples| {
                             let Some(mut buffer) = stream.dequeue_buffer() else {
                                 return;
@@ -168,7 +187,8 @@ impl PipeWireOutput {
                                 for frame in 0..n_frames {
                                     let base = frame * stride;
                                     for ch in 0..channel_count {
-                                        let s = samples.next_sample();
+                                        let raw = samples.next_sample();
+                                        let s = gain_ramp.apply(raw, control.gain());
                                         let off = base + ch * SIZE_F32;
                                         // Defense-in-depth: never panic the
                                         // realtime audio thread on a partial
@@ -281,13 +301,17 @@ impl PipeWireOutput {
     }
 
     pub fn write(&mut self, samples: &[f32]) -> Result<()> {
-        if self.pause_state.is_paused() {
-            return Ok(());
-        }
+        // Pause is handled entirely in the process callback (it holds
+        // position and does not drain the channel); writes must keep
+        // flowing so post-seek/pre-fill audio decoded while paused is ready
+        // the instant playback resumes.
         match &self.sample_sender {
-            Some(sender) => sender
-                .send(samples.to_vec())
-                .map_err(|_| RmpdError::Player("pipewire output gone".to_owned())),
+            Some(sender) => {
+                let chunk = Chunk::new(self.control.generation(), samples.to_vec());
+                sender
+                    .send(chunk)
+                    .map_err(|_| RmpdError::Player("pipewire output gone".to_owned()))
+            }
             None => Err(RmpdError::Player("pipewire output not started".to_owned())),
         }
     }
@@ -347,6 +371,12 @@ impl AudioOutput for PipeWireOutput {
     fn pause_state_mut(&mut self) -> &mut PauseState {
         &mut self.pause_state
     }
+    fn self_managed(&self) -> bool {
+        // The process callback (via SampleBuffer + GainRamp) owns
+        // pause-hold, flush-generation dropping, and gain directly from
+        // `control`; MultiOutput must forward chunks unconditionally.
+        true
+    }
 }
 
 #[cfg(test)]
@@ -378,7 +408,8 @@ mod tests {
     fn start_write_stop_roundtrip() {
         let format = AudioFormat::new(48_000, 2, 32);
         let cfg = OutputConfig::cpal_default();
-        let mut out = PipeWireOutput::new(format, &cfg, 500).expect("construct");
+        let mut out = PipeWireOutput::new(format, &cfg, 500, Arc::new(OutputControl::new()))
+            .expect("construct");
         out.start().expect("start connects to the PipeWire daemon");
         out.write(&[0.0_f32; 4096]).expect("write");
         out.stop().expect("stop");
