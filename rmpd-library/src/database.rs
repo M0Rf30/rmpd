@@ -433,6 +433,15 @@ impl Database {
                     .execute("ALTER TABLE songs ADD COLUMN range_start REAL", [])?;
                 self.conn
                     .execute("ALTER TABLE songs ADD COLUMN range_end REAL", [])?;
+                // FLACs scanned by an older version never had their embedded cue sheet
+                // read, and an ordinary `update` skips unchanged files. Reset their
+                // modification stamp so the next scan (including startup auto-update)
+                // re-reads them once, like MPD rescans after a database format change.
+                self.conn.execute(
+                    "UPDATE songs SET last_modified = 0
+                     WHERE source IS NULL AND lower(path) LIKE '%.flac'",
+                    [],
+                )?;
             }
         }
 

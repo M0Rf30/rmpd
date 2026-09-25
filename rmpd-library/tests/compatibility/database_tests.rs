@@ -464,6 +464,74 @@ fn test_source_column_migration_idempotent() {
     rmpd_library::database::Database::open(&db_path).unwrap();
 }
 
+/// Upgrading a pre-range (v5) database must reset FLAC rows' `last_modified`
+/// so the next ordinary scan re-reads them and picks up embedded cue sheets
+/// (an `update` otherwise skips unchanged files). Other formats keep theirs.
+#[test]
+fn test_range_migration_forces_flac_rescan() {
+    use rusqlite::Connection;
+
+    let temp_dir = tempfile::TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("v5.db").to_string_lossy().to_string();
+    {
+        let db = rmpd_library::database::Database::open(&db_path).unwrap();
+        for path in ["a/album.flac", "a/song.mp3"] {
+            let mut song = make_local_song(path);
+            song.last_modified = 1_700_000_000;
+            db.add_song(&song).unwrap();
+        }
+    }
+    // Turn it back into a v5 database: no range columns.
+    {
+        let conn = Connection::open(&db_path).unwrap();
+        conn.execute_batch(
+            "ALTER TABLE songs DROP COLUMN range_start;
+             ALTER TABLE songs DROP COLUMN range_end;",
+        )
+        .unwrap();
+    }
+
+    rmpd_library::database::Database::open(&db_path).unwrap();
+
+    let conn = Connection::open(&db_path).unwrap();
+    let stamp = |path: &str| -> i64 {
+        conn.query_row(
+            "SELECT last_modified FROM songs WHERE path = ?1",
+            [path],
+            |r| r.get(0),
+        )
+        .unwrap()
+    };
+    assert_eq!(
+        stamp("a/album.flac"),
+        0,
+        "FLAC must be re-read after the upgrade"
+    );
+    assert_eq!(
+        stamp("a/song.mp3"),
+        1_700_000_000,
+        "non-FLAC rows are left alone"
+    );
+
+    // A second open is a no-op (the columns now exist).
+    drop(conn);
+    let db = rmpd_library::database::Database::open(&db_path).unwrap();
+    let mut song = make_local_song("a/album.flac");
+    song.last_modified = 1_800_000_000;
+    db.add_song(&song).unwrap();
+    drop(db);
+    rmpd_library::database::Database::open(&db_path).unwrap();
+    let conn = Connection::open(&db_path).unwrap();
+    let flac: i64 = conn
+        .query_row(
+            "SELECT last_modified FROM songs WHERE path = 'a/album.flac'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(flac, 1_800_000_000, "the reset must only happen once");
+}
+
 /// (b) After `add_source_song` for the mount-style `alarm-music/Artist/Album/<id>.flac`:
 ///  - `list_directory("")` shows the bare `alarm-music` mount point
 ///  - `list_directory("alarm-music")` shows `alarm-music/Artist`
