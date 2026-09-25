@@ -231,6 +231,7 @@ mod tests {
             replay_gain_album_peak: None,
             added_at: 0,
             last_modified: 0,
+            range: None,
             tags: vec![("title".into(), "Test".to_owned())],
         }
     }

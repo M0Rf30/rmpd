@@ -114,6 +114,7 @@ fn test_song_with_empty_tags() {
         replay_gain_album_peak: None,
         added_at: 0,
         last_modified: 0,
+        range: None,
         tags: vec![],
     };
 
@@ -153,6 +154,7 @@ fn test_song_tag_values_multiple() {
         replay_gain_album_peak: None,
         added_at: 0,
         last_modified: 0,
+        range: None,
         tags: vec![
             (intern_tag_key("artist"), "Artist 1".to_string()),
             (intern_tag_key("artist"), "Artist 2".to_string()),
@@ -203,6 +205,7 @@ fn test_song_display_artist_fallback_to_albumartist() {
         replay_gain_album_peak: None,
         added_at: 0,
         last_modified: 0,
+        range: None,
         tags: vec![(intern_tag_key("albumartist"), "Album Artist".to_string())],
     };
 
@@ -326,6 +329,7 @@ fn test_song_tag_with_fallback() {
         replay_gain_album_peak: None,
         added_at: 0,
         last_modified: 0,
+        range: None,
         tags: vec![(intern_tag_key("artist"), "Test Artist".to_string())],
     };
 

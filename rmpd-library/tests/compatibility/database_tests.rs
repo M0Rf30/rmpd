@@ -429,6 +429,7 @@ fn make_virtual_song(virtual_path: &str, title: &str) -> rmpd_core::song::Song {
         replay_gain_album_peak: None,
         added_at: 0,
         last_modified: 0,
+        range: None,
         tags: vec![(rmpd_core::song::intern_tag_key("title"), title.to_string())],
     }
 }

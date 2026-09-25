@@ -109,6 +109,15 @@ pub struct Song {
     pub added_at: i64,
     pub last_modified: i64,
 
+    /// Playback range `(start, end)` in seconds, persisted for embedded-cue
+    /// virtual tracks (see `rmpd-library::embedded_cue`): the row is a
+    /// range-restricted slice of another song's underlying file rather than
+    /// an independent audio stream. `None` for every ordinary song.
+    /// `#[serde(default)]` keeps old queue/state-file JSON (saved before
+    /// this field existed) deserializable.
+    #[serde(default)]
+    pub range: Option<(f64, f64)>,
+
     /// All tags as (lowercase_tag_name, value) pairs.
     /// The same tag name may appear multiple times for multi-valued tags.
     /// Tags are stored in file insertion order; output preserves this order to match MPD.

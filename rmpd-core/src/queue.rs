@@ -218,13 +218,17 @@ impl Queue {
         let id = self.allocate_id();
 
         let position = self.items.len() as u32;
+        // Embedded-cue virtual tracks (`rmpd_library::embedded_cue`) carry
+        // their own persisted playback range; every other song leaves it
+        // `None` (the queue item then plays the whole file).
+        let range = song.range;
         self.items.push(QueueItem {
             id,
             position,
             song: Arc::new(song),
             priority: 0, // Default priority
-            range: None, // No range restriction by default
-            tags: None,  // No custom tags by default
+            range,
+            tags: None, // No custom tags by default
         });
 
         self.version += 1;
@@ -405,13 +409,15 @@ impl Queue {
         let id = self.allocate_id();
 
         let pos = position.unwrap_or(self.items.len() as u32);
+        // See `add`'s comment: inherit the song's own persisted range.
+        let range = song.range;
         let item = QueueItem {
             id,
             position: pos,
             song: Arc::new(song),
             priority: 0, // Default priority
-            range: None, // No range restriction by default
-            tags: None,  // No custom tags by default
+            range,
+            tags: None, // No custom tags by default
         };
 
         if pos as usize >= self.items.len() {

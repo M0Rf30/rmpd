@@ -320,6 +320,7 @@ impl SubsonicSource {
             replay_gain_album_peak: None,
             added_at: 0,
             last_modified: 0,
+            range: None,
             tags,
         }
     }

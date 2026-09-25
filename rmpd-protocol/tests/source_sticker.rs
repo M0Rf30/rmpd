@@ -39,6 +39,7 @@ async fn source_song_supports_stickers_and_consistent_path() {
             replay_gain_album_peak: None,
             added_at: 0,
             last_modified: 0,
+            range: None,
             tags: vec![
                 (intern_tag_key("title"), "Loftið".into()),
                 (intern_tag_key("artist"), "Ólafur Arnalds".into()),

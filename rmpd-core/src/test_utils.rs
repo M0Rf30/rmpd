@@ -36,6 +36,7 @@ pub fn create_test_song(id: u64, name: &str) -> Song {
         replay_gain_album_peak: None,
         added_at: 0,
         last_modified: 0,
+        range: None,
         tags: vec![(intern_tag_key("title"), format!("Song {}", name))],
     }
 }
@@ -87,6 +88,7 @@ pub fn create_test_song_with_metadata(
         replay_gain_album_peak: None,
         added_at: 0,
         last_modified: 0,
+        range: None,
         tags,
     }
 }
@@ -111,6 +113,7 @@ pub fn make_test_song(path: &str, track: u32) -> Song {
         replay_gain_album_peak: None,
         added_at: 0,
         last_modified: 0,
+        range: None,
         tags: vec![
             (intern_tag_key("title"), format!("Track {track}")),
             (intern_tag_key("artist"), "Test Artist".to_string()),
