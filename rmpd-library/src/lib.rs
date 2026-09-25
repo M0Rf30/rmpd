@@ -4,6 +4,7 @@
 pub mod artwork;
 pub mod cue;
 pub mod database;
+pub mod embedded_cue;
 #[cfg(feature = "fingerprint")]
 pub mod fingerprint;
 pub mod metadata;
