@@ -321,13 +321,17 @@ mod tests {
 
     /// Records the first sample of every buffer it's asked to write, so a
     /// test can distinguish "old" from "new" generation audio by content.
+    /// `start()` blocks until `start_gate` fires, which holds the worker off
+    /// the queue until the test has set up the scenario it wants to observe.
     struct RecordingOutput {
         log: Arc<Mutex<Vec<f32>>>,
         state: PauseState,
+        start_gate: std::sync::mpsc::Receiver<()>,
     }
 
     impl AudioOutput for RecordingOutput {
         fn start(&mut self) -> rmpd_core::error::Result<()> {
+            let _ = self.start_gate.recv();
             Ok(())
         }
         fn write(&mut self, samples: &[f32]) -> rmpd_core::error::Result<()> {
@@ -530,9 +534,15 @@ mod tests {
         let log = Arc::new(Mutex::new(Vec::new()));
         let ctl = control();
 
+        // Hold the worker off the queue until the flush has happened: without
+        // this it may legitimately play some stale chunks *before* the flush
+        // (they were current when played), which made the test racy on fast
+        // runners.
+        let (gate_tx, gate_rx) = std::sync::mpsc::channel();
         let primary = RecordingOutput {
             log: Arc::clone(&log),
             state: PauseState::new(),
+            start_gate: gate_rx,
         };
 
         let multi = MultiOutput::spawn(
@@ -558,6 +568,9 @@ mod tests {
             multi.write(chunk).expect("write must not fail");
         }
 
+        // Let the worker run: everything queued is now either stale (must be
+        // dropped) or fresh (must be played).
+        gate_tx.send(()).expect("worker gone");
         multi.stop();
 
         let seen = log.lock();
