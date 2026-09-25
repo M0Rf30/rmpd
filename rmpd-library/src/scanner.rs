@@ -45,6 +45,11 @@ pub struct Scanner {
     /// Matches mpd.conf's `follow_outside_symlinks` (default yes).
     follow_outside_symlinks: bool,
     force_rescan: bool,
+    /// Mirrors `[playlist].embedded_cue_as_directory`: when `false`, the
+    /// scanner never creates embedded-cue virtual track rows (and a scan
+    /// removes any that already exist), matching MPD's default (stock MPD
+    /// never scans an embedded cue sheet into the database at all).
+    embedded_cue_as_directory: bool,
 }
 
 /// A single `.mpdignore` glob pattern, matched against a file/directory's
@@ -132,6 +137,7 @@ impl Scanner {
             follow_inside_symlinks: follow_symlinks,
             follow_outside_symlinks: follow_symlinks,
             force_rescan: false,
+            embedded_cue_as_directory: true,
         }
     }
 
@@ -148,6 +154,7 @@ impl Scanner {
             follow_inside_symlinks,
             follow_outside_symlinks,
             force_rescan: self.force_rescan,
+            embedded_cue_as_directory: self.embedded_cue_as_directory,
         }
     }
 
@@ -162,6 +169,7 @@ impl Scanner {
             follow_inside_symlinks: self.follow_inside_symlinks,
             follow_outside_symlinks: self.follow_outside_symlinks,
             force_rescan: self.force_rescan,
+            embedded_cue_as_directory: self.embedded_cue_as_directory,
         }
     }
 
@@ -176,6 +184,19 @@ impl Scanner {
             follow_inside_symlinks: self.follow_inside_symlinks,
             follow_outside_symlinks: self.follow_outside_symlinks,
             force_rescan: force,
+            embedded_cue_as_directory: self.embedded_cue_as_directory,
+        }
+    }
+
+    /// Mirrors `[playlist].embedded_cue_as_directory` (default `true`).
+    pub fn with_embedded_cue_as_directory(&self, enabled: bool) -> Self {
+        Self {
+            event_bus: self.event_bus.clone(),
+            music_directory: self.music_directory.clone(),
+            follow_inside_symlinks: self.follow_inside_symlinks,
+            follow_outside_symlinks: self.follow_outside_symlinks,
+            force_rescan: self.force_rescan,
+            embedded_cue_as_directory: enabled,
         }
     }
 
@@ -416,10 +437,11 @@ impl Scanner {
                         // Embedded-cue container tracks: only worth checking FLAC
                         // files (the only format with an embedded-cue convention
                         // this fork supports — see `crate::embedded_cue`).
-                        let container_tracks = if file_info
-                            .absolute_path
-                            .extension()
-                            .is_some_and(|ext| ext.eq_ignore_ascii_case("flac"))
+                        let container_tracks = if self.embedded_cue_as_directory
+                            && file_info
+                                .absolute_path
+                                .extension()
+                                .is_some_and(|ext| ext.eq_ignore_ascii_case("flac"))
                         {
                             crate::embedded_cue::read_embedded_cue_tracks(
                                 &file_info.absolute_path,
