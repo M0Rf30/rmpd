@@ -291,6 +291,7 @@ fn read_cue_tracks(
             replay_gain_album_peak: None,
             added_at: 0,
             last_modified: 0,
+            range: None,
             tags,
         };
         out.push((song, (t.start, t.end.unwrap_or(t.start))));

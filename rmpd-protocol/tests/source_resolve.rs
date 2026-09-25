@@ -90,6 +90,7 @@ fn test_song(path: &str) -> rmpd_core::song::Song {
         replay_gain_album_peak: None,
         added_at: 0,
         last_modified: 0,
+        range: None,
         tags: Vec::new(),
     }
 }

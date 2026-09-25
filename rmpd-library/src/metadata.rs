@@ -596,6 +596,7 @@ impl MetadataExtractor {
             replay_gain_album_peak: rg_album_peak,
             added_at: mtime,
             last_modified: mtime,
+            range: None,
             tags,
         })
     }
