@@ -25,6 +25,10 @@ pub struct FilesystemWatcher {
     /// default) is unlimited. Matches mpd.conf's `auto_update_depth`
     /// (mpd `src/db/update/InotifyUpdate.cxx`).
     max_depth: Option<u32>,
+    /// Mirrors `[playlist].embedded_cue_as_directory` (default `true`): when
+    /// `false`, a watched FLAC create/modify never creates embedded-cue
+    /// virtual track rows (and clears any that already exist for it).
+    embedded_cue_as_directory: bool,
 }
 
 impl fmt::Debug for FilesystemWatcher {
@@ -45,7 +49,13 @@ impl FilesystemWatcher {
             event_bus,
             debouncer: None,
             max_depth: None,
+            embedded_cue_as_directory: true,
         })
+    }
+
+    /// Mirrors `[playlist].embedded_cue_as_directory` (default `true`).
+    pub fn set_embedded_cue_as_directory(&mut self, enabled: bool) {
+        self.embedded_cue_as_directory = enabled;
     }
 
     /// Bounds event processing to `depth` directory levels below the music
@@ -63,6 +73,7 @@ impl FilesystemWatcher {
         let db = Arc::clone(&self.db);
         let event_bus = self.event_bus.clone();
         let music_dir = self.music_dir.clone();
+        let embedded_cue_as_directory = self.embedded_cue_as_directory;
         let max_depth = self.max_depth;
 
         // Create debouncer
@@ -98,9 +109,15 @@ impl FilesystemWatcher {
                 match result {
                     Ok(events) => {
                         for event in events {
-                            if let Err(e) =
-                                handle_fs_event(&event, &music_dir, &db, &event_bus, max_depth)
-                                    .await
+                            if let Err(e) = handle_fs_event(
+                                &event,
+                                &music_dir,
+                                &db,
+                                &event_bus,
+                                max_depth,
+                                embedded_cue_as_directory,
+                            )
+                            .await
                             {
                                 error!("failed to handle filesystem event: {}", e);
                             }
@@ -189,6 +206,7 @@ async fn handle_fs_event(
     db: &Arc<Mutex<Database>>,
     event_bus: &EventBus,
     max_depth: Option<u32>,
+    embedded_cue_as_directory: bool,
 ) -> Result<()> {
     // Filter out non-audio files and hidden files
     let is_audio_file = |path: &Path| -> bool {
@@ -272,9 +290,10 @@ async fn handle_fs_event(
 
                 // Embedded-cue container tracks (see `crate::embedded_cue`): only
                 // worth checking FLAC files, mirroring the scanner's own gate.
-                let container_tracks = if Path::new(&path_str)
-                    .extension()
-                    .is_some_and(|ext| ext.eq_ignore_ascii_case("flac"))
+                let container_tracks = if embedded_cue_as_directory
+                    && Path::new(&path_str)
+                        .extension()
+                        .is_some_and(|ext| ext.eq_ignore_ascii_case("flac"))
                 {
                     let abs_path = camino::Utf8PathBuf::from(path.to_string_lossy().to_string());
                     let container_song = song.clone();
@@ -494,7 +513,7 @@ mod tests {
         // The file was never created on disk: the path no longer exists.
         let event = Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::From)))
             .add_path(music_dir.join("song.flac"));
-        handle_fs_event(&event, &music_dir, &db, &event_bus, None)
+        handle_fs_event(&event, &music_dir, &db, &event_bus, None, true)
             .await
             .expect("handle the synthetic event");
 
@@ -539,7 +558,7 @@ mod tests {
 
         // `dir` was never created on disk: the directory no longer exists.
         let event = Event::new(kind).add_path(music_dir.join("dir"));
-        handle_fs_event(&event, &music_dir, &db, &event_bus, None)
+        handle_fs_event(&event, &music_dir, &db, &event_bus, None, true)
             .await
             .expect("handle the synthetic event");
 
@@ -625,7 +644,7 @@ mod tests {
         std::fs::remove_dir(&music_dir).expect("remove music dir to simulate vanish");
         let event = Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::From)))
             .add_path(music_dir.clone());
-        handle_fs_event(&event, &music_dir, &db, &event_bus, None)
+        handle_fs_event(&event, &music_dir, &db, &event_bus, None, true)
             .await
             .expect("handle the synthetic event");
 

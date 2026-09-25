@@ -141,12 +141,15 @@ fn embedded_text_cuesheet_becomes_virtual_tracks_with_cue_tags() {
         .expect("whole file still present");
     assert!(whole.range.is_none(), "whole file has no range restriction");
 
-    // `lsinfo Artist` shows both the physical file and the virtual container
-    // directory named after it (MPD's `album.flac/trackNNNN` convention).
+    // `lsinfo Artist` shows the virtual container directory named after the
+    // file (MPD's `album.flac/trackNNNN` convention). The physical file
+    // itself is hidden from this listing by `hide_playlist_targets`
+    // (default true, mirroring mpd.conf's setting of the same name -- it
+    // remains directly reachable by its exact path, asserted above).
     let top = database.list_directory("Artist").expect("list Artist");
     assert!(
-        top.songs.iter().any(|s| s.path == "Artist/Album.flac"),
-        "physical file listed: {:?}",
+        !top.songs.iter().any(|s| s.path == "Artist/Album.flac"),
+        "physical file hidden by default hide_playlist_targets: {:?}",
         top.songs
             .iter()
             .map(|s| s.path.to_string())
@@ -295,5 +298,102 @@ fn rescanning_after_stripping_the_cue_removes_the_virtual_tracks() {
     assert!(
         !has_track_rows,
         "virtual tracks removed after cue is stripped"
+    );
+}
+
+/// `hide_playlist_targets = false` (`Database::with_hide_playlist_targets`)
+/// must show the physical whole-file row in directory listings even though
+/// it has embedded-cue virtual tracks -- the opposite of the default tested
+/// above.
+#[test]
+fn hide_playlist_targets_false_shows_the_whole_file() {
+    require_tools!();
+
+    let temp = TempDir::new().expect("tempdir");
+    let music_dir = temp.path().join("music");
+    std::fs::create_dir_all(&music_dir).expect("mkdir");
+
+    let flac_path = music_dir.join("Album.flac");
+    generate_flac(&flac_path, 6);
+    let cue_path = write_cue(temp.path());
+    embed_text_and_binary_cue(&flac_path, &cue_path);
+
+    let db_path = temp.path().join("test.db");
+    let database = Database::open(db_path.to_str().unwrap())
+        .expect("open database")
+        .with_hide_playlist_targets(false);
+    let scanner = Scanner::new(EventBus::new(), false);
+    scanner.scan_directory(&database, &music_dir).expect("scan");
+
+    let top = database.list_directory("").expect("list root");
+    assert!(
+        top.songs.iter().any(|s| s.path == "Album.flac"),
+        "whole file shown when hide_playlist_targets is disabled: {:?}",
+        top.songs
+            .iter()
+            .map(|s| s.path.to_string())
+            .collect::<Vec<_>>()
+    );
+}
+
+/// `[playlist].embedded_cue_as_directory = false`
+/// (`Scanner::with_embedded_cue_as_directory`) must stop the scanner from
+/// creating embedded-cue virtual track rows at all -- matching stock MPD,
+/// which never scans an embedded cue sheet into its database. Also checks
+/// that a rescan after *disabling* the option removes tracks a prior scan
+/// (with it enabled) had already created.
+#[test]
+fn embedded_cue_as_directory_false_disables_virtual_tracks() {
+    require_tools!();
+
+    let temp = TempDir::new().expect("tempdir");
+    let music_dir = temp.path().join("music");
+    std::fs::create_dir_all(&music_dir).expect("mkdir");
+
+    let flac_path = music_dir.join("Album.flac");
+    generate_flac(&flac_path, 6);
+    let cue_path = write_cue(temp.path());
+    embed_text_and_binary_cue(&flac_path, &cue_path);
+
+    let db_path = temp.path().join("test.db");
+    let database = Database::open(db_path.to_str().unwrap()).expect("open database");
+
+    // First scan with the option enabled: tracks are created.
+    let scanner = Scanner::new(EventBus::new(), false);
+    scanner
+        .scan_directory(&database, &music_dir)
+        .expect("first scan");
+    assert_eq!(
+        database
+            .list_directory("Album.flac")
+            .expect("list container")
+            .songs
+            .len(),
+        2
+    );
+
+    // A forced rescan with the option disabled must remove them.
+    let scanner = scanner
+        .with_force_rescan(true)
+        .with_embedded_cue_as_directory(false);
+    scanner
+        .scan_directory(&database, &music_dir)
+        .expect("rescan with option disabled");
+
+    assert!(
+        database
+            .get_song_by_path("Album.flac")
+            .expect("query")
+            .is_some(),
+        "whole file must still be present"
+    );
+    let has_track_rows = database
+        .list_directory_recursive("")
+        .expect("recursive list")
+        .iter()
+        .any(|s| s.path.as_str().starts_with("Album.flac/track"));
+    assert!(
+        !has_track_rows,
+        "no virtual tracks once embedded_cue_as_directory is disabled"
     );
 }

@@ -191,6 +191,7 @@ impl DbPool {
         // Run migration + schema setup exactly once, on this connection.
         let db = Database {
             conn: DbConn::Direct(conn),
+            hide_playlist_targets: true,
         };
         db.migrate_schema()?;
         db.init_schema()?;
@@ -261,6 +262,13 @@ impl std::ops::Deref for DbConn {
 #[derive(Debug)]
 pub struct Database {
     conn: DbConn,
+    /// Mirrors MPD's `hide_playlist_targets` database option (default
+    /// `true`, `SimpleDatabasePlugin.cxx`): hides a song from directory
+    /// listings/find/search when it is the physical file underlying
+    /// embedded-cue virtual tracks (`crate::embedded_cue`) or an external
+    /// `.cue`-style target -- it's still directly addressable/playable by
+    /// its exact path. See `Directory::Walk`'s `song.in_playlist` check.
+    hide_playlist_targets: bool,
 }
 
 impl Database {
@@ -270,10 +278,38 @@ impl Database {
         let conn = open_connection(path)?;
         let db = Self {
             conn: DbConn::Direct(conn),
+            hide_playlist_targets: true,
         };
         db.migrate_schema()?;
         db.init_schema()?;
         Ok(db)
+    }
+
+    /// Override the `hide_playlist_targets` default (see the struct doc).
+    #[must_use]
+    pub fn with_hide_playlist_targets(mut self, hide: bool) -> Self {
+        self.hide_playlist_targets = hide;
+        self
+    }
+
+    /// SQL fragment excluding a song that is itself the container of at
+    /// least one embedded-cue virtual track (its own path equals a
+    /// directory that holds a range-restricted child row), when
+    /// `hide_playlist_targets` is enabled. `song_path_expr` is the SQL
+    /// expression for the candidate song's path in the enclosing query
+    /// (e.g. `"path"` or `"s.path"`).
+    fn hide_playlist_targets_clause(&self, song_path_expr: &str) -> String {
+        if self.hide_playlist_targets {
+            format!(
+                "AND NOT EXISTS (
+                    SELECT 1 FROM directories d
+                    JOIN songs c ON c.directory_id = d.id AND c.range_start IS NOT NULL
+                    WHERE d.path = {song_path_expr}
+                )"
+            )
+        } else {
+            String::new()
+        }
     }
 
     /// Run `f` inside a SQL transaction: commits on `Ok`, rolls back on `Err`.
@@ -299,6 +335,7 @@ impl Database {
     pub fn from_pool(pool: &Arc<DbPool>) -> Result<Self> {
         Ok(Self {
             conn: DbConn::Pooled(pool.checkout()?),
+            hide_playlist_targets: true,
         })
     }
 
@@ -1193,7 +1230,8 @@ impl Database {
     ) -> Result<Vec<Song>> {
         let (where_clause, filter_params) = filter_expr.to_sql();
 
-        let sql = format!("SELECT {SONG_COLUMNS} FROM songs WHERE {where_clause}");
+        let hide_clause = self.hide_playlist_targets_clause("songs.path");
+        let sql = format!("SELECT {SONG_COLUMNS} FROM songs WHERE {where_clause} {hide_clause}");
 
         let mut stmt = self.conn.prepare(&sql)?;
 
@@ -1567,8 +1605,9 @@ impl Database {
         }
 
         // Get songs in this directory (no ORDER BY; sort in Rust after loading tags)
+        let hide_clause = self.hide_playlist_targets_clause("songs.path");
         let mut stmt = self.conn.prepare(&format!(
-            "SELECT {SONG_COLUMNS} FROM songs WHERE directory_id = ?1"
+            "SELECT {SONG_COLUMNS} FROM songs WHERE directory_id = ?1 {hide_clause}"
         ))?;
         let mut songs: Vec<Song> = stmt
             .query_map(params![dir_id.unwrap_or(0)], song_from_row)?
@@ -1681,7 +1720,8 @@ impl Database {
         };
 
         // Get songs in this directory
-        let sql = format!("SELECT {SONG_COLUMNS} FROM songs WHERE directory_id = ?1");
+        let hide_clause = self.hide_playlist_targets_clause("songs.path");
+        let sql = format!("SELECT {SONG_COLUMNS} FROM songs WHERE directory_id = ?1 {hide_clause}");
         let mut stmt = self.conn.prepare(&sql)?;
         let mut songs: Vec<Song> = stmt
             .query_map(params![id], song_from_row)?
