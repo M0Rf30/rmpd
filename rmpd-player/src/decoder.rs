@@ -4,6 +4,7 @@ use std::path::Path;
 use std::sync::LazyLock;
 use symphonia::core::audio::GenericAudioBufferRef;
 use symphonia::core::codecs::CodecParameters;
+use symphonia::core::codecs::audio::well_known::CODEC_ID_AAC;
 use symphonia::core::codecs::audio::{
     AudioCodecId, AudioDecoder, AudioDecoderOptions, BitOrder, ChannelDataLayout,
 };
@@ -111,6 +112,10 @@ impl SymphoniaDecoder {
             .make_audio_decoder(audio, &AudioDecoderOptions::default())
             .map_err(|e| RmpdError::Player(format!("Failed to create decoder: {e}")))?;
 
+        // The decoder may report a different output rate than the container (e.g. explicitly
+        // signalled HE-AAC decodes at twice the AAC core rate the container declares).
+        let sample_rate = decoder.codec_params().sample_rate.unwrap_or(sample_rate);
+
         let mut decoder = Self {
             reader,
             decoder,
@@ -134,19 +139,22 @@ impl SymphoniaDecoder {
         // it eagerly here rather than letting `format()`/`channels()` default
         // to stereo before the first real `read()` call (PLAY-05) — that
         // default would otherwise get latched into the device/output config
-        // for the whole track.
-        if decoder.channels.is_none() {
-            decoder.resolve_channels()?;
+        // for the whole track. AAC is always primed: implicitly signalled
+        // HE-AAC (SBR/PS found only in the bitstream, common in ADTS radio
+        // streams) doubles the output rate and may turn a mono core into
+        // stereo, which only the first decoded buffer reveals.
+        if decoder.channels.is_none() || codec_id == CODEC_ID_AAC {
+            decoder.prime_output_format()?;
         }
 
         Ok(decoder)
     }
 
-    /// Decode packets until the channel count is known or the stream ends,
-    /// buffering any decoded audio (rather than discarding it) so the first
-    /// real `read()` call still sees it.
-    fn resolve_channels(&mut self) -> Result<()> {
-        while self.channels.is_none() {
+    /// Decode packets until the first non-empty buffer (or the end of the stream), take the
+    /// output channel count and sample rate from it, and buffer its audio (rather than
+    /// discarding it) so the first real `read()` call still sees it.
+    fn prime_output_format(&mut self) -> Result<()> {
+        loop {
             let packet = match self.reader.next_packet() {
                 Ok(Some(packet)) => packet,
                 Ok(None) => return Ok(()), // EOS with no decodable audio.
@@ -181,10 +189,11 @@ impl SymphoniaDecoder {
             }
 
             self.channels = Some(decoded.spec().channels().count() as u8);
+            self.sample_rate = decoded.spec().rate();
             decoded.copy_to_vec_interleaved(&mut self.sample_buf);
             self.sample_pos = 0;
+            return Ok(());
         }
-        Ok(())
     }
 
     /// The current ICY "now playing" title for a remote stream, if any has
