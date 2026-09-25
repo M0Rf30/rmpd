@@ -104,19 +104,45 @@ impl<T: Default + Copy> SampleBuffer<T> {
     /// nothing fresh yet queued.
     #[inline]
     pub fn next_sample(&mut self) -> T {
-        if self.control.is_paused() {
-            // Hold position: don't touch buffer/pos, don't drain the
-            // channel. Resume picks up exactly here.
-            return T::default();
-        }
-
         let generation = self.control.generation();
 
         // The in-hand buffer was produced under an older generation (a
-        // flush happened mid-chunk) — drop the unconsumed tail instantly
-        // instead of playing it out.
+        // flush happened) — drop the unconsumed tail instantly instead of
+        // playing it out. Checked UNCONDITIONALLY (even while paused): a
+        // flush means "this queued audio is garbage" and must drain a
+        // paused pipeline too, otherwise a stop issued while paused (which
+        // never resumes to let the normal drain-at-playback-rate run) would
+        // leave upstream `SyncSender::send` calls blocked forever waiting
+        // for room that a permanently-silent, non-draining pause would
+        // never free.
         if self.pos < self.buffer.len() && self.buffer_generation != generation {
             self.pos = self.buffer.len();
+        }
+
+        if self.control.is_paused() {
+            // Hold position: a CURRENT-generation buffer is left exactly
+            // where it is (not advanced, not re-queued) so resume continues
+            // from this same sample. Stale-generation chunks still sitting
+            // in the channel are actively drained and discarded (bounded by
+            // the channel's capacity, non-blocking) so a flush frees the
+            // pipeline even without a resume in between — see above.
+            while self.pos >= self.buffer.len() {
+                match self.rx.try_recv() {
+                    Ok(chunk) if chunk.generation != generation => continue,
+                    Ok(chunk) => {
+                        // A current-generation chunk arrived while paused:
+                        // take it out of the channel (freeing a slot) but do
+                        // NOT consume any of it — held at position 0 until
+                        // resume.
+                        self.buffer = chunk.samples;
+                        self.buffer_generation = chunk.generation;
+                        self.pos = 0;
+                        break;
+                    }
+                    Err(_) => break, // nothing queued right now
+                }
+            }
+            return T::default();
         }
 
         while self.pos >= self.buffer.len() {
@@ -315,6 +341,56 @@ mod tests {
         // dropped; the very next sample is the fresh gen-1 audio.
         assert_eq!(buf.next_sample(), 5.0);
         assert_eq!(buf.next_sample(), 6.0);
+    }
+
+    /// A flush issued WHILE PAUSED must still drain (and discard) a full,
+    /// stale-generation backlog — not just hold position — otherwise a stop
+    /// issued right after a pause (which never resumes to let the normal
+    /// at-playback-rate drain run) would leave an upstream bounded
+    /// `SyncSender::send` blocked forever with nothing ever freeing a slot
+    /// (PLAY-latency regression guard).
+    #[test]
+    fn flush_while_paused_drains_full_backlog_without_resuming() {
+        let (tx, rx) = sync_channel::<Chunk<f32>>(3);
+        let ctl = control();
+        let mut buf = SampleBuffer::new(rx, Arc::clone(&ctl), 1);
+
+        // Fill the bounded channel to capacity with stale (gen-0) chunks —
+        // simulates a full pipeline built up before pause.
+        for _ in 0..3 {
+            tx.try_send(Chunk::new(0, vec![9.0]))
+                .expect("channel has room");
+        }
+        ctl.set_paused(true);
+
+        // Pause pulls at most ONE chunk out of the channel into its local
+        // holding buffer (freeing exactly one slot) and then stops — it
+        // must NOT keep draining the rest of a full backlog just because
+        // it's paused.
+        assert_eq!(buf.next_sample(), 0.0, "paused output is silent");
+        tx.try_send(Chunk::new(0, vec![9.0]))
+            .expect("pause frees exactly one slot by holding one chunk");
+        assert!(
+            tx.try_send(Chunk::new(0, vec![9.0])).is_err(),
+            "plain pause must not drain further once holding a buffer"
+        );
+
+        // Now flush while STILL paused (mirrors stop-while-paused): the
+        // backlog must drain so the channel has room again, without ever
+        // resuming.
+        ctl.flush();
+        assert_eq!(
+            buf.next_sample(),
+            0.0,
+            "still paused: draining a flushed backlog must not become audible"
+        );
+        tx.try_send(Chunk::new(ctl.generation(), vec![1.0]))
+            .expect("flush-while-paused must have freed room in the channel");
+
+        // Resume: the fresh post-flush chunk (not any stale gen-0 audio) is
+        // what plays.
+        ctl.set_paused(false);
+        assert_eq!(buf.next_sample(), 1.0);
     }
 
     /// `played_frames` increments once per full frame (all channels), not

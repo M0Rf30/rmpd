@@ -459,6 +459,11 @@ impl PlaybackEngine {
         // Update atomic state (caller must update status to avoid deadlock)
         self.atomic_state
             .store(PlayerState::Stop as u8, Ordering::Release);
+        // A stopped session must not leave `paused` set: otherwise the NEXT
+        // `play()` (which does not touch this flag, only `flush()`s) would
+        // start with every self-managed backend's callback silently holding
+        // silence forever despite `atomic_state` correctly reporting Play.
+        self.control.set_paused(false);
         *self.current_song.lock() = None;
 
         // Clear the look-ahead; the protocol re-feeds it after play().
