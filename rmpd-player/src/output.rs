@@ -1,23 +1,28 @@
 use crate::audio_output::{AudioOutput, PauseState};
-use crate::conversion::{self, SampleBuffer};
+use crate::conversion::{self, Chunk, GainRamp, SampleBuffer};
 use crate::cpal_utils::CpalDeviceConfig;
+use crate::output_control::OutputControl;
 use crate::resampler::StreamResampler;
 use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{Device, SampleFormat, Stream, StreamConfig};
 use rmpd_core::config::ResamplerQuality;
 use rmpd_core::error::{Result, RmpdError};
 use rmpd_core::song::AudioFormat;
+use std::sync::Arc;
 use std::sync::mpsc::{SyncSender, sync_channel};
 
 pub struct CpalOutput {
     device: Device,
     stream: Option<Stream>,
-    sample_sender: Option<SyncSender<Vec<f32>>>,
+    sample_sender: Option<SyncSender<Chunk<f32>>>,
     config: StreamConfig,
     pause_state: PauseState,
     resampler: Option<StreamResampler>,
     /// Output buffer time in milliseconds; sizes the sync-channel depth.
     buffer_time_ms: u32,
+    /// Shared, lock-free pause/flush/gain state. The real-time callback
+    /// reads this directly — see module docs on [`crate::conversion::SampleBuffer`].
+    control: Arc<OutputControl>,
 }
 
 impl CpalOutput {
@@ -25,8 +30,9 @@ impl CpalOutput {
         format: AudioFormat,
         quality: ResamplerQuality,
         buffer_time_ms: u32,
+        control: Arc<OutputControl>,
     ) -> Result<Self> {
-        Self::build(format, quality, buffer_time_ms, format.sample_rate)
+        Self::build(format, quality, buffer_time_ms, format.sample_rate, control)
     }
 
     /// Open the cpal stream at `target_device_rate` instead of
@@ -40,8 +46,9 @@ impl CpalOutput {
         quality: ResamplerQuality,
         buffer_time_ms: u32,
         target_device_rate: u32,
+        control: Arc<OutputControl>,
     ) -> Result<Self> {
-        Self::build(format, quality, buffer_time_ms, target_device_rate)
+        Self::build(format, quality, buffer_time_ms, target_device_rate, control)
     }
 
     fn build(
@@ -49,6 +56,7 @@ impl CpalOutput {
         quality: ResamplerQuality,
         buffer_time_ms: u32,
         requested_device_rate: u32,
+        control: Arc<OutputControl>,
     ) -> Result<Self> {
         let device_config = CpalDeviceConfig::new(requested_device_rate, format.channels as u16)?;
 
@@ -89,6 +97,7 @@ impl CpalOutput {
             pause_state: PauseState::new(),
             resampler,
             buffer_time_ms,
+            control,
         })
     }
 
@@ -104,7 +113,11 @@ impl CpalOutput {
     }
 
     #[cfg(feature = "jack")]
-    pub fn new_jack(format: AudioFormat, buffer_time_ms: u32) -> Result<Self> {
+    pub fn new_jack(
+        format: AudioFormat,
+        buffer_time_ms: u32,
+        control: Arc<OutputControl>,
+    ) -> Result<Self> {
         let device_config = CpalDeviceConfig::new_jack(format.sample_rate, format.channels as u16)?;
         Ok(Self {
             device: device_config.device,
@@ -114,11 +127,16 @@ impl CpalOutput {
             pause_state: PauseState::new(),
             resampler: None,
             buffer_time_ms,
+            control,
         })
     }
 
     #[cfg(all(feature = "asio", target_os = "windows"))]
-    pub fn new_asio(format: AudioFormat, buffer_time_ms: u32) -> Result<Self> {
+    pub fn new_asio(
+        format: AudioFormat,
+        buffer_time_ms: u32,
+        control: Arc<OutputControl>,
+    ) -> Result<Self> {
         let device_config = CpalDeviceConfig::new_asio(format.sample_rate, format.channels as u16)?;
         Ok(Self {
             device: device_config.device,
@@ -128,6 +146,7 @@ impl CpalOutput {
             pause_state: PauseState::new(),
             resampler: None,
             buffer_time_ms,
+            control,
         })
     }
 
@@ -158,17 +177,21 @@ impl CpalOutput {
                 / 1000;
             samples_needed.div_ceil(SAMPLES_PER_CHUNK).max(4) as usize
         };
-        let (tx, rx) = sync_channel::<Vec<f32>>(channel_depth);
+        let (tx, rx) = sync_channel::<Chunk<f32>>(channel_depth);
+        let channels = self.config.channels as usize;
+        let control = self.control.clone();
 
         let stream = match sample_format {
             SampleFormat::F32 => {
-                let mut buf = SampleBuffer::new(rx);
+                let mut buf = SampleBuffer::new(rx, control.clone(), channels);
+                let mut ramp = GainRamp::new(self.config.sample_rate, channels);
                 self.device
                     .build_output_stream(
                         self.config,
                         move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
                             for sample in data.iter_mut() {
-                                *sample = buf.next_sample();
+                                let raw = buf.next_sample();
+                                *sample = ramp.apply(raw, control.gain());
                             }
                         },
                         |err| {
@@ -179,13 +202,15 @@ impl CpalOutput {
                     .map_err(|e| RmpdError::Player(format!("Failed to build F32 stream: {e}")))?
             }
             SampleFormat::I16 => {
-                let mut buf = SampleBuffer::new(rx);
+                let mut buf = SampleBuffer::new(rx, control.clone(), channels);
+                let mut ramp = GainRamp::new(self.config.sample_rate, channels);
                 self.device
                     .build_output_stream(
                         self.config,
                         move |data: &mut [i16], _: &cpal::OutputCallbackInfo| {
                             for sample in data.iter_mut() {
-                                *sample = conversion::f32_to_i16(buf.next_sample());
+                                let raw = buf.next_sample();
+                                *sample = conversion::f32_to_i16(ramp.apply(raw, control.gain()));
                             }
                         },
                         |err| {
@@ -196,13 +221,15 @@ impl CpalOutput {
                     .map_err(|e| RmpdError::Player(format!("Failed to build I16 stream: {e}")))?
             }
             SampleFormat::I32 => {
-                let mut buf = SampleBuffer::new(rx);
+                let mut buf = SampleBuffer::new(rx, control.clone(), channels);
+                let mut ramp = GainRamp::new(self.config.sample_rate, channels);
                 self.device
                     .build_output_stream(
                         self.config,
                         move |data: &mut [i32], _: &cpal::OutputCallbackInfo| {
                             for sample in data.iter_mut() {
-                                *sample = conversion::f32_to_i32(buf.next_sample());
+                                let raw = buf.next_sample();
+                                *sample = conversion::f32_to_i32(ramp.apply(raw, control.gain()));
                             }
                         },
                         |err| {
@@ -238,21 +265,23 @@ impl CpalOutput {
     }
 
     pub fn write(&mut self, samples: &[f32]) -> Result<usize> {
-        if self.pause_state.is_paused() {
-            return Ok(0);
-        }
+        // Pause is handled entirely in the real-time callback (it holds
+        // position and does not drain the channel); writes must keep
+        // flowing so post-seek/pre-fill audio decoded while paused is ready
+        // the instant playback resumes (see `SampleBuffer::next_sample`).
 
         // Resample to the device rate when required (bridges unsupported rates).
-        let out = match self.resampler {
-            Some(ref mut rs) => rs.process(samples),
+        let out = match &mut self.resampler {
+            Some(rs) => rs.process(samples),
             None => samples.to_vec(),
         };
         let n = out.len();
 
-        match self.sample_sender {
-            Some(ref sender) => {
+        match &self.sample_sender {
+            Some(sender) => {
                 if n > 0 {
-                    sender.send(out).map_err(|_| {
+                    let chunk = Chunk::new(self.control.generation(), out);
+                    sender.send(chunk).map_err(|_| {
                         RmpdError::Player("Failed to send samples to output".to_owned())
                     })?;
                 }
@@ -263,22 +292,21 @@ impl CpalOutput {
     }
 
     pub fn pause(&mut self) -> Result<()> {
-        if let Some(ref stream) = self.stream {
-            stream
-                .pause()
-                .map_err(|e| RmpdError::Player(format!("Failed to pause: {e}")))?;
-            self.pause_state.set_paused(true);
+        // Best-effort hardware-level pause; correctness never depends on
+        // this succeeding (PipeWire's ALSA emulation often ignores it) — the
+        // audible pause is `control.paused`, read by the real-time callback.
+        if let Some(stream) = &self.stream {
+            let _ = stream.pause();
         }
+        self.pause_state.set_paused(true);
         Ok(())
     }
 
     pub fn resume(&mut self) -> Result<()> {
-        if let Some(ref stream) = self.stream {
-            stream
-                .play()
-                .map_err(|e| RmpdError::Player(format!("Failed to resume: {e}")))?;
-            self.pause_state.set_paused(false);
+        if let Some(stream) = &self.stream {
+            let _ = stream.play();
         }
+        self.pause_state.set_paused(false);
         Ok(())
     }
 
@@ -326,5 +354,11 @@ impl AudioOutput for CpalOutput {
     }
     fn is_paused(&self) -> bool {
         CpalOutput::is_paused(self)
+    }
+    fn self_managed(&self) -> bool {
+        // The real-time callback (via SampleBuffer + GainRamp) owns
+        // pause-hold, flush-generation dropping, and gain directly from
+        // `control`; MultiOutput must forward chunks unconditionally.
+        true
     }
 }
