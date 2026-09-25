@@ -544,25 +544,10 @@ pub async fn handle_load_command(
     range: Option<(u32, u32)>,
     position: Option<InsertPosition>,
 ) -> String {
-    if let Err(e) = validate_playlist_name(name) {
-        return ResponseBuilder::error(ACK_ERROR_ARG, 0, "load", &e);
-    }
-
-    let playlist_dir = match &state.playlist_dir {
-        Some(d) => d.clone(),
-        None => {
-            return ResponseBuilder::error(
-                ACK_ERROR_SYS,
-                0,
-                "load",
-                "playlist directory not configured",
-            );
-        }
-    };
-
     // Resolve a relative (+N/-N) or absolute POSITION against the queue's
     // pre-load length and current song, mirroring MPD's ParseInsertPosition
-    // call (which runs before the songs are loaded into the queue).
+    // call (which runs before the songs are loaded into the queue). Needed
+    // by every path below, so this runs before any name-shape branching.
     let resolved_position = match position {
         None => None,
         Some(pos) => {
@@ -579,6 +564,46 @@ pub async fn handle_load_command(
                     return ResponseBuilder::error(code, 0, "load", &e);
                 }
             }
+        }
+    };
+
+    // `name` may be a path (relative to `music_directory`, or absolute) to a
+    // FLAC file with an embedded cue sheet -- MPD's `embcue`/`flac` playlist
+    // plugins expand exactly this on `load`, regardless of whether the
+    // scanner also exposes it as a virtual directory
+    // (`[playlist].embedded_cue_as_directory`; see
+    // `rmpd_library::embedded_cue`). Tried *before* `validate_playlist_name`
+    // (which forbids `/`, like MPD's `spl_valid_name`): a real path
+    // legitimately contains slashes, mirroring MPD's `LocateUri` trying the
+    // path/URI form first and only falling back to a bare stored-playlist
+    // name afterwards. Falls through when `name` isn't such a file (not
+    // found, no embedded cue, or not a `.flac` at all).
+    if name.to_ascii_lowercase().ends_with(".flac") {
+        let music_dir = state.music_dir.clone();
+        let name_owned = name.to_string();
+        let probe = tokio::task::spawn_blocking(move || {
+            read_embedded_cue_flac_tracks(music_dir.as_deref(), &name_owned)
+        })
+        .await;
+        if let Ok(Ok(tracks)) = probe {
+            return load_embedded_cue_virtual_tracks(state, tracks, name, range, resolved_position)
+                .await;
+        }
+    }
+
+    if let Err(e) = validate_playlist_name(name) {
+        return ResponseBuilder::error(ACK_ERROR_ARG, 0, "load", &e);
+    }
+
+    let playlist_dir = match &state.playlist_dir {
+        Some(d) => d.clone(),
+        None => {
+            return ResponseBuilder::error(
+                ACK_ERROR_SYS,
+                0,
+                "load",
+                "playlist directory not configured",
+            );
         }
     };
 
@@ -687,6 +712,73 @@ async fn load_cue_virtual_tracks(
         Err(_) => return internal_error("load"),
     };
 
+    if let Some((start, end)) = range {
+        let total = tracks.len();
+        let start = (start as usize).min(total);
+        let end = (end as usize).min(total).max(start);
+        tracks = tracks[start..end].to_vec();
+    }
+
+    {
+        let mut queue = state.queue.write().await;
+        for (i, (song, song_range)) in tracks.into_iter().enumerate() {
+            let pos = position.map(|p| p + i as u32);
+            let id = queue.add_at(song, pos);
+            queue.set_range_by_id(id, Some(song_range));
+        }
+        queue.set_last_loaded_playlist(name);
+    }
+
+    crate::helpers::update_playlist_version(state).await;
+    ResponseBuilder::new().ok()
+}
+
+/// Resolve `name` (relative to `music_dir`, or absolute) as a FLAC file with
+/// an embedded cue sheet and return its per-track virtual songs paired with
+/// their `(start, end)` ranges -- the embedded-cue analogue of
+/// `read_cue_tracks`, backing `load`/`listplaylist(info)` on a `.flac` path
+/// exactly like MPD's `embcue`/`flac` playlist plugins, independent of
+/// `[playlist].embedded_cue_as_directory` (which only controls whether the
+/// *scanner* also exposes these as virtual directory rows).
+fn read_embedded_cue_flac_tracks(
+    music_dir: Option<&str>,
+    name: &str,
+) -> Result<Vec<(rmpd_core::song::Song, (f64, f64))>, String> {
+    let file_path = Path::new(name);
+    let resolved = if file_path.is_absolute() {
+        file_path.to_path_buf()
+    } else {
+        let dir = music_dir.ok_or_else(|| "No such playlist".to_string())?;
+        Path::new(dir).join(file_path)
+    };
+    if !resolved.is_file() {
+        return Err("No such playlist".to_string());
+    }
+    let abs =
+        camino::Utf8PathBuf::from_path_buf(resolved).map_err(|_| "No such playlist".to_string())?;
+    let container = rmpd_library::metadata::MetadataExtractor::extract_from_file(&abs)
+        .map_err(|_| "No such playlist".to_string())?;
+    let cue_tracks = rmpd_library::embedded_cue::read_embedded_cue_tracks(&abs, container.duration)
+        .ok_or_else(|| "No such playlist".to_string())?;
+    let songs = rmpd_library::embedded_cue::build_container_tracks(&container, &cue_tracks);
+    Ok(songs
+        .into_iter()
+        .map(|s| {
+            let range = s.range.unwrap_or((0.0, 0.0));
+            (s, range)
+        })
+        .collect())
+}
+
+/// Queue `tracks` (already resolved by `read_embedded_cue_flac_tracks`) as
+/// range-restricted virtual songs, mirroring `load_cue_virtual_tracks`.
+async fn load_embedded_cue_virtual_tracks(
+    state: &AppState,
+    mut tracks: Vec<(rmpd_core::song::Song, (f64, f64))>,
+    name: &str,
+    range: Option<(u32, u32)>,
+    position: Option<u32>,
+) -> String {
     if let Some((start, end)) = range {
         let total = tracks.len();
         let start = (start as usize).min(total);
@@ -835,8 +927,28 @@ pub async fn handle_listplaylist_command(
         }
     };
     let name = name.to_string();
+    let music_dir = state.music_dir.clone();
 
     match tokio::task::spawn_blocking(move || {
+        // Embedded-cue FLAC path (see `handle_load_command`'s comment):
+        // tried before the stored-playlist directory so `listplaylist` on a
+        // `.flac` path shows its cue-derived track paths, matching `load`.
+        if name.to_ascii_lowercase().ends_with(".flac")
+            && let Ok(tracks) = read_embedded_cue_flac_tracks(music_dir.as_deref(), &name)
+        {
+            let total = tracks.len();
+            let (start, end) = if let Some((s, e)) = range {
+                (s as usize, (e as usize).min(total))
+            } else {
+                (0, total)
+            };
+            let mut resp = ResponseBuilder::new();
+            for (song, _range) in tracks.iter().take(end.min(total)).skip(start.min(total)) {
+                resp.field("file", &song.path);
+            }
+            return resp.ok();
+        }
+
         let paths = match read_playlist(&playlist_dir, &name) {
             Ok(p) => p,
             Err(_) => {
@@ -892,6 +1004,23 @@ pub async fn handle_listplaylistinfo_command(
                 );
             }
         };
+
+        // Embedded-cue FLAC path (see `handle_load_command`'s comment).
+        if name.to_ascii_lowercase().ends_with(".flac")
+            && let Ok(tracks) = read_embedded_cue_flac_tracks(state.music_dir.as_deref(), &name)
+        {
+            let total = tracks.len();
+            let (start, end) = if let Some((s, e)) = range {
+                (s as usize, (e as usize).min(total))
+            } else {
+                (0, total)
+            };
+            let mut resp = ResponseBuilder::new();
+            for (song, _range) in tracks.iter().take(end.min(total)).skip(start.min(total)) {
+                resp.song(song, None, None, None);
+            }
+            return resp.ok();
+        }
 
         let paths = match read_playlist(&playlist_dir, &name) {
             Ok(p) => p,

@@ -493,3 +493,77 @@ async fn test_load_tracks_last_loaded_playlist_across_second_load_and_clear() {
         "clear must reset the last-loaded-playlist name"
     );
 }
+
+/// `load "Album.flac"` on a FLAC with an embedded cue sheet must expand it
+/// into range-restricted virtual tracks, mirroring MPD's `embcue`/`flac`
+/// playlist plugins -- and must do so regardless of
+/// `[playlist].embedded_cue_as_directory` (that flag only controls whether
+/// the *scanner* also exposes these as virtual directory rows; here nothing
+/// is even scanned into the database).
+#[tokio::test]
+async fn test_load_embedded_cue_flac_expands_into_ranged_tracks() {
+    if std::process::Command::new("ffmpeg")
+        .arg("-version")
+        .output()
+        .is_err()
+        || std::process::Command::new("metaflac")
+            .arg("--version")
+            .output()
+            .is_err()
+    {
+        eprintln!("ffmpeg/metaflac not available - skipping test");
+        return;
+    }
+
+    let (tmp, state) = new_test_state();
+    let flac_path = state
+        .music_dir
+        .as_ref()
+        .map(std::path::PathBuf::from)
+        .unwrap()
+        .join("Album.flac");
+    let status = std::process::Command::new("ffmpeg")
+        .args([
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:duration=6",
+            "-ar",
+            "44100",
+            "-ac",
+            "2",
+        ])
+        .arg(&flac_path)
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let cue_path = tmp.path().join("t.cue");
+    std::fs::write(
+        &cue_path,
+        "FILE \"orig.wav\" WAVE\n  TRACK 01 AUDIO\n    TITLE \"One\"\n    INDEX 01 00:00:00\n  TRACK 02 AUDIO\n    TITLE \"Two\"\n    INDEX 01 00:03:00\n",
+    )
+    .unwrap();
+    let status = std::process::Command::new("metaflac")
+        .arg(format!(
+            "--set-tag-from-file=CUESHEET={}",
+            cue_path.display()
+        ))
+        .arg(&flac_path)
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let resp = playlists::handle_load_command(&state, "Album.flac", None, None).await;
+    assert!(TestClient::is_ok(&resp), "got: {resp}");
+
+    let queue = state.queue.read().await;
+    assert_eq!(queue.len(), 2, "two cue tracks queued");
+    let item0 = queue.get(0).unwrap();
+    let item1 = queue.get(1).unwrap();
+    assert_eq!(item0.range, Some((0.0, 3.0)));
+    assert_eq!(item1.range, Some((3.0, 6.0)));
+    assert_eq!(item0.song.tag("title"), Some("One"));
+    assert_eq!(item1.song.tag("title"), Some("Two"));
+}
