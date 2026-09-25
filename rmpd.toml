@@ -139,6 +139,21 @@ filesystem_watch = true
 # Maximum directory depth watched below music_directory by the filesystem
 # watcher. Unset = unlimited. Matches mpd.conf's auto_update_depth.
 # auto_update_depth = 4
+# Hide a song from directory listings/find/search when it is the physical
+# file underlying embedded-cue virtual tracks (see [playlist] below) -- it
+# stays directly addressable/playable by its exact path. Matches mpd.conf's
+# hide_playlist_targets.
+hide_playlist_targets = true
+
+[playlist]
+# Show a FLAC's embedded CUESHEET (text comment or binary block) as a
+# browsable virtual directory of per-track songs during library scans.
+# Mirrors mpd.conf's playlist_plugin "embcue"/"flac" { as_directory }, whose
+# MPD default is "no" (stock MPD never scans an embedded cue sheet into its
+# database); rmpd defaults this to true instead as an intentional deviation.
+# Set to false for MPD parity: load/listplaylist(info) on the file still
+# expand it into range-restricted tracks either way.
+embedded_cue_as_directory = true
 
 # ── Music Sources ────────────────────────────────────────────────────────────
 # Remote catalogs are declared as [[source]] blocks. Each enabled source is
