@@ -106,16 +106,35 @@ impl MultiOutput {
                     loop {
                         match rx.recv() {
                             Ok(OutputMsg::Samples(generation, arc)) => {
-                                if !self_managed
-                                    && (worker_control.is_paused()
-                                        || generation != worker_control.generation())
-                                {
-                                    // Paused/stale: discard rather than play out a
-                                    // chunk queued before the transition — see
-                                    // module docs. Keeps the backlog drain
-                                    // instantaneous instead of real-time-paced.
-                                    // Self-managed backends own this decision in
-                                    // their own real-time callback instead.
+                                // Stale (pre-flush) audio must never reach
+                                // ANY backend, self-managed or not — a
+                                // self-managed backend's own write() re-tags
+                                // outgoing chunks with WHATEVER generation is
+                                // current AT WRITE TIME (it has no way to
+                                // know this chunk's original one), which
+                                // would otherwise "revive" a stale chunk
+                                // sitting in this worker's queue as if it
+                                // were fresh once forwarded after a flush —
+                                // silently leaking up to `depth` chunks of
+                                // pre-flush audio back in (this was
+                                // measurable as ~680ms of the seek latency:
+                                // exactly this channel's depth-16 backlog).
+                                if generation != worker_control.generation() {
+                                    continue;
+                                }
+                                // Pause-hold: only a non-self-managed
+                                // backend (no real-time callback of its own)
+                                // needs the worker to skip here. A
+                                // self-managed backend must keep receiving
+                                // current-generation audio while paused so
+                                // it is queued and ready the instant its own
+                                // callback resumes draining it.
+                                if !self_managed && worker_control.is_paused() {
+                                    // Paused: discard rather than play out a
+                                    // chunk queued before the transition —
+                                    // see module docs. Keeps the backlog
+                                    // drain instantaneous instead of
+                                    // real-time-paced.
                                     continue;
                                 }
                                 let mut buf = arc.to_vec();
