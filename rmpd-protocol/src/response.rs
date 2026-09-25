@@ -256,7 +256,13 @@ impl ResponseBuilder {
         // MPD order (SongPrint.cxx song_print_info): Range, Last-Modified,
         // Added, Format, tags in file insertion order, Time/duration, then
         // Pos/Id/Prio appended by the caller (queue/Print.cxx).
-        if let Some((start, end)) = range {
+        //
+        // An explicit `range` (a queue item's rangeid/CUE-load override)
+        // wins; otherwise fall back to the song's own persisted range, which
+        // is set only for embedded-cue virtual tracks (see
+        // `rmpd_library::embedded_cue`) so browsing them (`lsinfo`/`find`)
+        // shows `Range:` without every call site threading it through.
+        if let Some((start, end)) = range.or(song.range) {
             if end > 0.0 {
                 self.field("Range", format!("{start:.3}-{end:.3}"));
             } else if start > 0.0 {
@@ -348,6 +354,7 @@ mod tests {
             replay_gain_album_peak: None,
             added_at: 0,
             last_modified: 0,
+            range: None,
             tags: vec![(
                 rmpd_core::song::intern_tag_key("title"),
                 "Echoes".to_string(),
@@ -534,6 +541,27 @@ mod tests {
         rb3.song(&source_song(), None, None, None);
         let out3 = rb3.ok();
         assert!(!out3.contains("Range:"), "got:\n{out3}");
+    }
+
+    /// A browsing call site (`lsinfo`/`find`) passes `None` for the explicit
+    /// range override; an embedded-cue virtual track's own persisted
+    /// `song.range` (see `rmpd_library::embedded_cue`) must still surface as
+    /// `Range:`, and an explicit override still wins over it.
+    #[test]
+    fn song_falls_back_to_its_own_persisted_range() {
+        let mut virtual_track = source_song();
+        virtual_track.range = Some((3.0, 6.0));
+
+        let mut rb = ResponseBuilder::new();
+        rb.song(&virtual_track, None, None, None);
+        let out = rb.ok();
+        assert!(out.contains("Range: 3.000-6.000\n"), "got:\n{out}");
+
+        // An explicit override (e.g. `rangeid`) still takes priority.
+        let mut rb2 = ResponseBuilder::new();
+        rb2.song(&virtual_track, None, None, Some((4.0, 5.0)));
+        let out2 = rb2.ok();
+        assert!(out2.contains("Range: 4.000-5.000\n"), "got:\n{out2}");
     }
 
     /// MPD omits `db_update` entirely when the database has never been

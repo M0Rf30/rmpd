@@ -345,6 +345,14 @@ pub async fn prepare_song_for_playback(
             .map_err(|e| {
                 rmpd_source::SourceError::Protocol(format!("resolve task panicked: {e}"))
             })?? // JoinError then SourceError
+    } else if song.range.is_some() && !rmpd_core::path::is_uri(path) {
+        // Embedded-cue virtual track (`rmpd_library::embedded_cue`): `path`
+        // is a synthetic `<container>/trackNNNN` child that has no file of
+        // its own on disk. Resolve against the real container file (its own
+        // parent path) instead; `range` alone restricts playback to this
+        // track's slice of it.
+        let container = song.path.parent().map(|p| p.as_str()).unwrap_or(path);
+        resolve_path(container, music_dir)
     } else {
         resolve_path(path, music_dir)
     };

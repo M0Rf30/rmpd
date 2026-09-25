@@ -850,30 +850,17 @@ pub async fn handle_lsinfo_command(state: &AppState, path: Option<&str>) -> Stri
         };
 
         let path_str = path.unwrap_or("");
+        let music_dir = state.music_dir.as_deref();
 
-        // First check if path refers to a single file (song), matching MPD behavior
-        // where `lsinfo <file>` returns just that file's info.
-        if !path_str.is_empty() && path_str != "/" {
-            match db.get_song_by_path(path_str) {
-                Ok(Some(song)) => {
-                    let mut resp = ResponseBuilder::new();
-                    let music_dir = state.music_dir.as_deref();
-                    let display_path = strip_music_dir_prefix(song.path.as_str(), music_dir);
-                    let mut display_song = song.clone();
-                    display_song.path = display_path.into();
-                    resp.song(&display_song, None, None, None);
-                    return resp.ok();
-                }
-                Ok(None) => {}
-                Err(_) => {}
-            }
-        }
-
-        // Get directory listing
+        // Directory listing takes priority over an exact-path song match: an
+        // embedded-cue FLAC (`rmpd_library::embedded_cue`) is both a plain
+        // song row AND a virtual container directory of the same name, and
+        // browsing into it (following the `directory:` entry `lsinfo`
+        // reported for its parent) must show the cue-derived tracks, not the
+        // whole file's own info a second time.
         match db.list_directory(path_str) {
             Ok(listing) => {
                 let mut resp = ResponseBuilder::new();
-                let music_dir = state.music_dir.as_deref();
 
                 // Songs first, then directories (matches MPD's lsinfo output order)
                 for song in &listing.songs {
@@ -923,7 +910,22 @@ pub async fn handle_lsinfo_command(state: &AppState, path: Option<&str>) -> Stri
 
                 resp.ok()
             }
-            Err(e) => directory_lookup_ack("lsinfo", &e),
+            Err(e) => {
+                // Not a directory (or nothing at all at this path): matching
+                // MPD, `lsinfo <file>` returns just that file's info.
+                if !path_str.is_empty()
+                    && path_str != "/"
+                    && let Ok(Some(song)) = db.get_song_by_path(path_str)
+                {
+                    let mut resp = ResponseBuilder::new();
+                    let display_path = strip_music_dir_prefix(song.path.as_str(), music_dir);
+                    let mut display_song = song.clone();
+                    display_song.path = display_path.into();
+                    resp.song(&display_song, None, None, None);
+                    return resp.ok();
+                }
+                directory_lookup_ack("lsinfo", &e)
+            }
         }
     })
     .await
@@ -945,19 +947,9 @@ pub async fn handle_listall_command(state: &AppState, path: Option<&str>) -> Str
 
         let path_str = path.unwrap_or("");
         let mut resp = ResponseBuilder::new();
+        let is_specific_path = !path_str.is_empty() && path_str != "/";
 
-        // If a specific path is given, check if it's a file first
-        if !path_str.is_empty() && path_str != "/" {
-            match db.get_song_by_path(path_str) {
-                Ok(Some(song)) => {
-                    // MPD returns just the file entry for a file path
-                    resp.field("file", &song.path);
-                    return resp.ok();
-                }
-                Ok(None) => {}
-                Err(_) => {}
-            }
-            // It's a directory path: emit the directory itself first (MPD behavior)
+        if is_specific_path {
             resp.field("directory", path_str);
         }
 
@@ -975,7 +967,18 @@ pub async fn handle_listall_command(state: &AppState, path: Option<&str>) -> Str
 
         match result {
             Ok(()) => resp.ok(),
-            Err(e) => directory_lookup_ack("listall", &e),
+            Err(e) => {
+                // Not a directory (or nothing at all at this path): matching
+                // MPD, a plain file path returns just that file entry. See
+                // `handle_lsinfo_command`'s comment for why the directory
+                // check comes first (an embedded-cue container is both).
+                if is_specific_path && let Ok(Some(song)) = db.get_song_by_path(path_str) {
+                    let mut resp = ResponseBuilder::new();
+                    resp.field("file", &song.path);
+                    return resp.ok();
+                }
+                directory_lookup_ack("listall", &e)
+            }
         }
     })
     .await
@@ -997,19 +1000,9 @@ pub async fn handle_listallinfo_command(state: &AppState, path: Option<&str>) ->
 
         let path_str = path.unwrap_or("");
         let mut resp = ResponseBuilder::new();
+        let is_specific_path = !path_str.is_empty() && path_str != "/";
 
-        // If a specific path is given, check if it's a file first
-        if !path_str.is_empty() && path_str != "/" {
-            match db.get_song_by_path(path_str) {
-                Ok(Some(song)) => {
-                    // MPD returns just the file's full info for a file path
-                    resp.song(&song, None, None, None);
-                    return resp.ok();
-                }
-                Ok(None) => {}
-                Err(_) => {}
-            }
-            // It's a directory path: emit the directory itself + Last-Modified first (MPD behavior)
+        if is_specific_path {
             resp.field("directory", path_str);
             if let Ok(Some(mtime)) = db.get_directory_mtime(path_str)
                 && mtime > 0
@@ -1035,7 +1028,14 @@ pub async fn handle_listallinfo_command(state: &AppState, path: Option<&str>) ->
 
         match result {
             Ok(()) => resp.ok(),
-            Err(e) => directory_lookup_ack("listallinfo", &e),
+            Err(e) => {
+                if is_specific_path && let Ok(Some(song)) = db.get_song_by_path(path_str) {
+                    let mut resp = ResponseBuilder::new();
+                    resp.song(&song, None, None, None);
+                    return resp.ok();
+                }
+                directory_lookup_ack("listallinfo", &e)
+            }
         }
     })
     .await
