@@ -270,6 +270,30 @@ async fn handle_fs_event(
                 // get_song_by_path lookups (lsinfo/add/playlistinfo/stickers) find it.
                 song.path = camino::Utf8PathBuf::from(path_str.clone());
 
+                // Embedded-cue container tracks (see `crate::embedded_cue`): only
+                // worth checking FLAC files, mirroring the scanner's own gate.
+                let container_tracks = if Path::new(&path_str)
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("flac"))
+                {
+                    let abs_path = camino::Utf8PathBuf::from(path.to_string_lossy().to_string());
+                    let container_song = song.clone();
+                    tokio::task::spawn_blocking(move || {
+                        crate::embedded_cue::read_embedded_cue_tracks(
+                            &abs_path,
+                            container_song.duration,
+                        )
+                        .map(|tracks| {
+                            crate::embedded_cue::build_container_tracks(&container_song, &tracks)
+                        })
+                        .unwrap_or_default()
+                    })
+                    .await
+                    .unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
+
                 // Database operations run synchronous rusqlite I/O; do them on a
                 // blocking-pool thread instead of the async runtime worker.
                 let db_for_task = Arc::clone(db);
@@ -279,6 +303,7 @@ async fn handle_fs_event(
                     let db_guard = db_for_task.blocking_lock();
                     let exists = db_guard.get_song_by_path(&path_for_db)?.is_some();
                     db_guard.add_song(&song_for_db)?;
+                    db_guard.sync_container_tracks(&path_for_db, &container_tracks)?;
                     Ok(exists)
                 })
                 .await
@@ -443,6 +468,7 @@ mod tests {
             replay_gain_album_peak: None,
             added_at: 0,
             last_modified: 0,
+            range: None,
             tags: Vec::new(),
         }
     }

@@ -58,14 +58,14 @@ pub enum WalkEntry<'a> {
 const SONG_COLUMNS: &str = "id, path, duration, sample_rate, channels, bits_per_sample, bitrate,
      replay_gain_track_gain, replay_gain_track_peak,
      replay_gain_album_gain, replay_gain_album_peak,
-     added_at, last_modified";
+     added_at, last_modified, range_start, range_end";
 
 /// Same columns with `s.` table alias.
 const SONG_COLUMNS_ALIASED: &str =
     "s.id, s.path, s.duration, s.sample_rate, s.channels, s.bits_per_sample, s.bitrate,
      s.replay_gain_track_gain, s.replay_gain_track_peak,
      s.replay_gain_album_gain, s.replay_gain_album_peak,
-     s.added_at, s.last_modified";
+     s.added_at, s.last_modified, s.range_start, s.range_end";
 
 /// FTS5 full-text index over song tags. Contentless (`content=''`) — sync is
 /// maintained manually by `update_fts_for_song` and the `songs_fts_delete`
@@ -91,6 +91,8 @@ const SONGS_FTS_DELETE_TRIGGER_SQL: &str = "
 /// Construct a Song (without tags) from a database row.
 /// Tags are loaded separately via `load_tags_for_songs`.
 fn song_from_row(row: &Row<'_>) -> rusqlite::Result<Song> {
+    let range_start: Option<f64> = row.get(13)?;
+    let range_end: Option<f64> = row.get(14)?;
     Ok(Song {
         id: row.get::<_, i64>(0)? as u64,
         path: row.get::<_, String>(1)?.into(),
@@ -105,6 +107,7 @@ fn song_from_row(row: &Row<'_>) -> rusqlite::Result<Song> {
         replay_gain_album_peak: row.get(10)?,
         added_at: row.get(11)?,
         last_modified: row.get(12)?,
+        range: range_start.zip(range_end),
         tags: Vec::new(),
     })
 }
@@ -375,6 +378,27 @@ impl Database {
             }
         }
 
+        // v5→v6: add songs.range_start/range_end for embedded-cue virtual
+        // tracks (see `crate::embedded_cue`). A non-NULL pair marks a local
+        // row as a range-restricted slice of another song's file rather than
+        // an independent audio stream; `list_local_song_paths_under` excludes
+        // them from prune candidacy (they never exist as on-disk files), and
+        // `sync_container_tracks`/`delete_song(s)_by_path` manage their
+        // lifecycle explicitly instead.
+        if songs_table_exists > 0 {
+            let has_range: i64 = self.conn.query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('songs') WHERE name='range_start'",
+                [],
+                |r| r.get(0),
+            )?;
+            if has_range == 0 {
+                self.conn
+                    .execute("ALTER TABLE songs ADD COLUMN range_start REAL", [])?;
+                self.conn
+                    .execute("ALTER TABLE songs ADD COLUMN range_end REAL", [])?;
+            }
+        }
+
         // v3→v4: songs_fts must be declared with contentless_delete=1 (SQLite >= 3.43)
         // so its delete trigger and re-index path can delete by rowid alone. Pre-fix DBs
         // created the contentless table without that option and maintained it with
@@ -441,6 +465,8 @@ impl Database {
                 last_modified INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
                 source TEXT,
                 file_size INTEGER,
+                range_start REAL,
+                range_end REAL,
                 FOREIGN KEY (directory_id) REFERENCES directories(id)
             )",
             [],
@@ -713,8 +739,8 @@ impl Database {
                 sample_rate, channels, bits_per_sample, bitrate,
                 replay_gain_track_gain, replay_gain_track_peak,
                 replay_gain_album_gain, replay_gain_album_peak,
-                last_modified, file_size
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?3, ?13)
+                last_modified, file_size, range_start, range_end
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?3, ?13, ?14, ?15)
             ON CONFLICT(path) DO UPDATE SET
                 directory_id = excluded.directory_id,
                 mtime = excluded.mtime,
@@ -728,7 +754,9 @@ impl Database {
                 replay_gain_album_gain = excluded.replay_gain_album_gain,
                 replay_gain_album_peak = excluded.replay_gain_album_peak,
                 last_modified = excluded.mtime,
-                file_size = excluded.file_size
+                file_size = excluded.file_size,
+                range_start = excluded.range_start,
+                range_end = excluded.range_end
             RETURNING id",
             params![
                 song.path.as_str(),
@@ -744,6 +772,8 @@ impl Database {
                 song.replay_gain_album_gain,
                 song.replay_gain_album_peak,
                 file_size.map(|s| s as i64),
+                song.range.map(|(s, _)| s),
+                song.range.map(|(_, e)| e),
             ],
             |row| row.get::<_, i64>(0),
         )? as u64;
@@ -766,6 +796,27 @@ impl Database {
         self.update_fts_for_song(song_id)?;
 
         Ok(song_id)
+    }
+
+    /// Replace every embedded-cue virtual track (`song.range.is_some()`, see
+    /// `crate::embedded_cue`) stored under `container_path` with `tracks`.
+    /// Always deletes first, so a cue sheet that shrank, grew, or was removed
+    /// entirely (`tracks` empty) leaves exactly `tracks` behind rather than a
+    /// stale mix of both track sets. Callers are the scanner (`scan_recursive`)
+    /// and the filesystem watcher's create/modify handler, both of which
+    /// process one container file at a time; issues plain (non-transactional)
+    /// statements so it composes with the scanner's own outer `with_transaction`
+    /// batch instead of nesting a second `BEGIN`.
+    pub fn sync_container_tracks(&self, container_path: &str, tracks: &[Song]) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM songs WHERE range_start IS NOT NULL
+               AND directory_id = (SELECT id FROM directories WHERE path = ?1)",
+            params![container_path],
+        )?;
+        for track in tracks {
+            self.add_song_with_size(track, None)?;
+        }
+        Ok(())
     }
 
     /// Stored file size for change detection (`None` if the song row doesn't
@@ -1175,7 +1226,17 @@ impl Database {
         Ok(songs)
     }
 
+    /// Deletes a local song row. When `path` is an embedded-cue container
+    /// (see `crate::embedded_cue`), also drops every virtual track stored
+    /// under it (their `directory_id` resolves to `path` itself, since a
+    /// container's virtual tracks live at `<path>/trackNNNN`) so deleting the
+    /// physical file never leaves orphaned range rows behind.
     pub fn delete_song_by_path(&self, path: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM songs WHERE range_start IS NOT NULL
+               AND directory_id = (SELECT id FROM directories WHERE path = ?1)",
+            params![path],
+        )?;
         self.conn.execute(
             "DELETE FROM songs WHERE path = ?1 AND source IS NULL",
             params![path],
@@ -1190,12 +1251,16 @@ impl Database {
     /// `prefix/`, the same rule as `find_songs_by_prefix`, but only `path` is
     /// read — no tags are loaded. `source IS NULL` is the predicate
     /// `delete_songs_by_paths` guards its `DELETE` with, so remote catalog rows
-    /// inserted by `add_source_song` are never returned.
+    /// inserted by `add_source_song` are never returned. `range_start IS NULL`
+    /// excludes embedded-cue virtual tracks (`crate::embedded_cue`): they have
+    /// no corresponding on-disk file at their own path, so `prune_missing`
+    /// would otherwise delete them every scan; their lifecycle is instead
+    /// managed by `sync_container_tracks`/`delete_song(s)_by_path`.
     pub fn list_local_song_paths_under(&self, prefix: &str) -> Result<Vec<String>> {
         if prefix.is_empty() {
-            let mut stmt = self
-                .conn
-                .prepare("SELECT path FROM songs WHERE source IS NULL ORDER BY path")?;
+            let mut stmt = self.conn.prepare(
+                "SELECT path FROM songs WHERE source IS NULL AND range_start IS NULL ORDER BY path",
+            )?;
             let paths = stmt
                 .query_map([], |row| row.get::<_, String>(0))?
                 .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -1210,7 +1275,7 @@ impl Database {
         let like_prefix = format!("{}%", dir_prefix.replace('%', "\\%").replace('_', "\\_"));
         let mut stmt = self.conn.prepare(
             "SELECT path FROM songs
-             WHERE source IS NULL AND (path = ?1 OR path LIKE ?2)
+             WHERE source IS NULL AND range_start IS NULL AND (path = ?1 OR path LIKE ?2)
              ORDER BY path",
         )?;
         let paths = stmt
@@ -1230,8 +1295,16 @@ impl Database {
         let tx = self.conn.unchecked_transaction()?;
         let mut deleted = Vec::with_capacity(paths.len());
         {
+            let mut container_stmt = tx.prepare(
+                "DELETE FROM songs WHERE range_start IS NOT NULL
+                   AND directory_id = (SELECT id FROM directories WHERE path = ?1)",
+            )?;
             let mut stmt = tx.prepare("DELETE FROM songs WHERE path = ?1 AND source IS NULL")?;
             for path in paths {
+                // Drop this path's own embedded-cue virtual tracks first (see
+                // `delete_song_by_path`'s doc comment) so a vanished container
+                // never leaves orphaned range rows behind.
+                container_stmt.execute(params![path])?;
                 if stmt.execute(params![path])? > 0 {
                     deleted.push(path.clone());
                 }

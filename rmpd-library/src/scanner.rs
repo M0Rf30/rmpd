@@ -25,6 +25,11 @@ struct FileInfo {
 struct ExtractedMetadata {
     file_info: FileInfo,
     song: Option<rmpd_core::song::Song>,
+    /// Embedded-cue virtual tracks derived from `song` (see
+    /// `crate::embedded_cue`), empty when `song` has no embedded cue sheet
+    /// (or isn't a FLAC). Always synced (even when empty, to drop a cue
+    /// sheet that was removed) alongside `song` in the batch-insert step.
+    container_tracks: Vec<rmpd_core::song::Song>,
     error: Option<String>,
 }
 
@@ -407,9 +412,31 @@ impl Scanner {
                     Ok(mut song) => {
                         // Replace absolute path with relative path for storage
                         song.path = file_info.relative_path.clone();
+
+                        // Embedded-cue container tracks: only worth checking FLAC
+                        // files (the only format with an embedded-cue convention
+                        // this fork supports — see `crate::embedded_cue`).
+                        let container_tracks = if file_info
+                            .absolute_path
+                            .extension()
+                            .is_some_and(|ext| ext.eq_ignore_ascii_case("flac"))
+                        {
+                            crate::embedded_cue::read_embedded_cue_tracks(
+                                &file_info.absolute_path,
+                                song.duration,
+                            )
+                            .map(|tracks| {
+                                crate::embedded_cue::build_container_tracks(&song, &tracks)
+                            })
+                            .unwrap_or_default()
+                        } else {
+                            Vec::new()
+                        };
+
                         ExtractedMetadata {
                             file_info,
                             song: Some(song),
+                            container_tracks,
                             error: None,
                         }
                     }
@@ -418,6 +445,7 @@ impl Scanner {
                         ExtractedMetadata {
                             file_info,
                             song: None,
+                            container_tracks: Vec::new(),
                             error: Some(error_msg),
                         }
                     }
@@ -451,6 +479,16 @@ impl Scanner {
                         match db.add_song_with_size(song, Some(extracted_meta.file_info.file_size))
                         {
                             Ok(_) => {
+                                if let Err(e) = db.sync_container_tracks(
+                                    song.path.as_str(),
+                                    &extracted_meta.container_tracks,
+                                ) {
+                                    warn!(
+                                        "failed to sync embedded-cue tracks for {}: {}",
+                                        song.path, e
+                                    );
+                                    errors += 1;
+                                }
                                 let is_update = extracted_meta.file_info.existing_song.is_some();
                                 if is_update {
                                     debug!("updated: {}", song.path);
