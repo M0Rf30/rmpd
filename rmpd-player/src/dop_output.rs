@@ -1,10 +1,12 @@
 /// DoP-specific audio output using integer samples
 /// DoP requires exact bit patterns, so we use I32 format instead of F32
-use crate::conversion::SampleBuffer;
+use crate::conversion::{Chunk, SampleBuffer};
 use crate::cpal_utils::CpalDeviceConfig;
+use crate::output_control::OutputControl;
 use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{Device, SampleFormat, Stream, StreamConfig};
 use rmpd_core::error::{Result, RmpdError};
+use std::sync::Arc;
 use std::sync::mpsc::{SyncSender, TrySendError, sync_channel};
 use std::time::{Duration, Instant};
 
@@ -20,8 +22,8 @@ enum SendOutcome {
 /// and a plain blocking `send` would hang forever if the output callback stalls
 /// (device xrun/disconnect) — leaking the exclusive ALSA device.
 fn send_bounded(
-    sender: &SyncSender<Vec<i32>>,
-    mut payload: Vec<i32>,
+    sender: &SyncSender<Chunk<i32>>,
+    mut payload: Chunk<i32>,
     timeout: Duration,
 ) -> SendOutcome {
     let deadline = Instant::now() + timeout;
@@ -43,13 +45,18 @@ fn send_bounded(
 pub struct DopOutput {
     device: Device,
     stream: Option<Stream>,
-    sample_sender: Option<SyncSender<Vec<i32>>>,
+    sample_sender: Option<SyncSender<Chunk<i32>>>,
     config: StreamConfig,
     is_paused: bool,
+    /// Shared, lock-free pause/flush state read directly by the real-time
+    /// callback — see [`crate::conversion::SampleBuffer`]. DoP is a bit-exact
+    /// passthrough so `control.gain()` is intentionally NOT applied here
+    /// (matches the pre-existing behaviour of not attenuating DoP streams).
+    control: Arc<OutputControl>,
 }
 
 impl DopOutput {
-    pub fn new(sample_rate: u32, channels: u8) -> Result<Self> {
+    pub fn new(sample_rate: u32, channels: u8, control: Arc<OutputControl>) -> Result<Self> {
         let device_config = CpalDeviceConfig::new_dop(sample_rate, channels as u16)?;
 
         tracing::warn!(
@@ -63,6 +70,7 @@ impl DopOutput {
             sample_sender: None,
             config: device_config.config,
             is_paused: false,
+            control,
         })
     }
 
@@ -80,11 +88,13 @@ impl DopOutput {
         tracing::info!("requested sample rate: {:?} Hz", self.config.sample_rate);
         tracing::info!("requested channels: {}", self.config.channels);
 
-        let (tx, rx) = sync_channel::<Vec<i32>>(32);
+        let (tx, rx) = sync_channel::<Chunk<i32>>(32);
+        let channels = self.config.channels as usize;
+        let control = self.control.clone();
 
         let stream = match sample_format {
             SampleFormat::I32 | SampleFormat::I24 => {
-                let mut buf = SampleBuffer::new(rx);
+                let mut buf = SampleBuffer::new(rx, control, channels);
                 self.device
                     .build_output_stream(
                         self.config,
@@ -102,7 +112,7 @@ impl DopOutput {
             }
             _ => {
                 tracing::warn!("no I32 format available, using fallback conversion");
-                let mut buf = SampleBuffer::new(rx);
+                let mut buf = SampleBuffer::new(rx, control, channels);
                 self.device
                     .build_output_stream(
                         self.config,
@@ -154,11 +164,16 @@ impl DopOutput {
             }
         }
 
+        let generation = self.control.generation();
         let chunk_size = self.config.sample_rate as usize / 50 * self.config.channels as usize;
         for chunk in primer_samples.chunks(chunk_size) {
             // Bounded wait so a stalled callback can't hang priming forever.
             if !matches!(
-                send_bounded(&tx, chunk.to_vec(), Duration::from_millis(500)),
+                send_bounded(
+                    &tx,
+                    Chunk::new(generation, chunk.to_vec()),
+                    Duration::from_millis(500)
+                ),
                 SendOutcome::Sent
             ) {
                 tracing::warn!("DoP primer send stalled; continuing");
@@ -176,11 +191,11 @@ impl DopOutput {
     }
 
     pub fn write(&mut self, samples: &[i32]) -> Result<usize> {
-        if self.is_paused {
-            return Ok(0);
-        }
-
-        let Some(ref sender) = self.sample_sender else {
+        // Pause is handled entirely in the real-time callback (it holds
+        // position and does not drain the channel); writes must keep
+        // flowing so post-seek/pre-fill audio decoded while paused is ready
+        // the instant playback resumes.
+        let Some(sender) = &self.sample_sender else {
             return Err(RmpdError::Player("DoP output not started".to_owned()));
         };
 
@@ -188,7 +203,8 @@ impl DopOutput {
         // to playback rate). If the output callback stalls (device xrun or
         // disconnect), don't block forever — drop this buffer so the playback
         // loop stays responsive to stop/seek and the device can be released.
-        match send_bounded(sender, samples.to_vec(), Duration::from_millis(500)) {
+        let chunk = Chunk::new(self.control.generation(), samples.to_vec());
+        match send_bounded(sender, chunk, Duration::from_millis(500)) {
             SendOutcome::Sent => Ok(samples.len()),
             SendOutcome::TimedOut => Ok(0),
             SendOutcome::Disconnected => {
@@ -198,34 +214,32 @@ impl DopOutput {
     }
 
     pub fn pause(&mut self) -> Result<()> {
-        if let Some(ref stream) = self.stream {
-            stream
-                .pause()
-                .map_err(|e| RmpdError::Player(format!("Failed to pause: {e}")))?;
-            self.is_paused = true;
+        // Best-effort hardware-level pause; the audible pause is
+        // `control.paused`, read by the real-time callback.
+        if let Some(stream) = &self.stream {
+            let _ = stream.pause();
         }
+        self.is_paused = true;
         Ok(())
     }
 
     pub fn resume(&mut self) -> Result<()> {
-        if let Some(ref stream) = self.stream {
-            stream
-                .play()
-                .map_err(|e| RmpdError::Player(format!("Failed to resume: {e}")))?;
-            self.is_paused = false;
+        if let Some(stream) = &self.stream {
+            let _ = stream.play();
         }
+        self.is_paused = false;
         Ok(())
     }
 
     pub fn stop(&mut self) -> Result<()> {
         tracing::info!("sending PCM reset sequence to switch DAC back to PCM mode");
 
-        if let Some(ref sender) = self.sample_sender {
+        if let Some(sender) = &self.sample_sender {
             let reset_frames = self.config.sample_rate as usize / 10;
             let reset_samples = vec![0; reset_frames * self.config.channels as usize];
 
             // Best-effort: never block shutdown if the callback isn't draining.
-            let _ = sender.try_send(reset_samples);
+            let _ = sender.try_send(Chunk::new(self.control.generation(), reset_samples));
 
             std::thread::sleep(std::time::Duration::from_millis(150));
 
