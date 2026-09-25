@@ -949,7 +949,7 @@ async fn handle_command(
             reflection::handle_stringnormalization_command(conn_state, subcommand).await
         }
         Command::Status => {
-            let status = {
+            let mut status = {
                 let mut guard = state.status.write().await;
                 // Sync status.state with atomic_state WHILE holding the lock
                 // This prevents race conditions between reading atomic_state and writing to status
@@ -960,6 +960,16 @@ async fn handle_command(
                 );
                 guard.clone()
             };
+            // Compute elapsed LIVE at query time from the engine's
+            // lock-free played-frames counter, instead of trusting the
+            // cached value from the last periodic PositionChanged event
+            // (which can be stale by up to that throttle interval). Falls
+            // back to the cached value when nothing is loaded/playing.
+            if status.state != rmpd_core::state::PlayerState::Stop
+                && let Some(live) = state.engine.read().await.get_elapsed_live()
+            {
+                status.elapsed = Some(live);
+            }
 
             let last_loaded_playlist = state.queue.read().await.last_loaded_playlist().to_string();
             let mut resp = ResponseBuilder::new();

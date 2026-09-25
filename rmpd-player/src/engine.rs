@@ -12,7 +12,7 @@ use rmpd_core::song::Song;
 use rmpd_core::state::PlayerState;
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::thread;
 use tokio::sync::RwLock;
@@ -136,6 +136,16 @@ pub struct PlaybackEngine {
     /// `seek()` / `set_volume()` act on the same block a reused (gapless
     /// next/previous) cached output's callback is already reading.
     control: Arc<OutputControl>,
+    /// Audible-position base (seconds, f64 bits) for [`Self::get_elapsed_live`]:
+    /// the decode thread updates this on every seek and at every natural
+    /// song-boundary reset, in lockstep with `control`'s played-frame
+    /// counter. Lock-free so a `status`/MPRIS query never blocks on (or is
+    /// staled by) the decode thread.
+    live_position_base_bits: Arc<AtomicU64>,
+    /// Sample rate of the currently active decode-thread's format, or 0
+    /// when nothing is loaded/playing. Constant for a given decode thread's
+    /// lifetime (gapless/crossfade only advance to same-rate songs).
+    live_sample_rate: Arc<AtomicU32>,
 }
 
 impl PlaybackEngine {
@@ -168,6 +178,8 @@ impl PlaybackEngine {
             next_song: Arc::new(Mutex::new(None)),
             buffer_time_ms: 500, // matches AudioConfig::default_buffer_time()
             control: Arc::new(OutputControl::new()),
+            live_position_base_bits: Arc::new(AtomicU64::new(0.0f64.to_bits())),
+            live_sample_rate: Arc::new(AtomicU32::new(0)),
         }
     }
 
@@ -313,6 +325,8 @@ impl PlaybackEngine {
         let range = playback_song.range;
         let buffer_time_ms = self.buffer_time_ms;
         let control = self.control.clone();
+        let live_position_base_bits = self.live_position_base_bits.clone();
+        let live_sample_rate = self.live_sample_rate.clone();
 
         let handle = thread::spawn(move || {
             let atomic_state_err = atomic_state_clone.clone();
@@ -343,6 +357,8 @@ impl PlaybackEngine {
                 range,
                 buffer_time_ms,
                 control,
+                live_position_base_bits,
+                live_sample_rate,
             ) {
                 error!("playback error: {}", e);
                 // A decode/output failure must not leave the player stuck
@@ -464,6 +480,9 @@ impl PlaybackEngine {
         // start with every self-managed backend's callback silently holding
         // silence forever despite `atomic_state` correctly reporting Play.
         self.control.set_paused(false);
+        // No active decode thread anymore: get_elapsed_live() must report
+        // None rather than a frozen stale value from the finished song.
+        self.live_sample_rate.store(0, Ordering::Release);
         *self.current_song.lock() = None;
 
         // Clear the look-ahead; the protocol re-feeds it after play().
@@ -484,6 +503,27 @@ impl PlaybackEngine {
 
     pub async fn get_current_song(&self) -> Option<Song> {
         self.current_song.lock().clone()
+    }
+
+    /// Compute the audible elapsed position LIVE, at call time.
+    ///
+    /// Unlike `status.elapsed` (only refreshed by the decode thread's
+    /// ~1s-throttled `PositionChanged` events, so it can read up to nearly a
+    /// second stale), this reads `control.played_frames()` — a plain atomic
+    /// the real-time callback increments on every frame it hands to the
+    /// device — directly, so it is always within one audio chunk's worth of
+    /// the true audible position. Stable (non-advancing) while paused, since
+    /// `played_frames` itself does not advance then. Returns `None` when
+    /// nothing is loaded/playing. Never blocks: every value read here is a
+    /// lock-free atomic, never a lock the audio callback touches.
+    pub fn get_elapsed_live(&self) -> Option<std::time::Duration> {
+        let sample_rate = self.live_sample_rate.load(Ordering::Acquire);
+        if sample_rate == 0 {
+            return None;
+        }
+        let base = f64::from_bits(self.live_position_base_bits.load(Ordering::Acquire));
+        let elapsed = base + self.control.played_frames() as f64 / f64::from(sample_rate);
+        Some(std::time::Duration::from_secs_f64(elapsed.max(0.0)))
     }
 
     pub async fn set_volume(&mut self, vol: u8) -> Result<()> {
@@ -528,6 +568,8 @@ impl PlaybackEngine {
         range: Option<(f64, f64)>,
         buffer_time_ms: u32,
         control: Arc<OutputControl>,
+        live_position_base_bits: Arc<AtomicU64>,
+        live_sample_rate: Arc<AtomicU32>,
     ) -> Result<()> {
         // Shadow as mutable so per-song gain can be updated on in-thread advance.
         let mut gain_scale = gain_scale;
@@ -574,6 +616,8 @@ impl PlaybackEngine {
                             stop_flag,
                             command_rx,
                             control,
+                            live_position_base_bits,
+                            live_sample_rate,
                         );
                     }
                     Err(e) => {
@@ -691,6 +735,8 @@ impl PlaybackEngine {
         // `control.reset_played_frames()`. Immune to however deep the
         // output queues are, unlike the old decoded-sample-count elapsed.
         let mut position_base_secs: f64 = range.map(|(start, _)| start).unwrap_or(0.0);
+        live_sample_rate.store(format.sample_rate, Ordering::Release);
+        live_position_base_bits.store(position_base_secs.to_bits(), Ordering::Release);
         // Last ICY "now playing" title emitted, to avoid re-emitting it every
         // throttle tick while it is unchanged (remote streams only).
         let mut last_stream_title: Option<String> = None;
@@ -740,6 +786,7 @@ impl PlaybackEngine {
                                 &mut total_samples_played,
                                 samples_per_second,
                                 &mut position_base_secs,
+                                &live_position_base_bits,
                                 &event_bus,
                             );
                         }
@@ -772,6 +819,7 @@ impl PlaybackEngine {
                                 &mut total_samples_played,
                                 samples_per_second,
                                 &mut position_base_secs,
+                                &live_position_base_bits,
                                 &event_bus,
                             );
                         }
@@ -921,6 +969,7 @@ impl PlaybackEngine {
                                                 &mut total_samples_played,
                                                 samples_per_second,
                                                 &mut position_base_secs,
+                                                &live_position_base_bits,
                                                 &event_bus,
                                             );
                                             // next_dec is dropped here; next_song
@@ -947,6 +996,7 @@ impl PlaybackEngine {
                                         &mut total_samples_played,
                                         samples_per_second,
                                         &mut position_base_secs,
+                                        &live_position_base_bits,
                                         &event_bus,
                                     );
                                     // next_dec is dropped here; next_song slot is
@@ -1050,6 +1100,7 @@ impl PlaybackEngine {
                                 // `control.flush()` would audibly interrupt the
                                 // crossfade that just played).
                                 position_base_secs = 0.0;
+                                live_position_base_bits.store(0.0f64.to_bits(), Ordering::Release);
                                 control.reset_played_frames();
                                 // Break inner loop; 'song iterates with new decoder.
                                 break 'buf;
@@ -1110,6 +1161,7 @@ impl PlaybackEngine {
                             // Natural (non-flushing) transition: see the
                             // crossfade transition above for rationale.
                             position_base_secs = 0.0;
+                            live_position_base_bits.store(0.0f64.to_bits(), Ordering::Release);
                             control.reset_played_frames();
                             break 'buf; // continue 'song
                         }
@@ -1217,6 +1269,7 @@ impl PlaybackEngine {
         counter: &mut u64,
         units_per_second: u64,
         position_base_secs: &mut f64,
+        live_position_base_bits: &Arc<AtomicU64>,
         event_bus: &EventBus,
     ) {
         match result {
@@ -1227,6 +1280,7 @@ impl PlaybackEngine {
                 // already reset `control.played_frames()` to 0, so the two
                 // stay in lockstep from here.
                 *position_base_secs = target_secs;
+                live_position_base_bits.store(target_secs.to_bits(), Ordering::Release);
             }
             Err(e) => error!("seek failed{log_suffix}: {e}"),
         }
@@ -1365,6 +1419,8 @@ impl PlaybackEngine {
         stop_flag: Arc<AtomicBool>,
         command_rx: mpsc::Receiver<PlaybackCommand>,
         control: Arc<OutputControl>,
+        live_position_base_bits: Arc<AtomicU64>,
+        live_sample_rate: Arc<AtomicU32>,
     ) -> Result<()> {
         let dsd_sample_rate = decoder.sample_rate();
         let channels = decoder.channels();
@@ -1384,6 +1440,8 @@ impl PlaybackEngine {
         // SAME `control`), so it reflects frames actually handed to the
         // device, immune to the DoP channel's queue depth.
         let mut position_base_secs: f64 = 0.0;
+        live_sample_rate.store(pcm_sample_rate, Ordering::Release);
+        live_position_base_bits.store(0.0f64.to_bits(), Ordering::Release);
 
         'dsd: while !stop_flag.load(Ordering::Acquire) {
             // Check for commands
@@ -1396,6 +1454,7 @@ impl PlaybackEngine {
                         } else {
                             total_dsd_bytes = (position * dsd_bytes_per_second as f64) as u64;
                             position_base_secs = position;
+                            live_position_base_bits.store(position.to_bits(), Ordering::Release);
                             event_bus.emit(Event::PositionChanged(
                                 std::time::Duration::from_secs_f64(position),
                             ));
@@ -1426,6 +1485,7 @@ impl PlaybackEngine {
                         } else {
                             total_dsd_bytes = (position * dsd_bytes_per_second as f64) as u64;
                             position_base_secs = position;
+                            live_position_base_bits.store(position.to_bits(), Ordering::Release);
                             event_bus.emit(Event::PositionChanged(
                                 std::time::Duration::from_secs_f64(position),
                             ));
