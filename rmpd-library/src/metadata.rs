@@ -8,13 +8,13 @@ use std::borrow::Cow;
 use std::fs;
 use std::time::{Duration, SystemTime};
 use symphonia::core::codecs::CodecParameters;
-use symphonia::core::codecs::audio::AudioCodecId;
 use symphonia::core::codecs::audio::well_known::{
     CODEC_ID_AAC, CODEC_ID_ALAC, CODEC_ID_MP1, CODEC_ID_MP2, CODEC_ID_MP3, CODEC_ID_OPUS,
     CODEC_ID_VORBIS,
 };
+use symphonia::core::codecs::audio::{AudioCodecId, AudioDecoder};
 use symphonia::core::formats::probe::Hint;
-use symphonia::core::formats::{FormatOptions, MediaInfo, Track, TrackType};
+use symphonia::core::formats::{FormatOptions, FormatReader, MediaInfo, Track, TrackType};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::{
     Metadata, MetadataOptions, MetadataRevision, RawValue, StandardTag, Tag, Visual,
@@ -111,7 +111,7 @@ fn probe_file(path: &Utf8PathBuf, want_visuals: bool) -> Result<Probed> {
         )
         .map_err(|e| RmpdError::Library(format!("Failed to probe format: {e}")))?;
 
-    let (sample_rate, channels, bit_depth, duration, track_id) = {
+    let (mut sample_rate, mut channels, bit_depth, duration, track_id, codec, decoder) = {
         let track = reader.default_track(TrackType::Audio);
         let audio = track.and_then(|t| match t.codec_params.as_ref() {
             Some(CodecParameters::Audio(a)) => Some(a),
@@ -123,20 +123,22 @@ fn probe_file(path: &Utf8PathBuf, want_visuals: bool) -> Result<Probed> {
         // aac feature). Reject those up front so they are never inserted into the library only
         // to fail at playback time. A later rescan re-evaluates them: files that were never
         // inserted are re-probed from scratch since there is no stored mtime/size to match.
-        if let Some(params) = audio
-            && let Err(e) =
-                symphonia::default::get_codecs().make_audio_decoder(params, &Default::default())
-            && matches!(e, symphonia::core::errors::Error::Unsupported(_))
-        {
-            tracing::info!(
-                "skipping {}: codec not decodable by symphonia ({})",
-                path,
-                e
-            );
-            return Err(RmpdError::Library(format!(
-                "unsupported codec, skipping: {e}"
-            )));
-        }
+        let decoder = match audio.map(|params| {
+            symphonia::default::get_codecs().make_audio_decoder(params, &Default::default())
+        }) {
+            Some(Err(e)) if matches!(e, symphonia::core::errors::Error::Unsupported(_)) => {
+                tracing::info!(
+                    "skipping {}: codec not decodable by symphonia ({})",
+                    path,
+                    e
+                );
+                return Err(RmpdError::Library(format!(
+                    "unsupported codec, skipping: {e}"
+                )));
+            }
+            Some(Ok(decoder)) => Some(decoder),
+            _ => None,
+        };
 
         let sample_rate = audio.and_then(|a| a.sample_rate);
         let channels = audio.and_then(|a| a.channels.as_ref().map(|c| c.count() as u8));
@@ -158,11 +160,33 @@ fn probe_file(path: &Utf8PathBuf, want_visuals: bool) -> Result<Probed> {
         });
         let duration = track_duration(track, reader.media_info());
         let track_id = track.map(|t| u64::from(t.id));
-        (sample_rate, channels, bit_depth, duration, track_id)
+        let codec = audio.map(|a| a.codec);
+        (
+            sample_rate,
+            channels,
+            bit_depth,
+            duration,
+            track_id,
+            codec,
+            decoder,
+        )
     };
 
     let (tags, visuals, visual_bytes) =
         drain_metadata(&mut reader.metadata(), want_visuals, track_id);
+
+    // AAC's container-declared format can differ from what the decoder outputs:
+    // HE-AAC (SBR) doubles the core rate and HE-AAC v2 (PS) turns a mono core into
+    // stereo, and with implicit signalling (the usual ADTS case) only the bitstream
+    // says so. Decode the first audio packet and record the real output format, which
+    // is what `status`/`Format:` report (as MPD does).
+    if codec == Some(CODEC_ID_AAC)
+        && let (Some(mut decoder), Some(track_id)) = (decoder, track_id)
+        && let Some((rate, chans)) = first_decoded_format(&mut *reader, &mut *decoder, track_id)
+    {
+        sample_rate = Some(rate);
+        channels = Some(chans);
+    }
 
     // Symphonia exposes no bitrate field; derive kbps from the audio-bitstream portion of the
     // file (excluding embedded artwork, which is not part of the audio stream) and duration,
@@ -181,6 +205,31 @@ fn probe_file(path: &Utf8PathBuf, want_visuals: bool) -> Result<Probed> {
         bit_depth,
         bitrate,
     })
+}
+
+/// Decode packets of `track_id` until the first non-empty buffer (giving up after a few
+/// packets or on any error) and return its sample rate and channel count.
+fn first_decoded_format(
+    reader: &mut dyn FormatReader,
+    decoder: &mut dyn AudioDecoder,
+    track_id: u64,
+) -> Option<(u32, u8)> {
+    const MAX_PACKETS: usize = 16;
+    for _ in 0..MAX_PACKETS {
+        let packet = reader.next_packet().ok()??;
+        if u64::from(packet.track_id) != track_id {
+            continue;
+        }
+        match decoder.decode(&packet) {
+            Ok(buf) if buf.frames() > 0 => {
+                let spec = buf.spec();
+                return Some((spec.rate(), spec.channels().count() as u8));
+            }
+            Ok(_) | Err(symphonia::core::errors::Error::DecodeError(_)) => continue,
+            Err(_) => return None,
+        }
+    }
+    None
 }
 
 /// Compute a track's duration, falling back through every level of precision symphonia
