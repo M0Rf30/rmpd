@@ -3,6 +3,7 @@ use crate::decoder::SymphoniaDecoder;
 use crate::dop::DopEncoder;
 use crate::dop_output::DopOutput;
 use crate::output::CpalOutput;
+use crate::output_control::OutputControl;
 use parking_lot::Mutex;
 use rmpd_core::config::{DopMode, OutputConfig, ReplayGainMode, ResamplerQuality};
 use rmpd_core::error::Result;
@@ -14,7 +15,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration as StdDuration;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 
@@ -82,6 +82,11 @@ fn dsd_output_target_rate(
 /// Commands that can be sent to the playback thread
 enum PlaybackCommand {
     Seek(f64),
+    /// No-op wake-up: unblocks a decode thread parked in a blocking
+    /// `command_rx.recv()` while paused, so a resume (which otherwise only
+    /// touches shared atomics) is noticed immediately instead of on the
+    /// next incidental command.
+    Wake,
 }
 
 /// Main playback engine
@@ -125,6 +130,12 @@ pub struct PlaybackEngine {
     /// Output buffer time in milliseconds (0 uses a safe default).
     /// Sizes the PCM output's internal ring buffer / sync-channel depth.
     buffer_time_ms: u32,
+    /// Lock-free pause/flush-generation/gain/played-frames control block,
+    /// shared with every output backend's real-time callback. Owned by the
+    /// engine for its ENTIRE lifetime (not per-song) so that `pause()` /
+    /// `seek()` / `set_volume()` act on the same block a reused (gapless
+    /// next/previous) cached output's callback is already reading.
+    control: Arc<OutputControl>,
 }
 
 impl PlaybackEngine {
@@ -156,6 +167,7 @@ impl PlaybackEngine {
             mixramp_delay: 0.0,
             next_song: Arc::new(Mutex::new(None)),
             buffer_time_ms: 500, // matches AudioConfig::default_buffer_time()
+            control: Arc::new(OutputControl::new()),
         }
     }
 
@@ -224,6 +236,11 @@ impl PlaybackEngine {
 
     pub async fn seek(&self, position: f64) -> Result<()> {
         if let Some(tx) = &self.command_tx {
+            // Bump the flush generation BEFORE the decode thread even sees
+            // the seek: every backend's real-time callback starts dropping
+            // stale (pre-seek) queued/in-flight audio immediately, instead
+            // of waiting for the decode thread to notice the command.
+            self.control.flush();
             tx.send(PlaybackCommand::Seek(position)).map_err(|_| {
                 rmpd_core::error::RmpdError::Player("Failed to send seek command".to_owned())
             })?;
@@ -240,6 +257,16 @@ impl PlaybackEngine {
 
         // Stop current playback if any (internal stop, no events - caller will emit)
         self.stop_internal().await?;
+
+        // Flush BEFORE spawning the new decode thread: this is the single
+        // entry point for both a genuinely fresh song AND a user-initiated
+        // change (next/previous/play N) that `OutputSlot` may satisfy by
+        // reusing an already-open, same-format `MultiOutput` for gapless
+        // device persistence — reusing the device must NOT mean reusing its
+        // queued audio. Bumping here drops any such stale backlog instantly
+        // while natural (in-thread) gapless/crossfade advances, which never
+        // call this, are left untouched.
+        self.control.flush();
 
         // Update current song - clone the song from Arc
         *self.current_song.lock() = Some((*playback_song.song).clone());
@@ -285,6 +312,7 @@ impl PlaybackEngine {
         let mixramp_delay = self.mixramp_delay;
         let range = playback_song.range;
         let buffer_time_ms = self.buffer_time_ms;
+        let control = self.control.clone();
 
         let handle = thread::spawn(move || {
             let atomic_state_err = atomic_state_clone.clone();
@@ -314,6 +342,7 @@ impl PlaybackEngine {
                 mixramp_delay,
                 range,
                 buffer_time_ms,
+                control,
             ) {
                 error!("playback error: {}", e);
                 // A decode/output failure must not leave the player stuck
@@ -343,6 +372,12 @@ impl PlaybackEngine {
             _ => return Ok(()),            // Stop -> do nothing
         };
         self.atomic_state.store(new_state, Ordering::Release);
+        // Instant, lock-free: every backend's real-time callback reads this
+        // directly and holds/resumes position without waiting for the
+        // decode thread's next loop turn.
+        self.control
+            .set_paused(new_state == PlayerState::Pause as u8);
+        self.wake_playback_thread();
         Ok(())
     }
 
@@ -358,8 +393,21 @@ impl PlaybackEngine {
                 PlayerState::Play as u8
             };
             self.atomic_state.store(new_state, Ordering::Release);
+            self.control.set_paused(should_pause);
+            self.wake_playback_thread();
         }
         Ok(())
+    }
+
+    /// Best-effort nudge for a decode thread that may be parked in a
+    /// blocking `command_rx.recv()` while paused (see `playback_thread`'s
+    /// pause branch) — a resume only touches shared atomics otherwise, so
+    /// without this the thread wouldn't notice until some other command
+    /// arrived. No-op if nothing is currently playing.
+    fn wake_playback_thread(&self) {
+        if let Some(tx) = &self.command_tx {
+            let _ = tx.send(PlaybackCommand::Wake);
+        }
     }
 
     pub async fn stop(&mut self) -> Result<()> {
@@ -382,20 +430,28 @@ impl PlaybackEngine {
     async fn stop_internal(&mut self) -> Result<()> {
         debug!("internal stop (no events)");
 
+        // Flush first: every backend's real-time callback starts dropping
+        // queued/in-flight audio (and, while paused, still yields silence)
+        // instantly, well before the decode thread notices `stop_flag` and
+        // before the teardown handshake below completes.
+        self.control.flush();
+
         // Set stop flag
         self.stop_flag.store(true, Ordering::Release);
 
-        // Clear command channel
+        // Clear command channel. If the decode thread is parked in a
+        // blocking `command_rx.recv()` (paused), dropping the sender makes
+        // that call return `Err` immediately, which it treats as "stop".
         self.command_tx = None;
 
         // Wait for playback thread to finish. `JoinHandle::join` blocks the
         // calling thread; run it on a blocking-pool thread so it never stalls
         // a Tokio worker (or the `state.engine` write lock held by the async
         // caller) for however long the decode thread takes to notice
-        // `stop_flag` and unwind. With the MultiOutput `active` flag (see
-        // multi_output.rs) clearing the queued-sample backlog immediately,
-        // this is now typically fast, but it's still a blocking syscall and
-        // must never run inline on the async runtime.
+        // `stop_flag` and unwind. With the flush above making every
+        // backend's real-time callback silence almost instantly, this is
+        // now typically fast, but it's still a blocking syscall and must
+        // never run inline on the async runtime.
         if let Some(handle) = self.playback_thread.take() {
             let _ = tokio::task::spawn_blocking(move || handle.join()).await;
         }
@@ -427,6 +483,11 @@ impl PlaybackEngine {
 
     pub async fn set_volume(&mut self, vol: u8) -> Result<()> {
         self.volume.store(vol, Ordering::Release);
+        // Instant: every self-managed backend's real-time callback ramps
+        // toward this over a few ms (see `conversion::GainRamp`), instead of
+        // the old write-time `VolumeFilter` which could lag by the full
+        // queue depth (up to ~1s) before a change reached the device.
+        self.control.set_gain(f32::from(vol) / 100.0);
         self.event_bus.emit(Event::VolumeChanged(vol));
         Ok(())
     }
@@ -461,6 +522,7 @@ impl PlaybackEngine {
         mixramp_delay: f32,
         range: Option<(f64, f64)>,
         buffer_time_ms: u32,
+        control: Arc<OutputControl>,
     ) -> Result<()> {
         // Shadow as mutable so per-song gain can be updated on in-thread advance.
         let mut gain_scale = gain_scale;
@@ -495,7 +557,7 @@ impl PlaybackEngine {
                 info!("DSD file detected, attempting DoP output");
                 // Release any cached PCM output so DoP can open the device.
                 output_slot.clear();
-                match Self::setup_dop(&decoder) {
+                match Self::setup_dop(&decoder, control.clone()) {
                     Ok((dop_encoder, dop_out)) => {
                         info!("DoP output available, using native DSD playback");
                         return Self::run_dsd_dop(
@@ -506,6 +568,7 @@ impl PlaybackEngine {
                             event_bus,
                             stop_flag,
                             command_rx,
+                            control,
                         );
                     }
                     Err(e) => {
@@ -587,6 +650,7 @@ impl PlaybackEngine {
                     resampler_quality,
                     buffer_time_ms,
                     dsd_target_rate,
+                    control.clone(),
                 ) {
                     Ok(b) => boxes.push(b),
                     Err(e) => {
@@ -604,6 +668,7 @@ impl PlaybackEngine {
                 boxes,
                 16,
                 volume.clone(),
+                control.clone(),
             )?))
         })?;
 
@@ -614,6 +679,13 @@ impl PlaybackEngine {
         // Track whether we have sent pause/resume to the workers to avoid
         // spamming the same message every 100 ms.
         let mut multi_paused = false;
+        // Audible-position base: `elapsed = position_base_secs +
+        // control.played_frames() / format.sample_rate`. Updated on a
+        // successful seek (to the seek target) and reset to 0.0 at every
+        // natural (non-flushing) song transition below, alongside a soft
+        // `control.reset_played_frames()`. Immune to however deep the
+        // output queues are, unlike the old decoded-sample-count elapsed.
+        let mut position_base_secs: f64 = range.map(|(start, _)| start).unwrap_or(0.0);
         // Last ICY "now playing" title emitted, to avoid re-emitting it every
         // throttle tick while it is unchanged (remote streams only).
         let mut last_stream_title: Option<String> = None;
@@ -662,9 +734,11 @@ impl PlaybackEngine {
                                 position,
                                 &mut total_samples_played,
                                 samples_per_second,
+                                &mut position_base_secs,
                                 &event_bus,
                             );
                         }
+                        PlaybackCommand::Wake => {}
                     }
                 }
 
@@ -675,7 +749,29 @@ impl PlaybackEngine {
                         multi.pause();
                         multi_paused = true;
                     }
-                    thread::sleep(StdDuration::from_millis(100));
+                    // Block until a command wakes us (resume/seek) or the
+                    // sender is dropped (stop), instead of busy-polling
+                    // every 100ms. The audible pause itself is already
+                    // instant (`control.paused`, set directly by
+                    // `PlaybackEngine::pause`/`set_pause` and read by every
+                    // backend's real-time callback) — this just stops the
+                    // decode thread from spinning while nothing can be
+                    // played anyway.
+                    match command_rx.recv() {
+                        Ok(PlaybackCommand::Seek(position)) => {
+                            debug!("seeking to position: {:.2}s (while paused)", position);
+                            Self::apply_seek_result(
+                                decoder.seek(position),
+                                " (while paused)",
+                                position,
+                                &mut total_samples_played,
+                                samples_per_second,
+                                &mut position_base_secs,
+                                &event_bus,
+                            );
+                        }
+                        Ok(PlaybackCommand::Wake) | Err(_) => {}
+                    }
                     continue 'buf;
                 } else if multi_paused {
                     multi.resume();
@@ -808,7 +904,27 @@ impl PlaybackEngine {
                                         multi.pause();
                                         multi_paused = true;
                                     }
-                                    thread::sleep(StdDuration::from_millis(100));
+                                    // Same blocking-wait treatment as the
+                                    // main pause branch above — see its
+                                    // comment.
+                                    match command_rx.recv() {
+                                        Ok(PlaybackCommand::Seek(pos)) => {
+                                            Self::apply_seek_result(
+                                                decoder.seek(pos),
+                                                " during crossfade (while paused)",
+                                                pos,
+                                                &mut total_samples_played,
+                                                samples_per_second,
+                                                &mut position_base_secs,
+                                                &event_bus,
+                                            );
+                                            // next_dec is dropped here; next_song
+                                            // slot is already empty so the
+                                            // protocol must re-feed.
+                                            break 'cf;
+                                        }
+                                        Ok(PlaybackCommand::Wake) | Err(_) => {}
+                                    }
                                     continue 'cf;
                                 } else if multi_paused {
                                     multi.resume();
@@ -825,6 +941,7 @@ impl PlaybackEngine {
                                         pos,
                                         &mut total_samples_played,
                                         samples_per_second,
+                                        &mut position_base_secs,
                                         &event_bus,
                                     );
                                     // next_dec is dropped here; next_song slot is
@@ -904,8 +1021,9 @@ impl PlaybackEngine {
 
                                 // Position/bitrate events (~1 s throttle)
                                 if total_samples_played % samples_per_second < (n_mix as u64) {
-                                    let elapsed =
-                                        total_samples_played as f64 / samples_per_second as f64;
+                                    let elapsed = position_base_secs
+                                        + control.played_frames() as f64
+                                            / format.sample_rate as f64;
                                     event_bus.emit(Event::PositionChanged(
                                         std::time::Duration::from_secs_f64(elapsed),
                                     ));
@@ -921,6 +1039,13 @@ impl PlaybackEngine {
                                 event_bus.emit(Event::AdvancedToNext);
                                 // Update gain for the now-active next song.
                                 gain_scale = next_gain_scale;
+                                // Natural (non-flushing) transition: restart the
+                                // audible-elapsed base at 0 for the new song
+                                // without discarding any queued audio (a
+                                // `control.flush()` would audibly interrupt the
+                                // crossfade that just played).
+                                position_base_secs = 0.0;
+                                control.reset_played_frames();
                                 // Break inner loop; 'song iterates with new decoder.
                                 break 'buf;
                             }
@@ -977,6 +1102,10 @@ impl PlaybackEngine {
                                 volume_normalization,
                                 random.load(Ordering::Relaxed),
                             );
+                            // Natural (non-flushing) transition: see the
+                            // crossfade transition above for rationale.
+                            position_base_secs = 0.0;
+                            control.reset_played_frames();
                             break 'buf; // continue 'song
                         }
                         None => {
@@ -1030,7 +1159,8 @@ impl PlaybackEngine {
 
                 // Emit position update event every ~1 second of audio (throttled)
                 if total_samples_played % samples_per_second < (samples_read as u64) {
-                    let elapsed_seconds = total_samples_played as f64 / samples_per_second as f64;
+                    let elapsed_seconds = position_base_secs
+                        + control.played_frames() as f64 / format.sample_rate as f64;
                     event_bus.emit(Event::PositionChanged(std::time::Duration::from_secs_f64(
                         elapsed_seconds,
                     )));
@@ -1081,10 +1211,18 @@ impl PlaybackEngine {
         target_secs: f64,
         counter: &mut u64,
         units_per_second: u64,
+        position_base_secs: &mut f64,
         event_bus: &EventBus,
     ) {
         match result {
-            Ok(()) => *counter = (target_secs * units_per_second as f64) as u64,
+            Ok(()) => {
+                *counter = (target_secs * units_per_second as f64) as u64;
+                // Audible-elapsed base resynchronises to the seek target;
+                // the flush the engine issued before sending this command
+                // already reset `control.played_frames()` to 0, so the two
+                // stay in lockstep from here.
+                *position_base_secs = target_secs;
+            }
             Err(e) => error!("seek failed{log_suffix}: {e}"),
         }
         let elapsed = *counter as f64 / units_per_second as f64;
@@ -1099,8 +1237,16 @@ impl PlaybackEngine {
         quality: ResamplerQuality,
         buffer_time_ms: u32,
         dsd_target_rate: Option<u32>,
+        control: Arc<OutputControl>,
     ) -> Result<Box<dyn AudioOutput>> {
-        crate::output_registry::create_output(format, quality, cfg, buffer_time_ms, dsd_target_rate)
+        crate::output_registry::create_output(
+            format,
+            quality,
+            cfg,
+            buffer_time_ms,
+            dsd_target_rate,
+            control,
+        )
     }
 
     fn compute_gain_scale(
@@ -1163,7 +1309,10 @@ impl PlaybackEngine {
     /// starting the stream here means any failure (configured device can't do the
     /// DoP rate, device busy, no DoP DAC) surfaces as an error so the caller can
     /// cleanly revert to PCM instead of aborting playback.
-    fn setup_dop(decoder: &SymphoniaDecoder) -> Result<(DopEncoder, DopOutput)> {
+    fn setup_dop(
+        decoder: &SymphoniaDecoder,
+        control: Arc<OutputControl>,
+    ) -> Result<(DopEncoder, DopOutput)> {
         let dsd_sample_rate = decoder.sample_rate();
         let channels = decoder.channels();
         let channel_layout = decoder
@@ -1194,13 +1343,14 @@ impl PlaybackEngine {
             dsd_sample_rate, pcm_sample_rate
         );
 
-        let mut output = DopOutput::new(pcm_sample_rate, channels)?;
+        let mut output = DopOutput::new(pcm_sample_rate, channels, control)?;
         output.start()?;
 
         Ok((dop_encoder, output))
     }
 
     /// DSD playback loop over an already-started DoP output.
+    #[allow(clippy::too_many_arguments)]
     fn run_dsd_dop(
         mut decoder: SymphoniaDecoder,
         mut dop_encoder: DopEncoder,
@@ -1209,9 +1359,11 @@ impl PlaybackEngine {
         event_bus: EventBus,
         stop_flag: Arc<AtomicBool>,
         command_rx: mpsc::Receiver<PlaybackCommand>,
+        control: Arc<OutputControl>,
     ) -> Result<()> {
         let dsd_sample_rate = decoder.sample_rate();
         let channels = decoder.channels();
+        let pcm_sample_rate = dop_encoder.pcm_sample_rate();
 
         let mut dsd_buffer = Vec::new();
         let mut dop_i32_buffer = Vec::new();
@@ -1220,8 +1372,15 @@ impl PlaybackEngine {
         // Track whether pause() has been called so we only call it once on
         // entry (matching the multi_paused pattern in the PCM path).
         let mut dsd_paused = false;
+        // Audible-position base, mirroring the PCM path's
+        // `position_base_secs`: `elapsed = position_base_secs +
+        // control.played_frames() / pcm_sample_rate`. `played_frames` is
+        // maintained by `DopOutput`'s own real-time callback (it shares this
+        // SAME `control`), so it reflects frames actually handed to the
+        // device, immune to the DoP channel's queue depth.
+        let mut position_base_secs: f64 = 0.0;
 
-        while !stop_flag.load(Ordering::Acquire) {
+        'dsd: while !stop_flag.load(Ordering::Acquire) {
             // Check for commands
             if let Ok(cmd) = command_rx.try_recv() {
                 match cmd {
@@ -1231,11 +1390,13 @@ impl PlaybackEngine {
                             error!("seek failed: {}", e);
                         } else {
                             total_dsd_bytes = (position * dsd_bytes_per_second as f64) as u64;
+                            position_base_secs = position;
                             event_bus.emit(Event::PositionChanged(
                                 std::time::Duration::from_secs_f64(position),
                             ));
                         }
                     }
+                    PlaybackCommand::Wake => {}
                 }
             }
 
@@ -1244,13 +1405,32 @@ impl PlaybackEngine {
 
             if current_state == PlayerState::Pause {
                 if !dsd_paused {
-                    output.pause()?;
+                    let _ = output.pause();
                     dsd_paused = true;
                 }
-                thread::sleep(StdDuration::from_millis(100));
-                continue;
+                // Block until a command wakes us (resume/seek) or the
+                // sender is dropped (stop), instead of busy-polling every
+                // 100ms — same treatment as the PCM path's pause branch.
+                // The audible pause is already instant: `output`'s
+                // real-time callback reads `control.paused` directly.
+                match command_rx.recv() {
+                    Ok(PlaybackCommand::Seek(position)) => {
+                        debug!("seeking to position: {:.2}s (while paused)", position);
+                        if let Err(e) = decoder.seek(position) {
+                            error!("seek failed (while paused): {}", e);
+                        } else {
+                            total_dsd_bytes = (position * dsd_bytes_per_second as f64) as u64;
+                            position_base_secs = position;
+                            event_bus.emit(Event::PositionChanged(
+                                std::time::Duration::from_secs_f64(position),
+                            ));
+                        }
+                    }
+                    Ok(PlaybackCommand::Wake) | Err(_) => {}
+                }
+                continue 'dsd;
             } else if dsd_paused {
-                output.resume()?;
+                let _ = output.resume();
                 dsd_paused = false;
             }
 
@@ -1269,12 +1449,14 @@ impl PlaybackEngine {
             // Write DoP samples (i32 to preserve marker precision)
             output.write(&dop_i32_buffer)?;
 
-            // Update elapsed time
+            // Update elapsed time (decoded-position throttle trigger only;
+            // see below for the emitted, audible-position value).
             total_dsd_bytes += bytes_read as u64;
 
             // Emit position update every ~1 second
             if total_dsd_bytes % dsd_bytes_per_second < (bytes_read as u64) {
-                let elapsed_seconds = total_dsd_bytes as f64 / dsd_bytes_per_second as f64;
+                let elapsed_seconds =
+                    position_base_secs + control.played_frames() as f64 / pcm_sample_rate as f64;
                 event_bus.emit(Event::PositionChanged(std::time::Duration::from_secs_f64(
                     elapsed_seconds,
                 )));
