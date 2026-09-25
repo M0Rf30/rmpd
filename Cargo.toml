@@ -37,7 +37,7 @@ rayon = "1.12"
 # Use remote Symphonia fork (branch rmpd-next: upstream v0.6.1 + DSD, APE, WavPack, WAV metadata
 # fixes, native Opus decoder, format/codec enumeration, MP4 gapless, RF64/MP3-in-WAV, and
 # selected upstream fix PRs)
-symphonia = { git = "https://github.com/M0Rf30/Symphonia", rev = "56f8568c2e253e816e1e11682b21a81fbb819838", features = ["all", "dsd"] }
+symphonia = { git = "https://github.com/M0Rf30/Symphonia", rev = "7d52ad7c763bc89105acbeb302bb505af56ea6f2", features = ["all", "dsd"] }
 cpal = { git = "https://github.com/RustAudio/cpal", rev = "a7f56fff9d9ae325a3c9c8c44194bc10eb60d7ee", default-features = false }
 rubato = "5.0"                   # High-quality (anti-aliased) sample-rate conversion
 audioadapter-buffers = "5.0"     # Buffer wrappers (InterleavedSlice) for rubato 5.x
