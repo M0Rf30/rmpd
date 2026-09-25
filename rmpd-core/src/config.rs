@@ -17,6 +17,8 @@ pub struct Config {
     pub source: Vec<SourceConfig>,
     #[serde(default)]
     pub database: DatabaseConfig,
+    #[serde(default)]
+    pub playlist: PlaylistConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -276,6 +278,14 @@ pub struct DatabaseConfig {
     /// mpd.conf's `auto_update_depth` (mpd `src/db/update/InotifyUpdate.cxx`).
     #[serde(default)]
     pub auto_update_depth: Option<u32>,
+    /// Hide a song from directory listings/`find`/`search` when it is the
+    /// physical file underlying embedded-cue virtual tracks (see
+    /// `[playlist].embedded_cue_as_directory`) -- it stays directly
+    /// addressable/playable by its exact path. Matches mpd.conf's
+    /// `hide_playlist_targets` (mpd default: yes;
+    /// `SimpleDatabasePlugin.cxx`).
+    #[serde(default = "default_true")]
+    pub hide_playlist_targets: bool,
 }
 
 impl Default for DatabaseConfig {
@@ -284,6 +294,35 @@ impl Default for DatabaseConfig {
             auto_update: true,
             filesystem_watch: true,
             auto_update_depth: None,
+            hide_playlist_targets: true,
+        }
+    }
+}
+
+/// Playlist-plugin-style settings (mpd.conf `playlist_plugin { ... }`
+/// blocks), currently limited to the one plugin this fork implements.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+pub struct PlaylistConfig {
+    /// Show a FLAC's embedded `CUESHEET` (text comment or binary block --
+    /// see `rmpd_library::embedded_cue`) as a browsable virtual directory of
+    /// per-track songs during library scans. Mirrors mpd.conf's
+    /// `playlist_plugin "embcue"/"flac" { as_directory "yes" }` (mpd
+    /// default for those plugins: no -- stock MPD never scans an embedded
+    /// cue sheet into its database at all; rmpd defaults this to `true`
+    /// instead as an intentional deviation, since browsing/searching the
+    /// per-track split is the whole point of this feature. Set to `false`
+    /// for MPD-parity: `false` only stops the scanner from creating the
+    /// virtual rows -- `load`/`listplaylist(info)` on the file still expand
+    /// it into range-restricted tracks, matching MPD's `embcue`/`flac`
+    /// playlist plugins exactly regardless of this setting.
+    #[serde(default = "default_true")]
+    pub embedded_cue_as_directory: bool,
+}
+
+impl Default for PlaylistConfig {
+    fn default() -> Self {
+        Self {
+            embedded_cue_as_directory: true,
         }
     }
 }
@@ -507,7 +546,7 @@ fn default_true() -> bool {
 // settings and are intentionally not covered here beyond `name`/`type`.
 
 const KNOWN_SECTIONS: &[&str] = &[
-    "general", "network", "audio", "output", "source", "database",
+    "general", "network", "audio", "output", "source", "database", "playlist",
 ];
 
 const GENERAL_KEYS: &[&str] = &[
@@ -561,7 +600,14 @@ const AUDIO_KEYS: &[&str] = &[
     "restore_paused",
 ];
 
-const DATABASE_KEYS: &[&str] = &["auto_update", "filesystem_watch", "auto_update_depth"];
+const DATABASE_KEYS: &[&str] = &[
+    "auto_update",
+    "filesystem_watch",
+    "auto_update_depth",
+    "hide_playlist_targets",
+];
+
+const PLAYLIST_KEYS: &[&str] = &["embedded_cue_as_directory"];
 
 /// Levenshtein edit distance between two strings (two-row DP, no allocation
 /// beyond the two rows).
@@ -906,6 +952,7 @@ impl Config {
                 "network" => lint_section("network", value, NETWORK_KEYS, &mut diagnostics),
                 "audio" => lint_section("audio", value, AUDIO_KEYS, &mut diagnostics),
                 "database" => lint_section("database", value, DATABASE_KEYS, &mut diagnostics),
+                "playlist" => lint_section("playlist", value, PLAYLIST_KEYS, &mut diagnostics),
                 "output" => lint_tables("output", value, &mut diagnostics),
                 "source" => lint_tables("source", value, &mut diagnostics),
                 "decoder" => diagnostics.push(Diagnostic::warn(
@@ -1480,6 +1527,10 @@ max_bitrate = 320
         assert_eq!(
             format!("{:?}", parsed.database),
             format!("{:?}", default.database)
+        );
+        assert_eq!(
+            format!("{:?}", parsed.playlist),
+            format!("{:?}", default.playlist)
         );
     }
 
