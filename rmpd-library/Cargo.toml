@@ -44,7 +44,7 @@ sha2.workspace = true
 chromaprint-sys-next = { workspace = true, optional = true }
 base64.workspace = true
 rayon.workspace = true
-icu_collator = "2.2.0"
+icu_collator = "2.3.1"
 regex = "1"
 [dev-dependencies]
 rmpd-core = { workspace = true, features = ["test-utils"] }
