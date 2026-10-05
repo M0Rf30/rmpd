@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! CUE sheet parser.
 //!
 //! A `.cue` sheet describes how one or more audio files are divided into

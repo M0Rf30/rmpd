@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! rmpd-source — music-source registry and backends.
 //!
 //! Provides a compile-time `SOURCE_PLUGINS` registry (see `registry.rs`),

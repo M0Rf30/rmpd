@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Compile-time name→factory registry for music-source backends.
 //!
 //! Mirrors `OUTPUT_PLUGINS` in `rmpd-player/src/output_registry.rs` exactly:

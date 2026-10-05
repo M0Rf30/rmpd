@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! MPD protocol reflection and introspection command handlers
 //!
 //! These commands allow clients to query the server's capabilities,

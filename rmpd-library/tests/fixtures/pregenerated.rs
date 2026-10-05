@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 /// Pre-generated test audio fixtures
 ///
 /// These files are committed to the repository and do not require FFmpeg.

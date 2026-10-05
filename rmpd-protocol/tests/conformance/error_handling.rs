@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Tests for MPD error handling: ACK format, malformed args, missing args.
 
 use crate::tcp_harness::*;

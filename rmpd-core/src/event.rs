@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 use crate::song::Song;
 use crate::state::PlayerState;
 use serde::{Deserialize, Serialize};

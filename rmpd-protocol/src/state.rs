@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 use crate::discovery::DiscoveryService;
 use rmpd_core::event::EventBus;
 use rmpd_core::messaging::MessageBroker;

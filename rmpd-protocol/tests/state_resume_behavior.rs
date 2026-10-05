@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 /// Tests for state persistence and resume behavior simulating full restarts
 ///
 /// These tests simulate the full lifecycle of saving state, "restarting"

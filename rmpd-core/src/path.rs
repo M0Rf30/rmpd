@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 /// Shared path utilities: tilde expansion and path resolution.
 use camino::Utf8PathBuf;
 

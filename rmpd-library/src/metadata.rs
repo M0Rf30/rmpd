@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 use crate::artwork::{infer_mime, picture_type_to_string};
 use camino::Utf8PathBuf;
 use rmpd_core::error::{Result, RmpdError};

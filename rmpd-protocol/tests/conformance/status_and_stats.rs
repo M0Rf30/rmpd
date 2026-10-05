@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Tests for MPD status and stats commands over TCP.
 
 use crate::tcp_harness::*;

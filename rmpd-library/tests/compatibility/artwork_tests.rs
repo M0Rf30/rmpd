@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 /// Artwork extraction tests validating album art handling
 ///
 /// These tests validate that rmpd correctly extracts embedded artwork

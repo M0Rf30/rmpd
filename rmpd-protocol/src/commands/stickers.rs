@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Sticker (metadata tag) command handlers
 //!
 //! Stickers are arbitrary key-value metadata tags that can be attached to songs.

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Crossfade / MixRamp DSP primitives.
 //!
 //! These are the pure, deterministic building blocks for overlapping two

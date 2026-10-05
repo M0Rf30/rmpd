@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 pub mod command_batching;
 pub mod connection_lifecycle;
 pub mod database_conformance;

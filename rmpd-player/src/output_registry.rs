@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! MPD-faithful audio output registry.
 //!
 //! Maps an `OutputConfig.output_type` string to a factory function that

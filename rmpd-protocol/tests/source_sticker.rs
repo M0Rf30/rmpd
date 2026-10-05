@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Source-backed songs (e.g. Subsonic) must support the full sticker flow and
 //! expose a consistent virtual path across `lsinfo`/`listallinfo`, so clients
 //! (mympd) can attach ratings/likes to them.

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Tests for MPD playback commands over TCP.
 //! Note: actual audio playback is not expected in test environments.
 //! These tests verify protocol-level responses (OK/ACK as appropriate).

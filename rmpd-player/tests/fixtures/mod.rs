@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 /// Test fixtures for decoder validation
 ///
 /// This module provides audio test fixtures for validating decoder behavior:

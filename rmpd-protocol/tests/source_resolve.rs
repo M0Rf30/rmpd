@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Regression tests for PR5: the prepare_song_for_playback resolve hook.
 //!
 //! Uses a stub `MusicSource` to prove that:

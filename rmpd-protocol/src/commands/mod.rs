@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! MPD protocol command handlers organized by category
 //!
 //! This module splits the large server.rs file into logical categories for better

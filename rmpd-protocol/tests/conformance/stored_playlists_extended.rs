@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Extended stored playlist conformance tests.
 //! Tests save modes, load with range/position, searchplaylist, playlistlength.
 

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 /// FFmpeg-based test fixture generation
 ///
 /// This module generates minimal audio files for testing metadata extraction.

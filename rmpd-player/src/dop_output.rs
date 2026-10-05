@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 /// DoP-specific audio output using integer samples
 /// DoP requires exact bit patterns, so we use I32 format instead of F32
 use crate::conversion::{Chunk, SampleBuffer};

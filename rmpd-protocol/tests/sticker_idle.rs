@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Verifies `sticker set`/`delete`/`inc`/`dec` notify idle `sticker` clients,
 //! matching MPD's `idle_add(IDLE_STICKER)` in `sticker/Database.cxx`.
 

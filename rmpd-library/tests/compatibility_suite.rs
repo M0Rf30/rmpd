@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 /// Compatibility test suite entry point
 ///
 /// This test file runs all compatibility tests that validate rmpd's

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 /// Pre-generated test fixtures for CI
 ///
 /// These fixtures are small audio files committed to the repository

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 use mdns_sd::{ServiceDaemon, ServiceEvent};
 use rmpd_core::discovery::{DiscoveryCache, NetworkNeighbor};
 use std::sync::Arc;

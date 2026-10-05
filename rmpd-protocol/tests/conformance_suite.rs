@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! MPD Protocol Conformance Test Suite
 //!
 //! TCP-level tests that start a real rmpd server on a random port, connect

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 use camino::Utf8PathBuf;
 use rayon::prelude::*;
 use rmpd_core::error::{Result, RmpdError};

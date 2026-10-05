@@ -1,4 +1,7 @@
 #!/bin/bash
+# SPDX-FileCopyrightText: 2026 Gianluca Boiano
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
 # Generate test audio fixtures for rmpd compatibility tests
 # These files are committed to the repo to avoid FFmpeg dependency
 

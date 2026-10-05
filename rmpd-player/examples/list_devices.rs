@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! List cpal output devices with their capabilities. The `id` column is what
 //! you pass to `RMPD_AUDIO_DEVICE` / `audio.device` (e.g. a raw ALSA
 //! `hw:CARD=...,DEV=0` for bit-perfect DoP/DSD, bypassing PipeWire/PulseAudio).

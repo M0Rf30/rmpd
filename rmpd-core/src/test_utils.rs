@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Shared test utilities for rmpd workspace
 //!
 //! This module provides common test helpers and fixtures used across

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 use crate::commands::utils::prepare_song_for_playback;
 use crate::helpers;
 use crate::state::AppState;

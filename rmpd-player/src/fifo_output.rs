@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Named FIFO (pipe) audio output — writes raw s16le PCM.
 //!
 //! Primarily used for Snapcast multi-room audio.

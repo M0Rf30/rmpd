@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Client-to-client messaging commands
 //!
 //! MPD supports a publish-subscribe messaging system for clients to communicate.

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! `FilesystemSource` — wraps `rmpd_library::Database` via `spawn_blocking`.
 //!
 //! Local playback never routes through this trait (`resolve_stream_uri` returns

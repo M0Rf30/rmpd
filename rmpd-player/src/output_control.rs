@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Lock-free, allocation-free control block shared between the engine's
 //! async API and every audio output's real-time callback.
 //!

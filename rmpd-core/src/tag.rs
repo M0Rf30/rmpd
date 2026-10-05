@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 /// Shared tag utilities: fallback chains, normalization, and canonical mappings.
 use std::collections::HashMap;
 use std::sync::LazyLock;

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Derive macros for rmpd `Command` metadata.
 //!
 //! Provides `#[derive(CommandMetadata)]` which generates `command_name()` and

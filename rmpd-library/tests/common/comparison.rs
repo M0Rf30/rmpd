@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 /// Comparison utilities for verifying rmpd behavior matches MPD
 ///
 /// This module provides tiered comparison strategies for different types

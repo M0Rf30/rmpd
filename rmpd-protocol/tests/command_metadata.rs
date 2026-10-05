@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 use rmpd_protocol::parser::{Command, DeleteTarget, InsertPosition, MoveFrom};
 
 const PERMISSION_NONE: u8 = 0;

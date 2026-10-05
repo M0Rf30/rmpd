@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Common test utilities for integration tests
 //!
 //! These utilities provide helpers for testing MPD protocol response formats.

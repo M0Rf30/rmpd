@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Storage and mount conformance tests.
 //! Tests mount, unmount, listmounts, and listneighbors.
 //!

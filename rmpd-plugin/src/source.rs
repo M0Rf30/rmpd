@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! `MusicSource` SPI — transport-agnostic music-source trait + error types.
 //!
 //! Lives in `rmpd-plugin` so it can be a dependency-light contract crate

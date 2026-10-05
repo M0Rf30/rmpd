@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 use rmpd_core::error::{Result, RmpdError};
 use rmpd_core::queue::Queue;
 use rmpd_core::state::{PlayerState, PlayerStatus, ReplayGainMode};

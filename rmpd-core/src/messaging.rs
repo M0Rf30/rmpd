@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Publish-subscribe messaging system
 //!
 //! A generic message broker that allows clients to subscribe to named channels

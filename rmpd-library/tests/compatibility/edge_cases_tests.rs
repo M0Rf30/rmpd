@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 /// Edge case tests for rmpd metadata extraction and database operations
 ///
 /// Tests handling of:

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Pipe (external-command) audio output — writes raw s16le PCM to stdin.
 
 use crate::audio_output::{AudioOutput, PauseState};

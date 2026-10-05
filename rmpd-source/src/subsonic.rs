@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! `SubsonicSource` — OpenSubsonic/Subsonic REST API backend.
 //!
 //! Compiled only when `feature = "subsonic"` is active (declared in `lib.rs`).

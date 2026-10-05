@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Pluggable PCM-to-wire encoders for network audio outputs.
 //!
 //! Each encoder converts interleaved f32 samples to the byte format expected

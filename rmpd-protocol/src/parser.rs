@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 use winnow::ascii::space0;
 use winnow::combinator::opt;
 use winnow::error::{ContextError, ErrMode};

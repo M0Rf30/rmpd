@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! HTTP/streaming input source for rmpd (internet radio).
 //!
 //! Provides [`HttpSource`], a Symphonia [`MediaSource`] that streams audio over

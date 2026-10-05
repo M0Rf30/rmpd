@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Single source of truth for "which formats can rmpd scan/play", derived at runtime from
 //! Symphonia's own probe and codec registries instead of hand-maintained extension/mime lists.
 //!

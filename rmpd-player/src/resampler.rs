@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Streaming sample-rate conversion.
 //!
 //! Used only as a fallback when the output device cannot natively play the

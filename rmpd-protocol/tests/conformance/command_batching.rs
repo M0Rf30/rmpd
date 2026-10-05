@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Tests for MPD command batching (command_list_begin / command_list_ok_begin).
 
 use crate::tcp_harness::*;

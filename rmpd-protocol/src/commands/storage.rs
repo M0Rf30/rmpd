@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Storage and mount commands
 //!
 //! MPD supports mounting remote storage locations and discovering network neighbors.

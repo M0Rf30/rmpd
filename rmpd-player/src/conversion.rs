@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Shared sample format conversion utilities for audio output backends.
 
 use crate::output_control::OutputControl;

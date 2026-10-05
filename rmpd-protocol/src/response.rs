@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 use rmpd_core::song::Song;
 use rmpd_core::state::PlayerStatus;
 use std::fmt::Write as FmtWrite;

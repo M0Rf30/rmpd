@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 use super::ResponseBuilder;
 #[cfg(not(feature = "fingerprint"))]
 use super::utils::ACK_ERROR_UNKNOWN;

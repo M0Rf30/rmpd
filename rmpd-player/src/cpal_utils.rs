@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 use cpal::traits::{DeviceTrait, HostTrait};
 use cpal::{Device, SampleFormat, SampleRate, StreamConfig};
 use rmpd_core::error::{Result, RmpdError};

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Partition commands - Multi-queue support
 //!
 //! MPD supports multiple queues called "partitions" to allow independent playback

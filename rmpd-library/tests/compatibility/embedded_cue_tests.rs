@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 use rmpd_core::event::EventBus;
 /// Integration tests for embedded FLAC `CUESHEET` exposure (see
 /// `rmpd_library::embedded_cue`): a whole-album FLAC with an embedded cue

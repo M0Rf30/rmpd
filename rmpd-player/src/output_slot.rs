@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Persistent output cache for gapless playback.
 //!
 //! The decode thread `acquire`s a [`MultiOutput`] for the current track's

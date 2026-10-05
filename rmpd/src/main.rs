@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 use anyhow::{Result, anyhow};
 use clap::Parser;
 use rmpd_core::config::{Config, ConfigSource, DiagLevel, DiscoverOptions};

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Icecast-lite HTTP audio streaming output.
 //!
 //! Binds a TCP port and streams encoded audio to every connected client.

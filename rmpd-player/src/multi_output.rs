@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Non-blocking fan-out to N simultaneous audio outputs.
 //!
 //! `MultiOutput` owns one worker thread per backend.  The PRIMARY output

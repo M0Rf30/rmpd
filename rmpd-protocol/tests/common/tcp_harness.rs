@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! TCP-level test harness for MPD protocol conformance tests.
 //!
 //! Provides `MpdTestServer` (binds to port 0, spawns the real server) and

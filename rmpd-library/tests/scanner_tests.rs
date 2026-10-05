@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 /// Regression tests for `Scanner::collect_audio_files`'s directory-tree walk.
 use camino::Utf8PathBuf;
 use rmpd_core::event::{Event, EventBus};

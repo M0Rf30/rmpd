@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Verifies `subscribe`/`unsubscribe` notify idle `subscription` clients and
 //! `sendmessage` notifies idle `message` clients, matching MPD's
 //! `EmitIdle(IDLE_SUBSCRIPTION)` / `IdleAdd(IDLE_MESSAGE)`.

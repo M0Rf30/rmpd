@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 /// Test harness for testing rmpd-library components directly
 ///
 /// This harness provides a convenient interface for testing the Scanner,

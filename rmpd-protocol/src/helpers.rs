@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Shared `pub(crate)` helpers for protocol command handlers.
 
 use crate::commands::utils::{ACK_ERROR_SYS, filter_parse_ack, parse_filter_args};

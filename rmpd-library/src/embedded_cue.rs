@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Embedded FLAC cue-sheet extraction.
 //!
 //! A whole-album FLAC rip often carries a `CUESHEET` describing how it splits

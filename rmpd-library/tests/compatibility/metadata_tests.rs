@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 /// Metadata extraction tests using pre-generated fixtures
 ///
 /// These tests use pre-generated audio files (no FFmpeg required)

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 /// Search operation tests validating FTS (Full-Text Search) functionality
 ///
 /// These tests validate that rmpd's FTS5-based search produces
