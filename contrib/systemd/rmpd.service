@@ -53,4 +53,3 @@ RestrictSUIDSGID=true
 
 [Install]
 WantedBy=default.target
-Also=rmpd.socket
