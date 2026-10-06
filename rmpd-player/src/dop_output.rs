@@ -101,7 +101,7 @@ impl DopOutput {
                 self.device
                     .build_output_stream(
                         self.config,
-                        move |data: &mut [i32], _: &cpal::OutputCallbackInfo| {
+                        move |data: &mut [i32], _: &cpal::CallbackInfo| {
                             for sample in data.iter_mut() {
                                 *sample = buf.next_sample();
                             }
@@ -119,7 +119,7 @@ impl DopOutput {
                 self.device
                     .build_output_stream(
                         self.config,
-                        move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+                        move |data: &mut [f32], _: &cpal::CallbackInfo| {
                             for sample in data.iter_mut() {
                                 let val = buf.next_sample();
                                 *sample = (val as f32) / 2147483648.0;
@@ -135,7 +135,7 @@ impl DopOutput {
         };
 
         stream
-            .play()
+            .start()
             .map_err(|e| RmpdError::Player(format!("Failed to start DoP stream: {e}")))?;
 
         self.stream = Some(stream);
@@ -228,7 +228,7 @@ impl DopOutput {
 
     pub fn resume(&mut self) -> Result<()> {
         if let Some(stream) = &self.stream {
-            let _ = stream.play();
+            let _ = stream.start();
         }
         self.is_paused = false;
         Ok(())
