@@ -11,7 +11,7 @@ use symphonia::core::codecs::audio::well_known::CODEC_ID_AAC;
 use symphonia::core::codecs::audio::{
     AudioCodecId, AudioDecoder, AudioDecoderOptions, BitOrder, ChannelDataLayout,
 };
-use symphonia::core::errors::Error as SymphoniaError;
+use symphonia::core::errors::{Error as SymphoniaError, SeekErrorKind};
 use symphonia::core::formats::probe::Hint;
 use symphonia::core::formats::{FormatOptions, FormatReader, SeekMode, SeekTo, TrackType};
 use symphonia::core::io::MediaSourceStream;
@@ -371,7 +371,15 @@ impl SymphoniaDecoder {
                     track_id: Some(self.track_id),
                 },
             )
-            .map_err(|e| RmpdError::Player(format!("Seek failed: {e}")))?;
+            .map_err(|e| match e {
+                // MPD's text for an unseekable source (`DecoderControl::Seek`:
+                // `throw std::runtime_error("Not seekable")`), which `seek` /
+                // `seekcur` now show the client verbatim.
+                SymphoniaError::SeekError(SeekErrorKind::Unseekable) => {
+                    RmpdError::Player("Not seekable".to_owned())
+                }
+                e => RmpdError::Player(format!("Seek failed: {e}")),
+            })?;
 
         self.decoder.reset();
         self.sample_buf.clear();
