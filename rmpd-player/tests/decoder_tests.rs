@@ -492,3 +492,55 @@ fn test_decoder_format_consistency() {
         }
     }
 }
+
+/// A seek to (or past) the end of a stream of known length ends the stream:
+/// the next `read` reports end-of-file. Demuxers disagree on a target at
+/// exactly the end (ogg: out-of-range, flac: unexpected end of file, mp3, wav
+/// and m4a: fine); none of that may fail the seek.
+#[test]
+fn test_seek_to_the_end_ends_the_stream() {
+    for (name, path) in [
+        ("flac", pregenerated::sine_440hz_flac()),
+        ("ogg", pregenerated::sine_1khz_ogg()),
+        ("m4a", pregenerated::sine_1khz_m4a()),
+        ("mp3", pregenerated::sine_1khz_mp3()),
+        ("wav", pregenerated::sine_1khz_wav()),
+    ] {
+        if !path.exists() {
+            eprintln!("Skipping {name}: fixture not found");
+            continue;
+        }
+        let mut decoder = SymphoniaDecoder::open(&path).expect("Failed to open");
+        let duration = decoder.duration().expect("fixture has a known duration");
+        let mut buffer = vec![0.0f32; 4096];
+
+        for target in [duration, duration + 1.0, 1.0e9] {
+            decoder
+                .seek(target)
+                .unwrap_or_else(|e| panic!("{name}: seek to {target}s failed: {e}"));
+            assert_eq!(
+                decoder.read(&mut buffer).expect("read after seek"),
+                0,
+                "{name}: nothing is left after seeking to {target}s"
+            );
+        }
+
+        // A later seek back into the stream plays again.
+        decoder.seek(0.0).expect("seek back to the start");
+        assert!(
+            decoder.read(&mut buffer).expect("read after rewinding") > 0,
+            "{name}: reading resumes after seeking back"
+        );
+    }
+}
+
+#[test]
+fn test_seek_rejects_negative_positions() {
+    let path = pregenerated::sine_440hz_flac();
+    if !path.exists() {
+        eprintln!("Skipping test: fixture not found");
+        return;
+    }
+    let mut decoder = SymphoniaDecoder::open(&path).expect("Failed to open");
+    assert!(decoder.seek(-1.0).is_err());
+}

@@ -38,6 +38,10 @@ pub struct SymphoniaDecoder {
     uses_pcm_conversion: bool,
     /// ICY "now playing" title handle when decoding a remote stream.
     stream_title: Option<rmpd_stream::TitleHandle>,
+    /// Set by a `seek` to (or past) the end of the stream: `read` /
+    /// `read_dsd_raw` then report end-of-stream, whatever position the
+    /// demuxer was left at. Cleared by the next seek.
+    ended: bool,
 }
 
 impl SymphoniaDecoder {
@@ -135,6 +139,7 @@ impl SymphoniaDecoder {
             bit_order,
             uses_pcm_conversion: false,
             stream_title,
+            ended: false,
         };
 
         // Some containers don't declare the channel count in the codec
@@ -269,6 +274,9 @@ impl SymphoniaDecoder {
     }
 
     pub fn read(&mut self, buffer: &mut [f32]) -> Result<usize> {
+        if self.ended {
+            return Ok(0);
+        }
         let mut samples_written = 0;
 
         while samples_written < buffer.len() {
@@ -363,27 +371,40 @@ impl SymphoniaDecoder {
         let time = Time::try_from_secs_f64(position)
             .ok_or_else(|| RmpdError::Player("Invalid seek position".to_owned()))?;
 
-        self.reader
-            .seek(
-                SeekMode::Accurate,
-                SeekTo::Time {
-                    time,
-                    track_id: Some(self.track_id),
-                },
-            )
-            .map_err(|e| match e {
-                // MPD's text for an unseekable source (`DecoderControl::Seek`:
-                // `throw std::runtime_error("Not seekable")`), which `seek` /
-                // `seekcur` now show the client verbatim.
-                SymphoniaError::SeekError(SeekErrorKind::Unseekable) => {
-                    RmpdError::Player("Not seekable".to_owned())
-                }
-                e => RmpdError::Player(format!("Seek failed: {e}")),
-            })?;
+        // A seek to (or past) the end of a stream of known length just ends
+        // the song, like MPD (`Player::SeekDecoder` clamps to the song length
+        // and the decoder then hits end-of-file). Demuxers disagree on what a
+        // target at exactly the end is: isomp4, ape and dsf/dff refuse it as
+        // out-of-range, flac runs into the end of the file while searching —
+        // and either way the reader is left wherever it was. So on those
+        // errors report end of stream from `read` ourselves instead of
+        // failing the seek.
+        let at_end = self.total_duration.is_some_and(|d| position >= d);
+
+        match self.reader.seek(
+            SeekMode::Accurate,
+            SeekTo::Time {
+                time,
+                track_id: Some(self.track_id),
+            },
+        ) {
+            Ok(_) => {}
+            Err(SymphoniaError::SeekError(SeekErrorKind::OutOfRange)) if at_end => {}
+            Err(SymphoniaError::IoError(e))
+                if at_end && e.kind() == std::io::ErrorKind::UnexpectedEof => {}
+            // MPD's text for an unseekable source (`DecoderControl::Seek`:
+            // `throw std::runtime_error("Not seekable")`), which `seek` /
+            // `seekcur` now show the client verbatim.
+            Err(SymphoniaError::SeekError(SeekErrorKind::Unseekable)) => {
+                return Err(RmpdError::Player("Not seekable".to_owned()));
+            }
+            Err(e) => return Err(RmpdError::Player(format!("Seek failed: {e}"))),
+        }
 
         self.decoder.reset();
         self.sample_buf.clear();
         self.sample_pos = 0;
+        self.ended = at_end;
 
         Ok(())
     }
@@ -427,6 +448,9 @@ impl SymphoniaDecoder {
     /// Returns raw DSD bytes without conversion
     pub fn read_dsd_raw(&mut self, buffer: &mut Vec<u8>) -> Result<usize> {
         buffer.clear();
+        if self.ended {
+            return Ok(0);
+        }
 
         // Read next packet
         let packet = match self.reader.next_packet() {
