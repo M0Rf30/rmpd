@@ -99,6 +99,15 @@ pub struct AppState {
     /// physical file underlying embedded-cue virtual tracks. Mirrors
     /// `database.hide_playlist_targets` from the config file.
     pub hide_playlist_targets: bool,
+    /// Consecutive songs that failed to play since the user last started
+    /// playback (MPD `playlist::error_count`). Once it reaches the queue
+    /// length, skipping to the next song after a decoder error gives up and
+    /// playback stops, instead of looping over a queue of unplayable files.
+    pub playback_error_count: Arc<std::sync::atomic::AtomicU32>,
+    /// Stop (rather than skip to the next song) when the current song fails
+    /// to play (MPD `playlist::stop_on_error`): set when playback was started
+    /// by a `seek`/`seekid`, cleared by `play`/`playid`.
+    pub stop_on_error: Arc<std::sync::atomic::AtomicBool>,
     /// Monotonic counter for library-scan job ids (MPD-style `updating_db`
     /// job numbers).
     job_counter: Arc<std::sync::atomic::AtomicU32>,
@@ -202,6 +211,8 @@ impl AppState {
             follow_outside_symlinks: true,
             embedded_cue_as_directory: true,
             hide_playlist_targets: true,
+            playback_error_count: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            stop_on_error: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             job_counter: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             source_sync_running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
@@ -209,6 +220,20 @@ impl AppState {
 
     pub fn new() -> Self {
         Self::build(None, None, None)
+    }
+
+    /// Begin a user-initiated playback attempt (`play`, `playid`, `seek`, ...):
+    /// forget the previous playback error and the failure streak, and record
+    /// whether a failure of this attempt should stop rather than skip to the
+    /// next song. Mirrors MPD's `PlayerControl::LockClearError()` followed by
+    /// `stop_on_error = ...; error_count = 0` in `playlist::PlayPosition` /
+    /// `SeekSongOrder`.
+    pub async fn begin_playback_attempt(&self, stop_on_error: bool) {
+        self.status.write().await.error = None;
+        self.playback_error_count
+            .store(0, std::sync::atomic::Ordering::Release);
+        self.stop_on_error
+            .store(stop_on_error, std::sync::atomic::Ordering::Release);
     }
 
     pub fn with_paths(db_path: String, music_dir: String) -> Self {

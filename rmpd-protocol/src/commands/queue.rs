@@ -13,7 +13,7 @@ use crate::state::AppState;
 use super::utils::{
     ACK_ERROR_ARG, ACK_ERROR_NO_EXIST, ACK_ERROR_PERMISSION, ACK_ERROR_PLAYER_SYNC,
     ACK_ERROR_PLAYLIST_MAX, ACK_ERROR_SYS, add_at_checked, add_queue_item_metadata, apply_range,
-    internal_error, open_db, prepare_song_for_playback, update_next_song,
+    internal_error, open_db,
 };
 
 fn number_too_large(command: &str, n: u32) -> String {
@@ -300,12 +300,9 @@ pub async fn handle_add_command(
 
 pub async fn handle_clear_command(state: &AppState) -> String {
     state.queue.write().await.clear();
-    state.engine.write().await.stop().await.ok();
     helpers::update_playlist_version(state).await;
-
-    let mut status = state.status.write().await;
-    status.current_song = None;
-    status.next_song = None;
+    // MPD `playlist::Clear`: stop the player and reset the current song.
+    let _ = crate::queue_playback::stop_playback(state, true).await;
 
     ResponseBuilder::new().ok()
 }
@@ -341,6 +338,8 @@ pub async fn handle_delete_command(
     }
     drop(queue);
     helpers::update_playlist_version(state).await;
+    // If the playing song was among them, carry on with what took its place.
+    playback::current_song_removed(state, start).await;
     ResponseBuilder::new().ok()
 }
 
@@ -429,8 +428,11 @@ pub async fn handle_addid_command(
 }
 
 pub async fn handle_deleteid_command(state: &AppState, id: u32) -> String {
+    let position = state.queue.read().await.get_by_id(id).map(|i| i.position);
     if state.queue.write().await.delete_id(id).is_some() {
         helpers::update_playlist_version(state).await;
+        // If it was the playing song, carry on with what took its place.
+        playback::current_song_removed(state, position.unwrap_or(0)).await;
         ResponseBuilder::new().ok()
     } else {
         ResponseBuilder::error(ACK_ERROR_NO_EXIST, 0, "deleteid", "No such song")
@@ -607,78 +609,23 @@ pub async fn handle_playlistinfo_command(state: &AppState, range: Option<(u32, u
 }
 
 pub async fn handle_playid_command(state: &AppState, id: Option<u32>) -> String {
-    if let Some(song_id) = id {
-        // Play specific song by ID
-        let queue = state.queue.read().await;
-        if let Some(item) = queue.get_by_id(song_id) {
-            let song = (*item.song).clone();
-            let position = item.position;
-            let range = item.range;
-            drop(queue);
-
-            let playback_song = match prepare_song_for_playback(
-                &song,
-                state.music_dir.as_deref(),
-                range,
-                &state.sources,
-            )
-            .await
-            {
-                Ok(ps) => ps,
-                Err(e) => {
-                    return ResponseBuilder::error(
-                        ACK_ERROR_NO_EXIST,
-                        0,
-                        "playid",
-                        &format!("Cannot resolve song: {}", e),
-                    );
-                }
-            };
-
-            match state.engine.write().await.play(playback_song).await {
-                Ok(_) => {
-                    {
-                        let mut status = state.status.write().await;
-                        status.state = rmpd_core::state::PlayerState::Play;
-                        status.elapsed = Some(std::time::Duration::ZERO);
-                        status.duration = song.duration;
-                        status.bitrate = song.bitrate;
-                        status.audio_format = helpers::extract_audio_format(&song);
-                        status.current_song = Some(rmpd_core::state::QueuePosition {
-                            position,
-                            id: song_id,
-                        });
-
-                        let queue = state.queue.read().await;
-                        update_next_song(&mut status, &queue, position);
-                    }
-
-                    // Mirror `play`: notify the `player` idle subsystem so clients
-                    // update their now-playing view and cover art.
-                    state
-                        .event_bus
-                        .emit(rmpd_core::event::Event::PlayerStateChanged(
-                            rmpd_core::state::PlayerState::Play,
-                        ));
-                    state
-                        .event_bus
-                        .emit(rmpd_core::event::Event::SongChanged(Some(song)));
-
-                    ResponseBuilder::new().ok()
-                }
-                Err(e) => ResponseBuilder::error(
-                    ACK_ERROR_SYS,
-                    0,
-                    "playid",
-                    &format!("Playback error: {e}"),
-                ),
+    match id {
+        Some(song_id) => {
+            // MPD `PlayId`: an unknown id is "No such song", reported before
+            // `PlayPosition` gets to clear the previous playback error.
+            let position = state
+                .queue
+                .read()
+                .await
+                .get_by_id(song_id)
+                .map(|item| item.position);
+            match position {
+                Some(position) => playback::play_position(state, "playid", position).await,
+                None => ResponseBuilder::error(ACK_ERROR_NO_EXIST, 0, "playid", "No such song"),
             }
-        } else {
-            ResponseBuilder::error(ACK_ERROR_NO_EXIST, 0, "playid", "No such song")
         }
-    } else {
         // Resume playback (same as play with no args)
-        playback::handle_play_command(state, None).await
+        None => playback::play_any(state, "playid").await,
     }
 }
 
@@ -764,7 +711,15 @@ pub async fn handle_rangeid_command(
     id: u32,
     range: Option<(f64, f64)>,
 ) -> String {
-    if let Some(current) = state.status.read().await.current_song
+    // Only while the player is playing/paused (MPD checks `playing`): a
+    // stopped player keeps its current song, but nothing is decoding it.
+    let playing = rmpd_core::state::PlayerState::from_atomic(
+        state
+            .atomic_state
+            .load(std::sync::atomic::Ordering::Acquire),
+    ) != rmpd_core::state::PlayerState::Stop;
+    if playing
+        && let Some(current) = state.status.read().await.current_song
         && current.id == id
     {
         return ResponseBuilder::error(

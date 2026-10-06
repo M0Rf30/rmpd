@@ -17,6 +17,21 @@ pub enum Event {
     VolumeChanged(u8),
     BitrateChanged(Option<u32>), // Instantaneous bitrate in kbps (for VBR files)
     SongFinished,
+    /// Playback of the current song failed (decoder or audio output error),
+    /// mirroring MPD's `PlayerControl::SetError`. `message` is the text
+    /// `status` reports as `error:` (e.g. `Failed to decode "x.flac": ...`);
+    /// `output` is true for an audio-output failure (MPD's
+    /// `PlayerError::OUTPUT`), false for a decoder failure. Emitted instead of
+    /// [`Event::SongFinished`]: the protocol layer decides whether to skip to
+    /// the next song or stop (MPD `playlist::ResumePlayback`).
+    PlaybackError {
+        message: String,
+        output: bool,
+        /// `PlaybackEngine::generation` of the playback attempt that failed;
+        /// a report that no longer matches the engine's current generation
+        /// concerns a song that was since stopped or replaced.
+        generation: u64,
+    },
     /// The engine advanced to the look-ahead (next) song in-thread — gaplessly
     /// or via crossfade — instead of stopping. The protocol promotes its fed
     /// "next" to current and feeds the following song.
@@ -101,6 +116,7 @@ impl Event {
             Event::PlayerStateChanged(_)
             | Event::SongChanged(_)
             | Event::SongFinished
+            | Event::PlaybackError { .. }
             | Event::StreamTitleChanged(_) => &[Subsystem::Player],
             // Position and bitrate changes are internal - don't notify idle
             Event::PositionChanged(_) | Event::BitrateChanged(_) => &[],
@@ -152,5 +168,20 @@ impl EventBus {
 impl Default for EventBus {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn playback_error_wakes_the_player_subsystem() {
+        let event = Event::PlaybackError {
+            message: "Failed to decode \"x.flac\": boom".to_owned(),
+            output: false,
+            generation: 1,
+        };
+        assert_eq!(event.subsystems(), &[Subsystem::Player]);
     }
 }

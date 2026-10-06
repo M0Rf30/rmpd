@@ -9,7 +9,7 @@ use crate::output::CpalOutput;
 use crate::output_control::OutputControl;
 use parking_lot::Mutex;
 use rmpd_core::config::{DopMode, OutputConfig, ReplayGainMode, ResamplerQuality};
-use rmpd_core::error::Result;
+use rmpd_core::error::{Result, RmpdError};
 use rmpd_core::event::{Event, EventBus};
 use rmpd_core::song::Song;
 use rmpd_core::state::PlayerState;
@@ -84,12 +84,122 @@ fn dsd_output_target_rate(
 
 /// Commands that can be sent to the playback thread
 enum PlaybackCommand {
-    Seek(f64),
+    /// Seek the decoder to `position` seconds. `reply` (when present)
+    /// receives the decoder's outcome so the protocol layer can report a
+    /// failed seek to the client (MPD 0.25 "show detailed seek errors",
+    /// `PlayerControl::SeekLocked` rethrowing the player error) instead of
+    /// answering OK before the decode thread has even looked at it.
+    Seek {
+        position: f64,
+        reply: Option<tokio::sync::oneshot::Sender<Result<()>>>,
+    },
     /// No-op wake-up: unblocks a decode thread parked in a blocking
     /// `command_rx.recv()` while paused, so a resume (which otherwise only
     /// touches shared atomics) is noticed immediately instead of on the
     /// next incidental command.
     Wake,
+}
+
+/// How long [`PlaybackEngine::seek`] waits for the decode thread to report the
+/// outcome of a seek before assuming it went through (a decode thread parked
+/// in a slow network read must not wedge the `seek` command forever).
+const SEEK_REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// A seek the decode thread has been asked to carry out, not yet answered.
+/// See [`PlaybackEngine::begin_seek`].
+#[derive(Debug)]
+pub struct SeekPending {
+    reply: tokio::sync::oneshot::Receiver<Result<()>>,
+    last_failure: Arc<Mutex<Option<String>>>,
+}
+
+impl SeekPending {
+    /// Wait for the decode thread's verdict, so a failed seek ("Not
+    /// seekable", a decode error, ...) reaches the client as an ACK, like
+    /// MPD's `PlayerControl::SeekLocked`.
+    pub async fn verdict(self) -> Result<()> {
+        match tokio::time::timeout(SEEK_REPLY_TIMEOUT, self.reply).await {
+            Ok(Ok(result)) => result,
+            // The decode thread went away without answering.
+            Ok(Err(_)) => Err(seek_unavailable(&self.last_failure)),
+            // Decode thread busy (e.g. a stalled network read): assume the
+            // seek will go through, as before replies existed.
+            Err(_) => Ok(()),
+        }
+    }
+}
+
+/// Why a seek could not be delivered: the failure that killed the decode
+/// thread if there was one (`Failed to decode "x": ...`), otherwise the
+/// player simply is not playing.
+fn seek_unavailable(last_failure: &Mutex<Option<String>>) -> RmpdError {
+    match last_failure.lock().clone() {
+        Some(message) => RmpdError::Player(message),
+        None => RmpdError::InvalidState("Not playing".to_owned()),
+    }
+}
+
+/// Why the decode thread gave up on a song, classified like MPD's
+/// `PlayerError` (`DECODER` vs `OUTPUT`, `src/player/Control.hxx`): the
+/// protocol layer reacts differently (an output failure stops playback, a
+/// decoder failure skips to the next song).
+#[derive(Debug)]
+enum PlaybackFailure {
+    /// The song could not be opened/probed/decoded.
+    Decoder(RmpdError),
+    /// The audio output could not be opened, or died mid-stream.
+    Output(RmpdError),
+}
+
+impl From<RmpdError> for PlaybackFailure {
+    /// Plain `?` on a decoder operation classifies as a decoder failure;
+    /// output call sites opt in with `map_err(PlaybackFailure::Output)`.
+    fn from(e: RmpdError) -> Self {
+        Self::Decoder(e)
+    }
+}
+
+impl PlaybackFailure {
+    /// The client-visible `error:` text and whether it is an output error.
+    ///
+    /// Decoder failures are formatted like MPD's decoder thread
+    /// (`src/decoder/Thread.cxx`): `Failed to decode "<uri>": <cause>`, with
+    /// any `user:password@` stripped from the URI (`uri_remove_auth`).
+    fn message(&self, uri: &str) -> (String, bool) {
+        match self {
+            Self::Decoder(e) => (
+                format!(
+                    "Failed to decode {:?}: {}",
+                    strip_uri_auth(uri),
+                    error_text(e)
+                ),
+                false,
+            ),
+            Self::Output(e) => (error_text(e), true),
+        }
+    }
+}
+
+/// The bare message of an [`RmpdError`], without the `"Player error: "`-style
+/// category prefix its `Display` adds (MPD error text carries no such prefix).
+fn error_text(e: &RmpdError) -> String {
+    match e {
+        RmpdError::Player(msg) => msg.clone(),
+        other => other.to_string(),
+    }
+}
+
+/// Remove the `user:password@` part of a URL so credentials never reach a
+/// client-visible error message (MPD `uri_remove_auth`).
+fn strip_uri_auth(uri: &str) -> String {
+    if let Some(scheme_end) = uri.find("://") {
+        let rest = &uri[scheme_end + 3..];
+        let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+        if let Some(at) = rest[..authority_end].rfind('@') {
+            return format!("{}{}", &uri[..scheme_end + 3], &rest[at + 1..]);
+        }
+    }
+    uri.to_owned()
 }
 
 /// Main playback engine
@@ -149,6 +259,22 @@ pub struct PlaybackEngine {
     /// when nothing is loaded/playing. Constant for a given decode thread's
     /// lifetime (gapless/crossfade only advance to same-rate songs).
     live_sample_rate: Arc<AtomicU32>,
+    /// Total duration of audio handed to the outputs since the engine was
+    /// created, in nanoseconds (MPD `PlayerControl::total_play_time`, reported
+    /// as `stats` `playtime`). Counted from the decoded samples actually
+    /// written — not song durations — so pauses, seeks and aborted songs
+    /// only contribute what really played. Never reset or persisted.
+    play_time_ns: Arc<AtomicU64>,
+    /// Message of the failure that ended the most recent decode thread, kept
+    /// so a `seek` that arrives after the thread already died can still
+    /// report the real reason (MPD keeps the error in `PlayerControl` and
+    /// rethrows it from `SeekLocked`). Cleared when a new song starts.
+    last_failure: Arc<Mutex<Option<String>>>,
+    /// Identifies the current playback attempt: bumped by every `play()` and
+    /// `stop()`. A [`Event::PlaybackError`] carries the generation of the
+    /// decode thread that raised it, so the protocol layer can recognise (and
+    /// drop) the report of a song the user has already stopped or replaced.
+    generation: u64,
 }
 
 impl PlaybackEngine {
@@ -183,6 +309,9 @@ impl PlaybackEngine {
             control: Arc::new(OutputControl::new()),
             live_position_base_bits: Arc::new(AtomicU64::new(0.0f64.to_bits())),
             live_sample_rate: Arc::new(AtomicU32::new(0)),
+            play_time_ns: Arc::new(AtomicU64::new(0)),
+            last_failure: Arc::new(Mutex::new(None)),
+            generation: 0,
         }
     }
 
@@ -249,22 +378,57 @@ impl PlaybackEngine {
         *self.next_song.lock() = next;
     }
 
+    /// Seek the playing song to `position` seconds and wait for the decoder's
+    /// verdict. Convenience for callers that do not hold the engine lock
+    /// across the wait; command handlers use [`Self::begin_seek`] so the
+    /// engine lock is released first.
     pub async fn seek(&self, position: f64) -> Result<()> {
-        if let Some(tx) = &self.command_tx {
-            // Bump the flush generation BEFORE the decode thread even sees
-            // the seek: every backend's real-time callback starts dropping
-            // stale (pre-seek) queued/in-flight audio immediately, instead
-            // of waiting for the decode thread to notice the command.
-            self.control.flush();
-            tx.send(PlaybackCommand::Seek(position)).map_err(|_| {
-                rmpd_core::error::RmpdError::Player("Failed to send seek command".to_owned())
-            })?;
-            Ok(())
-        } else {
-            Err(rmpd_core::error::RmpdError::Player(
-                "No active playback".to_owned(),
-            ))
+        self.begin_seek(position)?.verdict().await
+    }
+
+    /// First half of a seek: flush and queue the command (cheap, synchronous),
+    /// returning a [`SeekPending`] to await once the engine lock has been
+    /// released. The decoder can take seconds to answer (a network read, a
+    /// song still opening); awaiting that under the engine `RwLock` would
+    /// stall every other engine user (`status`, `stop`, `stats`, ...) behind
+    /// it.
+    pub fn begin_seek(&self, position: f64) -> Result<SeekPending> {
+        let Some(tx) = &self.command_tx else {
+            return Err(RmpdError::InvalidState("Not playing".to_owned()));
+        };
+        // Bump the flush generation BEFORE the decode thread even sees
+        // the seek: every backend's real-time callback starts dropping
+        // stale (pre-seek) queued/in-flight audio immediately, instead
+        // of waiting for the decode thread to notice the command.
+        self.control.flush();
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        if tx
+            .send(PlaybackCommand::Seek {
+                position,
+                reply: Some(reply_tx),
+            })
+            .is_err()
+        {
+            // The decode thread already ended.
+            return Err(seek_unavailable(&self.last_failure));
         }
+        Ok(SeekPending {
+            reply: reply_rx,
+            last_failure: self.last_failure.clone(),
+        })
+    }
+
+    /// The current playback generation (see the `generation` field): changes
+    /// whenever a song is started or playback is stopped.
+    #[must_use]
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Total duration of audio played since the engine was created
+    /// (MPD `PlayerControl::GetTotalPlayTime`, the `stats` `playtime` field).
+    pub fn total_play_time(&self) -> std::time::Duration {
+        std::time::Duration::from_nanos(self.play_time_ns.load(Ordering::Relaxed))
     }
 
     pub async fn play(&mut self, playback_song: rmpd_core::playback::PlaybackSong) -> Result<()> {
@@ -291,6 +455,9 @@ impl PlaybackEngine {
 
         // Reset stop flag
         self.stop_flag.store(false, Ordering::Release);
+        // A new song forgets the previous failure (MPD `SeekLocked` ->
+        // `ClearError`).
+        *self.last_failure.lock() = None;
 
         // Create command channel
         let (command_tx, command_rx) = mpsc::channel();
@@ -330,18 +497,27 @@ impl PlaybackEngine {
         let control = self.control.clone();
         let live_position_base_bits = self.live_position_base_bits.clone();
         let live_sample_rate = self.live_sample_rate.clone();
+        let play_time_ns = self.play_time_ns.clone();
+        // URI named in the `error:` text of a failure; refreshed from the
+        // engine's current song at failure time (an in-thread gapless advance
+        // may have moved on from the song this thread started with).
+        let song_uri = playback_song.song.path.to_string();
+        let current_song_err = self.current_song.clone();
+        let last_failure = self.last_failure.clone();
+        let generation = self.generation;
+        let stop_flag_err = self.stop_flag.clone();
 
         let handle = thread::spawn(move || {
             let atomic_state_err = atomic_state_clone.clone();
             let event_bus_err = event_bus.clone();
-            if let Err(e) = Self::playback_thread(
+            if let Err(failure) = Self::playback_thread(
                 song_path.as_std_path(),
                 status_clone,
                 atomic_state_clone,
                 event_bus,
                 stop_flag,
                 volume,
-                command_rx,
+                &command_rx,
                 outputs,
                 resampler_quality,
                 dop_mode,
@@ -362,14 +538,47 @@ impl PlaybackEngine {
                 control,
                 live_position_base_bits,
                 live_sample_rate,
+                play_time_ns,
             ) {
-                error!("playback error: {}", e);
+                // The song was torn down by `stop`/`play` (which set the stop
+                // flag before joining this thread): whatever made it fail
+                // afterwards — a still-pending open, a closed output — is
+                // the user's doing, not a playback error to report. Not
+                // even `last_failure`/seek replies: `stop_internal` resets
+                // the state itself.
+                if stop_flag_err.load(Ordering::Acquire) {
+                    debug!("playback aborted; ignoring failure: {:?}", failure);
+                    return;
+                }
+                error!("playback error: {:?}", failure);
                 // A decode/output failure must not leave the player stuck
-                // reporting Play forever with no further events: reset state
-                // and let the queue-advance logic react as it does to a
-                // normal end-of-song (PLAY-01).
+                // reporting Play forever with no further events: reset the
+                // state and tell the protocol layer what went wrong. It
+                // records the `error:` text and then reacts like MPD's
+                // `playlist::ResumePlayback` — skip to the next song after a
+                // decoder error, stop after an output error (PLAY-01).
+                let uri = current_song_err
+                    .lock()
+                    .as_ref()
+                    .map_or_else(|| song_uri.clone(), |s| s.path.to_string());
+                let (message, output) = failure.message(&uri);
+                *last_failure.lock() = Some(message.clone());
+                // A seek already queued behind the failure would otherwise
+                // be dropped unanswered: give it the real reason.
+                while let Ok(cmd) = command_rx.try_recv() {
+                    if let PlaybackCommand::Seek {
+                        reply: Some(reply), ..
+                    } = cmd
+                    {
+                        let _ = reply.send(Err(RmpdError::Player(message.clone())));
+                    }
+                }
                 atomic_state_err.store(PlayerState::Stop as u8, Ordering::Release);
-                event_bus_err.emit(Event::SongFinished);
+                event_bus_err.emit(Event::PlaybackError {
+                    message,
+                    output,
+                    generation,
+                });
             }
         });
 
@@ -475,6 +684,10 @@ impl PlaybackEngine {
             let _ = tokio::task::spawn_blocking(move || handle.join()).await;
         }
 
+        // A failure report from the song just torn down (or still in flight
+        // on the event bus) must not be mistaken for one of the next song.
+        self.generation = self.generation.wrapping_add(1);
+
         // Update atomic state (caller must update status to avoid deadlock)
         self.atomic_state
             .store(PlayerState::Stop as u8, Ordering::Release);
@@ -552,7 +765,7 @@ impl PlaybackEngine {
         event_bus: EventBus,
         stop_flag: Arc<AtomicBool>,
         volume: Arc<AtomicU8>,
-        command_rx: mpsc::Receiver<PlaybackCommand>,
+        command_rx: &mpsc::Receiver<PlaybackCommand>,
         outputs: Vec<rmpd_core::config::OutputConfig>,
         resampler_quality: ResamplerQuality,
         dop_mode: DopMode,
@@ -573,7 +786,8 @@ impl PlaybackEngine {
         control: Arc<OutputControl>,
         live_position_base_bits: Arc<AtomicU64>,
         live_sample_rate: Arc<AtomicU32>,
-    ) -> Result<()> {
+        play_time_ns: Arc<AtomicU64>,
+    ) -> std::result::Result<(), PlaybackFailure> {
         // Shadow as mutable so per-song gain can be updated on in-thread advance.
         let mut gain_scale = gain_scale;
         // Open decoder (pass-through mode by default)
@@ -621,6 +835,7 @@ impl PlaybackEngine {
                             control,
                             live_position_base_bits,
                             live_sample_rate,
+                            play_time_ns,
                         );
                     }
                     Err(e) => {
@@ -693,36 +908,45 @@ impl PlaybackEngine {
         // Reuse the existing output (and its open device) across consecutive
         // same-key tracks for gapless transitions; rebuild on format/output
         // change. The closure (which opens devices) runs only on a cache miss.
-        let multi = output_slot.acquire(key, || {
-            let mut boxes: Vec<Box<dyn AudioOutput>> = Vec::with_capacity(effective_outputs.len());
-            for (i, cfg) in effective_outputs.iter().enumerate() {
-                match Self::create_output(
-                    format,
-                    cfg,
-                    resampler_quality,
-                    buffer_time_ms,
-                    dsd_target_rate,
-                    control.clone(),
-                ) {
-                    Ok(b) => boxes.push(b),
-                    Err(e) => {
-                        if i == 0 {
-                            return Err(e);
+        let multi = output_slot
+            .acquire(key, || {
+                let mut boxes: Vec<Box<dyn AudioOutput>> =
+                    Vec::with_capacity(effective_outputs.len());
+                for (i, cfg) in effective_outputs.iter().enumerate() {
+                    match Self::create_output(
+                        format,
+                        cfg,
+                        resampler_quality,
+                        buffer_time_ms,
+                        dsd_target_rate,
+                        control.clone(),
+                    ) {
+                        Ok(b) => boxes.push(b),
+                        Err(e) => {
+                            if i == 0 {
+                                // MPD (`Filtered::Open`): `Failed to open "name" (plugin)`.
+                                return Err(RmpdError::Player(format!(
+                                    "Failed to open \"{}\" ({}): {}",
+                                    cfg.name,
+                                    cfg.output_type,
+                                    error_text(&e)
+                                )));
+                            }
+                            warn!(
+                                "secondary output '{}' failed to create: {}; skipping",
+                                cfg.name, e
+                            );
                         }
-                        warn!(
-                            "secondary output '{}' failed to create: {}; skipping",
-                            cfg.name, e
-                        );
                     }
                 }
-            }
-            Ok(Arc::new(crate::multi_output::MultiOutput::spawn(
-                boxes,
-                16,
-                volume.clone(),
-                control.clone(),
-            )?))
-        })?;
+                Ok(Arc::new(crate::multi_output::MultiOutput::spawn(
+                    boxes,
+                    16,
+                    volume.clone(),
+                    control.clone(),
+                )?))
+            })
+            .map_err(PlaybackFailure::Output)?;
 
         // ── Playback state ────────────────────────────────────────────────────
         let mut buffer = vec![0.0f32; BUFFER_SIZE];
@@ -780,10 +1004,11 @@ impl PlaybackEngine {
                 // ── Commands ──────────────────────────────────────────────────
                 if let Ok(cmd) = command_rx.try_recv() {
                     match cmd {
-                        PlaybackCommand::Seek(position) => {
+                        PlaybackCommand::Seek { position, reply } => {
                             debug!("seeking to position: {:.2}s", position);
+                            let (result, position) = Self::seek_decoder(&mut decoder, position);
                             Self::apply_seek_result(
-                                decoder.seek(position),
+                                result,
                                 "",
                                 position,
                                 &mut total_samples_played,
@@ -791,6 +1016,7 @@ impl PlaybackEngine {
                                 &mut position_base_secs,
                                 &live_position_base_bits,
                                 &event_bus,
+                                reply,
                             );
                         }
                         PlaybackCommand::Wake => {}
@@ -813,10 +1039,11 @@ impl PlaybackEngine {
                     // decode thread from spinning while nothing can be
                     // played anyway.
                     match command_rx.recv() {
-                        Ok(PlaybackCommand::Seek(position)) => {
+                        Ok(PlaybackCommand::Seek { position, reply }) => {
                             debug!("seeking to position: {:.2}s (while paused)", position);
+                            let (result, position) = Self::seek_decoder(&mut decoder, position);
                             Self::apply_seek_result(
-                                decoder.seek(position),
+                                result,
                                 " (while paused)",
                                 position,
                                 &mut total_samples_played,
@@ -824,6 +1051,7 @@ impl PlaybackEngine {
                                 &mut position_base_secs,
                                 &live_position_base_bits,
                                 &event_bus,
+                                reply,
                             );
                         }
                         Ok(PlaybackCommand::Wake) | Err(_) => {}
@@ -964,9 +1192,14 @@ impl PlaybackEngine {
                                     // main pause branch above — see its
                                     // comment.
                                     match command_rx.recv() {
-                                        Ok(PlaybackCommand::Seek(pos)) => {
+                                        Ok(PlaybackCommand::Seek {
+                                            position: pos,
+                                            reply,
+                                        }) => {
+                                            let (result, pos) =
+                                                Self::seek_decoder(&mut decoder, pos);
                                             Self::apply_seek_result(
-                                                decoder.seek(pos),
+                                                result,
                                                 " during crossfade (while paused)",
                                                 pos,
                                                 &mut total_samples_played,
@@ -974,6 +1207,7 @@ impl PlaybackEngine {
                                                 &mut position_base_secs,
                                                 &live_position_base_bits,
                                                 &event_bus,
+                                                reply,
                                             );
                                             // next_dec is dropped here; next_song
                                             // slot is already empty so the
@@ -991,9 +1225,14 @@ impl PlaybackEngine {
                                 // Seek during crossfade: seek current decoder and
                                 // abandon the blend so the user hears the new
                                 // position without the incoming track underneath.
-                                if let Ok(PlaybackCommand::Seek(pos)) = command_rx.try_recv() {
+                                if let Ok(PlaybackCommand::Seek {
+                                    position: pos,
+                                    reply,
+                                }) = command_rx.try_recv()
+                                {
+                                    let (result, pos) = Self::seek_decoder(&mut decoder, pos);
                                     Self::apply_seek_result(
-                                        decoder.seek(pos),
+                                        result,
                                         " during crossfade",
                                         pos,
                                         &mut total_samples_played,
@@ -1001,6 +1240,7 @@ impl PlaybackEngine {
                                         &mut position_base_secs,
                                         &live_position_base_bits,
                                         &event_bus,
+                                        reply,
                                     );
                                     // next_dec is dropped here; next_song slot is
                                     // already empty so the protocol must re-feed.
@@ -1033,8 +1273,16 @@ impl PlaybackEngine {
                                     }
                                     if multi.write(Arc::from(&cf_cur[..n_cur])).is_err() {
                                         warn!("output disconnected (crossfade/next-eof)");
-                                        break 'song;
+                                        if stop_flag.load(Ordering::Acquire) {
+                                            break 'song;
+                                        }
+                                        return Err(Self::output_gone());
                                     }
+                                    Self::add_play_time(
+                                        &play_time_ns,
+                                        n_cur as u64,
+                                        samples_per_second,
+                                    );
                                     total_samples_played += n_cur as u64;
                                     // Continue with current decoder; next_dec dropped.
                                     break 'cf;
@@ -1070,8 +1318,16 @@ impl PlaybackEngine {
 
                                 if multi.write(Arc::from(&cf_cur[..n_cur])).is_err() {
                                     warn!("output disconnected during crossfade");
-                                    break 'song;
+                                    if stop_flag.load(Ordering::Acquire) {
+                                        break 'song;
+                                    }
+                                    return Err(Self::output_gone());
                                 }
+                                Self::add_play_time(
+                                    &play_time_ns,
+                                    n_cur as u64,
+                                    samples_per_second,
+                                );
 
                                 overlap_done += n_mix;
                                 next_pos += n_mix as u64;
@@ -1205,8 +1461,12 @@ impl PlaybackEngine {
                 let chunk: Arc<[f32]> = Arc::from(&buffer[..samples_read]);
                 if multi.write(chunk).is_err() {
                     warn!("primary output disconnected; stopping playback");
-                    break 'song;
+                    if stop_flag.load(Ordering::Acquire) {
+                        break 'song;
+                    }
+                    return Err(Self::output_gone());
                 }
+                Self::add_play_time(&play_time_ns, samples_read as u64, samples_per_second);
 
                 // Update elapsed time
                 total_samples_played += samples_read as u64;
@@ -1252,6 +1512,38 @@ impl PlaybackEngine {
         Ok(())
     }
 
+    /// Seek `decoder` to `position` seconds, clamped to the song's duration
+    /// when known. Returns the outcome together with the position actually
+    /// targeted.
+    ///
+    /// MPD clamps an out-of-range seek to the end of the song
+    /// (`Player::SeekDecoder`: `if (seek_time > total_time) seek_time =
+    /// total_time`) — the song then simply ends — rather than failing.
+    fn seek_decoder(decoder: &mut SymphoniaDecoder, position: f64) -> (Result<()>, f64) {
+        let position = match decoder.duration() {
+            Some(duration) if position > duration => duration,
+            _ => position,
+        };
+        (decoder.seek(position), position)
+    }
+
+    /// The failure reported when the output stopped accepting audio while the
+    /// song was still playing (the worker died, e.g. the device went away).
+    fn output_gone() -> PlaybackFailure {
+        PlaybackFailure::Output(RmpdError::Player("Audio output disconnected".to_owned()))
+    }
+
+    /// Add `samples` interleaved samples (at `samples_per_second`) to the
+    /// engine-wide played-time counter behind `stats` `playtime`.
+    fn add_play_time(counter: &AtomicU64, samples: u64, samples_per_second: u64) {
+        if let Some(nanos) = samples
+            .saturating_mul(1_000_000_000)
+            .checked_div(samples_per_second)
+        {
+            counter.fetch_add(nanos, Ordering::Relaxed);
+        }
+    }
+
     /// Apply a `PlaybackCommand::Seek` outcome to the running sample counter
     /// and (re)broadcast the resulting position.
     ///
@@ -1264,7 +1556,9 @@ impl PlaybackEngine {
     /// `Event::PositionChanged` is (re)emitted with whatever `counter` now
     /// says, so a client that already assumed the seek succeeded is
     /// corrected immediately instead of drifting until the next throttled
-    /// tick.
+    /// tick. The outcome is also sent to `reply` (if any) so the `seek`
+    /// command can answer with the decoder's actual error.
+    #[allow(clippy::too_many_arguments)]
     fn apply_seek_result(
         result: Result<()>,
         log_suffix: &str,
@@ -1274,8 +1568,9 @@ impl PlaybackEngine {
         position_base_secs: &mut f64,
         live_position_base_bits: &Arc<AtomicU64>,
         event_bus: &EventBus,
+        reply: Option<tokio::sync::oneshot::Sender<Result<()>>>,
     ) {
-        match result {
+        match &result {
             Ok(()) => {
                 *counter = (target_secs * units_per_second as f64) as u64;
                 // Audible-elapsed base resynchronises to the seek target;
@@ -1291,6 +1586,9 @@ impl PlaybackEngine {
         event_bus.emit(Event::PositionChanged(std::time::Duration::from_secs_f64(
             elapsed,
         )));
+        if let Some(reply) = reply {
+            let _ = reply.send(result);
+        }
     }
 
     fn create_output(
@@ -1420,11 +1718,12 @@ impl PlaybackEngine {
         atomic_state: Arc<AtomicU8>,
         event_bus: EventBus,
         stop_flag: Arc<AtomicBool>,
-        command_rx: mpsc::Receiver<PlaybackCommand>,
+        command_rx: &mpsc::Receiver<PlaybackCommand>,
         control: Arc<OutputControl>,
         live_position_base_bits: Arc<AtomicU64>,
         live_sample_rate: Arc<AtomicU32>,
-    ) -> Result<()> {
+        play_time_ns: Arc<AtomicU64>,
+    ) -> std::result::Result<(), PlaybackFailure> {
         let dsd_sample_rate = decoder.sample_rate();
         let channels = decoder.channels();
         let pcm_sample_rate = dop_encoder.pcm_sample_rate();
@@ -1450,9 +1749,10 @@ impl PlaybackEngine {
             // Check for commands
             if let Ok(cmd) = command_rx.try_recv() {
                 match cmd {
-                    PlaybackCommand::Seek(position) => {
+                    PlaybackCommand::Seek { position, reply } => {
                         debug!("seeking to position: {:.2}s", position);
-                        if let Err(e) = decoder.seek(position) {
+                        let (result, position) = Self::seek_decoder(&mut decoder, position);
+                        if let Err(e) = &result {
                             error!("seek failed: {}", e);
                         } else {
                             total_dsd_bytes = (position * dsd_bytes_per_second as f64) as u64;
@@ -1461,6 +1761,9 @@ impl PlaybackEngine {
                             event_bus.emit(Event::PositionChanged(
                                 std::time::Duration::from_secs_f64(position),
                             ));
+                        }
+                        if let Some(reply) = reply {
+                            let _ = reply.send(result);
                         }
                     }
                     PlaybackCommand::Wake => {}
@@ -1481,9 +1784,10 @@ impl PlaybackEngine {
                 // The audible pause is already instant: `output`'s
                 // real-time callback reads `control.paused` directly.
                 match command_rx.recv() {
-                    Ok(PlaybackCommand::Seek(position)) => {
+                    Ok(PlaybackCommand::Seek { position, reply }) => {
                         debug!("seeking to position: {:.2}s (while paused)", position);
-                        if let Err(e) = decoder.seek(position) {
+                        let (result, position) = Self::seek_decoder(&mut decoder, position);
+                        if let Err(e) = &result {
                             error!("seek failed (while paused): {}", e);
                         } else {
                             total_dsd_bytes = (position * dsd_bytes_per_second as f64) as u64;
@@ -1492,6 +1796,9 @@ impl PlaybackEngine {
                             event_bus.emit(Event::PositionChanged(
                                 std::time::Duration::from_secs_f64(position),
                             ));
+                        }
+                        if let Some(reply) = reply {
+                            let _ = reply.send(result);
                         }
                     }
                     Ok(PlaybackCommand::Wake) | Err(_) => {}
@@ -1515,7 +1822,13 @@ impl PlaybackEngine {
             dop_encoder.encode(&dsd_buffer, &mut dop_i32_buffer);
 
             // Write DoP samples (i32 to preserve marker precision)
-            output.write(&dop_i32_buffer)?;
+            output
+                .write(&dop_i32_buffer)
+                .map_err(PlaybackFailure::Output)?;
+            play_time_ns.fetch_add(
+                (bytes_read as u64).saturating_mul(1_000_000_000) / dsd_bytes_per_second.max(1),
+                Ordering::Relaxed,
+            );
 
             // Update elapsed time (decoded-position throttle trigger only;
             // see below for the emitted, audible-position value).
@@ -1534,7 +1847,7 @@ impl PlaybackEngine {
             }
         }
 
-        output.stop()?;
+        output.stop().map_err(PlaybackFailure::Output)?;
 
         Ok(())
     }
@@ -1727,5 +2040,451 @@ mod tests {
             cf_window,
             samples_per_second
         ));
+    }
+    // ── playback failure reporting / play-time accounting ────────────────────
+
+    #[test]
+    fn strip_uri_auth_removes_credentials_only_from_the_authority() {
+        assert_eq!(
+            strip_uri_auth("http://user:secret@radio.example/stream?x=a@b"),
+            "http://radio.example/stream?x=a@b"
+        );
+        assert_eq!(
+            strip_uri_auth("https://tok@host:8000/a"),
+            "https://host:8000/a"
+        );
+        // Nothing to strip: plain paths, URLs without userinfo, and an `@`
+        // that only appears in the path.
+        assert_eq!(
+            strip_uri_auth("Artist/Album/01 a@b.flac"),
+            "Artist/Album/01 a@b.flac"
+        );
+        assert_eq!(strip_uri_auth("http://host/path@x"), "http://host/path@x");
+    }
+
+    #[test]
+    fn decoder_failure_message_follows_mpd_decoder_thread_format() {
+        // src/decoder/Thread.cxx: `Failed to decode {:?}` nested over the cause,
+        // flattened by GetFullMessage with ": ".
+        let failure = PlaybackFailure::Decoder(RmpdError::Player(
+            "Failed to open file: No such file or directory (os error 2)".to_owned(),
+        ));
+        let (message, output) = failure.message("Artist/01.flac");
+        assert_eq!(
+            message,
+            "Failed to decode \"Artist/01.flac\": Failed to open file: No such file or directory (os error 2)"
+        );
+        assert!(!output);
+
+        // Credentials never reach the client.
+        let (message, _) = failure.message("http://u:p@host/live.mp3");
+        assert!(
+            message.starts_with("Failed to decode \"http://host/live.mp3\": "),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn output_failure_message_is_the_bare_cause_and_flagged_as_output() {
+        let failure = PlaybackFailure::Output(RmpdError::Player(
+            "Failed to open \"Default Output\" (cpal): no device".to_owned(),
+        ));
+        let (message, output) = failure.message("x.flac");
+        assert_eq!(
+            message,
+            "Failed to open \"Default Output\" (cpal): no device"
+        );
+        assert!(output);
+    }
+
+    #[test]
+    fn add_play_time_counts_audio_duration_not_sample_counts() {
+        let counter = AtomicU64::new(0);
+        // 44.1 kHz stereo: 88_200 interleaved samples per second.
+        PlaybackEngine::add_play_time(&counter, 88_200, 88_200);
+        PlaybackEngine::add_play_time(&counter, 44_100, 88_200);
+        assert_eq!(counter.load(Ordering::Relaxed), 1_500_000_000);
+        // A zero rate (nothing decoded yet) must not divide by zero.
+        PlaybackEngine::add_play_time(&counter, 10, 0);
+        assert_eq!(counter.load(Ordering::Relaxed), 1_500_000_000);
+    }
+
+    /// Write `seconds` of 8 kHz mono 16-bit silence as a WAV file.
+    fn write_silent_wav(path: &std::path::Path, seconds: u32) {
+        let sample_rate: u32 = 8000;
+        let data_len = sample_rate * seconds * 2;
+        let mut buf = Vec::with_capacity(44 + data_len as usize);
+        buf.extend_from_slice(b"RIFF");
+        buf.extend_from_slice(&(36 + data_len).to_le_bytes());
+        buf.extend_from_slice(b"WAVEfmt ");
+        buf.extend_from_slice(&16u32.to_le_bytes());
+        buf.extend_from_slice(&1u16.to_le_bytes()); // PCM
+        buf.extend_from_slice(&1u16.to_le_bytes()); // mono
+        buf.extend_from_slice(&sample_rate.to_le_bytes());
+        buf.extend_from_slice(&(sample_rate * 2).to_le_bytes()); // byte rate
+        buf.extend_from_slice(&2u16.to_le_bytes()); // block align
+        buf.extend_from_slice(&16u16.to_le_bytes()); // bits per sample
+        buf.extend_from_slice(b"data");
+        buf.extend_from_slice(&data_len.to_le_bytes());
+        buf.resize(44 + data_len as usize, 0);
+        std::fs::write(path, buf).unwrap();
+    }
+
+    fn test_engine(output_type: &str) -> (PlaybackEngine, EventBus, Arc<AtomicU8>) {
+        let bus = EventBus::new();
+        let status = Arc::new(RwLock::new(rmpd_core::state::PlayerStatus::default()));
+        let atomic_state = Arc::new(AtomicU8::new(PlayerState::Stop as u8));
+        let mut engine = PlaybackEngine::new(bus.clone(), status, atomic_state.clone());
+        engine.set_outputs(vec![OutputConfig {
+            output_type: output_type.to_owned(),
+            ..OutputConfig::cpal_default()
+        }]);
+        (engine, bus, atomic_state)
+    }
+
+    fn playback_song(uri: &str, file: &std::path::Path) -> rmpd_core::playback::PlaybackSong {
+        let mut song = rmpd_core::test_utils::create_test_song(1, "x");
+        song.path = uri.into();
+        rmpd_core::playback::PlaybackSong {
+            song: Arc::new(song),
+            resolved_path: file.to_str().unwrap().into(),
+            range: None,
+        }
+    }
+
+    /// Wait for the first event `pick` accepts (5 s cap).
+    async fn wait_event<T>(
+        rx: &mut tokio::sync::broadcast::Receiver<Event>,
+        pick: impl Fn(&Event) -> Option<T>,
+    ) -> T {
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                let event = rx.recv().await.expect("event bus closed");
+                if let Some(found) = pick(&event) {
+                    return found;
+                }
+            }
+        })
+        .await
+        .expect("timed out waiting for an engine event")
+    }
+
+    #[tokio::test]
+    async fn undecodable_song_reports_a_decoder_playback_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let bad = dir.path().join("bad.wav");
+        std::fs::write(&bad, b"this is not audio").unwrap();
+
+        let (mut engine, bus, atomic_state) = test_engine("null");
+        let mut rx = bus.subscribe();
+        engine.play(playback_song("bad.wav", &bad)).await.unwrap();
+
+        let (message, output) = wait_event(&mut rx, |e| match e {
+            Event::PlaybackError {
+                message, output, ..
+            } => Some((message.clone(), *output)),
+            _ => None,
+        })
+        .await;
+        assert!(
+            message.starts_with("Failed to decode \"bad.wav\": "),
+            "unexpected message: {message}"
+        );
+        assert!(!output, "a decoder failure is not an output error");
+        assert_eq!(
+            atomic_state.load(Ordering::Acquire),
+            PlayerState::Stop as u8,
+            "a failed song must not leave the player reporting play"
+        );
+    }
+
+    #[tokio::test]
+    async fn unopenable_output_reports_an_output_playback_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let wav = dir.path().join("ok.wav");
+        write_silent_wav(&wav, 1);
+
+        let (mut engine, bus, _) = test_engine("no-such-output-plugin");
+        let mut rx = bus.subscribe();
+        engine.play(playback_song("ok.wav", &wav)).await.unwrap();
+
+        let (message, output) = wait_event(&mut rx, |e| match e {
+            Event::PlaybackError {
+                message, output, ..
+            } => Some((message.clone(), *output)),
+            _ => None,
+        })
+        .await;
+        // MPD (`Filtered::Open`): Failed to open "<name>" (<plugin>): <cause>
+        assert!(
+            message.starts_with("Failed to open \"Default Output\" (no-such-output-plugin): "),
+            "unexpected message: {message}"
+        );
+        assert!(output, "an output failure must be flagged as such");
+    }
+
+    #[tokio::test]
+    async fn seek_reports_the_decoders_verdict() {
+        let dir = tempfile::tempdir().unwrap();
+        let wav = dir.path().join("long.wav");
+        write_silent_wav(&wav, 60);
+
+        let (mut engine, _bus, _) = test_engine("null");
+        // No song yet: nothing to seek in.
+        assert!(matches!(
+            engine.seek(1.0).await,
+            Err(RmpdError::InvalidState(_))
+        ));
+
+        engine.play(playback_song("long.wav", &wav)).await.unwrap();
+        // A real seek succeeds, an invalid one comes back as the decoder's error.
+        engine.seek(2.0).await.expect("valid seek");
+        match engine.seek(-1.0).await {
+            Err(RmpdError::Player(msg)) => assert_eq!(msg, "Invalid seek position"),
+            other => panic!("expected the decoder's error, got {other:?}"),
+        }
+        // Past the end clamps to the end of the song (MPD `SeekDecoder`).
+        engine.seek(1.0e9).await.expect("out-of-range seek clamps");
+        engine.stop().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn seek_after_the_decoder_failed_reports_that_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let bad = dir.path().join("bad.wav");
+        std::fs::write(&bad, b"this is not audio").unwrap();
+
+        let (mut engine, bus, _) = test_engine("null");
+        let mut rx = bus.subscribe();
+        engine.play(playback_song("bad.wav", &bad)).await.unwrap();
+        // Whether the seek lands before or after the decode thread died, the
+        // client must learn why: the failure, not a generic "cannot send".
+        let err = engine.seek(5.0).await.expect_err("seek on a dead song");
+        wait_event(&mut rx, |e| {
+            matches!(e, Event::PlaybackError { .. }).then_some(())
+        })
+        .await;
+        match err {
+            RmpdError::Player(msg) => {
+                assert!(msg.starts_with("Failed to decode \"bad.wav\": "), "{msg}")
+            }
+            other => panic!("expected the decode failure, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn total_play_time_counts_samples_played_and_ignores_pauses() {
+        let dir = tempfile::tempdir().unwrap();
+        let wav = dir.path().join("long.wav");
+        write_silent_wav(&wav, 60);
+
+        let (mut engine, _bus, _) = test_engine("null");
+        assert_eq!(engine.total_play_time(), std::time::Duration::ZERO);
+
+        engine.play(playback_song("long.wav", &wav)).await.unwrap();
+        let mut playing = engine.total_play_time();
+        for _ in 0..100 {
+            if playing > std::time::Duration::ZERO {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            playing = engine.total_play_time();
+        }
+        assert!(
+            playing > std::time::Duration::ZERO,
+            "audio handed to the output must count"
+        );
+
+        // While paused the decode thread writes nothing. It only notices the
+        // pause once the write it is blocked in (backpressure from the
+        // real-time paced output, up to one 0.512 s chunk) returns, so settle
+        // first: poll at an interval longer than one chunk until it holds.
+        engine.pause().await.unwrap();
+        let mut paused = engine.total_play_time();
+        let settle_deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(700)).await;
+            let now = engine.total_play_time();
+            if now == paused {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < settle_deadline,
+                "play time never settled after the pause ({paused:?} -> {now:?})"
+            );
+            paused = now;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(900)).await;
+        assert_eq!(
+            engine.total_play_time(),
+            paused,
+            "time spent paused must not count as played"
+        );
+
+        // Stopping keeps the accumulated total (never reset, MPD semantics).
+        engine.stop().await.unwrap();
+        assert!(engine.total_play_time() >= playing);
+    }
+
+    #[tokio::test]
+    async fn total_play_time_of_a_finished_song_is_its_duration() {
+        let dir = tempfile::tempdir().unwrap();
+        let wav = dir.path().join("one.wav");
+        write_silent_wav(&wav, 1);
+
+        let (mut engine, bus, _) = test_engine("null");
+        let mut rx = bus.subscribe();
+        engine.play(playback_song("one.wav", &wav)).await.unwrap();
+        wait_event(&mut rx, |e| matches!(e, Event::SongFinished).then_some(())).await;
+
+        let played = engine.total_play_time();
+        assert!(
+            (played.as_secs_f64() - 1.0).abs() < 0.001,
+            "a 1 s song must account for 1 s of play time, got {played:?}"
+        );
+    }
+    /// A song torn down by `stop` while its open is still in flight must not
+    /// report a playback error afterwards: that stale `PlaybackError` would
+    /// stop or advance whatever the user did next.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn song_aborted_by_stop_never_reports_a_playback_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let fifo = dir.path().join("blocked.wav");
+        assert!(
+            std::process::Command::new("mkfifo")
+                .arg(&fifo)
+                .status()
+                .expect("mkfifo")
+                .success()
+        );
+
+        let (mut engine, bus, _) = test_engine("null");
+        let mut rx = bus.subscribe();
+        let before = engine.generation();
+        engine
+            .play(playback_song("blocked.wav", &fifo))
+            .await
+            .unwrap();
+        assert_ne!(engine.generation(), before, "play starts a new generation");
+        let started = engine.generation();
+
+        // The decode thread now sits in `open(2)` on the FIFO, which has no
+        // writer. Give a writer only after `stop` has raised the stop flag:
+        // the open then "succeeds" with an empty stream and the song fails
+        // to probe — a failure that happens strictly after the abort.
+        let writer_fifo = fifo.clone();
+        let writer = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(400));
+            drop(
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .open(writer_fifo)
+                    .unwrap(),
+            );
+        });
+        engine.stop().await.unwrap(); // joins the decode thread
+        writer.join().unwrap();
+
+        assert_ne!(engine.generation(), started, "stop ends the generation");
+        while let Ok(event) = rx.try_recv() {
+            assert!(
+                !matches!(event, Event::PlaybackError { .. }),
+                "an aborted song must not report a playback error: {event:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn playback_error_carries_the_generation_of_its_play() {
+        let dir = tempfile::tempdir().unwrap();
+        let bad = dir.path().join("bad.wav");
+        std::fs::write(&bad, b"this is not audio").unwrap();
+
+        let (mut engine, bus, _) = test_engine("null");
+        let mut rx = bus.subscribe();
+        engine.play(playback_song("bad.wav", &bad)).await.unwrap();
+        let expected = engine.generation();
+
+        let generation = wait_event(&mut rx, |e| match e {
+            Event::PlaybackError { generation, .. } => Some(*generation),
+            _ => None,
+        })
+        .await;
+        assert_eq!(generation, expected);
+        // Nothing has happened since, so the engine still agrees…
+        assert_eq!(engine.generation(), generation);
+        // …and a later play makes that report stale.
+        engine.play(playback_song("bad.wav", &bad)).await.unwrap();
+        assert_ne!(engine.generation(), generation);
+    }
+
+    #[tokio::test]
+    async fn begin_seek_hands_back_the_verdict_without_borrowing_the_engine() {
+        let dir = tempfile::tempdir().unwrap();
+        let wav = dir.path().join("long.wav");
+        write_silent_wav(&wav, 60);
+
+        let (mut engine, _bus, _) = test_engine("null");
+        assert!(matches!(
+            engine.begin_seek(1.0),
+            Err(RmpdError::InvalidState(_))
+        ));
+
+        engine.play(playback_song("long.wav", &wav)).await.unwrap();
+        // The pending seek owns everything it needs and borrows nothing from
+        // the engine: the engine stays usable (here: mutably) while the
+        // verdict is still outstanding, which is what lets the command
+        // handlers release the engine lock before waiting.
+        let pending = engine.begin_seek(3.0).expect("seek queued");
+        let bad = engine.begin_seek(-1.0).expect("seek queued");
+        engine.set_volume(50).await.unwrap();
+        pending.verdict().await.expect("valid seek");
+        match bad.verdict().await {
+            Err(RmpdError::Player(msg)) => assert_eq!(msg, "Invalid seek position"),
+            other => panic!("expected the decoder's error, got {other:?}"),
+        }
+    }
+
+    fn sample_fixture(name: &str) -> Option<std::path::PathBuf> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/samples")
+            .join(name);
+        path.exists().then_some(path)
+    }
+
+    /// `seekcur 99999` ends the song like MPD, whatever the demuxer does with
+    /// a seek to exactly the end of the stream: ogg reports it out-of-range,
+    /// flac runs into the end of the file, wav/mp3/m4a accept it.
+    #[tokio::test]
+    async fn seek_past_the_end_ends_the_song_for_every_format() {
+        for name in [
+            "sine_1khz.ogg",
+            "sine_440hz.flac",
+            "sine_1khz.m4a",
+            "sine_1khz.mp3",
+            "sine_1khz.wav",
+        ] {
+            let Some(file) = sample_fixture(name) else {
+                eprintln!("Skipping {name}: fixture not found");
+                continue;
+            };
+            let (mut engine, bus, _) = test_engine("null");
+            let mut rx = bus.subscribe();
+            engine.play(playback_song(name, &file)).await.unwrap();
+
+            engine
+                .seek(1.0e9)
+                .await
+                .unwrap_or_else(|e| panic!("{name}: an out-of-range seek must not fail: {e}"));
+            wait_event(&mut rx, |e| match e {
+                Event::SongFinished => Some(true),
+                Event::PlaybackError { message, .. } => {
+                    panic!("{name}: seeking to the end must not fail playback: {message}")
+                }
+                _ => None,
+            })
+            .await;
+        }
     }
 }

@@ -607,6 +607,15 @@ async fn restore_state(
                             error!("failed to resume playback: {}", e);
                         }
                     });
+                } else {
+                    // Saved as `state: stop` with a `current:` position: the
+                    // stopped player keeps the song it stopped on (MPD
+                    // `playlist_state_restore`: `playlist.current = current`).
+                    let mut status = state.status.write().await;
+                    status.current_song = Some(rmpd_core::state::QueuePosition {
+                        position,
+                        id: song_id,
+                    });
                 }
             } else {
                 // Don't auto-resume, just set current position
@@ -663,7 +672,19 @@ async fn resume_playback(
     if let Some(elapsed_time) = elapsed
         && elapsed_time > 0.0
     {
-        state.engine.write().await.seek(elapsed_time).await?;
+        // Queue the seek under the engine lock, wait for the verdict without
+        // it (see `handle_seek_command`). A failed seek (an unseekable
+        // source such as a radio stream) must not abort the restore: the
+        // saved pause below still has to be applied, or audio would start
+        // playing on a daemon that was left paused.
+        let pending = state.engine.read().await.begin_seek(elapsed_time);
+        let outcome = match pending {
+            Ok(pending) => pending.verdict().await,
+            Err(e) => Err(e),
+        };
+        if let Err(e) = outcome {
+            warn!("could not seek to the saved position {elapsed_time}s: {e}");
+        }
     }
 
     if target_state == PlayerState::Pause {
@@ -671,4 +692,64 @@ async fn resume_playback(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rmpd_core::song::Song;
+
+    fn song(path: &str) -> Song {
+        Song {
+            id: 0,
+            path: path.into(),
+            duration: None,
+            sample_rate: None,
+            channels: None,
+            bits_per_sample: None,
+            bitrate: None,
+            replay_gain_track_gain: None,
+            replay_gain_track_peak: None,
+            replay_gain_album_gain: None,
+            replay_gain_album_peak: None,
+            added_at: 0,
+            last_modified: 0,
+            range: None,
+            tags: vec![],
+        }
+    }
+
+    /// A saved `state: pause` with a `time:` must survive a failing seek (an
+    /// unseekable source such as a radio stream, or a song that cannot be
+    /// decoded): the restore carries on instead of bailing out before the
+    /// pause is applied, which would leave the daemon playing.
+    #[tokio::test]
+    async fn resume_does_not_abort_when_the_saved_position_cannot_be_seeked() {
+        let dir = std::env::temp_dir().join(format!(
+            "rmpd-resume-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let bad = dir.join("bad.wav");
+        std::fs::write(&bad, b"this is not audio").unwrap();
+
+        let state = AppState::new();
+        let playback_song = rmpd_core::playback::PlaybackSong {
+            song: Arc::new(song("bad.wav")),
+            resolved_path: bad.to_str().unwrap().into(),
+            range: None,
+        };
+
+        let result = resume_playback(&state, playback_song, PlayerState::Pause, Some(5.0)).await;
+        std::fs::remove_dir_all(&dir).ok();
+
+        assert!(
+            result.is_ok(),
+            "a failed seek must not abort the restore: {result:?}"
+        );
+    }
 }

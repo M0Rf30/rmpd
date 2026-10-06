@@ -256,8 +256,8 @@ impl ResponseBuilder {
         // nextsong/nextsongid are printed last, matching handle_status, and
         // only when there is a current song: MPD derives them from
         // playlist::GetNextPosition(), which returns -1 whenever
-        // `current < 0` (Playlist.cxx:320), so a stopped player never
-        // reports a next song.
+        // `current < 0` (Playlist.cxx:320). A stopped player keeps its
+        // current song (playlist::Stop), so it still reports the next one.
         if let (Some(_), Some(next)) = (&status.current_song, &status.next_song) {
             self.field("nextsong", next.position);
             self.field("nextsongid", next.id);

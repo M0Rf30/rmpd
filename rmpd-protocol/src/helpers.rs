@@ -20,6 +20,8 @@ pub(crate) async fn update_playlist_version(state: &AppState) {
         status.playlist_version += 1;
         status.playlist_length = state.queue.read().await.len() as u32;
     }
+    // Keep the current song anchored on the same queue item through the edit.
+    crate::queue_playback::sync_current_with_queue(state).await;
     state.event_bus.emit(Event::QueueChanged);
 }
 
