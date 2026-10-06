@@ -37,8 +37,8 @@ fn resolve_variable(name: &str) -> Result<Option<std::path::PathBuf>, String> {
 }
 
 /// Expand a configured path the way MPD's `ParsePath` does: a leading `~`
-/// (`~` or `~/...`) becomes the home directory and a leading `$NAME` (see
-/// [`resolve_variable`]) becomes that directory; everything else is returned
+/// (`~` or `~/...`) becomes the home directory and a leading `$NAME` (`$HOME`
+/// or one of MPD's `$XDG_*` variables) becomes that directory; everything else is returned
 /// unchanged. `~user/...` is left alone (not supported).
 ///
 /// # Errors
