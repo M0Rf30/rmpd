@@ -3,22 +3,31 @@
 
 //! Sticker (metadata tag) command handlers
 //!
-//! Stickers are arbitrary key-value metadata tags that can be attached to songs.
-//! They are stored persistently in the database and can be used for ratings,
-//! playback counts, or any custom metadata.
+//! Stickers are arbitrary key-value metadata tags that can be attached to
+//! songs and, since MPD 0.24, to stored playlists, allowed tag values and
+//! filter expressions. They are stored persistently in the database (keyed by
+//! type, uri and name, like MPD's `sticker` table) and can be used for
+//! ratings, playback counts, or any custom metadata.
 //!
-//! Only the `song` domain is backed by storage (rmpd's `stickers` table is
-//! URI-keyed with no `type` column). MPD 0.24 also supports `playlist`,
-//! `filter`, and per-tag domains (see `sticker/AllowedTags.cxx`); requests
-//! for those return a clear "not supported" ACK instead of silently
-//! misinterpreting the domain argument as a song URI.
+//! The domain (`TYPE` argument) decides what the URI means, mirroring the
+//! per-domain handlers of `command/StickerCommands.cxx`:
+//!
+//! | TYPE            | URI                                   | validated against           |
+//! |-----------------|---------------------------------------|-----------------------------|
+//! | `song`          | file path in the database             | song must exist             |
+//! | `playlist`      | stored playlist name                  | playlist must exist         |
+//! | tag name        | tag value                             | tag must be allowed + exist |
+//! | `filter`        | filter expression (normalized)        | must parse and match a song |
+//!
+//! `sticker find` never validates its URI: it is a (directory, for `song`)
+//! prefix, and the empty string matches everything.
 
 use crate::response::ResponseBuilder;
 use crate::state::AppState;
 
 use super::utils::{
-    ACK_ERROR_ARG, ACK_ERROR_NO_EXIST, ACK_ERROR_SYS, apply_range, internal_error, open_db,
-    sys_error,
+    ACK_ERROR_ARG, ACK_ERROR_NO_EXIST, ACK_ERROR_SYS, ACK_ERROR_UNKNOWN, apply_range,
+    internal_error, open_db, sys_error,
 };
 
 /// Tags MPD allows stickers on, in `sticker/AllowedTags.cxx` enum order.
@@ -42,34 +51,50 @@ const STICKER_ALLOWED_TAGS: &[&str] = &[
     "MUSICBRAINZ_WORKID",
 ];
 
-/// Reject sticker domains this build doesn't have storage for. `song` is the
-/// only implemented domain; `playlist`/`filter`/tag-name domains are real
-/// MPD 0.24 features we don't back yet, so callers get an honest ACK instead
-/// of the domain argument being silently treated as a song URI.
-fn require_song_domain(sticker_type: &str, command: &str) -> Result<(), String> {
-    if sticker_type == "song" {
-        return Ok(());
+/// A resolved sticker domain (`handle_sticker`'s handler selection).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Domain {
+    Song,
+    Playlist,
+    Filter,
+    /// Canonical MPD tag name (`tag_item_names[]`), allowed or not: MPD picks
+    /// the tag handler for any tag name and only rejects a disallowed one
+    /// when it validates a URI.
+    Tag(&'static str),
+}
+
+impl Domain {
+    /// The `type` column value and the field name `sticker find` prints.
+    fn type_name(&self) -> &str {
+        match self {
+            Domain::Song => "song",
+            Domain::Playlist => "playlist",
+            Domain::Filter => "filter",
+            Domain::Tag(name) => name,
+        }
     }
-    let recognized = sticker_type == "playlist"
-        || sticker_type == "filter"
-        || STICKER_ALLOWED_TAGS
-            .iter()
-            .any(|t| t.eq_ignore_ascii_case(sticker_type));
-    if recognized {
-        Err(ResponseBuilder::error(
-            ACK_ERROR_ARG,
-            0,
-            command,
-            &format!("sticker domain {sticker_type:?} is not supported (song stickers only)"),
-        ))
-    } else {
-        Err(ResponseBuilder::error(
-            ACK_ERROR_ARG,
-            0,
-            command,
-            &format!("unknown sticker domain {sticker_type:?}"),
-        ))
+}
+
+/// Resolve the `TYPE` argument like `handle_sticker`: `song`, `playlist` and
+/// `filter` are exact; anything else must be a tag name (matched
+/// case-insensitively, then normalized to its canonical spelling).
+fn resolve_domain(sticker_type: &str, command: &str) -> Result<Domain, String> {
+    match sticker_type {
+        "song" => return Ok(Domain::Song),
+        "playlist" => return Ok(Domain::Playlist),
+        "filter" => return Ok(Domain::Filter),
+        _ => {}
     }
+    let canonical = rmpd_core::song::canonical_tag_name(&sticker_type.to_ascii_lowercase());
+    if canonical != "Unknown" {
+        return Ok(Domain::Tag(canonical));
+    }
+    Err(ResponseBuilder::error(
+        ACK_ERROR_ARG,
+        0,
+        command,
+        &format!("unknown sticker domain {sticker_type:?}"),
+    ))
 }
 
 /// MPD rejects `set`/`inc`/`dec` with an empty sticker name.
@@ -94,14 +119,6 @@ fn notify_sticker_changed(state: &AppState) {
         .emit(rmpd_core::event::Event::StickerChanged);
 }
 
-fn get_sticker_i32(db: &rmpd_library::Database, uri: &str, name: &str) -> i32 {
-    db.get_sticker(uri, name)
-        .ok()
-        .flatten()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(0)
-}
-
 /// Return `Err(error_response)` when the song at `uri` does not exist in the DB.
 fn require_song(db: &rmpd_library::Database, uri: &str) -> Result<(), String> {
     match db.get_song_by_path(uri) {
@@ -118,6 +135,92 @@ fn require_song(db: &rmpd_library::Database, uri: &str) -> Result<(), String> {
             "No such song",
         )),
         Ok(Some(_)) => Ok(()),
+    }
+}
+
+fn arg_error(msg: &str) -> String {
+    ResponseBuilder::error(ACK_ERROR_ARG, 0, "sticker", msg)
+}
+
+/// Whether the stored playlist `name` exists (`PlaylistVector::exists`).
+fn playlist_exists(state: &AppState, name: &str) -> Result<bool, String> {
+    let Some(dir) = &state.playlist_dir else {
+        return Err(ResponseBuilder::error(
+            ACK_ERROR_NO_EXIST,
+            0,
+            "sticker",
+            "Stored playlists are disabled",
+        ));
+    };
+    if super::playlists::validate_playlist_name(name).is_err() {
+        return Ok(false);
+    }
+    Ok(std::path::Path::new(dir)
+        .join(format!("{name}.m3u"))
+        .is_file())
+}
+
+/// Validate a command URI for `domain` and return the URI to key the sticker
+/// on (`DomainHandler::ValidateUri` and its per-domain overrides).
+fn validate_uri(
+    state: &AppState,
+    db: &rmpd_library::Database,
+    domain: &Domain,
+    uri: &str,
+) -> Result<String, String> {
+    match domain {
+        Domain::Song => {
+            require_song(db, uri)?;
+            Ok(uri.to_string())
+        }
+        Domain::Playlist => {
+            if playlist_exists(state, uri)? {
+                Ok(uri.to_string())
+            } else {
+                Err(arg_error(&format!("no such playlist: {uri:?}")))
+            }
+        }
+        Domain::Tag(name) => {
+            if !STICKER_ALLOWED_TAGS.contains(name) {
+                return Err(arg_error(&format!("unsupported tag: {name:?}")));
+            }
+            let expr = rmpd_core::filter::FilterExpression::Compare {
+                tag: name.to_ascii_lowercase(),
+                op: rmpd_core::filter::CompareOp::Equal,
+                value: uri.to_string(),
+                case_sensitive: true,
+                negated: false,
+            };
+            match db.filter_matches_any(&expr) {
+                Ok(true) => Ok(uri.to_string()),
+                Ok(false) => Err(arg_error(&format!("no such {name}: {uri:?}"))),
+                Err(e) => Err(sys_error("sticker", e)),
+            }
+        }
+        Domain::Filter => {
+            // `MakeSongFilter(uri)`: a non-`(` argument is the legacy
+            // `TAG VALUE` form, which needs a second argument we never have.
+            // MPD's parse failures are `std::runtime_error` (ACK_ERROR_UNKNOWN).
+            let parse_error = |msg: &str| {
+                ResponseBuilder::error(
+                    ACK_ERROR_UNKNOWN,
+                    0,
+                    "sticker",
+                    msg.strip_prefix("Parse error: ").unwrap_or(msg),
+                )
+            };
+            if !uri.starts_with('(') {
+                return Err(parse_error("Incorrect number of filter arguments"));
+            }
+            let expr = rmpd_core::filter::FilterExpression::parse(uri, false)
+                .map_err(|e| parse_error(&e.to_string()))?;
+            let normalized = expr.to_expression();
+            match db.filter_matches_any(&expr) {
+                Ok(true) => Ok(normalized),
+                Ok(false) => Err(arg_error(&format!("no matches found: {normalized:?}"))),
+                Err(e) => Err(sys_error("sticker", e)),
+            }
+        }
     }
 }
 
@@ -191,10 +294,9 @@ fn sticker_matches(op: StickerCmp, sticker_value: &str, cmp_value: &str) -> bool
 /// A `sticker` line with an unrecognized subcommand. MPD resolves the
 /// domain (`args[1]`) before ever checking the subcommand (StickerCommands.cxx
 /// `handle_sticker`), so an invalid domain still reports "unknown sticker
-/// domain"/"not supported" here; only a valid (song) domain reaches the
-/// generic "bad request".
+/// domain" here; only a valid domain reaches the generic "bad request".
 pub fn handle_sticker_invalid_command(sticker_type: &str) -> String {
-    if let Err(e) = require_song_domain(sticker_type, "sticker") {
+    if let Err(e) = resolve_domain(sticker_type, "sticker") {
         return e;
     }
     ResponseBuilder::error(ACK_ERROR_ARG, 0, "sticker", "bad request")
@@ -206,9 +308,10 @@ pub async fn handle_sticker_get_command(
     uri: &str,
     name: &str,
 ) -> String {
-    if let Err(e) = require_song_domain(sticker_type, "sticker") {
-        return e;
-    }
+    let domain = match resolve_domain(sticker_type, "sticker") {
+        Ok(d) => d,
+        Err(e) => return e,
+    };
     let state = state.clone();
     let uri = uri.to_string();
     let name = name.to_string();
@@ -218,18 +321,21 @@ pub async fn handle_sticker_get_command(
             Err(e) => return e,
         };
 
-        // Check song exists (MPD validates URI before sticker lookup)
-        if let Err(e) = require_song(&db, &uri) {
-            return e;
-        }
+        // MPD validates the URI before the sticker lookup.
+        let key = match validate_uri(&state, &db, &domain, &uri) {
+            Ok(k) => k,
+            Err(e) => return e,
+        };
 
-        match db.get_sticker(&uri, &name) {
-            Ok(Some(value)) => {
+        match db.get_sticker_typed(domain.type_name(), &key, &name) {
+            // MPD's `LoadValue` returns an empty string for "absent", so an
+            // empty stored value is also "no such sticker".
+            Ok(Some(value)) if !value.is_empty() => {
                 let mut resp = ResponseBuilder::new();
                 resp.field("sticker", format!("{name}={value}"));
                 resp.ok()
             }
-            Ok(None) => ResponseBuilder::error(
+            Ok(_) => ResponseBuilder::error(
                 ACK_ERROR_NO_EXIST,
                 0,
                 "sticker",
@@ -249,9 +355,10 @@ pub async fn handle_sticker_set_command(
     name: &str,
     value: &str,
 ) -> String {
-    if let Err(e) = require_song_domain(sticker_type, "sticker") {
-        return e;
-    }
+    let domain = match resolve_domain(sticker_type, "sticker") {
+        Ok(d) => d,
+        Err(e) => return e,
+    };
     if let Err(e) = require_nonempty_name(name, "sticker") {
         return e;
     }
@@ -265,11 +372,12 @@ pub async fn handle_sticker_set_command(
             Err(e) => return (false, e),
         };
 
-        if let Err(e) = require_song(&db, &uri) {
-            return (false, e);
-        }
+        let key = match validate_uri(&state_owned, &db, &domain, &uri) {
+            Ok(k) => k,
+            Err(e) => return (false, e),
+        };
 
-        match db.set_sticker(&uri, &name, &value) {
+        match db.set_sticker_typed(domain.type_name(), &key, &name, &value) {
             Ok(_) => (true, ResponseBuilder::new().ok()),
             Err(e) => (false, sys_error("sticker", e)),
         }
@@ -282,22 +390,19 @@ pub async fn handle_sticker_set_command(
     response
 }
 
-/// `delete TYPE URI` with no NAME removes every sticker for `uri`. When
-/// there is nothing to delete, real MPD (StickerCommands.cxx
-/// `DomainHandler::Delete`) formats `FmtError(..., "no such sticker: {:?}",
-/// name)` with `name == nullptr`, which crashes the daemon (verified against
-/// MPD master 793eb1219) — that is a real MPD bug, not a spec to match.
-/// rmpd deliberately returns `OK` here instead of reproducing the crash or
-/// inventing an error MPD itself doesn't survive to send.
+/// `delete TYPE URI [NAME]`. Like `DomainHandler::Delete`, nothing removed is
+/// an error: `no such sticker: "NAME"` for a named delete, otherwise
+/// `no stickers found: "URI"` (both `ACK_ERROR_NO_EXIST`).
 pub async fn handle_sticker_delete_command(
     state: &AppState,
     sticker_type: &str,
     uri: &str,
     name: Option<&str>,
 ) -> String {
-    if let Err(e) = require_song_domain(sticker_type, "sticker") {
-        return e;
-    }
+    let domain = match resolve_domain(sticker_type, "sticker") {
+        Ok(d) => d,
+        Err(e) => return e,
+    };
     let state_owned = state.clone();
     let uri = uri.to_string();
     let name = name.map(|s| s.to_string());
@@ -308,33 +413,23 @@ pub async fn handle_sticker_delete_command(
             Err(e) => return (false, e),
         };
 
-        if let Err(e) = require_song(&db, &uri) {
-            return (false, e);
-        }
+        let key = match validate_uri(&state_owned, &db, &domain, &uri) {
+            Ok(k) => k,
+            Err(e) => return (false, e),
+        };
 
-        // When deleting a named sticker, check it exists first (MPD returns error if not found)
-        if let Some(sticker_name) = name {
-            match db.get_sticker(&uri, sticker_name) {
-                Ok(None) => {
-                    return (
-                        false,
-                        ResponseBuilder::error(
-                            ACK_ERROR_NO_EXIST,
-                            0,
-                            "sticker",
-                            &format!("no such sticker: {:?}", sticker_name),
-                        ),
-                    );
-                }
-                Err(e) => {
-                    return (false, sys_error("sticker", e));
-                }
-                Ok(Some(_)) => {}
+        match db.delete_sticker_typed(domain.type_name(), &key, name) {
+            Ok(true) => (true, ResponseBuilder::new().ok()),
+            Ok(false) => {
+                let msg = match name {
+                    Some(n) => format!("no such sticker: {n:?}"),
+                    None => format!("no stickers found: {uri:?}"),
+                };
+                (
+                    false,
+                    ResponseBuilder::error(ACK_ERROR_NO_EXIST, 0, "sticker", &msg),
+                )
             }
-        }
-
-        match db.delete_sticker(&uri, name) {
-            Ok(_) => (true, ResponseBuilder::new().ok()),
             Err(e) => (false, sys_error("sticker", e)),
         }
     })
@@ -351,9 +446,10 @@ pub async fn handle_sticker_list_command(
     sticker_type: &str,
     uri: &str,
 ) -> String {
-    if let Err(e) = require_song_domain(sticker_type, "sticker") {
-        return e;
-    }
+    let domain = match resolve_domain(sticker_type, "sticker") {
+        Ok(d) => d,
+        Err(e) => return e,
+    };
     let state = state.clone();
     let uri = uri.to_string();
     tokio::task::spawn_blocking(move || {
@@ -362,12 +458,12 @@ pub async fn handle_sticker_list_command(
             Err(e) => return e,
         };
 
-        // Check song exists
-        if let Err(e) = require_song(&db, &uri) {
-            return e;
-        }
+        let key = match validate_uri(&state, &db, &domain, &uri) {
+            Ok(k) => k,
+            Err(e) => return e,
+        };
 
-        match db.list_stickers(&uri) {
+        match db.list_stickers_typed(domain.type_name(), &key) {
             Ok(stickers) => {
                 let mut resp = ResponseBuilder::new();
                 for (name, value) in stickers {
@@ -392,9 +488,10 @@ pub async fn handle_sticker_find_command(
     sort: Option<&str>,
     window: Option<(u32, u32)>,
 ) -> String {
-    if let Err(e) = require_song_domain(sticker_type, "sticker") {
-        return e;
-    }
+    let domain = match resolve_domain(sticker_type, "sticker") {
+        Ok(d) => d,
+        Err(e) => return e,
+    };
 
     // Validate `sort` up front so a bad tag fails before touching the DB.
     enum SortKey {
@@ -438,7 +535,7 @@ pub async fn handle_sticker_find_command(
 
         let filter = decode_sticker_filter(value.as_deref());
 
-        match db.find_stickers(&uri, &name) {
+        match db.find_stickers_typed(domain.type_name(), &uri, &name) {
             Ok(mut results) => {
                 if let Some((op, cmp_val)) = filter {
                     results
@@ -458,9 +555,15 @@ pub async fn handle_sticker_find_command(
                 }
                 let results = apply_range(&results, window);
 
+                // MPD prints `file: URI` for songs and `TYPE: URI` (the
+                // canonical type name) for every other domain.
+                let uri_field = match domain {
+                    Domain::Song => "file",
+                    _ => domain.type_name(),
+                };
                 let mut resp = ResponseBuilder::new();
-                for (file_uri, sticker_value) in results {
-                    resp.field("file", file_uri);
+                for (found_uri, sticker_value) in results {
+                    resp.field(uri_field, found_uri);
                     resp.field("sticker", format!("{name}={sticker_value}"));
                 }
                 resp.ok()
@@ -481,9 +584,10 @@ async fn adjust_sticker_value(
     name: &str,
     delta: i32,
 ) -> String {
-    if let Err(e) = require_song_domain(sticker_type, "sticker") {
-        return e;
-    }
+    let domain = match resolve_domain(sticker_type, "sticker") {
+        Ok(d) => d,
+        Err(e) => return e,
+    };
     if let Err(e) = require_nonempty_name(name, "sticker") {
         return e;
     }
@@ -495,11 +599,11 @@ async fn adjust_sticker_value(
             Ok(d) => d,
             Err(e) => return (false, e),
         };
-        if let Err(e) = require_song(&db, &uri) {
-            return (false, e);
-        }
-        let new_value = get_sticker_i32(&db, &uri, &name) + delta;
-        match db.set_sticker(&uri, &name, &new_value.to_string()) {
+        let key = match validate_uri(&state_owned, &db, &domain, &uri) {
+            Ok(k) => k,
+            Err(e) => return (false, e),
+        };
+        match db.adjust_sticker_typed(domain.type_name(), &key, &name, i64::from(delta)) {
             // MPD's Inc/Dec (StickerCommands.cxx) never print the new
             // value: just OK, unlike Get/Find's `sticker_print_value`.
             Ok(_) => (true, ResponseBuilder::new().ok()),
@@ -534,6 +638,18 @@ pub async fn handle_sticker_dec_command(
     adjust_sticker_value(state, sticker_type, uri, name, -delta).await
 }
 
+/// Remove every sticker attached to the stored playlist `name`, mirroring
+/// `Instance::OnPlaylistDeleted` (called by `rm`). Best effort like MPD:
+/// failures are ignored; idle `sticker` clients are notified if any row went.
+pub fn delete_playlist_stickers(state: &AppState, name: &str) {
+    let Ok(db) = open_db(state, "rm") else {
+        return;
+    };
+    if matches!(db.delete_sticker_typed("playlist", name, None), Ok(true)) {
+        notify_sticker_changed(state);
+    }
+}
+
 /// `stickernames` takes no arguments: it lists every distinct sticker name
 /// across all URIs (not scoped to a single song), matching MPD's
 /// `SELECT DISTINCT name FROM sticker ORDER BY name`.
@@ -561,10 +677,7 @@ pub async fn handle_sticker_names_command(state: &AppState) -> String {
 
 /// List available sticker types, matching MPD's `handle_sticker_types`
 /// (StickerCommands.cxx:504) byte for byte: `filter`, `playlist`, `song`,
-/// then every tag in `sticker_allowed_tags`. rmpd only backs `song` and the
-/// tag domains today — `sticker get`/`set` on `filter`/`playlist` still ACK
-/// via `require_song_domain` — but the advertised list stays identical to
-/// upstream so clients see the standard 0.24 domain set.
+/// then every tag in `sticker_allowed_tags`.
 pub async fn handle_sticker_types_command() -> String {
     let mut resp = ResponseBuilder::new();
     resp.field("stickertype", "filter");
@@ -578,50 +691,43 @@ pub async fn handle_sticker_types_command() -> String {
 
 /// `stickernamestypes [TYPE]`: unique sticker names and their domain type.
 /// Mirrors MPD's `handle_sticker_names_types` (StickerCommands.cxx): `song`,
-/// `playlist`, `filter`, and any tag in `sticker_allowed_tags` are all valid
-/// TYPEs there and simply filter the listing, so a domain with no stored
-/// stickers yields a bare `OK`. That is deliberately different from
-/// `require_song_domain` (used by `sticker get`/`set`/etc.), which ACKs
-/// `playlist`/`filter` as "not supported" instead of accepting them — MPD's
-/// own `stickernamestypes` never rejects a recognized domain outright, it
-/// just lists nothing, so rmpd matches that here. Only a TYPE that is not a
-/// tag name at all (`no such tag`) or a tag outside the allowed set
-/// (`unsupported tag`) is an error. rmpd stores song stickers only, so
-/// every other valid domain lists nothing.
+/// `playlist`, `filter`, and any tag in `sticker_allowed_tags` are valid
+/// TYPEs and filter the listing (a domain with no stickers yields a bare
+/// `OK`). Only a TYPE that is not a tag name at all (`no such tag`) or a tag
+/// outside the allowed set (`unsupported tag`) is an error. Unlike the
+/// `sticker` command, MPD matches the tag name case-sensitively here.
 pub async fn handle_sticker_namestypes_command(
     state: &AppState,
     sticker_type: Option<&str>,
 ) -> String {
     if let Some(t) = sticker_type
-        && t != "song"
+        && !matches!(t, "song" | "playlist" | "filter")
+        && !STICKER_ALLOWED_TAGS.contains(&t)
     {
-        if t == "playlist" || t == "filter" {
-            return ResponseBuilder::new().ok();
-        }
-        if STICKER_ALLOWED_TAGS.contains(&t) {
-            return ResponseBuilder::new().ok();
-        }
         // MPD uses the case-sensitive tag_name_parse() here, unlike the
         // `sticker` command's case-insensitive tag_name_parse_i().
-        let msg = if rmpd_core::song::canonical_tag_name(t) == "Unknown" {
-            format!("no such tag {t:?}")
-        } else {
+        let canonical = rmpd_core::song::canonical_tag_name(&t.to_ascii_lowercase());
+        let known_tag = canonical != "Unknown" && canonical == t;
+        let msg = if known_tag {
             format!("unsupported tag {t:?}")
+        } else {
+            format!("no such tag {t:?}")
         };
         return ResponseBuilder::error(ACK_ERROR_ARG, 0, "stickernamestypes", &msg);
     }
     let state = state.clone();
+    let sticker_type = sticker_type.map(|s| s.to_string());
     tokio::task::spawn_blocking(move || {
         let db = match open_db(&state, "stickernamestypes") {
             Ok(d) => d,
             Err(e) => return e,
         };
-        match db.list_all_sticker_names() {
-            Ok(names) => {
+        match db.list_sticker_names_types(sticker_type.as_deref()) {
+            Ok(pairs) => {
                 let mut resp = ResponseBuilder::new();
-                for name in names {
+                for (name, ty) in pairs {
                     resp.field("name", &name);
-                    resp.field("type", "song");
+                    resp.field("type", &ty);
                 }
                 resp.ok()
             }
@@ -630,4 +736,28 @@ pub async fn handle_sticker_namestypes_command(
     })
     .await
     .unwrap_or_else(|_| internal_error("stickernamestypes"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_domain_is_exact_for_builtin_types_and_nocase_for_tags() {
+        assert_eq!(resolve_domain("song", "sticker"), Ok(Domain::Song));
+        assert_eq!(resolve_domain("playlist", "sticker"), Ok(Domain::Playlist));
+        assert_eq!(resolve_domain("filter", "sticker"), Ok(Domain::Filter));
+        assert_eq!(resolve_domain("album", "sticker"), Ok(Domain::Tag("Album")));
+        assert_eq!(
+            resolve_domain("musicbrainz_albumid", "sticker"),
+            Ok(Domain::Tag("MUSICBRAINZ_ALBUMID"))
+        );
+        // Valid tag, but not an allowed sticker tag: still the tag handler
+        // (rejected later, at URI validation time).
+        assert_eq!(resolve_domain("TRACK", "sticker"), Ok(Domain::Tag("Track")));
+        // `song` is not matched case-insensitively.
+        let err = resolve_domain("Song", "sticker").unwrap_err();
+        assert!(err.contains("unknown sticker domain \"Song\""), "{err}");
+        assert!(resolve_domain("bogus", "sticker").is_err());
+    }
 }

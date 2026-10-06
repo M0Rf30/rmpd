@@ -64,3 +64,49 @@ async fn sticker_get_does_not_emit_notification() {
         "read-only sticker get must not emit an idle notification"
     );
 }
+
+#[tokio::test]
+async fn tag_domain_mutations_emit_notification_only_on_change() {
+    let (state, _tmp) = state_with_song().await;
+    let mut rx = state.event_bus.subscribe();
+
+    // Rejected (no such Album): nothing changed, nothing emitted.
+    let resp = stickers::handle_sticker_set_command(&state, "Album", "Nope", "rating", "5").await;
+    assert!(resp.starts_with("ACK"), "got: {resp}");
+    assert!(rx.try_recv().is_err(), "failed set must not notify");
+
+    let resp =
+        stickers::handle_sticker_set_command(&state, "Album", "Test Album", "rating", "5").await;
+    assert!(resp.contains("OK"), "got: {resp}");
+    assert!(
+        rx.try_recv()
+            .is_ok_and(|ev| matches!(ev, Event::StickerChanged)),
+        "tag-domain set must emit Event::StickerChanged"
+    );
+
+    let resp =
+        stickers::handle_sticker_inc_command(&state, "Album", "Test Album", "rating", 1).await;
+    assert!(resp.contains("OK"), "got: {resp}");
+    assert!(
+        rx.try_recv()
+            .is_ok_and(|ev| matches!(ev, Event::StickerChanged)),
+        "tag-domain inc must emit Event::StickerChanged"
+    );
+
+    // Deleting a sticker that is not there changes nothing: no event.
+    let resp =
+        stickers::handle_sticker_delete_command(&state, "Album", "Test Album", Some("nosuch"))
+            .await;
+    assert!(resp.starts_with("ACK [50@0]"), "got: {resp}");
+    assert!(rx.try_recv().is_err(), "no-op delete must not notify");
+
+    let resp =
+        stickers::handle_sticker_delete_command(&state, "Album", "Test Album", Some("rating"))
+            .await;
+    assert!(resp.contains("OK"), "got: {resp}");
+    assert!(
+        rx.try_recv()
+            .is_ok_and(|ev| matches!(ev, Event::StickerChanged)),
+        "tag-domain delete must emit Event::StickerChanged"
+    );
+}

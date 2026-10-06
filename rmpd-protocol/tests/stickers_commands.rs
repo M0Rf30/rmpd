@@ -91,15 +91,26 @@ async fn test_sticker_inc_missing_delta_is_bad_request() {
 }
 
 #[tokio::test]
-async fn test_sticker_delete_all_with_nothing_to_delete_is_ok() {
-    // Real MPD crashes here (StickerCommands.cxx formats a nullptr with
-    // FmtError when the unnamed delete removes zero rows) — a genuine
-    // upstream bug, not a spec to match. rmpd returns OK instead.
+async fn test_sticker_delete_with_nothing_to_delete_is_no_exist() {
+    // MPD master's DomainHandler::Delete reports `no stickers found` (an
+    // unnamed delete) / `no such sticker` (a named one) with ACK_ERROR_NO_EXIST
+    // when no row was removed.
     let (_server, mut client, _tmp) = setup_with_db(1).await;
     let response = client
         .command("sticker delete song \"music/song1.flac\"")
         .await;
-    assert_ok(&response);
+    assert_eq!(
+        response,
+        "ACK [50@0] {sticker} no stickers found: \"music/song1.flac\"\n"
+    );
+
+    let response = client
+        .command("sticker delete song \"music/song1.flac\" nosuch")
+        .await;
+    assert_eq!(
+        response,
+        "ACK [50@0] {sticker} no such sticker: \"nosuch\"\n"
+    );
 }
 
 #[tokio::test]
@@ -258,4 +269,370 @@ async fn test_sticker_types_command() {
         "got: {response}"
     );
     assert_ok(&response);
+}
+
+// ── MPD 0.24 sticker domains: tag / playlist / filter ───────────────────
+
+#[tokio::test]
+async fn test_sticker_tag_domain_full_roundtrip() {
+    let (_server, mut client, _tmp) = setup_with_db(2).await;
+
+    assert_ok(
+        &client
+            .command("sticker set Album \"Test Album\" rating 8")
+            .await,
+    );
+    // Tag names are case-insensitive on the command and stored canonically.
+    assert_eq!(
+        client
+            .command("sticker get album \"Test Album\" rating")
+            .await,
+        "sticker: rating=8\nOK\n"
+    );
+    assert_eq!(
+        client.command("sticker list ALBUM \"Test Album\"").await,
+        "sticker: rating=8\nOK\n"
+    );
+
+    // inc/dec work and print nothing.
+    assert_eq!(
+        client
+            .command("sticker inc Album \"Test Album\" rating 2")
+            .await,
+        "OK\n"
+    );
+    assert_eq!(
+        client
+            .command("sticker dec Album \"Test Album\" rating 3")
+            .await,
+        "OK\n"
+    );
+    assert_eq!(
+        client
+            .command("sticker get Album \"Test Album\" rating")
+            .await,
+        "sticker: rating=7\nOK\n"
+    );
+
+    // find prints `<canonical tag>: <value>`, not `file:`; empty URI = all.
+    assert_eq!(
+        client.command("sticker find album \"\" rating").await,
+        "Album: Test Album\nsticker: rating=7\nOK\n"
+    );
+    // URI is a plain string prefix for non-song domains.
+    assert_eq!(
+        client.command("sticker find Album \"Test\" rating").await,
+        "Album: Test Album\nsticker: rating=7\nOK\n"
+    );
+    assert_eq!(
+        client.command("sticker find Album \"Other\" rating").await,
+        "OK\n"
+    );
+    assert_eq!(
+        client.command("sticker find Album \"\" rating = 7").await,
+        "Album: Test Album\nsticker: rating=7\nOK\n"
+    );
+    assert_eq!(
+        client.command("sticker find Album \"\" rating gt 7").await,
+        "OK\n"
+    );
+
+    // Domains are isolated: the same URI/name under Artist or song is empty.
+    assert!(
+        client
+            .command("sticker get Artist \"Test Album\" rating")
+            .await
+            .starts_with("ACK")
+    );
+    assert_eq!(
+        client.command("sticker find song \"\" rating").await,
+        "OK\n"
+    );
+
+    assert_eq!(
+        client
+            .command("sticker delete Album \"Test Album\" rating")
+            .await,
+        "OK\n"
+    );
+    assert_eq!(
+        client
+            .command("sticker get Album \"Test Album\" rating")
+            .await,
+        "ACK [50@0] {sticker} no such sticker: \"rating\"\n"
+    );
+}
+
+#[tokio::test]
+async fn test_sticker_tag_domain_errors() {
+    let (_server, mut client, _tmp) = setup_with_db(1).await;
+
+    // The tag value must exist in the database.
+    assert_eq!(
+        client.command("sticker set Album \"Nope\" rating 1").await,
+        "ACK [2@0] {sticker} no such Album: \"Nope\"\n"
+    );
+    // Error text uses the canonical tag spelling even for a lowercase domain.
+    assert_eq!(
+        client.command("sticker get artist \"Nope\" rating").await,
+        "ACK [2@0] {sticker} no such Artist: \"Nope\"\n"
+    );
+    // A real tag that is not in the sticker allow-list.
+    assert_eq!(
+        client.command("sticker set Track \"1\" rating 1").await,
+        "ACK [2@0] {sticker} unsupported tag: \"Track\"\n"
+    );
+    // `find` never validates, so a disallowed tag just finds nothing.
+    assert_eq!(
+        client.command("sticker find Track \"\" rating").await,
+        "OK\n"
+    );
+    // Not a tag at all.
+    assert_eq!(
+        client.command("sticker get Bogus \"x\" rating").await,
+        "ACK [2@0] {sticker} unknown sticker domain \"Bogus\"\n"
+    );
+    // Deleting where nothing is stored.
+    assert_eq!(
+        client.command("sticker delete Album \"Test Album\"").await,
+        "ACK [50@0] {sticker} no stickers found: \"Test Album\"\n"
+    );
+    assert_eq!(
+        client
+            .command("sticker set Album \"Test Album\" \"\" 1")
+            .await,
+        "ACK [2@0] {sticker} empty sticker name\n"
+    );
+}
+
+#[tokio::test]
+async fn test_sticker_playlist_domain_full_roundtrip() {
+    let (_server, mut client, tmp) = setup_with_db(1).await;
+    let playlists = tmp.path().join("playlists");
+
+    // Unknown playlist.
+    assert_eq!(
+        client
+            .command("sticker set playlist \"mix\" rating 5")
+            .await,
+        "ACK [2@0] {sticker} no such playlist: \"mix\"\n"
+    );
+
+    std::fs::write(playlists.join("mix.m3u"), "music/song1.flac\n").unwrap();
+    std::fs::write(playlists.join("mix2.m3u"), "").unwrap();
+
+    assert_ok(
+        &client
+            .command("sticker set playlist \"mix\" rating 5")
+            .await,
+    );
+    assert_ok(
+        &client
+            .command("sticker set playlist \"mix2\" rating 9")
+            .await,
+    );
+    assert_eq!(
+        client.command("sticker get playlist \"mix\" rating").await,
+        "sticker: rating=5\nOK\n"
+    );
+    assert_eq!(
+        client.command("sticker list playlist \"mix\"").await,
+        "sticker: rating=5\nOK\n"
+    );
+    assert_eq!(
+        client.command("sticker inc playlist \"mix\" plays 4").await,
+        "OK\n"
+    );
+    assert_eq!(
+        client.command("sticker get playlist \"mix\" plays").await,
+        "sticker: plays=4\nOK\n"
+    );
+
+    // find: `playlist: NAME` lines; empty URI = all playlists, else prefix.
+    assert_eq!(
+        client.command("sticker find playlist \"\" rating").await,
+        "playlist: mix\nsticker: rating=5\nplaylist: mix2\nsticker: rating=9\nOK\n"
+    );
+    assert_eq!(
+        client
+            .command("sticker find playlist \"mix2\" rating")
+            .await,
+        "playlist: mix2\nsticker: rating=9\nOK\n"
+    );
+    assert_eq!(
+        client
+            .command("sticker find playlist \"\" rating > 6")
+            .await,
+        "playlist: mix2\nsticker: rating=9\nOK\n"
+    );
+    // song domain does not see playlist stickers.
+    assert_eq!(
+        client.command("sticker find song \"\" rating").await,
+        "OK\n"
+    );
+
+    // `rm` of a stored playlist removes its stickers (Instance::OnPlaylistDeleted).
+    assert_ok(&client.command("rm mix").await);
+    assert_eq!(
+        client.command("sticker find playlist \"\" rating").await,
+        "playlist: mix2\nsticker: rating=9\nOK\n"
+    );
+    assert_eq!(
+        client.command("sticker get playlist \"mix\" rating").await,
+        "ACK [2@0] {sticker} no such playlist: \"mix\"\n"
+    );
+
+    assert_eq!(
+        client
+            .command("sticker delete playlist \"mix2\" rating")
+            .await,
+        "OK\n"
+    );
+    assert_eq!(
+        client.command("sticker delete playlist \"mix2\"").await,
+        "ACK [50@0] {sticker} no stickers found: \"mix2\"\n"
+    );
+}
+
+#[tokio::test]
+async fn test_sticker_filter_domain_full_roundtrip() {
+    let (_server, mut client, _tmp) = setup_with_db(2).await;
+
+    assert_ok(
+        &client
+            .command(
+                "sticker set filter \"((Album == \\\"Test Album\\\") AND (Artist == \\\"Test Artist\\\"))\" rating 6",
+            )
+            .await,
+    );
+    // The URI is normalized: different spelling of the same filter hits the
+    // same row (lower-case tag names, extra grouping, case/space variations).
+    assert_eq!(
+        client
+            .command(
+                "sticker get filter \"((album == \\\"Test Album\\\") AND ((artist == \\\"Test Artist\\\")))\" rating"
+            )
+            .await,
+        "sticker: rating=6\nOK\n"
+    );
+    assert_eq!(
+        client
+            .command(
+                "sticker list filter \"((Album == \\\"Test Album\\\") AND (Artist == \\\"Test Artist\\\"))\""
+            )
+            .await,
+        "sticker: rating=6\nOK\n"
+    );
+    assert_eq!(
+        client
+            .command(
+                "sticker inc filter \"((Album == \\\"Test Album\\\") AND (Artist == \\\"Test Artist\\\"))\" rating 1"
+            )
+            .await,
+        "OK\n"
+    );
+
+    // find prints the normalized expression under `filter:`.
+    assert_eq!(
+        client.command("sticker find filter \"\" rating").await,
+        "filter: ((Album == \"Test Album\") AND (Artist == \"Test Artist\"))\nsticker: rating=7\nOK\n"
+    );
+
+    // Single term is not wrapped in an extra group.
+    assert_ok(
+        &client
+            .command("sticker set filter \"(Genre == \\\"Rock\\\")\" liked yes")
+            .await,
+    );
+    assert_eq!(
+        client.command("sticker find filter \"\" liked").await,
+        "filter: (Genre == \"Rock\")\nsticker: liked=yes\nOK\n"
+    );
+
+    assert_eq!(
+        client
+            .command("sticker delete filter \"(Genre == \\\"Rock\\\")\" liked")
+            .await,
+        "OK\n"
+    );
+}
+
+#[tokio::test]
+async fn test_sticker_filter_domain_errors() {
+    let (_server, mut client, _tmp) = setup_with_db(1).await;
+
+    // Valid filter, no song matches: `no matches found` with the normalized
+    // expression (ACK_ERROR_ARG).
+    assert_eq!(
+        client
+            .command("sticker set filter \"(album == \\\"Nope\\\")\" rating 1")
+            .await,
+        "ACK [2@0] {sticker} no matches found: \"(Album == \\\"Nope\\\")\"\n"
+    );
+    // Parse failures are runtime errors in MPD (ACK_ERROR_UNKNOWN).
+    assert_eq!(
+        client
+            .command("sticker get filter \"not a filter\" rating")
+            .await,
+        "ACK [5@0] {sticker} Incorrect number of filter arguments\n"
+    );
+    let response = client
+        .command("sticker get filter \"(bogus == \\\"x\\\")\" rating")
+        .await;
+    assert!(
+        response.starts_with("ACK [5@0] {sticker} "),
+        "got: {response}"
+    );
+    // `find` is unvalidated.
+    assert_eq!(
+        client.command("sticker find filter \"(\" rating").await,
+        "OK\n"
+    );
+}
+
+#[tokio::test]
+async fn test_stickernamestypes_across_domains() {
+    let (_server, mut client, tmp) = setup_with_db(1).await;
+    std::fs::write(tmp.path().join("playlists/mix.m3u"), "").unwrap();
+
+    assert_ok(
+        &client
+            .command("sticker set song \"music/song1.flac\" rating 5")
+            .await,
+    );
+    assert_ok(
+        &client
+            .command("sticker set Album \"Test Album\" rating 5")
+            .await,
+    );
+    assert_ok(&client.command("sticker set playlist \"mix\" fav 1").await);
+
+    // Ordered by name; one entry per (name, type).
+    assert_eq!(
+        client.command("stickernamestypes").await,
+        "name: fav\ntype: playlist\nname: rating\ntype: Album\nname: rating\ntype: song\nOK\n"
+    );
+    assert_eq!(
+        client.command("stickernamestypes Album").await,
+        "name: rating\ntype: Album\nOK\n"
+    );
+    assert_eq!(
+        client.command("stickernamestypes playlist").await,
+        "name: fav\ntype: playlist\nOK\n"
+    );
+    assert_eq!(client.command("stickernamestypes filter").await, "OK\n");
+    assert_eq!(
+        client.command("stickernamestypes Track").await,
+        "ACK [2@0] {stickernamestypes} unsupported tag \"Track\"\n"
+    );
+    assert_eq!(
+        client.command("stickernamestypes bogus").await,
+        "ACK [2@0] {stickernamestypes} no such tag \"bogus\"\n"
+    );
+
+    // `stickernames` stays a flat unique list across all domains.
+    assert_eq!(
+        client.command("stickernames").await,
+        "name: fav\nname: rating\nOK\n"
+    );
 }

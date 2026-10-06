@@ -1427,6 +1427,7 @@ pub async fn handle_rm_command(state: &AppState, name: &str) -> String {
         }
         match std::fs::remove_file(&pl_path) {
             Ok(_) => {
+                super::stickers::delete_playlist_stickers(&state, &name);
                 notify_stored_playlist(&state);
                 ResponseBuilder::new().ok()
             }
