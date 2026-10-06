@@ -937,3 +937,174 @@ fn test_with_transaction_commits_and_rolls_back() {
         "the row inserted before the error must not survive the rollback"
     );
 }
+
+/// v6→v7 migration: a pre-0.24 `stickers` table (no `type` column, UNIQUE on
+/// (uri, name)) is rebuilt in place. Existing rows become `song` stickers and
+/// stay readable through the unchanged song API; the same (uri, name) may now
+/// also exist in another domain; and re-opening is a no-op.
+#[test]
+fn test_sticker_type_column_migration_preserves_song_stickers() {
+    use rusqlite::Connection;
+
+    let temp_dir = tempfile::TempDir::new().unwrap();
+    let db_path = temp_dir
+        .path()
+        .join("legacy_stickers.db")
+        .to_string_lossy()
+        .to_string();
+
+    {
+        let conn = Connection::open(&db_path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE stickers (
+                 id INTEGER PRIMARY KEY,
+                 uri TEXT NOT NULL,
+                 name TEXT NOT NULL,
+                 value TEXT NOT NULL,
+                 UNIQUE(uri, name)
+             );
+             INSERT INTO stickers (uri, name, value) VALUES
+                 ('music/a.flac', 'rating', '5'),
+                 ('music/a.flac', 'plays', '12'),
+                 ('music/b.flac', 'rating', '1');",
+        )
+        .unwrap();
+    }
+
+    let db = rmpd_library::database::Database::open(&db_path).unwrap();
+
+    // Song API sees the pre-existing rows unchanged.
+    assert_eq!(
+        db.get_sticker("music/a.flac", "rating").unwrap().as_deref(),
+        Some("5")
+    );
+    assert_eq!(
+        db.list_stickers("music/a.flac").unwrap(),
+        vec![
+            ("plays".to_string(), "12".to_string()),
+            ("rating".to_string(), "5".to_string())
+        ]
+    );
+    assert_eq!(db.find_stickers("", "rating").unwrap().len(), 2);
+    assert_eq!(
+        db.get_sticker_typed("song", "music/b.flac", "rating")
+            .unwrap()
+            .as_deref(),
+        Some("1")
+    );
+    // ...and none leaked into other domains.
+    assert_eq!(
+        db.get_sticker_typed("playlist", "music/a.flac", "rating")
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        db.list_sticker_names_types(None).unwrap(),
+        vec![
+            ("plays".to_string(), "song".to_string()),
+            ("rating".to_string(), "song".to_string())
+        ]
+    );
+
+    // Uniqueness is now (type, uri, name): same uri+name in another domain.
+    db.set_sticker_typed("playlist", "music/a.flac", "rating", "9")
+        .unwrap();
+    assert_eq!(
+        db.get_sticker("music/a.flac", "rating").unwrap().as_deref(),
+        Some("5")
+    );
+    assert_eq!(
+        db.get_sticker_typed("playlist", "music/a.flac", "rating")
+            .unwrap()
+            .as_deref(),
+        Some("9")
+    );
+    drop(db);
+
+    // Re-open: the migration must not run again or lose data.
+    let db = rmpd_library::database::Database::open(&db_path).unwrap();
+    assert_eq!(
+        db.get_sticker("music/a.flac", "plays").unwrap().as_deref(),
+        Some("12")
+    );
+    assert_eq!(
+        db.get_sticker_typed("playlist", "music/a.flac", "rating")
+            .unwrap()
+            .as_deref(),
+        Some("9")
+    );
+}
+
+/// Typed sticker API: domains are isolated, non-song `find` is a plain
+/// string prefix (wildcards literal), delete reports whether it removed
+/// anything, and `adjust_sticker_typed` upserts.
+#[test]
+fn test_typed_sticker_api_domains_and_prefix_find() {
+    let temp_dir = tempfile::TempDir::new().unwrap();
+    let db_path = temp_dir
+        .path()
+        .join("typed.db")
+        .to_string_lossy()
+        .to_string();
+    let db = rmpd_library::database::Database::open(&db_path).unwrap();
+
+    db.set_sticker_typed("Album", "Greatest Hits", "score", "3")
+        .unwrap();
+    db.set_sticker_typed("Album", "Greatest_Hits 2", "score", "4")
+        .unwrap();
+    db.set_sticker_typed("Artist", "Greatest Hits", "score", "7")
+        .unwrap();
+
+    // Empty prefix = everything in that domain only.
+    let all = db.find_stickers_typed("Album", "", "score").unwrap();
+    assert_eq!(all.len(), 2);
+    // Plain string prefix (no directory boundary), `_` taken literally.
+    let prefix = db
+        .find_stickers_typed("Album", "Greatest", "score")
+        .unwrap();
+    assert_eq!(prefix.len(), 2);
+    let literal = db
+        .find_stickers_typed("Album", "Greatest_", "score")
+        .unwrap();
+    assert_eq!(
+        literal,
+        vec![("Greatest_Hits 2".to_string(), "4".to_string())]
+    );
+    // Song-domain find is untouched by other domains.
+    assert!(db.find_stickers("", "score").unwrap().is_empty());
+
+    // Upsert-based adjust: insert on miss, add on hit, text-affinity result.
+    db.adjust_sticker_typed("Album", "Greatest Hits", "plays", -2)
+        .unwrap();
+    db.adjust_sticker_typed("Album", "Greatest Hits", "plays", 5)
+        .unwrap();
+    assert_eq!(
+        db.get_sticker_typed("Album", "Greatest Hits", "plays")
+            .unwrap()
+            .as_deref(),
+        Some("3")
+    );
+
+    assert!(
+        db.delete_sticker_typed("Album", "Greatest Hits", Some("score"))
+            .unwrap()
+    );
+    assert!(
+        !db.delete_sticker_typed("Album", "Greatest Hits", Some("score"))
+            .unwrap()
+    );
+    assert!(
+        db.delete_sticker_typed("Album", "Greatest Hits", None)
+            .unwrap()
+    );
+    assert!(
+        !db.delete_sticker_typed("Album", "Greatest Hits", None)
+            .unwrap()
+    );
+    assert_eq!(
+        db.get_sticker_typed("Artist", "Greatest Hits", "score")
+            .unwrap()
+            .as_deref(),
+        Some("7")
+    );
+}
