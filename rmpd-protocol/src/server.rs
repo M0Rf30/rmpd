@@ -998,6 +998,16 @@ async fn handle_command(
             // Calculate uptime in seconds
             let uptime = state.start_time.elapsed().as_secs();
 
+            // Audio actually played since startup (MPD `total_play_time`),
+            // rounded to whole seconds like `std::lround` in Stats.cxx.
+            let playtime = state
+                .engine
+                .read()
+                .await
+                .total_play_time()
+                .as_secs_f64()
+                .round() as u64;
+
             let stats = Stats {
                 artists,
                 albums,
@@ -1005,7 +1015,7 @@ async fn handle_command(
                 uptime,
                 db_playtime,
                 db_update,
-                playtime: 0,
+                playtime,
             };
 
             let mut resp = ResponseBuilder::new();
