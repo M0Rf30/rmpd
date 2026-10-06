@@ -3,112 +3,197 @@
 
 //! Playback control command handlers
 
+use std::sync::atomic::Ordering;
+use std::time::Duration;
+
+use rmpd_core::error::RmpdError;
+use rmpd_core::event::Event;
+use rmpd_core::state::{ConsumeMode, PlayerState, QueuePosition};
 use tracing::{debug, error};
 
 use crate::helpers;
+use crate::queue_playback::{consume_finished, next_position, stop_playback};
 use crate::response::ResponseBuilder;
 use crate::state::AppState;
 
 use super::utils::{
-    ACK_ERROR_ARG, ACK_ERROR_NO_EXIST, ACK_ERROR_PLAYER_SYNC, ACK_ERROR_SYS,
+    ACK_ERROR_ARG, ACK_ERROR_NO_EXIST, ACK_ERROR_PLAYER_SYNC, ACK_ERROR_SYS, ACK_ERROR_UNKNOWN,
     prepare_song_for_playback, update_next_song,
 };
 
-pub async fn handle_play_command(state: &AppState, position: Option<u32>) -> String {
-    let queue = state.queue.read().await;
+/// The player's state, read lock-free from the engine's atomic.
+///
+/// MPD's `playlist::playing` flag — "the player is playing or paused" — is
+/// what gates `next`, `previous` and `seekcur`. It is NOT the same as "there
+/// is a current song": a stopped player keeps its current song.
+fn player_state(state: &AppState) -> PlayerState {
+    PlayerState::from_atomic(state.atomic_state.load(Ordering::Acquire))
+}
 
-    // Get song to play and track the actual position
-    let (song, actual_position) = if let Some(pos) = position {
-        // Play specific position
-        if let Some(item) = queue.get(pos) {
-            ((*item.song).clone(), Some((pos, item.id)))
-        } else {
-            return ResponseBuilder::error(ACK_ERROR_ARG, 0, "play", "Bad song index");
-        }
-    } else {
-        // Resume or play first song
-        let current_song = state.engine.read().await.get_current_song().await;
-        if let Some(song) = current_song {
-            // Resuming - keep existing position if set
-            let pos = state.status.read().await.current_song;
-            (song, pos.map(|p| (p.position, p.id)))
-        } else if let Some(item) = queue.get(0) {
-            // Play first song
-            ((*item.song).clone(), Some((0, item.id)))
-        } else {
-            // Empty queue: MPD silently returns OK
-            return ResponseBuilder::new().ok();
+fn not_playing(command: &str) -> String {
+    ResponseBuilder::error(ACK_ERROR_PLAYER_SYNC, 0, command, "Not playing")
+}
+
+/// A queue item that was just handed to the engine.
+pub(crate) struct StartedSong {
+    pub song: rmpd_core::song::Song,
+}
+
+/// Start playing the queue item at `position` on the engine and record it as
+/// the current song, without announcing it to idle clients yet (see
+/// [`announce_started`]) so callers can still adjust the queue first.
+///
+/// Starting a song clears any previous playback error, like MPD's
+/// `PlayerControl::SeekLocked` (`ClearError`).
+pub(crate) async fn engine_play_item(
+    state: &AppState,
+    command: &str,
+    position: u32,
+) -> Result<StartedSong, String> {
+    let (song, item_id, range) = {
+        let queue = state.queue.read().await;
+        match queue.get(position) {
+            Some(item) => ((*item.song).clone(), item.id, item.range),
+            None => {
+                return Err(ResponseBuilder::error(
+                    ACK_ERROR_ARG,
+                    0,
+                    command,
+                    "Bad song index",
+                ));
+            }
         }
     };
 
-    // Honor a per-item playback range (CUE virtual track / rangeid).
-    let range = actual_position
-        .and_then(|(p, _)| queue.get(p))
-        .and_then(|it| it.range);
-    drop(queue);
-
     let playback_song =
-        match prepare_song_for_playback(&song, state.music_dir.as_deref(), range, &state.sources)
+        prepare_song_for_playback(&song, state.music_dir.as_deref(), range, &state.sources)
             .await
-        {
-            Ok(ps) => ps,
-            Err(e) => {
-                return ResponseBuilder::error(
+            .map_err(|e| {
+                ResponseBuilder::error(
                     ACK_ERROR_NO_EXIST,
                     0,
-                    "play",
-                    &format!("Cannot resolve song: {}", e),
-                );
-            }
-        };
+                    command,
+                    &format!("Cannot resolve song: {e}"),
+                )
+            })?;
 
-    match state.engine.write().await.play(playback_song).await {
-        Ok(_) => {
-            let mut status = state.status.write().await;
-            status.state = rmpd_core::state::PlayerState::Play;
-            status.elapsed = Some(std::time::Duration::ZERO);
-            status.duration = song.duration;
-            status.bitrate = song.bitrate;
-            status.audio_format = helpers::extract_audio_format(&song);
+    if let Err(e) = state.engine.write().await.play(playback_song).await {
+        error!("{command} failed: {e}");
+        return Err(ResponseBuilder::error(
+            ACK_ERROR_SYS,
+            0,
+            command,
+            &format!("Playback error: {e}"),
+        ));
+    }
 
-            if let Some((pos, id)) = actual_position {
-                status.current_song = Some(rmpd_core::state::QueuePosition { position: pos, id });
+    {
+        let mut status = state.status.write().await;
+        status.state = PlayerState::Play;
+        status.elapsed = Some(Duration::ZERO);
+        status.duration = song.duration;
+        status.bitrate = song.bitrate;
+        status.audio_format = helpers::extract_audio_format(&song);
+        status.error = None;
+        status.current_song = Some(QueuePosition {
+            position,
+            id: item_id,
+        });
+        let queue = state.queue.read().await;
+        update_next_song(&mut status, &queue, position);
+    }
 
-                let queue = state.queue.read().await;
-                update_next_song(&mut status, &queue, pos);
-            }
-            drop(status);
+    Ok(StartedSong { song })
+}
 
-            debug!("emitting PlayerStateChanged(Play) and SongChanged events");
-            state
-                .event_bus
-                .emit(rmpd_core::event::Event::PlayerStateChanged(
-                    rmpd_core::state::PlayerState::Play,
-                ));
-            state
-                .event_bus
-                .emit(rmpd_core::event::Event::SongChanged(Some(song)));
+/// Notify idle clients (`player` subsystem) that a new song started playing.
+pub(crate) fn announce_started(state: &AppState, song: rmpd_core::song::Song) {
+    debug!("emitting PlayerStateChanged(Play) and SongChanged events");
+    state
+        .event_bus
+        .emit(Event::PlayerStateChanged(PlayerState::Play));
+    state.event_bus.emit(Event::SongChanged(Some(song)));
+}
 
+/// `play POS` / `playid ID` once the target position is known: MPD
+/// `playlist::PlayPosition`.
+pub(crate) async fn play_position(state: &AppState, command: &str, position: u32) -> String {
+    // PlayPosition clears the error and the failure streak before it even
+    // validates the position.
+    state.begin_playback_attempt(false).await;
+    match engine_play_item(state, command, position).await {
+        Ok(started) => {
+            announce_started(state, started.song);
             ResponseBuilder::new().ok()
         }
-        Err(e) => {
-            tracing::error!("play failed: {e}");
-            ResponseBuilder::error(ACK_ERROR_SYS, 0, "play", "Playback error")
+        Err(resp) => resp,
+    }
+}
+
+/// `play` / `playid` without an argument: MPD `playlist::PlayAny`.
+///
+/// - an empty queue is a silent no-op;
+/// - while playing it does nothing, while paused it resumes;
+/// - while stopped it (re)starts the song the player stopped on (the current
+///   song survives `stop`), or else the first one — a random one in random
+///   mode, since MPD's play order is the shuffled order there.
+pub(crate) async fn play_any(state: &AppState, command: &str) -> String {
+    if state.queue.read().await.is_empty() {
+        return ResponseBuilder::new().ok();
+    }
+    state.status.write().await.error = None;
+    match player_state(state) {
+        PlayerState::Play => return ResponseBuilder::new().ok(),
+        PlayerState::Pause => return handle_pause_command(state, Some(false)).await,
+        PlayerState::Stop => {}
+    }
+    state.begin_playback_attempt(false).await;
+
+    let (current, random) = {
+        let status = state.status.read().await;
+        (status.current_song, status.random)
+    };
+    let position = {
+        let queue = state.queue.read().await;
+        let len = queue.len() as u32;
+        current
+            .and_then(|c| {
+                queue
+                    .get_by_id(c.id)
+                    .map(|item| item.position)
+                    .or((c.position < len).then_some(c.position))
+            })
+            .or_else(|| {
+                if random {
+                    queue.weighted_random_pos(None)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(0)
+    };
+    match engine_play_item(state, command, position).await {
+        Ok(started) => {
+            announce_started(state, started.song);
+            ResponseBuilder::new().ok()
         }
+        Err(resp) => resp,
+    }
+}
+
+pub async fn handle_play_command(state: &AppState, position: Option<u32>) -> String {
+    match position {
+        Some(pos) => play_position(state, "play", pos).await,
+        None => play_any(state, "play").await,
     }
 }
 
 pub async fn handle_pause_command(state: &AppState, pause_state: Option<bool>) -> String {
     // Get current state lock-free using atomic (no engine lock needed!)
-    let current_state = rmpd_core::state::PlayerState::from_atomic(
-        state
-            .atomic_state
-            .load(std::sync::atomic::Ordering::Acquire),
-    );
+    let current_state = player_state(state);
 
-    let should_pause =
-        pause_state.unwrap_or_else(|| current_state == rmpd_core::state::PlayerState::Play);
-    let is_currently_paused = current_state == rmpd_core::state::PlayerState::Pause;
+    let should_pause = pause_state.unwrap_or_else(|| current_state == PlayerState::Play);
+    let is_currently_paused = current_state == PlayerState::Pause;
 
     // If already in desired state, do nothing
     if should_pause == is_currently_paused {
@@ -126,11 +211,7 @@ pub async fn handle_pause_command(state: &AppState, pause_state: Option<bool>) -
 
     match result {
         Ok(_) => {
-            let actual_state = rmpd_core::state::PlayerState::from_atomic(
-                state
-                    .atomic_state
-                    .load(std::sync::atomic::Ordering::Acquire),
-            );
+            let actual_state = player_state(state);
 
             debug!("emitting PlayerStateChanged({:?}) event", actual_state);
             helpers::update_player_state(state, actual_state).await;
@@ -145,316 +226,284 @@ pub async fn handle_pause_command(state: &AppState, pause_state: Option<bool>) -
 }
 
 pub async fn handle_stop_command(state: &AppState) -> String {
-    match state.engine.write().await.stop().await {
-        Ok(_) => {
-            debug!("emitting PlayerStateChanged(Stop) event");
-            helpers::update_player_state(state, rmpd_core::state::PlayerState::Stop).await;
-            let mut status = state.status.write().await;
-            status.current_song = None;
-            status.next_song = None;
-            drop(status);
-
-            ResponseBuilder::new().ok()
-        }
+    // MPD `playlist::Stop` keeps the current song: `status` still reports
+    // `song`/`songid`/`nextsong`, `currentsong` still prints it, and a bare
+    // `play` restarts it.
+    debug!("emitting PlayerStateChanged(Stop) event");
+    match stop_playback(state, false).await {
+        Ok(()) => ResponseBuilder::new().ok(),
         Err(e) => ResponseBuilder::error(ACK_ERROR_SYS, 0, "stop", &format!("Stop error: {e}")),
     }
 }
 
-pub async fn handle_next_command(state: &AppState) -> String {
-    let queue = state.queue.read().await;
+/// The current song and the options `next`/`previous` depend on, or the
+/// "Not playing" ACK when the player is stopped (MPD: `if (!playing) throw
+/// NotPlaying()` — a stopped player still has a current song, so the song
+/// alone does not tell).
+async fn playing_current(
+    state: &AppState,
+    command: &str,
+) -> Result<(QueuePosition, bool, bool, ConsumeMode), String> {
     let status = state.status.read().await;
-
-    // MPD requires a current song (playing or paused); if stopped, returns Not playing
-    let current = match status.current_song {
-        Some(c) => c,
-        None => return ResponseBuilder::error(ACK_ERROR_PLAYER_SYNC, 0, "next", "Not playing"),
-    };
-    let repeat = status.repeat;
-    let random = status.random;
-    let consume = status.consume;
-    drop(status);
-
-    let queue_len = queue.len() as u32;
-    let target_pos = if random {
-        // Random mode: pick weighted by priority, excluding the current
-        // song; only replay it (single-song queue) when repeat is on.
-        match queue.weighted_random_pos(Some(current.position)) {
-            Some(p) => Some(p),
-            None if repeat => queue.weighted_random_pos(None),
-            None => None,
+    match status.current_song {
+        Some(current) if player_state(state) != PlayerState::Stop => {
+            Ok((current, status.repeat, status.random, status.consume))
         }
-    } else {
-        let next = current.position + 1;
-        if next >= queue_len {
-            if repeat && queue_len > 0 {
-                Some(0)
-            } else {
-                None
+        _ => Err(not_playing(command)),
+    }
+}
+
+pub async fn handle_next_command(state: &AppState) -> String {
+    let (current, repeat, random, consume) = match playing_current(state, "next").await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    // MPD `PlayNext`: `stop_on_error = false`.
+    state.stop_on_error.store(false, Ordering::Release);
+
+    let target_pos = {
+        let queue = state.queue.read().await;
+        next_position(
+            &queue,
+            current.position,
+            repeat,
+            random,
+            consume != ConsumeMode::Off,
+        )
+    };
+
+    let Some(target_pos) = target_pos else {
+        // End of queue without repeat: MPD stops and replies OK, not an ACK
+        // error; the current song is reset, and consume still removes the
+        // song that was playing.
+        return match stop_playback(state, true).await {
+            Ok(()) => {
+                consume_finished(state, current).await;
+                ResponseBuilder::new().ok()
             }
-        } else {
-            Some(next)
-        }
-    };
-
-    let target_pos = match target_pos {
-        Some(p) => p,
-        None => {
-            // End of queue without repeat: MPD stops and replies OK, not an ACK error.
-            drop(queue);
-            return match state.engine.write().await.stop().await {
-                Ok(_) => {
-                    helpers::update_player_state(state, rmpd_core::state::PlayerState::Stop).await;
-                    let mut status = state.status.write().await;
-                    status.current_song = None;
-                    status.next_song = None;
-                    drop(status);
-                    ResponseBuilder::new().ok()
-                }
-                Err(e) => ResponseBuilder::error(
-                    ACK_ERROR_SYS,
-                    0,
-                    "next",
-                    &format!("Playback error: {e}"),
-                ),
-            };
-        }
-    };
-
-    let item = match queue.get(target_pos) {
-        Some(item) => item,
-        None => return ResponseBuilder::error(ACK_ERROR_PLAYER_SYNC, 0, "next", "Not playing"),
-    };
-    let song = (*item.song).clone();
-    let item_id = item.id;
-    let range = item.range;
-    drop(queue);
-
-    let playback_song =
-        match prepare_song_for_playback(&song, state.music_dir.as_deref(), range, &state.sources)
-            .await
-        {
-            Ok(ps) => ps,
             Err(e) => {
-                return ResponseBuilder::error(
-                    ACK_ERROR_NO_EXIST,
-                    0,
-                    "next",
-                    &format!("Cannot resolve song: {}", e),
-                );
+                ResponseBuilder::error(ACK_ERROR_SYS, 0, "next", &format!("Playback error: {e}"))
             }
         };
+    };
 
-    match state.engine.write().await.play(playback_song).await {
-        Ok(_) => {
-            let mut final_pos = target_pos;
-            if matches!(consume, rmpd_core::state::ConsumeMode::On) {
-                state.queue.write().await.delete(current.position);
-                helpers::update_playlist_version(state).await;
-                if target_pos > current.position {
-                    final_pos -= 1;
-                }
-            }
-
-            let mut status = state.status.write().await;
-            status.current_song = Some(rmpd_core::state::QueuePosition {
-                position: final_pos,
-                id: item_id,
-            });
-
-            let queue = state.queue.read().await;
-            update_next_song(&mut status, &queue, final_pos);
-
+    match engine_play_item(state, "next", target_pos).await {
+        Ok(started) => {
+            // Consume removes the song left behind; do it before announcing
+            // so listeners already see the final queue.
+            consume_finished(state, current).await;
+            announce_started(state, started.song);
             ResponseBuilder::new().ok()
         }
-        Err(e) => ResponseBuilder::error(ACK_ERROR_SYS, 0, "next", &format!("Playback error: {e}")),
+        Err(resp) => resp,
     }
 }
 
 pub async fn handle_previous_command(state: &AppState) -> String {
-    let queue = state.queue.read().await;
-    let status = state.status.read().await;
-
-    // MPD requires a current song (playing or paused); if stopped, returns Not playing
-    let current = match status.current_song {
-        Some(c) => c,
-        None => return ResponseBuilder::error(ACK_ERROR_PLAYER_SYNC, 0, "previous", "Not playing"),
-    };
-    let repeat = status.repeat;
-    let random = status.random;
-    let consume = status.consume;
-    drop(status);
-
-    let queue_len = queue.len() as u32;
-    let target_pos = if random {
-        match queue.weighted_random_pos(Some(current.position)) {
-            Some(p) => p,
-            None if repeat => queue.weighted_random_pos(None).unwrap_or(current.position),
-            None => current.position,
-        }
-    } else if current.position > 0 {
-        current.position - 1
-    } else if repeat && queue_len > 0 {
-        // Wrap to the last song when repeat is on (CMD-06).
-        queue_len - 1
-    } else {
-        // Already at the first song, no repeat: MPD replays the same song.
-        current.position
+    let (current, repeat, random, _consume) = match playing_current(state, "previous").await {
+        Ok(v) => v,
+        Err(resp) => return resp,
     };
 
-    if let Some(item) = queue.get(target_pos) {
-        let song = (*item.song).clone();
-        let item_id = item.id;
-        let range = item.range;
-        drop(queue);
-
-        let playback_song = match prepare_song_for_playback(
-            &song,
-            state.music_dir.as_deref(),
-            range,
-            &state.sources,
-        )
-        .await
-        {
-            Ok(ps) => ps,
-            Err(e) => {
-                return ResponseBuilder::error(
-                    ACK_ERROR_NO_EXIST,
-                    0,
-                    "previous",
-                    &format!("Cannot resolve song: {}", e),
-                );
+    let target_pos = {
+        let queue = state.queue.read().await;
+        let queue_len = queue.len() as u32;
+        if random {
+            match queue.weighted_random_pos(Some(current.position)) {
+                Some(p) => p,
+                None if repeat => queue.weighted_random_pos(None).unwrap_or(current.position),
+                None => current.position,
             }
-        };
+        } else if current.position > 0 {
+            current.position - 1
+        } else if repeat && queue_len > 0 {
+            // Wrap to the last song when repeat is on (CMD-06).
+            queue_len - 1
+        } else {
+            // Already at the first song, no repeat: MPD replays the same song.
+            current.position
+        }
+    };
 
-        match state.engine.write().await.play(playback_song).await {
-            Ok(_) => {
-                let mut final_pos = target_pos;
-                if matches!(consume, rmpd_core::state::ConsumeMode::On) {
-                    state.queue.write().await.delete(current.position);
-                    helpers::update_playlist_version(state).await;
-                    if target_pos > current.position {
-                        final_pos -= 1;
-                    }
-                }
+    // MPD's `playlist::PlayPrevious` just plays the target: unlike `next`, it
+    // does not consume the song being left.
+    match engine_play_item(state, "previous", target_pos).await {
+        Ok(started) => {
+            announce_started(state, started.song);
+            ResponseBuilder::new().ok()
+        }
+        Err(resp) => resp,
+    }
+}
 
-                let mut status = state.status.write().await;
-                status.current_song = Some(rmpd_core::state::QueuePosition {
-                    position: final_pos,
-                    id: item_id,
-                });
+/// The ACK for a seek the engine could not carry out.
+///
+/// MPD 0.25 ("show detailed seek errors") no longer collapses a failed seek
+/// into `Not playing`: `PlayerControl::SeekLocked` rethrows the player's
+/// error, and `PrintError` (`src/command/CommandError.cxx`) answers with the
+/// exception's full message — `Not seekable`, `Failed to decode "…": …` — under
+/// `ACK_ERROR_UNKNOWN`, since none of those is a protocol/playlist error.
+fn seek_error(command: &str, e: &RmpdError) -> String {
+    match e {
+        // The decode thread is gone: nothing is playing any more.
+        RmpdError::InvalidState(_) => not_playing(command),
+        RmpdError::Player(msg) => ResponseBuilder::error(ACK_ERROR_UNKNOWN, 0, command, msg),
+        other => ResponseBuilder::error(ACK_ERROR_UNKNOWN, 0, command, &other.to_string()),
+    }
+}
 
-                let queue = state.queue.read().await;
-                update_next_song(&mut status, &queue, final_pos);
+/// Seek inside the song that is playing/paused right now and, on success,
+/// record the position `status` should show until the next position event.
+async fn seek_playing_song(state: &AppState, command: &str, time: f64) -> String {
+    let result = state.engine.read().await.seek(time).await;
+    match result {
+        Ok(()) => {
+            let mut status = state.status.write().await;
+            let mut elapsed = Duration::try_from_secs_f64(time).unwrap_or(Duration::ZERO);
+            if let Some(duration) = status.duration {
+                // The engine clamps an out-of-range seek to the end of the song.
+                elapsed = elapsed.min(duration);
+            }
+            status.elapsed = Some(elapsed);
+            ResponseBuilder::new().ok()
+        }
+        Err(e) => seek_error(command, &e),
+    }
+}
 
+/// MPD `playlist::SeekSongOrder`: seek within the song at `position` if it is
+/// the one playing, otherwise start it and seek to `time`.
+///
+/// Both ways clear the previous error and arm `stop_on_error`, so a song that
+/// fails to play after a seek stops playback instead of skipping ahead.
+async fn seek_to_position(state: &AppState, command: &str, position: u32, time: f64) -> String {
+    let is_playing_it = player_state(state) != PlayerState::Stop
+        && state
+            .status
+            .read()
+            .await
+            .current_song
+            .is_some_and(|c| c.position == position);
+
+    state.begin_playback_attempt(true).await;
+    if is_playing_it {
+        return seek_playing_song(state, command, time).await;
+    }
+
+    match engine_play_item(state, command, position).await {
+        Ok(started) => {
+            announce_started(state, started.song);
+            if time > 0.0 {
+                seek_playing_song(state, command, time).await
+            } else {
                 ResponseBuilder::new().ok()
             }
-            Err(e) => ResponseBuilder::error(
-                ACK_ERROR_SYS,
-                0,
-                "previous",
-                &format!("Playback error: {e}"),
-            ),
         }
-    } else {
-        ResponseBuilder::error(ACK_ERROR_PLAYER_SYNC, 0, "previous", "Not playing")
+        Err(resp) => resp,
     }
 }
 
 pub async fn handle_seek_command(state: &AppState, position: u32, time: f64) -> String {
-    // MPD seek validates the position exists in queue (ACK_ERROR_ARG if not).
-    // If position is valid, it seeks and starts playing (even if stopped).
-    let queue = state.queue.read().await;
-    if queue.get(position).is_none() {
+    // MPD SeekSongPosition: BadRange if the position is not in the queue.
+    if state.queue.read().await.get(position).is_none() {
         return ResponseBuilder::error(ACK_ERROR_ARG, 0, "seek", "Bad song index");
     }
-    drop(queue);
-
-    // Seek in current song (if it's the same position) or start playing at that position
-    let status = state.status.read().await;
-    let is_current = status
-        .current_song
-        .map(|c| c.position == position)
-        .unwrap_or(false);
-    drop(status);
-
-    if is_current {
-        match state.engine.read().await.seek(time).await {
-            Ok(_) => {
-                state.status.write().await.elapsed = Some(std::time::Duration::from_secs_f64(time));
-                ResponseBuilder::new().ok()
-            }
-            Err(e) => {
-                ResponseBuilder::error(ACK_ERROR_SYS, 0, "seek", &format!("Seek failed: {e}"))
-            }
-        }
-    } else {
-        // Start playing at that position from given time offset
-        handle_play_command(state, Some(position)).await
-    }
+    seek_to_position(state, "seek", position, time).await
 }
 
 pub async fn handle_seekid_command(state: &AppState, id: u32, time: f64) -> String {
     // Find the song by ID first
-    let (position, is_current) = {
-        let queue = state.queue.read().await;
-        if let Some(item) = queue.get_by_id(id) {
-            let pos = item.position;
-            let status = state.status.read().await;
-            let is_current = status.current_song.map(|c| c.id == id).unwrap_or(false);
-            (pos, is_current)
-        } else {
+    let position = match state.queue.read().await.get_by_id(id) {
+        Some(item) => item.position,
+        None => {
             return ResponseBuilder::error(ACK_ERROR_NO_EXIST, 0, "seekid", "No such song");
         }
     };
-
-    if is_current {
-        match state.engine.read().await.seek(time).await {
-            Ok(_) => {
-                state.status.write().await.elapsed = Some(std::time::Duration::from_secs_f64(time));
-                ResponseBuilder::new().ok()
-            }
-            Err(e) => {
-                ResponseBuilder::error(ACK_ERROR_SYS, 0, "seekid", &format!("Seek failed: {e}"))
-            }
-        }
-    } else {
-        // Start playing at that position
-        handle_play_command(state, Some(position)).await
-    }
+    seek_to_position(state, "seekid", position, time).await
 }
 
 pub async fn handle_seekcur_command(state: &AppState, time: f64, relative: bool) -> String {
-    let status = state.status.read().await;
+    // MPD `playlist::SeekCurrent`: `if (!playing) throw NotPlaying`.
+    if player_state(state) == PlayerState::Stop || state.status.read().await.current_song.is_none()
+    {
+        return not_playing("seekcur");
+    }
 
-    if status.current_song.is_some() {
-        let current_elapsed = status
-            .elapsed
-            .unwrap_or(std::time::Duration::ZERO)
-            .as_secs_f64();
-        drop(status);
-
-        // Calculate actual seek position
-        let seek_position = if relative {
-            // Relative seek: add to current position
-            (current_elapsed + time).max(0.0)
-        } else {
-            // Absolute seek
-            time.max(0.0)
+    let seek_position = if relative {
+        // Relative seek: add to the live position (like MPD, which reads the
+        // player's current elapsed time), falling back to the last reported one.
+        let elapsed = match state.engine.read().await.get_elapsed_live() {
+            Some(live) => live,
+            None => state.status.read().await.elapsed.unwrap_or(Duration::ZERO),
         };
-
-        // Seek in current song
-        match state.engine.read().await.seek(seek_position).await {
-            Ok(_) => {
-                // Update status elapsed time
-                state.status.write().await.elapsed =
-                    Some(std::time::Duration::from_secs_f64(seek_position));
-                ResponseBuilder::new().ok()
-            }
-            Err(e) => {
-                ResponseBuilder::error(ACK_ERROR_SYS, 0, "seekcur", &format!("Seek failed: {e}"))
-            }
-        }
+        elapsed.as_secs_f64() + time
     } else {
-        ResponseBuilder::error(ACK_ERROR_PLAYER_SYNC, 0, "seekcur", "Not playing")
+        time
+    };
+    // A negative target is clamped to the start of the song.
+    let seek_position = if seek_position.is_finite() {
+        seek_position.max(0.0)
+    } else {
+        0.0
+    };
+
+    state.begin_playback_attempt(true).await;
+    seek_playing_song(state, "seekcur", seek_position).await
+}
+
+/// The song the player was playing/paused on was just removed from the queue
+/// (`delete`/`deleteid`), and `at` is the position that now holds what used to
+/// follow it. Mirrors MPD's `playlist::DeleteInternal`:
+///
+/// - playing: carry on with the song that took its place (wrapping with
+///   repeat), or stop when the queue ran out;
+/// - paused: stop the player; `current` moves to the song that took its place.
+///
+/// A stopped player simply forgets its current song, which
+/// [`crate::queue_playback::sync_current_with_queue`] already did.
+pub(crate) async fn current_song_removed(state: &AppState, at: u32) {
+    let Some(current) = state.status.read().await.current_song else {
+        return;
+    };
+    let repeat = state.status.read().await.repeat;
+    let (still_queued, len) = {
+        let queue = state.queue.read().await;
+        (queue.get_by_id(current.id).is_some(), queue.len() as u32)
+    };
+    let playing = player_state(state);
+    if still_queued || playing == PlayerState::Stop {
+        return;
+    }
+
+    let replacement = if at < len {
+        Some(at)
+    } else if repeat && len > 0 {
+        Some(0)
+    } else {
+        None
+    };
+
+    match (playing, replacement) {
+        (PlayerState::Play, Some(pos)) => match engine_play_item(state, "delete", pos).await {
+            Ok(started) => announce_started(state, started.song),
+            Err(_) => {
+                let _ = stop_playback(state, true).await;
+            }
+        },
+        (_, Some(pos)) => {
+            // Paused: MPD stops the player but leaves `current` on the
+            // replacement, so a following `play` starts it.
+            let _ = stop_playback(state, false).await;
+            let queue = state.queue.read().await;
+            let mut status = state.status.write().await;
+            status.current_song = queue.get(pos).map(|item| QueuePosition {
+                position: pos,
+                id: item.id,
+            });
+            update_next_song(&mut status, &queue, pos);
+        }
+        (_, None) => {
+            let _ = stop_playback(state, true).await;
+        }
     }
 }
