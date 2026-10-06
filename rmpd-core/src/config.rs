@@ -425,6 +425,13 @@ impl Diagnostic {
             message: message.into(),
         }
     }
+
+    fn info(message: impl Into<String>) -> Self {
+        Self {
+            level: DiagLevel::Info,
+            message: message.into(),
+        }
+    }
 }
 
 /// The result of [`Config::discover`]: the parsed config, where it came from,
@@ -477,11 +484,67 @@ fn default_db_file() -> Utf8PathBuf {
         .unwrap_or_else(|| home_join(".config/rmpd/database.db"))
 }
 
-fn default_state_file() -> Utf8PathBuf {
-    dirs::config_dir()
+/// Pure core of the state-file default so it can be tested without touching
+/// the process environment or the real home directory.
+///
+/// Returns `(preferred, legacy)`:
+/// - `preferred` is `<state dir>/rmpd/state` (`$STATE_DIRECTORY/state` when
+///   systemd provides one via `StateDirectory=`, otherwise
+///   `$XDG_STATE_HOME/rmpd/state`, falling back to `~/.local/state`), or the
+///   legacy location on platforms with no notion of a state directory;
+/// - `legacy` is `<config dir>/rmpd/state`, where earlier rmpd releases kept
+///   the file.
+fn state_file_candidates(
+    systemd_state_dir: Option<&str>,
+    state_dir: Option<std::path::PathBuf>,
+    config_dir: Option<std::path::PathBuf>,
+) -> (Utf8PathBuf, Utf8PathBuf) {
+    let legacy = config_dir
         .map(|p| p.join("rmpd/state"))
         .and_then(|p| Utf8PathBuf::try_from(p).ok())
-        .unwrap_or_else(|| home_join(".config/rmpd/state"))
+        .unwrap_or_else(|| home_join(".config/rmpd/state"));
+
+    // systemd(1) passes a ':'-separated list; like MPD's GetAppStateDir() use
+    // the first entry.
+    let from_systemd = systemd_state_dir
+        .and_then(|s| s.split(':').next())
+        .filter(|s| !s.is_empty())
+        .map(|s| Utf8PathBuf::from(s).join("state"));
+    let preferred = from_systemd
+        .or_else(|| {
+            state_dir
+                .map(|p| p.join("rmpd/state"))
+                .and_then(|p| Utf8PathBuf::try_from(p).ok())
+        })
+        .unwrap_or_else(|| legacy.clone());
+    (preferred, legacy)
+}
+
+/// Pick the default state file: `preferred` unless only the `legacy` file
+/// exists, in which case keep using it so upgrading does not silently drop
+/// the saved queue/playback state.
+fn choose_state_file(preferred: Utf8PathBuf, legacy: Utf8PathBuf) -> Utf8PathBuf {
+    if !preferred.exists() && legacy.exists() {
+        legacy
+    } else {
+        preferred
+    }
+}
+
+fn current_state_file_candidates() -> (Utf8PathBuf, Utf8PathBuf) {
+    state_file_candidates(
+        std::env::var("STATE_DIRECTORY").ok().as_deref(),
+        dirs::state_dir(),
+        dirs::config_dir(),
+    )
+}
+
+/// Default `state_file` (MPD 0.25 follows `$XDG_STATE_HOME` for state). Kept
+/// at the legacy `$XDG_CONFIG_HOME/rmpd/state` while only that file exists;
+/// [`Config`] reports it with an info diagnostic when that happens.
+fn default_state_file() -> Utf8PathBuf {
+    let (preferred, legacy) = current_state_file_candidates();
+    choose_state_file(preferred, legacy)
 }
 
 fn default_log_level() -> String {
@@ -910,7 +973,8 @@ impl Config {
 
     fn defaults_load(mut diagnostics: Vec<Diagnostic>) -> Result<ConfigLoad> {
         let mut config = Self::default();
-        config.expand_paths();
+        config.expand_paths(&mut diagnostics);
+        config.push_state_file_notice(&mut diagnostics);
         config.ensure_directories();
         Self::validate_and_normalize(&mut config, &mut diagnostics)?;
         Ok(ConfigLoad {
@@ -933,7 +997,8 @@ impl Config {
 
         let mut diagnostics = Self::lint(&content);
         apply_follow_symlinks_alias(&content, &mut config, &mut diagnostics);
-        config.expand_paths();
+        config.expand_paths(&mut diagnostics);
+        config.push_state_file_notice(&mut diagnostics);
         config.ensure_directories();
         Self::validate_and_normalize(&mut config, &mut diagnostics)?;
         Ok((config, diagnostics))
@@ -1037,13 +1102,42 @@ impl Config {
         None
     }
 
-    fn expand_paths(&mut self) {
-        use crate::path::expand_tilde;
+    fn expand_paths(&mut self, diagnostics: &mut Vec<Diagnostic>) {
+        use crate::path::expand_path;
 
-        self.general.music_directory = expand_tilde(&self.general.music_directory);
-        self.general.playlist_directory = expand_tilde(&self.general.playlist_directory);
-        self.general.db_file = expand_tilde(&self.general.db_file);
-        self.general.state_file = expand_tilde(&self.general.state_file);
+        // `~` and MPD's `$XDG_*`/`$HOME` prefixes (src/config/Path.cxx).
+        let mut expand = |name: &str, path: &mut Utf8PathBuf| {
+            let (expanded, err) = expand_path(path);
+            if let Some(err) = err {
+                diagnostics.push(Diagnostic::warn(format!(
+                    "cannot expand {name} = {path:?}: {err}"
+                )));
+            }
+            *path = expanded;
+        };
+
+        expand("music_directory", &mut self.general.music_directory);
+        expand("playlist_directory", &mut self.general.playlist_directory);
+        expand("db_file", &mut self.general.db_file);
+        expand("state_file", &mut self.general.state_file);
+        if let Some(p) = self.general.log_file.as_mut() {
+            expand("log_file", p);
+        }
+        if let Some(p) = self.network.unix_socket.as_mut() {
+            expand("unix_socket", p);
+        }
+    }
+
+    /// Info diagnostic when the effective `state_file` is the pre-XDG-state
+    /// default location (see [`default_state_file`]).
+    fn push_state_file_notice(&self, diagnostics: &mut Vec<Diagnostic>) {
+        let (preferred, legacy) = current_state_file_candidates();
+        if preferred != legacy && self.general.state_file == legacy {
+            diagnostics.push(Diagnostic::info(format!(
+                "using existing state file {legacy}; the default is now {preferred} \
+                 (move the file there, or set `state_file`, to silence this)"
+            )));
+        }
     }
 
     /// Create the directories referenced by the config entries if they do not
@@ -1306,6 +1400,103 @@ port = 6611
         assert_eq!(c.network.bind_address, default_bind_address());
         assert_eq!(c.audio.buffer_time, default_buffer_time());
         assert!(c.database.auto_update);
+    }
+
+    #[test]
+    fn state_file_defaults_to_xdg_state_dir() {
+        let base = unique_temp_dir("state-new");
+        let state = base.join("state");
+        let config = base.join("config");
+        let (preferred, legacy) = state_file_candidates(
+            None,
+            Some(state.clone().into_std_path_buf()),
+            Some(config.clone().into_std_path_buf()),
+        );
+        assert_eq!(preferred, state.join("rmpd/state"));
+        assert_eq!(legacy, config.join("rmpd/state"));
+        // Nothing exists yet: the new location wins.
+        assert_eq!(choose_state_file(preferred.clone(), legacy), preferred);
+    }
+
+    #[test]
+    fn state_file_keeps_legacy_location_while_only_it_exists() {
+        let base = unique_temp_dir("state-legacy");
+        let state = base.join("state");
+        let config = base.join("config");
+        let (preferred, legacy) = state_file_candidates(
+            None,
+            Some(state.into_std_path_buf()),
+            Some(config.into_std_path_buf()),
+        );
+        std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        std::fs::write(&legacy, "sw_volume: 50\n").unwrap();
+        assert_eq!(
+            choose_state_file(preferred.clone(), legacy.clone()),
+            legacy,
+            "legacy file exists, new one does not -> keep legacy"
+        );
+
+        // Once the new file exists it takes over, even if the old one remains.
+        std::fs::create_dir_all(preferred.parent().unwrap()).unwrap();
+        std::fs::write(&preferred, "sw_volume: 60\n").unwrap();
+        assert_eq!(choose_state_file(preferred.clone(), legacy), preferred);
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn state_file_honors_systemd_state_directory() {
+        let (preferred, _) = state_file_candidates(
+            Some("/var/lib/rmpd:/var/lib/other"),
+            Some("/home/u/.local/state".into()),
+            Some("/home/u/.config".into()),
+        );
+        assert_eq!(preferred, "/var/lib/rmpd/state");
+        // An empty STATE_DIRECTORY is ignored.
+        let (preferred, _) = state_file_candidates(
+            Some(""),
+            Some("/home/u/.local/state".into()),
+            Some("/home/u/.config".into()),
+        );
+        assert_eq!(preferred, "/home/u/.local/state/rmpd/state");
+    }
+
+    #[test]
+    fn state_file_without_state_dir_falls_back_to_config_dir() {
+        // Platforms without a state directory keep the historical default.
+        let (preferred, legacy) = state_file_candidates(None, None, Some("/home/u/.config".into()));
+        assert_eq!(preferred, legacy);
+        assert_eq!(preferred, "/home/u/.config/rmpd/state");
+    }
+
+    #[test]
+    fn expand_paths_handles_xdg_variables_and_reports_failures() {
+        let mut c = Config::default();
+        c.general.db_file = Utf8PathBuf::from("$XDG_CACHE_HOME/rmpd/database");
+        c.general.state_file = Utf8PathBuf::from("$NOT_A_VARIABLE/state");
+        c.general.log_file = Some(Utf8PathBuf::from("~/rmpd.log"));
+        c.network.unix_socket = Some(Utf8PathBuf::from("/run/rmpd/socket"));
+        let mut diags = Vec::new();
+        c.expand_paths(&mut diags);
+
+        assert!(!c.general.db_file.as_str().starts_with('$'));
+        assert!(c.general.db_file.as_str().ends_with("/rmpd/database"));
+        assert!(
+            !c.general
+                .log_file
+                .as_ref()
+                .unwrap()
+                .as_str()
+                .starts_with('~')
+        );
+        assert_eq!(
+            c.network.unix_socket.as_deref(),
+            Some("/run/rmpd/socket".into())
+        );
+        // The unresolvable one is kept verbatim and warned about.
+        assert_eq!(c.general.state_file, "$NOT_A_VARIABLE/state");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("state_file"));
     }
 
     #[test]
@@ -1719,7 +1910,10 @@ some_backend_specific_key = 1
         assert!(
             load.diagnostics
                 .iter()
-                .all(|d| d.message.contains("music directory")),
+                // An existing pre-XDG-state state file on the machine running
+                // the tests legitimately produces an Info notice.
+                .all(|d| d.message.contains("music directory")
+                    || (matches!(d.level, DiagLevel::Info) && d.message.contains("state file"))),
             "unexpected diagnostics from a freshly generated template: {:?}",
             load.diagnostics
         );

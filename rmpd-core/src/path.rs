@@ -16,6 +16,86 @@ pub fn expand_tilde(path: &Utf8PathBuf) -> Utf8PathBuf {
     path.clone()
 }
 
+/// Resolve one of MPD's `$VARIABLE` path prefixes (`ParsePath` in
+/// `src/config/Path.cxx`) to a directory.
+///
+/// The supported names are exactly MPD's: `HOME`, `XDG_CONFIG_HOME`,
+/// `XDG_MUSIC_DIR`, `XDG_DATA_HOME`, `XDG_CACHE_HOME`, `XDG_RUNTIME_DIR` and
+/// `XDG_STATE_HOME`. Returns `Err` for an unknown name and `Ok(None)` when the
+/// name is known but this system has no value for it.
+fn resolve_variable(name: &str) -> Result<Option<std::path::PathBuf>, String> {
+    match name {
+        "HOME" => Ok(dirs::home_dir()),
+        "XDG_CONFIG_HOME" => Ok(dirs::config_dir()),
+        "XDG_MUSIC_DIR" => Ok(dirs::audio_dir()),
+        "XDG_DATA_HOME" => Ok(dirs::data_dir()),
+        "XDG_CACHE_HOME" => Ok(dirs::cache_dir()),
+        "XDG_RUNTIME_DIR" => Ok(dirs::runtime_dir()),
+        "XDG_STATE_HOME" => Ok(dirs::state_dir()),
+        _ => Err(format!("unknown variable: {name:?}")),
+    }
+}
+
+/// Expand a configured path the way MPD's `ParsePath` does: a leading `~`
+/// (`~` or `~/...`) becomes the home directory and a leading `$NAME` (see
+/// [`resolve_variable`]) becomes that directory; everything else is returned
+/// unchanged. `~user/...` is left alone (not supported).
+///
+/// # Errors
+/// Returns a message when the path starts with `$` but the variable is
+/// unknown or has no value on this system.
+pub fn try_expand_path(path: &str) -> Result<String, String> {
+    expand_path_with(path, resolve_variable)
+}
+
+/// [`try_expand_path`] with an injectable variable resolver (`HOME` is
+/// requested for `~`), so the logic can be tested without touching the
+/// process environment.
+fn expand_path_with(
+    path: &str,
+    resolve: impl Fn(&str) -> Result<Option<std::path::PathBuf>, String>,
+) -> Result<String, String> {
+    fn join(base: &std::path::Path, rest: &str) -> Result<String, String> {
+        let base = base
+            .to_str()
+            .ok_or_else(|| "directory is not valid UTF-8".to_owned())?;
+        let rest = rest.trim_start_matches('/');
+        Ok(if rest.is_empty() {
+            base.to_owned()
+        } else {
+            format!("{}/{rest}", base.trim_end_matches('/'))
+        })
+    }
+
+    if let Some(rest) = path.strip_prefix('~') {
+        if rest.is_empty() || rest.starts_with('/') {
+            let Some(home) = resolve("HOME")? else {
+                return Ok(path.to_owned());
+            };
+            return join(&home, rest);
+        }
+        // "~user/..." is not supported; leave it as is.
+        return Ok(path.to_owned());
+    }
+
+    if let Some(rest) = path.strip_prefix('$') {
+        let (name, rest) = rest.split_once('/').unwrap_or((rest, ""));
+        let dir = resolve(name)?.ok_or_else(|| format!("no value for variable: {name:?}"))?;
+        return join(&dir, rest);
+    }
+
+    Ok(path.to_owned())
+}
+
+/// Expand `~` and MPD's `$XDG_*`/`$HOME` prefixes in `path`, returning it
+/// unchanged (and the reason) when a variable cannot be resolved.
+pub fn expand_path(path: &Utf8PathBuf) -> (Utf8PathBuf, Option<String>) {
+    match try_expand_path(path.as_str()) {
+        Ok(expanded) => (Utf8PathBuf::from(expanded), None),
+        Err(e) => (path.clone(), Some(e)),
+    }
+}
+
 /// Resolve a relative path to an absolute path using the music directory.
 /// If the path is already absolute, returns it as-is.
 pub fn resolve_path(rel_path: &str, music_dir: Option<&str>) -> String {
@@ -184,5 +264,58 @@ mod tests {
             compare_db_path("dir/a.flac", "dir/a.flac"),
             std::cmp::Ordering::Equal
         );
+    }
+
+    #[test]
+    fn expand_path_with_tilde_and_variables() {
+        use std::path::PathBuf;
+        let resolve = |name: &str| -> Result<Option<PathBuf>, String> {
+            match name {
+                "HOME" => Ok(Some(PathBuf::from("/home/u"))),
+                "XDG_STATE_HOME" => Ok(Some(PathBuf::from("/home/u/.local/state"))),
+                "XDG_RUNTIME_DIR" => Ok(None),
+                _ => Err(format!("unknown variable: {name:?}")),
+            }
+        };
+        assert_eq!(expand_path_with("~", resolve).unwrap(), "/home/u");
+        assert_eq!(
+            expand_path_with("~/Music", resolve).unwrap(),
+            "/home/u/Music"
+        );
+        assert_eq!(
+            expand_path_with("$XDG_STATE_HOME/rmpd/state", resolve).unwrap(),
+            "/home/u/.local/state/rmpd/state"
+        );
+        assert_eq!(
+            expand_path_with("$HOME", resolve).unwrap(),
+            "/home/u",
+            "bare variable without a trailing component"
+        );
+        // Absolute, relative and ~user paths pass through untouched.
+        assert_eq!(expand_path_with("/abs/x", resolve).unwrap(), "/abs/x");
+        assert_eq!(expand_path_with("rel/x", resolve).unwrap(), "rel/x");
+        assert_eq!(expand_path_with("~bob/x", resolve).unwrap(), "~bob/x");
+        // Unknown variable / variable without a value are errors (MPD throws).
+        assert!(
+            expand_path_with("$NOPE/x", resolve)
+                .unwrap_err()
+                .contains("unknown")
+        );
+        assert!(
+            expand_path_with("$XDG_RUNTIME_DIR/mpd/socket", resolve)
+                .unwrap_err()
+                .contains("no value")
+        );
+    }
+
+    #[test]
+    fn expand_path_leaves_unresolvable_variable_unchanged() {
+        let p = Utf8PathBuf::from("$DEFINITELY_NOT_A_VARIABLE/x");
+        let (out, err) = expand_path(&p);
+        assert_eq!(out, p);
+        assert!(err.is_some());
+        let (out, err) = expand_path(&Utf8PathBuf::from("/plain"));
+        assert_eq!(out, "/plain");
+        assert!(err.is_none());
     }
 }
