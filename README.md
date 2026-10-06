@@ -19,6 +19,7 @@
 - 🎼 **Format Support** — FLAC, MP3, Ogg Vorbis, WAV, AAC, ALAC, APE, WavPack, DSD and more; see [Format Support](#format-support)
 - 🏠 **Multi-Room** — HTTP streaming and Snapcast; see [Integrations](#integrations)
 - 🖥️ **Desktop Integration** — MPRIS D-Bus and mDNS auto-discovery; see [Integrations](#integrations)
+- ⚙️ **systemd Native** — `Type=notify` readiness and socket activation, like MPD; see [systemd](#systemd)
 - 🌐 **Remote Libraries** — OpenSubsonic servers as a music source; see [Integrations](#integrations)
 
 ## Architecture
@@ -139,8 +140,14 @@ This mirrors MPD's own search order (`$XDG_CONFIG_HOME/mpd/mpd.conf`,
 `~/.mpdconf`, `~/.mpd/mpd.conf`, `/etc/mpd.conf`).
 
 Every section and key is optional — anything omitted uses a built-in
-default, so a partial config is valid. Paths beginning with `~` are
-expanded.
+default, so a partial config is valid. Path values expand a leading `~`,
+`$HOME`, and MPD's `$XDG_CONFIG_HOME`, `$XDG_MUSIC_DIR`, `$XDG_CACHE_HOME`,
+`$XDG_DATA_HOME`, `$XDG_STATE_HOME` and `$XDG_RUNTIME_DIR`.
+
+The state file defaults to `$XDG_STATE_HOME/rmpd/state` (usually
+`~/.local/state/rmpd/state`; `$STATE_DIRECTORY` wins under systemd). An
+existing state file at the old default, `~/.config/rmpd/state`, keeps being
+used until the new one exists.
 
 A minimal config:
 
@@ -218,6 +225,28 @@ busctl --user introspect org.mpris.MediaPlayer2.rmpd /org/mpris/MediaPlayer2
 
 rmpd also advertises itself over **mDNS/Zeroconf** so MPD clients on the local network can auto-discover the server.
 
+### systemd
+
+rmpd speaks systemd's protocols natively, without linking libsystemd:
+
+- **Readiness** — the units use `Type=notify`; rmpd sends `READY=1` once every
+  listener is bound and `STOPPING=1` on shutdown. Don't pass `--daemonize`
+  under systemd (rmpd ignores it there).
+- **Socket activation** — with `rmpd.socket` enabled, systemd owns the TCP
+  and Unix sockets and starts rmpd on the first connection. Like MPD, rmpd
+  then serves the passed sockets and ignores `bind_address`, `port` and
+  `unix_socket`.
+
+Units live in [`contrib/systemd`](contrib/systemd): `rmpd.service` and
+`rmpd.socket` for the user instance, and `system/` for a system-wide
+instance running as the `rmpd` user.
+
+```bash
+install -Dm644 contrib/systemd/rmpd.{service,socket} -t ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now rmpd.service   # or: rmpd.socket for on-demand start
+```
+
 ### OpenSubsonic Music Sources
 
 rmpd can aggregate a remote [OpenSubsonic](https://opensubsonic.netlify.app/)
@@ -268,7 +297,7 @@ network stream can run at once. Two routes to networked/multi-room playback:
 
 - **Core**: MPD protocol server (TCP/Unix sockets), event bus, configuration management, logging via `tracing`
 - **Library**: filesystem scanning + watcher, SQLite database, metadata/artwork extraction via `symphonia`, full-text search via `tantivy`
-- **MPD protocol**: playback commands (play/pause/stop/seek), queue management (add/delete/move/shuffle), database queries (find/search/list), status/statistics, playlist management (`.m3u`, `.pls`, XSPF/ASX; `.cue` sheets expand into range-restricted virtual tracks), output control
+- **MPD protocol**: playback commands (play/pause/stop/seek), queue management (add/delete/move/shuffle), database queries (find/search/list), status/statistics, playlist management (`.m3u`, `.pls`, XSPF/ASX; `.cue` sheets expand into range-restricted virtual tracks, reported with `RealUri`), output control, stickers on songs, playlists, tags and filters
 - **Audio**: gapless playback, crossfade and MixRamp transitions, ReplayGain, internet radio input with Shoutcast/Icecast (ICY) "now playing" metadata — see [Format Support](#format-support) for codec coverage and [Integrations](#integrations) for multi-room, MPRIS, and OpenSubsonic
 - **Network storage**: `mount`/`unmount` shell out to the system `mount(8)` for NFS and SMB/CIFS shares (Linux and macOS), exposed under the music directory like MPD's storage plugins — no in-process NFS/SMB client
 
