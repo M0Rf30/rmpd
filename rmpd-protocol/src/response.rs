@@ -50,6 +50,29 @@ pub struct ResponseBuilder {
     binary_data: Option<Vec<u8>>,
 }
 
+/// Render an audio format the way MPD's `ToString(AudioFormat)` does
+/// (`src/pcm/AudioFormat.cxx`): `rate:bits:channels`, with `f` for the float
+/// sample format (`bits == 0` sentinel), and `dsdN:channels` for DSD sources.
+///
+/// DSD sources are stored with `bits == 1` and the 1-bit-per-sample rate
+/// (e.g. 2 822 400 for DSD64). MPD's own DSD sample rate is that divided by 8
+/// (bytes per second), and it prints `dsd{rate * 8 / 44100}` whenever that
+/// rate is a multiple of 44100, else `{rate}:dsd:channels` with the byte rate.
+pub(crate) fn format_audio_format(sample_rate: u32, bits: u16, channels: u8) -> String {
+    if bits == 1 && sample_rate.is_multiple_of(8) {
+        let mpd_rate = u64::from(sample_rate / 8);
+        if mpd_rate > 0 && mpd_rate.is_multiple_of(44100) {
+            return format!("dsd{}:{}", mpd_rate * 8 / 44100, channels);
+        }
+        return format!("{mpd_rate}:dsd:{channels}");
+    }
+    if bits == 0 {
+        format!("{sample_rate}:f:{channels}")
+    } else {
+        format!("{sample_rate}:{bits}:{channels}")
+    }
+}
+
 impl ResponseBuilder {
     pub fn new() -> Self {
         Self {
@@ -216,18 +239,13 @@ impl ResponseBuilder {
             );
 
             if let Some(fmt) = status.audio_format {
-                // `bits_per_sample == 0` is the sentinel MPD uses for lossy/float-decoded codecs
-                // (Opus, Vorbis, AAC, MP3/MP2/MP1): it reports the sample *format* `f` instead of
-                // a bit count there (see `sample_format_to_string(SampleFormat::FLOAT)` in MPD's
-                // `src/pcm/SampleFormat.cxx`), matching the `Format:` tag in `song()` below.
-                let bits = if fmt.bits_per_sample == 0 {
-                    "f".to_string()
-                } else {
-                    fmt.bits_per_sample.to_string()
-                };
                 self.field(
                     "audio",
-                    format!("{}:{}:{}", fmt.sample_rate, bits, fmt.channels),
+                    format_audio_format(
+                        fmt.sample_rate,
+                        u16::from(fmt.bits_per_sample),
+                        fmt.channels,
+                    ),
                 );
             }
         }
@@ -256,6 +274,11 @@ impl ResponseBuilder {
         range: Option<(f64, f64)>,
     ) -> &mut Self {
         self.field("file", &song.path);
+        // MPD prints `RealUri` right after `file` (SongPrint.cxx song_print_info);
+        // for CUE virtual tracks it is the container file.
+        if let Some(real) = song.real_uri() {
+            self.field("RealUri", real);
+        }
         // MPD order (SongPrint.cxx song_print_info): Range, Last-Modified,
         // Added, Format, tags in file insertion order, Time/duration, then
         // Pos/Id/Prio appended by the caller (queue/Print.cxx).
@@ -280,14 +303,13 @@ impl ResponseBuilder {
             let ts = crate::commands::utils::format_iso8601_timestamp(song.added_at);
             self.field("Added", &ts);
         }
-        // Format: samplerate:bits:channels — before tags (matching MPD's SongPrint.cxx order)
+        // Format: samplerate:bits:channels (or `dsdN:channels`) — before tags (matching MPD's SongPrint.cxx order)
         if let Some(sr) = song.sample_rate {
-            let bits = match song.bits_per_sample {
-                Some(0) | None => "f".to_string(),
-                Some(b) => b.to_string(),
-            };
             let ch = song.channels.unwrap_or(2);
-            self.field("Format", format!("{}:{}:{}", sr, bits, ch));
+            self.field(
+                "Format",
+                format_audio_format(sr, song.bits_per_sample.unwrap_or(0), ch),
+            );
         }
         // Tags in file insertion order (matching MPD which outputs tags as stored in the file).
         // Comment is excluded from default tag mask (MPD's Settings.cxx: All & ~TAG_COMMENT)
@@ -381,6 +403,73 @@ mod tests {
             out.contains("file: alarm-music/Artist/Album/song-1.flac"),
             "expected mount-style file line with .flac extension, got:\n{out}"
         );
+    }
+
+    #[test]
+    fn audio_format_dsd_uses_shorthand() {
+        // DSD bit rates (1 bit/sample) -> MPD `dsd{rate*8/44100}:channels`
+        assert_eq!(format_audio_format(2_822_400, 1, 2), "dsd64:2");
+        assert_eq!(format_audio_format(5_644_800, 1, 2), "dsd128:2");
+        assert_eq!(format_audio_format(11_289_600, 1, 2), "dsd256:2");
+        assert_eq!(format_audio_format(22_579_200, 1, 6), "dsd512:6");
+        // non multiple of 44100 falls back to the generic form
+        assert_eq!(format_audio_format(3_072_000, 1, 2), "384000:dsd:2");
+    }
+
+    #[test]
+    fn audio_format_pcm_and_float() {
+        assert_eq!(format_audio_format(44_100, 16, 2), "44100:16:2");
+        assert_eq!(format_audio_format(96_000, 24, 2), "96000:24:2");
+        assert_eq!(format_audio_format(48_000, 0, 2), "48000:f:2");
+    }
+
+    #[test]
+    fn dsd_song_and_status_use_shorthand() {
+        let mut song = source_song();
+        song.sample_rate = Some(2_822_400);
+        song.bits_per_sample = Some(1);
+        let mut rb = ResponseBuilder::new();
+        rb.song(&song, None, None, None);
+        let out = rb.ok();
+        assert!(out.contains("Format: dsd64:2\n"), "{out}");
+
+        let mut status = base_status();
+        status.state = rmpd_core::state::PlayerState::Play;
+        status.audio_format = Some(rmpd_core::song::AudioFormat {
+            sample_rate: 5_644_800,
+            channels: 2,
+            bits_per_sample: 1,
+        });
+        let mut rb = ResponseBuilder::new();
+        rb.status(&status, "default", "");
+        let out = rb.ok();
+        assert!(out.contains("audio: dsd128:2\n"), "{out}");
+    }
+
+    #[test]
+    fn cue_virtual_track_prints_real_uri_after_file() {
+        let mut song = source_song();
+        song.path = "Artist/Album.flac/track0002".into();
+        song.range = Some((60.0, 120.0));
+        let mut rb = ResponseBuilder::new();
+        rb.song(&song, None, None, None);
+        let out = rb.ok();
+        assert!(
+            out.starts_with(
+                "file: Artist/Album.flac/track0002\nRealUri: Artist/Album.flac\nRange: 60.000-120.000\n"
+            ),
+            "{out}"
+        );
+
+        // Ordinary song, and ranged real file, print no RealUri.
+        let mut plain = source_song();
+        let mut rb = ResponseBuilder::new();
+        rb.song(&plain, None, None, None);
+        assert!(!rb.ok().contains("RealUri"));
+        plain.range = Some((1.0, 2.0));
+        let mut rb = ResponseBuilder::new();
+        rb.song(&plain, None, None, None);
+        assert!(!rb.ok().contains("RealUri"));
     }
 
     fn base_status() -> PlayerStatus {

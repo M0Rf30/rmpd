@@ -50,6 +50,11 @@ use symphonia::core::meta::{ChapterGroupItem, MetadataOptions};
 /// the stream's reported end.
 const LEAD_OUT_TOLERANCE_SECS: f64 = 2.0;
 
+/// Upper bound on virtual tracks created from one embedded cue sheet, so a
+/// hostile or corrupt file cannot flood the database (mirrors the spirit of
+/// MPD's per-song tag item limit; real CDs have at most 99 tracks).
+pub const MAX_EMBEDDED_CUE_TRACKS: usize = 4096;
+
 /// Read `path`'s embedded cue sheet, if any, as a flat list of tracks.
 ///
 /// Prefers the `CUESHEET` text comment (title/performer per track); falls
@@ -71,6 +76,7 @@ pub fn read_embedded_cue_tracks(
             // image's filename (sometimes absent entirely): every track
             // always refers to the file it's embedded in, never that name.
             let file_name = path.file_name().unwrap_or_default().to_string();
+            tracks.truncate(MAX_EMBEDDED_CUE_TRACKS);
             for t in &mut tracks {
                 t.file = file_name.clone();
             }
@@ -153,6 +159,7 @@ fn read_binary_cuesheet_block(
         starts.pop();
     }
 
+    starts.truncate(MAX_EMBEDDED_CUE_TRACKS);
     if starts.is_empty() {
         return None;
     }

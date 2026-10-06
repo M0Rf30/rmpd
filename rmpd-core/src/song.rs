@@ -129,6 +129,21 @@ pub struct Song {
 }
 
 impl Song {
+    /// The file this song really refers to when it is a CUE virtual track
+    /// (MPD's `RealUri`). Embedded-cue tracks are stored as
+    /// `<container>/trackNNNN` with a [`Song::range`]; the container is the real
+    /// URI. Returns `None` for ordinary songs (real URI equals the path).
+    pub fn real_uri(&self) -> Option<&str> {
+        self.range?;
+        let path = self.path.as_str();
+        let (parent, name) = path.rsplit_once('/')?;
+        let digits = name.strip_prefix("track")?;
+        if parent.is_empty() || digits.len() < 4 || !digits.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        Some(parent)
+    }
+
     /// Get the first value for a tag, or None if the tag is not present.
     pub fn tag(&self, name: &str) -> Option<&str> {
         let name_lower = name.to_lowercase();
