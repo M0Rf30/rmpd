@@ -57,13 +57,14 @@ pub struct ResponseBuilder {
 /// DSD sources are stored with `bits == 1` and the 1-bit-per-sample rate
 /// (e.g. 2 822 400 for DSD64). MPD's own DSD sample rate is that divided by 8
 /// (bytes per second), and it prints `dsd{rate * 8 / 44100}` whenever that
-/// rate is a multiple of 44100.
+/// rate is a multiple of 44100, else `{rate}:dsd:channels` with the byte rate.
 pub(crate) fn format_audio_format(sample_rate: u32, bits: u16, channels: u8) -> String {
     if bits == 1 && sample_rate.is_multiple_of(8) {
         let mpd_rate = u64::from(sample_rate / 8);
         if mpd_rate > 0 && mpd_rate.is_multiple_of(44100) {
             return format!("dsd{}:{}", mpd_rate * 8 / 44100, channels);
         }
+        return format!("{mpd_rate}:dsd:{channels}");
     }
     if bits == 0 {
         format!("{sample_rate}:f:{channels}")
@@ -412,7 +413,7 @@ mod tests {
         assert_eq!(format_audio_format(11_289_600, 1, 2), "dsd256:2");
         assert_eq!(format_audio_format(22_579_200, 1, 6), "dsd512:6");
         // non multiple of 44100 falls back to the generic form
-        assert_eq!(format_audio_format(3_072_000, 1, 2), "3072000:1:2");
+        assert_eq!(format_audio_format(3_072_000, 1, 2), "384000:dsd:2");
     }
 
     #[test]
