@@ -362,6 +362,9 @@ fn simple_std_tag(std: &StandardTag) -> Option<(&'static str, &str)> {
         StandardTag::Grouping(v) => Some(("grouping", v.as_str())),
         StandardTag::Label(v) => Some(("label", v.as_str())),
         StandardTag::SortArtist(v) => Some(("artistsort", v.as_str())),
+        StandardTag::SortAlbum(v) => Some(("albumsort", v.as_str())),
+        StandardTag::SortTrackTitle(v) => Some(("titlesort", v.as_str())),
+        StandardTag::DiscSubtitle(v) => Some(("discsubtitle", v.as_str())),
         StandardTag::SortAlbumArtist(v) => Some(("albumartistsort", v.as_str())),
         StandardTag::SortComposer(v) => Some(("composersort", v.as_str())),
         StandardTag::Conductor(v) => Some(("conductor", v.as_str())),
@@ -389,6 +392,14 @@ fn push_simple(tags: &mut Vec<(Cow<'static, str>, String)>, key: &str, value: &s
     if !value.is_empty() {
         tags.push((intern_tag_key(key), value.to_string()));
     }
+}
+
+/// Maximum number of tag items kept per song (MPD's `TagBuilder::MAX_ITEMS`, added in
+/// 0.24.16 as "limit the number of tag items").
+pub const MAX_TAG_ITEMS: usize = 4096;
+
+fn cap_tag_items(tags: &mut Vec<(Cow<'static, str>, String)>) {
+    tags.truncate(MAX_TAG_ITEMS);
 }
 
 /// `mixramp_start`/`mixramp_end` have no `StandardTag`. Match them case-insensitively on the
@@ -488,7 +499,7 @@ fn fourcc_to_key(fourcc: &str) -> Option<&'static str> {
         "soal" => Some("sort_album"),
         "soar" => Some("sort_artist"),
         "soaa" => Some("sort_album_artist"),
-        "sonm" => Some("sort_title"),
+        "sonm" => Some("sort_name"),
         "soco" => Some("sort_composer"),
         "tmpo" => Some("bpm"),
         "rtng" => Some("rating"),
@@ -602,6 +613,12 @@ impl MetadataExtractor {
                     tags.push((intern_tag_key(key), val));
                 }
             }
+
+            // MPD's `TagBuilder` stops accepting items once `MAX_ITEMS` is reached
+            // (0.24.16: "limit the number of tag items"); stop scanning further.
+            if tags.len() >= MAX_TAG_ITEMS {
+                break;
+            }
         }
 
         // Date: prefer the recording date, falling back to a year-only value.
@@ -625,6 +642,7 @@ impl MetadataExtractor {
         if let Some(od) = best_original_date {
             tags.push((intern_tag_key("originaldate"), od));
         }
+        cap_tag_items(&mut tags);
 
         let (rg_track_gain, rg_track_peak, rg_album_gain, rg_album_peak) =
             replay_gain(&probed.tags);
@@ -807,5 +825,59 @@ mod bit_depth_tests {
     #[test]
     fn alac_bit_depth_from_undersized_cookie_is_none() {
         assert_eq!(alac_bit_depth_from_cookie(&[0u8; 10]), None);
+    }
+}
+
+#[cfg(test)]
+mod tag_mapping_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    fn s(v: &str) -> Arc<String> {
+        Arc::new(v.to_string())
+    }
+
+    #[test]
+    fn sort_album_and_title_map_to_mpd_names() {
+        assert_eq!(
+            simple_std_tag(&StandardTag::SortAlbum(s("A"))),
+            Some(("albumsort", "A"))
+        );
+        assert_eq!(
+            simple_std_tag(&StandardTag::SortTrackTitle(s("T"))),
+            Some(("titlesort", "T"))
+        );
+        assert_eq!(
+            simple_std_tag(&StandardTag::DiscSubtitle(s("D"))),
+            Some(("discsubtitle", "D"))
+        );
+    }
+
+    #[test]
+    fn sort_tags_use_canonical_keys() {
+        for (std, key) in [
+            (StandardTag::SortArtist(s("x")), "artistsort"),
+            (StandardTag::SortAlbumArtist(s("x")), "albumartistsort"),
+            (StandardTag::SortComposer(s("x")), "composersort"),
+        ] {
+            assert_eq!(simple_std_tag(&std).map(|(k, _)| k), Some(key));
+        }
+    }
+
+    #[test]
+    fn vorbis_raw_fallback_knows_sort_keys() {
+        assert_eq!(vorbis_tag_map_get("albumsort"), Some("albumsort"));
+        assert_eq!(vorbis_tag_map_get("titlesort"), Some("titlesort"));
+        assert_eq!(vorbis_tag_map_get("name"), Some("name"));
+    }
+
+    #[test]
+    fn tag_items_are_capped() {
+        let mut tags: Vec<(Cow<'static, str>, String)> = (0..MAX_TAG_ITEMS + 100)
+            .map(|i| (intern_tag_key("comment"), i.to_string()))
+            .collect();
+        cap_tag_items(&mut tags);
+        assert_eq!(tags.len(), MAX_TAG_ITEMS);
+        assert_eq!(tags[0].1, "0");
     }
 }

@@ -21,15 +21,14 @@ fn test_state() -> AppState {
 async fn test_mount_command() {
     let state = test_state();
 
-    let response =
-        storage::handle_mount_command(&state, "remote/nas", "nfs://192.168.1.100/music").await;
+    let response = storage::handle_mount_command(&state, "nas", "nfs://192.168.1.100/music").await;
 
     assert_eq!(response, "OK\n");
 
     // Verify mount was registered
     let mounts = state.mount_registry.list().await;
     assert_eq!(mounts.len(), 1);
-    assert_eq!(mounts[0].path, "remote/nas");
+    assert_eq!(mounts[0].path, "nas");
     assert_eq!(mounts[0].uri, "nfs://192.168.1.100/music");
     assert_eq!(mounts[0].protocol, "nfs");
 }
@@ -39,32 +38,58 @@ async fn test_mount_duplicate() {
     let state = test_state();
 
     // First mount should succeed
-    let response1 =
-        storage::handle_mount_command(&state, "remote/nas", "nfs://192.168.1.100/music").await;
+    let response1 = storage::handle_mount_command(&state, "nas", "nfs://192.168.1.100/music").await;
     assert_eq!(response1, "OK\n");
 
-    // Second mount to same path should fail
-    let response2 =
-        storage::handle_mount_command(&state, "remote/nas", "nfs://192.168.1.200/music").await;
-    assert!(response2.contains("ACK"));
-    assert!(response2.contains("already exists"));
+    // Second mount to same mount point is busy (MPD: "Mount point busy",
+    // ACK_ERROR_ARG = 2)
+    let response2 = storage::handle_mount_command(&state, "nas", "nfs://192.168.1.200/music").await;
+    assert_eq!(response2, "ACK [2@0] {mount} Mount point busy\n");
+}
+
+#[tokio::test]
+async fn test_mount_same_storage_twice_rejected() {
+    let state = test_state();
+
+    let response1 = storage::handle_mount_command(&state, "a", "nfs://192.168.1.100/music").await;
+    assert_eq!(response1, "OK\n");
+
+    // Same remote URI under a different mount point (MPD: `IsMounted`)
+    let response2 = storage::handle_mount_command(&state, "b", "nfs://192.168.1.100/music").await;
+    assert_eq!(
+        response2,
+        "ACK [2@0] {mount} This storage is already mounted\n"
+    );
+    assert_eq!(state.mount_registry.list().await.len(), 1);
 }
 
 #[tokio::test]
 async fn test_mount_path_validation() {
     let state = test_state();
 
-    // Absolute path should be rejected
-    let response1 =
-        storage::handle_mount_command(&state, "/etc/passwd", "nfs://server/share").await;
-    assert!(response1.contains("ACK"));
-    assert!(response1.contains("Invalid path"));
+    // Only top-level mount points are allowed: anything containing '/'
+    // (absolute, nested, traversal) is a "Bad mount point".
+    for bad in ["/etc/passwd", "../etc/passwd", "remote/nas", "a/", "/"] {
+        let response = storage::handle_mount_command(&state, bad, "nfs://server/share").await;
+        assert_eq!(
+            response, "ACK [2@0] {mount} Bad mount point\n",
+            "mount point {bad:?}"
+        );
+    }
 
-    // Path traversal should be rejected
-    let response2 =
-        storage::handle_mount_command(&state, "../etc/passwd", "nfs://server/share").await;
-    assert!(response2.contains("ACK"));
-    assert!(response2.contains("Invalid path"));
+    // "." and ".." would escape the music directory when really mounted.
+    for bad in [".", ".."] {
+        let response = storage::handle_mount_command(&state, bad, "nfs://server/share").await;
+        assert_eq!(
+            response, "ACK [2@0] {mount} Bad mount point\n",
+            "mount point {bad:?}"
+        );
+    }
+
+    // Names that merely contain ".." are fine (the old check rejected them).
+    let response = storage::handle_mount_command(&state, "my..nas", "nfs://server/share").await;
+    assert_eq!(response, "OK\n");
+    assert!(state.mount_registry.list().await.len() == 1);
 }
 
 #[tokio::test]
@@ -72,10 +97,10 @@ async fn test_unmount_command() {
     let state = test_state();
 
     // Mount first
-    storage::handle_mount_command(&state, "remote/nas", "nfs://192.168.1.100/music").await;
+    storage::handle_mount_command(&state, "nas", "nfs://192.168.1.100/music").await;
 
     // Unmount
-    let response = storage::handle_unmount_command(&state, "remote/nas").await;
+    let response = storage::handle_unmount_command(&state, "nas").await;
     assert_eq!(response, "OK\n");
 
     // Verify mount was removed
@@ -101,14 +126,14 @@ async fn test_listmounts_command() {
     assert_eq!(response1, "OK\n");
 
     // Add some mounts
-    storage::handle_mount_command(&state, "remote/nas1", "nfs://192.168.1.100/music").await;
-    storage::handle_mount_command(&state, "remote/nas2", "smb://server/share").await;
+    storage::handle_mount_command(&state, "nas1", "nfs://192.168.1.100/music").await;
+    storage::handle_mount_command(&state, "nas2", "smb://server/share").await;
 
     // List should show both
     let response2 = storage::handle_listmounts_command(&state).await;
-    assert!(response2.contains("mount: remote/nas1"));
+    assert!(response2.contains("mount: nas1"));
     assert!(response2.contains("storage: nfs://192.168.1.100/music"));
-    assert!(response2.contains("mount: remote/nas2"));
+    assert!(response2.contains("mount: nas2"));
     assert!(response2.contains("storage: smb://server/share"));
     assert!(response2.ends_with("OK\n"));
 }
@@ -162,14 +187,14 @@ async fn test_mount_and_unmount_emit_mount_idle() {
     let state = test_state();
     let mut rx = state.event_bus.subscribe();
 
-    storage::handle_mount_command(&state, "remote/nas", "nfs://192.168.1.100/music").await;
+    storage::handle_mount_command(&state, "nas", "nfs://192.168.1.100/music").await;
     let mut got = false;
     while let Ok(ev) = rx.try_recv() {
         got |= matches!(ev, Event::MountsChanged);
     }
     assert!(got, "mount must emit Event::MountsChanged");
 
-    storage::handle_unmount_command(&state, "remote/nas").await;
+    storage::handle_unmount_command(&state, "nas").await;
     let mut got = false;
     while let Ok(ev) = rx.try_recv() {
         got |= matches!(ev, Event::MountsChanged);

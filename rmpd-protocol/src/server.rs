@@ -86,6 +86,9 @@ pub struct MpdServer {
     shutdown_rx: broadcast::Receiver<()>,
     max_connections: usize,
     connection_timeout: std::time::Duration,
+    /// Fired once every listener is bound and the accept loop is about to
+    /// run (used for systemd `READY=1`).
+    ready_tx: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
 impl MpdServer {
@@ -97,6 +100,7 @@ impl MpdServer {
             shutdown_rx,
             max_connections: DEFAULT_MAX_CONNECTIONS,
             connection_timeout: std::time::Duration::from_secs(DEFAULT_CONNECTION_TIMEOUT_SECS),
+            ready_tx: None,
         }
     }
 
@@ -112,6 +116,7 @@ impl MpdServer {
             shutdown_rx,
             max_connections: DEFAULT_MAX_CONNECTIONS,
             connection_timeout: std::time::Duration::from_secs(DEFAULT_CONNECTION_TIMEOUT_SECS),
+            ready_tx: None,
         }
     }
 
@@ -133,6 +138,21 @@ impl MpdServer {
     pub fn with_connection_timeout(mut self, d: std::time::Duration) -> Self {
         self.connection_timeout = d;
         self
+    }
+
+    /// Register a one-shot signal fired once all listeners are bound and the
+    /// server is accepting connections. It is dropped unfired if the server
+    /// fails before reaching that point.
+    pub fn with_ready_signal(mut self, tx: tokio::sync::oneshot::Sender<()>) -> Self {
+        self.ready_tx = Some(tx);
+        self
+    }
+
+    /// Fire the ready signal, if one was registered.
+    fn signal_ready(&mut self) {
+        if let Some(tx) = self.ready_tx.take() {
+            let _ = tx.send(());
+        }
     }
 
     pub async fn run(self) -> Result<()> {
@@ -177,6 +197,8 @@ impl MpdServer {
         } else {
             None
         };
+
+        self.signal_ready();
 
         // Bounds the number of concurrently active connections. Each spawned
         // connection task holds a permit for its lifetime; the accept loop
@@ -270,6 +292,128 @@ impl MpdServer {
 
         info!("server shutdown complete");
         Ok(())
+    }
+
+    /// Run the server accept loops on already-bound listeners (e.g. sockets
+    /// inherited via systemd socket activation) instead of binding anything.
+    ///
+    /// Any number of TCP and Unix listeners is served concurrently. The
+    /// configured `unix_socket` path is ignored and the listeners' socket
+    /// files are never removed: whoever created the sockets owns them.
+    /// Returns when the shutdown signal is received.
+    pub async fn run_with_listeners(
+        mut self,
+        tcp: Vec<TcpListener>,
+        unix: Vec<tokio::net::UnixListener>,
+    ) -> Result<()> {
+        let mut playback_manager = QueuePlaybackManager::new(self.state.clone());
+        playback_manager.start();
+        info!("queue playback manager started");
+
+        let connection_limiter =
+            std::sync::Arc::new(tokio::sync::Semaphore::new(self.max_connections));
+        let mut acceptors = tokio::task::JoinSet::new();
+        for listener in tcp {
+            acceptors.spawn(accept_tcp_loop(
+                listener,
+                self.state.clone(),
+                connection_limiter.clone(),
+                self.connection_timeout,
+                self.max_connections,
+            ));
+        }
+        for listener in unix {
+            acceptors.spawn(accept_unix_loop(
+                listener,
+                self.state.clone(),
+                connection_limiter.clone(),
+                self.connection_timeout,
+                self.max_connections,
+            ));
+        }
+
+        self.signal_ready();
+
+        let _ = self.shutdown_rx.recv().await;
+        info!("shutdown signal received, stopping server");
+        acceptors.abort_all();
+        while acceptors.join_next().await.is_some() {}
+
+        info!("server shutdown complete");
+        Ok(())
+    }
+}
+
+/// Accept loop for one inherited TCP listener (see `run_with_listeners`).
+async fn accept_tcp_loop(
+    listener: TcpListener,
+    state: AppState,
+    limiter: std::sync::Arc<tokio::sync::Semaphore>,
+    timeout: std::time::Duration,
+    max_connections: usize,
+) {
+    loop {
+        match listener.accept().await {
+            Ok((stream, addr)) => {
+                debug!("new connection from {}", addr);
+                match limiter.clone().try_acquire_owned() {
+                    Ok(permit) => {
+                        let state = state.clone();
+                        tokio::spawn(async move {
+                            let _permit = permit;
+                            if let Err(e) = handle_client(stream, state, timeout).await {
+                                log_client_error("client", &e);
+                            }
+                        });
+                    }
+                    Err(_) => {
+                        debug!(
+                            "connection limit ({}) reached, dropping connection from {}",
+                            max_connections, addr
+                        );
+                    }
+                }
+            }
+            Err(e) => {
+                error!("failed to accept connection: {}", e);
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+        }
+    }
+}
+
+/// Accept loop for one inherited Unix listener (see `run_with_listeners`).
+async fn accept_unix_loop(
+    listener: tokio::net::UnixListener,
+    state: AppState,
+    limiter: std::sync::Arc<tokio::sync::Semaphore>,
+    timeout: std::time::Duration,
+    max_connections: usize,
+) {
+    loop {
+        match listener.accept().await {
+            Ok((stream, _)) => match limiter.clone().try_acquire_owned() {
+                Ok(permit) => {
+                    let state = state.clone();
+                    tokio::spawn(async move {
+                        let _permit = permit;
+                        if let Err(e) = handle_unix_client(stream, state, timeout).await {
+                            log_client_error("unix client", &e);
+                        }
+                    });
+                }
+                Err(_) => {
+                    debug!(
+                        "connection limit ({}) reached, dropping unix connection",
+                        max_connections
+                    );
+                }
+            },
+            Err(e) => {
+                error!("unix accept error: {}", e);
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+        }
     }
 }
 

@@ -1574,6 +1574,12 @@ pub async fn handle_searchplaylist_command(
     }
 }
 
+/// Whole-second playtime as MPD prints it (`std::chrono::round<seconds>` in
+/// `src/playlist/Length.cxx`: nearest, ties to even).
+fn round_playtime_secs(total_secs: f64) -> u64 {
+    total_secs.round_ties_even().max(0.0) as u64
+}
+
 pub async fn handle_playlistlength_command(state: &AppState, name: &str) -> String {
     if let Err(e) = validate_playlist_name(name) {
         return ResponseBuilder::error(ACK_ERROR_ARG, 0, "playlistlength", &e);
@@ -1622,7 +1628,7 @@ pub async fn handle_playlistlength_command(state: &AppState, name: &str) -> Stri
 
         let mut resp = ResponseBuilder::new();
         resp.field("songs", count.to_string());
-        resp.field("playtime", format!("{total_duration:.3}"));
+        resp.field("playtime", round_playtime_secs(total_duration));
         resp.ok()
     })
     .await
@@ -1635,6 +1641,17 @@ pub async fn handle_playlistlength_command(state: &AppState, name: &str) -> Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn playlistlength_playtime_is_whole_seconds() {
+        assert_eq!(round_playtime_secs(0.0), 0);
+        assert_eq!(round_playtime_secs(179.999), 180);
+        assert_eq!(round_playtime_secs(180.4), 180);
+        assert_eq!(round_playtime_secs(180.6), 181);
+        // ties-to-even, like std::chrono::round
+        assert_eq!(round_playtime_secs(0.5), 0);
+        assert_eq!(round_playtime_secs(1.5), 2);
+    }
 
     fn write_playlist(dir: &std::path::Path, name: &str, content: &str) {
         std::fs::write(dir.join(format!("{name}.m3u")), content).unwrap();
