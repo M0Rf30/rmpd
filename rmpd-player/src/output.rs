@@ -191,7 +191,7 @@ impl CpalOutput {
                 self.device
                     .build_output_stream(
                         self.config,
-                        move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+                        move |data: &mut [f32], _: &cpal::CallbackInfo| {
                             for sample in data.iter_mut() {
                                 let raw = buf.next_sample();
                                 *sample = ramp.apply(raw, control.gain());
@@ -210,7 +210,7 @@ impl CpalOutput {
                 self.device
                     .build_output_stream(
                         self.config,
-                        move |data: &mut [i16], _: &cpal::OutputCallbackInfo| {
+                        move |data: &mut [i16], _: &cpal::CallbackInfo| {
                             for sample in data.iter_mut() {
                                 let raw = buf.next_sample();
                                 *sample = conversion::f32_to_i16(ramp.apply(raw, control.gain()));
@@ -229,7 +229,7 @@ impl CpalOutput {
                 self.device
                     .build_output_stream(
                         self.config,
-                        move |data: &mut [i32], _: &cpal::OutputCallbackInfo| {
+                        move |data: &mut [i32], _: &cpal::CallbackInfo| {
                             for sample in data.iter_mut() {
                                 let raw = buf.next_sample();
                                 *sample = conversion::f32_to_i32(ramp.apply(raw, control.gain()));
@@ -250,7 +250,7 @@ impl CpalOutput {
         };
 
         stream
-            .play()
+            .start()
             .map_err(|e| RmpdError::Player(format!("Failed to start stream: {e}")))?;
 
         self.stream = Some(stream);
@@ -307,7 +307,7 @@ impl CpalOutput {
 
     pub fn resume(&mut self) -> Result<()> {
         if let Some(stream) = &self.stream {
-            let _ = stream.play();
+            let _ = stream.start();
         }
         self.pause_state.set_paused(false);
         Ok(())
