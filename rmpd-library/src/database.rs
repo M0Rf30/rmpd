@@ -174,6 +174,21 @@ fn like_dir_prefix(value: &str) -> String {
     )
 }
 
+/// Sticker domain for songs (the only domain pre-0.24 stickers had).
+pub const STICKER_TYPE_SONG: &str = "song";
+
+/// Escape `%`, `_`, and `\` for a SQL `LIKE ... ESCAPE '\'` value and append a
+/// `%` wildcard: a plain string-prefix pattern (no path-boundary semantics).
+fn like_string_prefix(value: &str) -> String {
+    format!(
+        "{}%",
+        value
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_")
+    )
+}
+
 /// A pool of reusable SQLite connections.
 ///
 /// Opening a connection per command is expensive: SQLite re-probes the
@@ -327,7 +342,12 @@ impl Database {
                 Ok(v)
             }
             Err(e) => {
-                let _ = self.conn.execute_batch("ROLLBACK");
+                if let Err(rollback_err) = self.conn.execute_batch("ROLLBACK") {
+                    tracing::warn!(
+                        error = %rollback_err,
+                        "ROLLBACK failed after transaction error"
+                    );
+                }
                 Err(e)
             }
         }
@@ -490,6 +510,44 @@ impl Database {
             self.conn.execute_batch("COMMIT;")?;
         }
 
+        // v6→v7: stickers gain a `type` column (MPD 0.24 sticker domains:
+        // song, playlist, filter, tag names) and uniqueness moves from
+        // (uri, name) to (type, uri, name). SQLite cannot alter a UNIQUE
+        // constraint, so rebuild the table; every pre-existing row was a song
+        // sticker. Guarded on the table existing (fresh DBs get the new shape
+        // from `init_schema`) and on the column being absent (idempotent).
+        let stickers_exists: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='stickers'",
+            [],
+            |r| r.get(0),
+        )?;
+        if stickers_exists > 0 {
+            let has_type: i64 = self.conn.query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('stickers') WHERE name='type'",
+                [],
+                |r| r.get(0),
+            )?;
+            if has_type == 0 {
+                self.with_transaction(|db| {
+                    db.conn.execute_batch(
+                        "CREATE TABLE stickers_new (
+                            id INTEGER PRIMARY KEY,
+                            type TEXT NOT NULL DEFAULT 'song',
+                            uri TEXT NOT NULL,
+                            name TEXT NOT NULL,
+                            value TEXT NOT NULL,
+                            UNIQUE(type, uri, name)
+                        );
+                        INSERT INTO stickers_new (id, type, uri, name, value)
+                            SELECT id, 'song', uri, name, value FROM stickers;
+                        DROP TABLE stickers;
+                        ALTER TABLE stickers_new RENAME TO stickers;",
+                    )?;
+                    Ok(())
+                })?;
+            }
+        }
+
         Ok(())
     }
 
@@ -592,10 +650,11 @@ impl Database {
         self.conn.execute(
             "CREATE TABLE IF NOT EXISTS stickers (
                 id INTEGER PRIMARY KEY,
+                type TEXT NOT NULL DEFAULT 'song',
                 uri TEXT NOT NULL,
                 name TEXT NOT NULL,
                 value TEXT NOT NULL,
-                UNIQUE(uri, name)
+                UNIQUE(type, uri, name)
             )",
             [],
         )?;
@@ -1982,44 +2041,116 @@ impl Database {
     }
 
     // Sticker methods
+    //
+    // Stickers are keyed by (type, uri, name) like MPD's `sticker` table. The
+    // un-suffixed methods operate on the `song` domain; the `*_typed` ones take
+    // the domain explicitly (`song`, `playlist`, `filter`, or a canonical tag
+    // name such as `Album`).
 
     pub fn get_sticker(&self, uri: &str, name: &str) -> Result<Option<String>> {
+        self.get_sticker_typed(STICKER_TYPE_SONG, uri, name)
+    }
+
+    pub fn set_sticker(&self, uri: &str, name: &str, value: &str) -> Result<()> {
+        self.set_sticker_typed(STICKER_TYPE_SONG, uri, name, value)
+    }
+
+    pub fn delete_sticker(&self, uri: &str, name: Option<&str>) -> Result<()> {
+        self.delete_sticker_typed(STICKER_TYPE_SONG, uri, name)
+            .map(|_| ())
+    }
+
+    pub fn list_stickers(&self, uri: &str) -> Result<Vec<(String, String)>> {
+        self.list_stickers_typed(STICKER_TYPE_SONG, uri)
+    }
+
+    pub fn find_stickers(&self, uri: &str, name: &str) -> Result<Vec<(String, String)>> {
+        self.find_stickers_typed(STICKER_TYPE_SONG, uri, name)
+    }
+
+    pub fn get_sticker_typed(
+        &self,
+        sticker_type: &str,
+        uri: &str,
+        name: &str,
+    ) -> Result<Option<String>> {
         Ok(self
             .conn
             .query_row(
-                "SELECT value FROM stickers WHERE uri = ?1 AND name = ?2",
-                params![uri, name],
+                "SELECT value FROM stickers WHERE type = ?1 AND uri = ?2 AND name = ?3",
+                params![sticker_type, uri, name],
                 |row| row.get(0),
             )
             .optional()?)
     }
 
-    pub fn set_sticker(&self, uri: &str, name: &str, value: &str) -> Result<()> {
+    pub fn set_sticker_typed(
+        &self,
+        sticker_type: &str,
+        uri: &str,
+        name: &str,
+        value: &str,
+    ) -> Result<()> {
         self.conn.execute(
-            "INSERT OR REPLACE INTO stickers (uri, name, value) VALUES (?1, ?2, ?3)",
-            params![uri, name, value],
+            "INSERT INTO stickers (type, uri, name, value) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(type, uri, name) DO UPDATE SET value = excluded.value",
+            params![sticker_type, uri, name, value],
         )?;
         Ok(())
     }
 
-    pub fn delete_sticker(&self, uri: &str, name: Option<&str>) -> Result<()> {
-        if let Some(sticker_name) = name {
-            self.conn.execute(
-                "DELETE FROM stickers WHERE uri = ?1 AND name = ?2",
-                params![uri, sticker_name],
-            )?;
-        } else {
-            self.conn
-                .execute("DELETE FROM stickers WHERE uri = ?1", params![uri])?;
-        }
+    /// Add `delta` to a sticker's integer value (a missing or non-numeric
+    /// value counts as 0), inserting the sticker when it does not exist yet.
+    /// A single upsert, so concurrent connections cannot lose an update.
+    pub fn adjust_sticker_typed(
+        &self,
+        sticker_type: &str,
+        uri: &str,
+        name: &str,
+        delta: i64,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO stickers (type, uri, name, value) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(type, uri, name) DO UPDATE
+             SET value = CAST(stickers.value AS INTEGER) + ?4",
+            params![sticker_type, uri, name, delta],
+        )?;
         Ok(())
     }
 
-    pub fn list_stickers(&self, uri: &str) -> Result<Vec<(String, String)>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT name, value FROM stickers WHERE uri = ?1 ORDER BY name")?;
-        let sticker_rows = stmt.query_map(params![uri], |row| Ok((row.get(0)?, row.get(1)?)))?;
+    /// Delete one sticker (`name` given) or every sticker of the object.
+    /// Returns whether any row was removed.
+    pub fn delete_sticker_typed(
+        &self,
+        sticker_type: &str,
+        uri: &str,
+        name: Option<&str>,
+    ) -> Result<bool> {
+        let affected = if let Some(sticker_name) = name {
+            self.conn.execute(
+                "DELETE FROM stickers WHERE type = ?1 AND uri = ?2 AND name = ?3",
+                params![sticker_type, uri, sticker_name],
+            )?
+        } else {
+            self.conn.execute(
+                "DELETE FROM stickers WHERE type = ?1 AND uri = ?2",
+                params![sticker_type, uri],
+            )?
+        };
+        Ok(affected > 0)
+    }
+
+    pub fn list_stickers_typed(
+        &self,
+        sticker_type: &str,
+        uri: &str,
+    ) -> Result<Vec<(String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT name, value FROM stickers WHERE type = ?1 AND uri = ?2 ORDER BY name",
+        )?;
+        let sticker_rows = stmt.query_map(params![sticker_type, uri], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })?;
         let mut stickers = Vec::new();
         for row in sticker_rows {
             stickers.push(row?);
@@ -2027,22 +2158,47 @@ impl Database {
         Ok(stickers)
     }
 
-    pub fn find_stickers(&self, uri: &str, name: &str) -> Result<Vec<(String, String)>> {
+    /// Find `(uri, value)` for every sticker called `name` in the domain.
+    ///
+    /// `song` matches `uri` as a directory (equal, or below it as a subtree).
+    /// Every other domain matches `uri` as a plain case-insensitive string
+    /// prefix (MPD's `uri LIKE (? || '%')`; the empty string matches all),
+    /// with LIKE wildcards in `uri` taken literally.
+    pub fn find_stickers_typed(
+        &self,
+        sticker_type: &str,
+        uri: &str,
+        name: &str,
+    ) -> Result<Vec<(String, String)>> {
         let sticker_rows: Vec<(String, String)> = if uri.is_empty() {
-            let mut stmt = self
-                .conn
-                .prepare("SELECT uri, value FROM stickers WHERE name = ?1 ORDER BY uri")?;
-            stmt.query_map(params![name], |row| Ok((row.get(0)?, row.get(1)?)))?
-                .collect::<std::result::Result<Vec<_>, _>>()?
+            let mut stmt = self.conn.prepare(
+                "SELECT uri, value FROM stickers WHERE type = ?1 AND name = ?2 ORDER BY uri",
+            )?;
+            stmt.query_map(params![sticker_type, name], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?
+        } else if sticker_type == STICKER_TYPE_SONG {
+            let mut stmt = self.conn.prepare(
+                "SELECT uri, value FROM stickers
+                 WHERE type = ?1 AND (uri = ?2 OR uri LIKE ?3 ESCAPE '\\') AND name = ?4
+                 ORDER BY uri",
+            )?;
+            stmt.query_map(
+                params![sticker_type, uri, like_dir_prefix(uri), name],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?
+            .collect::<std::result::Result<Vec<_>, _>>()?
         } else {
             let mut stmt = self.conn.prepare(
                 "SELECT uri, value FROM stickers
-                 WHERE (uri = ?1 OR uri LIKE ?2 ESCAPE '\\') AND name = ?3
+                 WHERE type = ?1 AND uri LIKE ?2 ESCAPE '\\' AND name = ?3
                  ORDER BY uri",
             )?;
-            stmt.query_map(params![uri, like_dir_prefix(uri), name], |row| {
-                Ok((row.get(0)?, row.get(1)?))
-            })?
+            stmt.query_map(
+                params![sticker_type, like_string_prefix(uri), name],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?
             .collect::<std::result::Result<Vec<_>, _>>()?
         };
 
@@ -2061,6 +2217,56 @@ impl Database {
             names.push(row?);
         }
         Ok(names)
+    }
+
+    /// Distinct `(name, type)` pairs, optionally limited to one domain, like
+    /// MPD's `stickernamestypes` (`GROUP BY name,type ORDER BY name`).
+    pub fn list_sticker_names_types(
+        &self,
+        sticker_type: Option<&str>,
+    ) -> Result<Vec<(String, String)>> {
+        let mut out = Vec::new();
+        if let Some(t) = sticker_type {
+            let mut stmt = self.conn.prepare(
+                "SELECT name, type FROM stickers WHERE type = ?1
+                 GROUP BY name, type ORDER BY name",
+            )?;
+            for row in stmt.query_map(params![t], |r| Ok((r.get(0)?, r.get(1)?)))? {
+                out.push(row?);
+            }
+        } else {
+            let mut stmt = self.conn.prepare(
+                "SELECT name, type FROM stickers GROUP BY name, type ORDER BY name, type",
+            )?;
+            for row in stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))? {
+                out.push(row?);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Whether at least one database song matches `filter_expr`. Used to
+    /// validate tag/filter sticker URIs without loading every song.
+    pub fn filter_matches_any(
+        &self,
+        filter_expr: &rmpd_core::filter::FilterExpression,
+    ) -> Result<bool> {
+        let (where_clause, filter_params) = filter_expr.to_sql();
+        let hide_clause = self.hide_playlist_targets_clause("songs.path");
+        let sql = format!(
+            "SELECT EXISTS (SELECT 1 FROM songs WHERE {where_clause} {hide_clause} LIMIT 1)"
+        );
+        let params_refs: Vec<&dyn rusqlite::ToSql> = filter_params
+            .iter()
+            .map(|s| {
+                let r: &dyn rusqlite::ToSql = s;
+                r
+            })
+            .collect();
+        let found: i64 = self
+            .conn
+            .query_row(&sql, params_refs.as_slice(), |row| row.get(0))?;
+        Ok(found != 0)
     }
 }
 
