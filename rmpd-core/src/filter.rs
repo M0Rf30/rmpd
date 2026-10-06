@@ -310,6 +310,91 @@ impl FilterExpression {
         }
     }
 
+    /// Serialize to MPD's normalized expression form, mirroring
+    /// `ISongFilter::ToExpression()`: canonical tag names, double-quoted
+    /// escaped values, `AND` groups flattened into one parenthesized list and
+    /// a single term left unwrapped. Case-sensitivity is not part of MPD's
+    /// output (`eq_ci` serializes as `==`). Used to key `filter` stickers.
+    pub fn to_expression(&self) -> String {
+        fn escape(value: &str) -> String {
+            let mut out = String::with_capacity(value.len() + 2);
+            for c in value.chars() {
+                if matches!(c, '"' | '\'' | '\\') {
+                    out.push('\\');
+                }
+                out.push(c);
+            }
+            out
+        }
+
+        fn collect<'a>(expr: &'a FilterExpression, out: &mut Vec<&'a FilterExpression>) {
+            match expr {
+                FilterExpression::And(l, r) => {
+                    collect(l, out);
+                    collect(r, out);
+                }
+                other => out.push(other),
+            }
+        }
+
+        match self {
+            FilterExpression::Compare {
+                tag,
+                op,
+                value,
+                negated,
+                ..
+            } => {
+                let name = match tag.as_str() {
+                    "any" => "any",
+                    "file" => "file",
+                    other => canonical_tag_name(other),
+                };
+                let op = match (op, negated) {
+                    (CompareOp::Equal, false) => "==",
+                    (CompareOp::Equal, true) => "!=",
+                    (CompareOp::Contains, false) => "contains",
+                    (CompareOp::Contains, true) => "!contains",
+                    (CompareOp::StartsWith, false) => "starts_with",
+                    (CompareOp::StartsWith, true) => "!starts_with",
+                    (CompareOp::Regex, false) => "=~",
+                    (CompareOp::Regex, true) => "!~",
+                };
+                format!("({name} {op} \"{}\")", escape(value))
+            }
+            FilterExpression::Base(value) => format!("(base \"{}\")", escape(value)),
+            FilterExpression::ModifiedSince(ts) => {
+                format!("(modified-since \"{}\")", crate::time::format_iso8601(*ts))
+            }
+            FilterExpression::AddedSince(ts) => {
+                format!("(added-since \"{}\")", crate::time::format_iso8601(*ts))
+            }
+            FilterExpression::AudioFormat {
+                sample_rate,
+                bits,
+                channels,
+            } => {
+                let fully_defined = sample_rate.is_some() && bits.is_some() && channels.is_some();
+                let part = |v: Option<String>| v.unwrap_or_else(|| "*".to_string());
+                format!(
+                    "(AudioFormat {} \"{}:{}:{}\")",
+                    if fully_defined { "==" } else { "=~" },
+                    part(sample_rate.map(|v| v.to_string())),
+                    part(bits.map(|v| v.to_string())),
+                    part(channels.map(|v| v.to_string())),
+                )
+            }
+            FilterExpression::Priority(n) => format!("(prio >= {n})"),
+            FilterExpression::Not(inner) => format!("(!{})", inner.to_expression()),
+            FilterExpression::And(..) => {
+                let mut items = Vec::new();
+                collect(self, &mut items);
+                let parts: Vec<String> = items.iter().map(|e| e.to_expression()).collect();
+                format!("({})", parts.join(" AND "))
+            }
+        }
+    }
+
     /// Convert filter expression to SQL WHERE clause using EXISTS subqueries on song_tags.
     /// The songs table is referenced as `songs` (no alias).
     pub fn to_sql(&self) -> (String, Vec<String>) {
@@ -1218,5 +1303,70 @@ mod tests {
     #[test]
     fn test_legacy_pairs_empty_rejected() {
         assert!(FilterExpression::from_pairs(&[], false).is_err());
+    }
+
+    fn norm(input: &str) -> String {
+        FilterExpression::parse(input, false)
+            .unwrap()
+            .to_expression()
+    }
+
+    #[test]
+    fn test_to_expression_normalizes_like_mpd() {
+        // Canonical tag names, double quotes, single term unwrapped.
+        assert_eq!(
+            norm("(album == 'Greatest Hits')"),
+            "(Album == \"Greatest Hits\")"
+        );
+        assert_eq!(norm("((artist == \"X\"))"), "(Artist == \"X\")");
+        // AND groups flatten regardless of input nesting.
+        assert_eq!(
+            norm("((album == 'A') AND (artist == 'B') AND (genre == 'C'))"),
+            "((Album == \"A\") AND (Artist == \"B\") AND (Genre == \"C\"))"
+        );
+        assert_eq!(
+            norm("(((album == 'A') AND (artist == 'B')) AND (genre == 'C'))"),
+            "((Album == \"A\") AND (Artist == \"B\") AND (Genre == \"C\"))"
+        );
+    }
+
+    #[test]
+    fn test_to_expression_operators_escaping_and_special_terms() {
+        assert_eq!(norm("(!(album contains 'x'))"), "(!(Album contains \"x\"))");
+        assert_eq!(
+            norm("(title !starts_with \"a\")"),
+            "(Title !starts_with \"a\")"
+        );
+        assert_eq!(norm("(file =~ 'a.*')"), "(file =~ \"a.*\")");
+        assert_eq!(norm("(any != 'x')"), "(any != \"x\")");
+        // eq_ci still serializes as `==` (case-folding is not part of MPD's output).
+        assert_eq!(norm("(album eq_ci 'x')"), "(Album == \"x\")");
+        // Quotes and backslashes are escaped.
+        assert_eq!(
+            norm("(album == \"a\\\"b\\\\c\")"),
+            "(Album == \"a\\\"b\\\\c\")"
+        );
+        assert_eq!(norm("(base 'Music/Rock')"), "(base \"Music/Rock\")");
+        assert_eq!(norm("(prio >= 5)"), "(prio >= 5)");
+        assert_eq!(
+            norm("(AudioFormat == '44100:16:2')"),
+            "(AudioFormat == \"44100:16:2\")"
+        );
+        assert_eq!(
+            norm("(AudioFormat =~ '44100:*:2')"),
+            "(AudioFormat =~ \"44100:*:2\")"
+        );
+    }
+
+    #[test]
+    fn test_to_expression_roundtrips() {
+        for src in [
+            "(Album == \"A\")",
+            "((Album == \"A\") AND (!(Artist contains \"B\")))",
+            "(modified-since \"2024-01-02T03:04:05Z\")",
+        ] {
+            let once = norm(src);
+            assert_eq!(norm(&once), once, "normalization must be idempotent: {src}");
+        }
     }
 }
