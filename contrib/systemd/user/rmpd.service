@@ -1,17 +1,45 @@
+# rmpd user service (systemd --user).
+#
+# Install:
+#   install -Dm644 rmpd.service rmpd.socket -t ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now rmpd.socket   # socket activation, or
+#   systemctl --user enable --now rmpd.service  # start at login
+#
+# Type=notify: rmpd sends READY=1 over $NOTIFY_SOCKET once every listener is
+# bound and it accepts connections (MPD behaves the same), and STOPPING=1 when
+# it shuts down. Do NOT pass --daemonize here: systemd must track the main
+# process (rmpd ignores --daemonize when it detects NOTIFY_SOCKET anyway).
+#
+# Socket activation: when rmpd.socket is enabled, systemd binds the sockets
+# and hands them to rmpd (LISTEN_PID/LISTEN_FDS). rmpd then serves exactly
+# those sockets and ignores `bind_address`, `port` and `unix_socket` from its
+# configuration (as MPD does). Without rmpd.socket, rmpd binds its own
+# listeners as usual, so this service also works on its own.
+
 [Unit]
 Description=Rust music player daemon
 Documentation=https://github.com/M0Rf30/rmpd
-After=sound.target pipewire.service pipewire-pulse.service wireplumber.service pulseaudio.service
+After=network.target sound.target pipewire.service pipewire-pulse.service wireplumber.service pulseaudio.service
 StartLimitIntervalSec=60
 StartLimitBurst=5
 
 [Service]
-Type=exec
+Type=notify
 ExecStart=/usr/bin/rmpd
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=20
+
+# rmpd keeps its config, database and playlists in $XDG_CONFIG_HOME/rmpd and its
+# state file in $XDG_STATE_HOME/rmpd (the default; $STATE_DIRECTORY is honored).
+# ConfigurationDirectory= makes sure ~/.config/rmpd exists *before* the mount
+# namespace is set up: ReadWritePaths= on a missing directory fails the unit
+# with status=226/NAMESPACE. ConfigurationDirectory= alone is read-only, hence
+# the explicit ReadWritePaths= below.
 ConfigurationDirectory=rmpd
+StateDirectory=rmpd
+ReadWritePaths=%E/rmpd
 
 # Security hardening
 NoNewPrivileges=true
@@ -25,3 +53,4 @@ RestrictSUIDSGID=true
 
 [Install]
 WantedBy=default.target
+Also=rmpd.socket

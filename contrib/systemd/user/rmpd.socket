@@ -1,0 +1,21 @@
+# rmpd user socket (systemd --user), modeled on MPD's systemd/user/mpd.socket.
+#
+# systemd listens here and starts rmpd.service on the first connection. rmpd
+# detects the passed sockets (LISTEN_FDS) and serves them instead of binding
+# its configured address; TCP and Unix stream sockets are both supported.
+
+[Socket]
+# Loopback only, matching rmpd's default bind_address. Use
+# `ListenStream=6600` (all interfaces) only if you want LAN access, and
+# protect it with passwords in rmpd.toml.
+ListenStream=127.0.0.1:6600
+# $XDG_RUNTIME_DIR/rmpd/socket (MPD uses $XDG_RUNTIME_DIR/mpd/socket).
+ListenStream=%t/rmpd/socket
+SocketMode=0600
+DirectoryMode=0700
+Backlog=5
+KeepAlive=true
+Service=rmpd.service
+
+[Install]
+WantedBy=sockets.target
