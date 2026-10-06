@@ -141,6 +141,19 @@ pub(crate) fn write_silent_wav(path: &std::path::Path, seconds: u32) {
     std::fs::write(path, buf).unwrap();
 }
 
+/// What a test song's file in the music directory holds.
+#[derive(Clone, Copy)]
+pub(crate) enum Media {
+    /// This many seconds of silence (a WAV file).
+    Silence(u32),
+    /// Bytes that are not audio at all: the decoder rejects the file.
+    NotAudio,
+    /// A named pipe nobody writes to: opening it for decoding blocks until a
+    /// writer shows up, i.e. a song that is stuck "opening" (unix only).
+    #[cfg(unix)]
+    Fifo,
+}
+
 /// A server whose database holds one song per `(file name, seconds)` entry,
 /// backed by a real file in the music directory: `seconds` of silence, or —
 /// for `0` — a file that is not audio at all (the decoder rejects it). Every
@@ -148,6 +161,25 @@ pub(crate) fn write_silent_wav(path: &std::path::Path, seconds: u32) {
 /// `output_type` (`"null"` plays, anything unknown fails to open).
 pub(crate) async fn setup_playable_with_output(
     files: &[(&str, u32)],
+    output_type: &str,
+) -> (MpdTestServer, MpdTestClient, TempDir) {
+    let media: Vec<(&str, Media)> = files
+        .iter()
+        .map(|&(name, seconds)| {
+            let media = if seconds == 0 {
+                Media::NotAudio
+            } else {
+                Media::Silence(seconds)
+            };
+            (name, media)
+        })
+        .collect();
+    setup_media(&media, output_type).await
+}
+
+/// [`setup_playable_with_output`] with a choice of what each file holds.
+pub(crate) async fn setup_media(
+    files: &[(&str, Media)],
     output_type: &str,
 ) -> (MpdTestServer, MpdTestClient, TempDir) {
     let tmp = TempDir::new().unwrap();
@@ -160,12 +192,19 @@ pub(crate) async fn setup_playable_with_output(
 
     {
         let db = rmpd_library::Database::open(&db_path_str).unwrap();
-        for (i, (name, seconds)) in files.iter().enumerate() {
+        for (i, (name, media)) in files.iter().enumerate() {
             let file = music_dir.join(name);
-            if *seconds == 0 {
-                std::fs::write(&file, b"this is not audio").unwrap();
-            } else {
-                write_silent_wav(&file, *seconds);
+            match media {
+                Media::NotAudio => std::fs::write(&file, b"this is not audio").unwrap(),
+                Media::Silence(seconds) => write_silent_wav(&file, *seconds),
+                #[cfg(unix)]
+                Media::Fifo => assert!(
+                    std::process::Command::new("mkfifo")
+                        .arg(&file)
+                        .status()
+                        .expect("mkfifo")
+                        .success()
+                ),
             }
             db.add_song(&make_test_song(name, i as u32 + 1)).unwrap();
         }
@@ -222,6 +261,22 @@ async fn playtime(client: &mut MpdTestClient) -> u64 {
         .unwrap_or_else(|| panic!("no playtime in: {stats}"))
         .parse()
         .unwrap()
+}
+
+/// Poll `stats` `playtime` until `done` accepts it (15 s cap).
+async fn wait_playtime(client: &mut MpdTestClient, what: &str, done: impl Fn(u64) -> bool) -> u64 {
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let t = playtime(client).await;
+        if done(t) {
+            return t;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for {what}; playtime is {t}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 }
 
 #[tokio::test]
@@ -553,9 +608,13 @@ async fn playback_stops_once_every_queued_song_failed() {
         "{error}"
     );
     // …and it stays stopped.
-    tokio::time::sleep(Duration::from_millis(500)).await;
-    let status = client.command("status").await;
-    assert_eq!(get_field(&status, "state"), Some("stop"), "{status}");
+    assert_status_holds(
+        &mut client,
+        Duration::from_millis(500),
+        "the stopped player",
+        |s| get_field(s, "state") == Some("stop"),
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -592,9 +651,165 @@ async fn seek_on_an_undecodable_song_reports_the_decoder_error() {
         resp.starts_with("ACK [5@0] {seek} Failed to decode \"bad.wav\": "),
         "unexpected response: {resp}"
     );
+    // Let the first attempt's failure be fully handled (error recorded,
+    // player stopped) before the next attempt starts, so the two cannot
+    // overlap on a slow machine.
+    wait_status(&mut client, "the first attempt to settle", |s| {
+        get_field(s, "state") == Some("stop") && get_field(s, "error").is_some()
+    })
+    .await;
     let resp = client.command("seekid 1 5").await;
     assert!(
         resp.starts_with("ACK [5@0] {seekid} Failed to decode \"bad.wav\": "),
+        "unexpected response: {resp}"
+    );
+}
+
+/// Open the write end of the FIFO behind `name` in the test's music
+/// directory, then close it: whoever is blocked opening it for reading gets
+/// an empty stream (and fails to probe it).
+#[cfg(unix)]
+async fn release_fifo(tmp: &TempDir, name: &str) {
+    let fifo = tmp.path().join("music").join(name);
+    tokio::task::spawn_blocking(move || {
+        drop(std::fs::OpenOptions::new().write(true).open(fifo).unwrap());
+    })
+    .await
+    .unwrap();
+}
+
+/// Assert `done` stays false for `window`, polling `status` (an absence
+/// check: it can only wait, but it fails the moment the state is wrong).
+async fn assert_status_holds(
+    client: &mut MpdTestClient,
+    window: Duration,
+    what: &str,
+    holds: impl Fn(&str) -> bool,
+) {
+    let until = Instant::now() + window;
+    loop {
+        let status = client.command("status").await;
+        assert!(holds(&status), "{what} no longer holds:\n{status}");
+        if Instant::now() >= until {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_song_aborted_while_opening_does_not_disturb_its_replacement() {
+    // `play 0` leaves the decode thread stuck opening a FIFO. `play 2` aborts
+    // it (it has to wait for that thread), and the aborted song then fails as
+    // soon as its open returns. That failure belongs to a song the user has
+    // already moved on from: it must not set `error:` nor stop or skip the
+    // song now playing. (The last song is the replacement, so a stale failure
+    // handled as "advance" would either stop at the end of the queue or step
+    // back onto the song after the stuck one — both visible.)
+    let (_server, mut client, tmp) = setup_media(
+        &[
+            ("stuck.wav", Media::Fifo),
+            ("good.wav", Media::Silence(60)),
+            ("last.wav", Media::Silence(60)),
+        ],
+        "null",
+    )
+    .await;
+    assert_ok(&client.command("play 0").await);
+
+    let fifo = tmp.path().join("music").join("stuck.wav");
+    let writer = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(500));
+        drop(std::fs::OpenOptions::new().write(true).open(fifo).unwrap());
+    });
+    assert_ok(&client.command("play 2").await);
+    writer.join().unwrap();
+
+    wait_status(&mut client, "last.wav to play", |s| {
+        get_field(s, "state") == Some("play") && get_field(s, "song") == Some("2")
+    })
+    .await;
+    assert_status_holds(
+        &mut client,
+        Duration::from_millis(1500),
+        "playback of last.wav",
+        |s| {
+            get_field(s, "state") == Some("play")
+                && get_field(s, "song") == Some("2")
+                && get_field(s, "error").is_none()
+        },
+    )
+    .await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_song_aborted_by_stop_leaves_no_error_behind() {
+    let (_server, mut client, tmp) = setup_media(
+        &[("stuck.wav", Media::Fifo), ("good.wav", Media::Silence(60))],
+        "null",
+    )
+    .await;
+    assert_ok(&client.command("play 0").await);
+
+    // `stop` waits for the stuck decode thread; its failure then lands after
+    // the stop and is nobody's error.
+    let fifo = tmp.path().join("music").join("stuck.wav");
+    let writer = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(500));
+        drop(std::fs::OpenOptions::new().write(true).open(fifo).unwrap());
+    });
+    assert_ok(&client.command("stop").await);
+    writer.join().unwrap();
+
+    assert_status_holds(
+        &mut client,
+        Duration::from_millis(1000),
+        "the stopped player with no error",
+        |s| {
+            get_field(s, "state") == Some("stop")
+                && get_field(s, "error").is_none()
+                && get_field(s, "song") == Some("0")
+        },
+    )
+    .await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_seek_waiting_for_its_verdict_does_not_block_other_clients() {
+    // The decode thread is stuck opening a FIFO, so `seekcur`'s verdict (up to
+    // several seconds) cannot arrive. Waiting for it must not hold the engine
+    // lock: any engine writer queued behind it — here `setvol` — would stall,
+    // and with it every later `status`/`stats` reader.
+    let (server, mut client, tmp) = setup_media(&[("stuck.wav", Media::Fifo)], "null").await;
+    assert_ok(&client.command("play 0").await);
+
+    let seeker = tokio::spawn(async move { client.command("seekcur 5").await });
+    // Give the seek time to be queued and start waiting. (Too short a wait
+    // can only make this test less strict, never fail it: until the seek is
+    // queued there is no lock to be stuck behind.)
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!seeker.is_finished(), "the seek must still be waiting");
+
+    let mut other = MpdTestClient::connect(server.port()).await;
+    let started = Instant::now();
+    assert_ok(&other.command("setvol 50").await);
+    let status = other.command("status").await;
+    assert_eq!(get_field(&status, "volume"), Some("50"), "{status}");
+    assert_ok(&other.command("stats").await);
+    assert!(
+        started.elapsed() < Duration::from_secs(3),
+        "engine users stalled behind a pending seek for {:?}",
+        started.elapsed()
+    );
+
+    // Let the song fail: the waiting seek then reports why.
+    release_fifo(&tmp, "stuck.wav").await;
+    let resp = seeker.await.unwrap();
+    assert!(
+        resp.starts_with("ACK [5@0] {seekcur} Failed to decode \"stuck.wav\": "),
         "unexpected response: {resp}"
     );
 }
@@ -653,8 +868,7 @@ async fn stats_playtime_counts_played_audio_and_ignores_pauses() {
         get_field(s, "state") == Some("play")
     })
     .await;
-    tokio::time::sleep(Duration::from_millis(600)).await;
-    let playing = playtime(&mut client).await;
+    let playing = wait_playtime(&mut client, "audio to be counted", |t| t > 0).await;
     assert!(playing > 0, "audio handed to the output must count");
 
     // Paused time does not count (the decode thread writes nothing).
@@ -663,14 +877,20 @@ async fn stats_playtime_counts_played_audio_and_ignores_pauses() {
     // in (paced in real time, up to one 0.512 s chunk) returns: settle first,
     // polling at an interval longer than a chunk.
     let mut paused = playtime(&mut client).await;
+    let settle_deadline = Instant::now() + Duration::from_secs(15);
     loop {
         tokio::time::sleep(Duration::from_millis(700)).await;
         let now = playtime(&mut client).await;
         if now == paused {
             break;
         }
+        assert!(
+            Instant::now() < settle_deadline,
+            "playtime never settled after the pause (still moving: {paused} -> {now})"
+        );
         paused = now;
     }
+    // An absence check, so it can only wait: playtime must still be flat.
     tokio::time::sleep(Duration::from_millis(1200)).await;
     assert_eq!(
         playtime(&mut client).await,

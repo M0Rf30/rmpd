@@ -355,7 +355,15 @@ fn seek_error(command: &str, e: &RmpdError) -> String {
 /// Seek inside the song that is playing/paused right now and, on success,
 /// record the position `status` should show until the next position event.
 async fn seek_playing_song(state: &AppState, command: &str, time: f64) -> String {
-    let result = state.engine.read().await.seek(time).await;
+    // Queue the seek under the engine lock, but wait for the decoder's verdict
+    // (up to seconds, for a slow source) only after releasing it: holding it
+    // would stall every other engine user — `status`, `stats`, `stop` — behind
+    // this seek.
+    let pending = state.engine.read().await.begin_seek(time);
+    let result = match pending {
+        Ok(pending) => pending.verdict().await,
+        Err(e) => Err(e),
+    };
     match result {
         Ok(()) => {
             let mut status = state.status.write().await;
@@ -494,8 +502,10 @@ pub(crate) async fn current_song_removed(state: &AppState, at: u32) {
             // Paused: MPD stops the player but leaves `current` on the
             // replacement, so a following `play` starts it.
             let _ = stop_playback(state, false).await;
-            let queue = state.queue.read().await;
+            // status before queue, the order every other path takes (the
+            // reverse order can deadlock against a queued queue writer).
             let mut status = state.status.write().await;
+            let queue = state.queue.read().await;
             status.current_song = queue.get(pos).map(|item| QueuePosition {
                 position: pos,
                 id: item.id,
