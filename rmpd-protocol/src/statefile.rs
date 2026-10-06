@@ -52,13 +52,17 @@ impl StateFile {
         };
         content.push_str(&format!("state: {state_str}\n"));
 
-        // Current song position
+        // Current song position. A stopped player keeps its current song
+        // (MPD `PlaylistState.cxx` writes `current:` for `state: stop` too).
         if let Some(current) = &status.current_song {
             content.push_str(&format!("current: {}\n", current.position));
         }
 
-        // Playback time (elapsed)
-        if let Some(elapsed) = &status.elapsed {
+        // Playback time (elapsed) — only while playing/paused; MPD writes no
+        // `time:` for a stopped player.
+        if status.state != PlayerState::Stop
+            && let Some(elapsed) = &status.elapsed
+        {
             content.push_str(&format!("time: {:.6}\n", elapsed.as_secs_f64()));
         }
 
@@ -354,6 +358,39 @@ mod tests {
         assert_eq!(loaded.playlist_paths[0], "/music/song1.mp3");
         assert_eq!(loaded.playlist_paths[1], "/music/song2.mp3");
         assert_eq!(loaded.last_loaded_playlist, "favorites");
+    }
+
+    /// MPD `playlist_state_save`: a stopped player still writes `current:`
+    /// (the song it stopped on) but no `time:`, which only means something
+    /// while a song is playing or paused.
+    #[tokio::test]
+    async fn test_stopped_state_saves_current_but_not_time() {
+        let temp_dir = TempDir::new().unwrap();
+        let state_path = temp_dir.path().join("state").to_str().unwrap().to_string();
+        let statefile = StateFile::new(state_path.clone());
+
+        let mut queue = Queue::new();
+        queue.add(make_test_song("/music/song1.mp3", 0));
+        queue.add(make_test_song("/music/song2.mp3", 1));
+
+        let status = PlayerStatus {
+            state: PlayerState::Stop,
+            current_song: Some(QueuePosition { position: 1, id: 2 }),
+            // A stale position left over from the song that was playing.
+            elapsed: Some(Duration::from_secs(42)),
+            ..PlayerStatus::default()
+        };
+        statefile.save(&status, &queue, &[]).await.unwrap();
+
+        let raw = std::fs::read_to_string(&state_path).unwrap();
+        assert!(raw.contains("state: stop\n"), "{raw}");
+        assert!(raw.contains("current: 1\n"), "{raw}");
+        assert!(!raw.contains("time:"), "no time while stopped: {raw}");
+
+        let loaded = statefile.load().unwrap().unwrap();
+        assert_eq!(loaded.state, Some(PlayerState::Stop));
+        assert_eq!(loaded.current_position, Some(1));
+        assert_eq!(loaded.elapsed_seconds, None);
     }
 
     #[tokio::test]

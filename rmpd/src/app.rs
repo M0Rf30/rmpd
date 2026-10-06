@@ -546,6 +546,15 @@ async fn restore_state(
                             error!("failed to resume playback: {}", e);
                         }
                     });
+                } else {
+                    // Saved as `state: stop` with a `current:` position: the
+                    // stopped player keeps the song it stopped on (MPD
+                    // `playlist_state_restore`: `playlist.current = current`).
+                    let mut status = state.status.write().await;
+                    status.current_song = Some(rmpd_core::state::QueuePosition {
+                        position,
+                        id: song_id,
+                    });
                 }
             } else {
                 // Don't auto-resume, just set current position

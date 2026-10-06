@@ -485,7 +485,9 @@ impl PlayerInterface for MprisPlayer {
     }
 
     async fn can_seek(&self) -> fdo::Result<bool> {
-        Ok(self.state.status.read().await.current_song.is_some())
+        // A stopped player keeps its current song but cannot seek in it.
+        Ok(current_state(&self.state) != PlayerState::Stop
+            && self.state.status.read().await.current_song.is_some())
     }
 
     async fn can_control(&self) -> fdo::Result<bool> {
