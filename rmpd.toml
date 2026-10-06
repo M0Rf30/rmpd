@@ -18,7 +18,13 @@ music_directory = "~/Music"
 # The following default to your XDG config dir (~/.config/rmpd/…) when omitted:
 # playlist_directory = "~/.config/rmpd/playlists"
 # db_file = "~/.config/rmpd/database.db"
-# state_file = "~/.config/rmpd/state"
+# The state file defaults to $XDG_STATE_HOME/rmpd/state (~/.local/state/rmpd/state;
+# $STATE_DIRECTORY/state under systemd StateDirectory=). An existing
+# ~/.config/rmpd/state from older releases keeps being used until the new file exists.
+# state_file = "$XDG_STATE_HOME/rmpd/state"
+# Path values accept "~/" and, like mpd.conf, $HOME, $XDG_CONFIG_HOME,
+# $XDG_MUSIC_DIR, $XDG_CACHE_HOME, $XDG_DATA_HOME, $XDG_RUNTIME_DIR and
+# $XDG_STATE_HOME prefixes (e.g. "$XDG_CACHE_HOME/rmpd/database.db").
 log_level = "info"
 # Follow symlinks that resolve inside/outside music_directory, independently.
 # Matches mpd.conf's follow_inside_symlinks/follow_outside_symlinks.
