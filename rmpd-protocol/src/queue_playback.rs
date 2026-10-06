@@ -81,7 +81,27 @@ pub(crate) async fn stop_playback(
     state: &AppState,
     clear_current: bool,
 ) -> rmpd_core::error::Result<()> {
-    state.engine.write().await.stop().await?;
+    stop_playback_guarded(state, clear_current, None)
+        .await
+        .map(|_| ())
+}
+
+/// [`stop_playback`], but only if the engine is still in playback
+/// `generation` `expected` (checked under the engine lock, so it cannot race a
+/// `play`/`stop` from a client). Returns `false`, having done nothing, when
+/// the engine has moved on — i.e. the event being handled is stale.
+pub(crate) async fn stop_playback_guarded(
+    state: &AppState,
+    clear_current: bool,
+    expected: Option<u64>,
+) -> rmpd_core::error::Result<bool> {
+    {
+        let mut engine = state.engine.write().await;
+        if expected.is_some_and(|g| engine.generation() != g) {
+            return Ok(false);
+        }
+        engine.stop().await?;
+    }
     // One critical section: `status` syncs `state` from the engine's (already
     // stopped) atomic under this same lock, so a separate state/current update
     // would let a client see "stop" with the old current song.
@@ -97,7 +117,7 @@ pub(crate) async fn stop_playback(
     state
         .event_bus
         .emit(Event::PlayerStateChanged(PlayerState::Stop));
-    Ok(())
+    Ok(true)
 }
 
 /// Re-anchor `status.current_song` / `next_song` on the queue after it was
@@ -174,9 +194,15 @@ impl QueuePlaybackManager {
                             error!("error advancing to next song: {}", e);
                         }
                     }
-                    Ok(Event::PlaybackError { message, output }) => {
+                    Ok(Event::PlaybackError {
+                        message,
+                        output,
+                        generation,
+                    }) => {
                         warn!("playback error: {message}");
-                        if let Err(e) = Self::handle_playback_error(&state, message, output).await {
+                        if let Err(e) =
+                            Self::handle_playback_error(&state, message, output, generation).await
+                        {
                             error!("error handling playback error: {}", e);
                         }
                     }
@@ -260,7 +286,7 @@ impl QueuePlaybackManager {
         // The song played through: that ends any streak of failing songs
         // (MPD `ResumePlayback`: no error => `error_count = 0`).
         state.playback_error_count.store(0, Ordering::Release);
-        Self::advance(state).await
+        Self::advance(state, None).await
     }
 
     /// Handle a playback failure reported by the engine.
@@ -270,25 +296,41 @@ impl QueuePlaybackManager {
     /// (`stop_on_error`), or as many failures in a row as the queue has
     /// songs stops playback — keeping the current song and the error — while
     /// any other decoder error skips on to the next song.
+    ///
+    /// `generation` is the engine's playback generation when the failing song
+    /// was started. If the engine has moved on since (the user stopped,
+    /// skipped or replayed in the meantime) the report is stale and is
+    /// dropped: it must neither set `error:` nor stop/advance the song that
+    /// is playing now.
     async fn handle_playback_error(
         state: &AppState,
         message: String,
         output: bool,
+        generation: u64,
     ) -> rmpd_core::error::Result<()> {
+        if state.engine.read().await.generation() != generation {
+            debug!("ignoring stale playback error: {message}");
+            return Ok(());
+        }
         state.status.write().await.error = Some(message);
 
         let failures = state.playback_error_count.fetch_add(1, Ordering::AcqRel) + 1;
         let queue_len = state.queue.read().await.len() as u32;
         if output || state.stop_on_error.load(Ordering::Acquire) || failures >= queue_len {
             debug!("too many playback errors or critical error: stopping playback");
-            return stop_playback(state, false).await;
+            stop_playback_guarded(state, false, Some(generation)).await?;
+            return Ok(());
         }
-        Self::advance(state).await
+        Self::advance(state, Some(generation)).await
     }
 
     /// Move on after the current song ended (finished or failed): play the
     /// next song, or stop at the end of the queue.
-    async fn advance(state: &AppState) -> rmpd_core::error::Result<()> {
+    ///
+    /// `expected` is the engine generation the caller is reacting to (a
+    /// failure report); every engine-mutating step re-checks it under the
+    /// engine lock and gives up if a client got in first.
+    async fn advance(state: &AppState, expected: Option<u64>) -> rmpd_core::error::Result<()> {
         // MPD `PlayNext`: moving on is not a seek, so a failure of the next
         // song skips again instead of stopping.
         state.stop_on_error.store(false, Ordering::Release);
@@ -306,7 +348,8 @@ impl QueuePlaybackManager {
             // Playback ended with no song selected (e.g. the playing song was
             // removed from the queue): don't sit in "play" with a dead decode
             // thread.
-            return stop_playback(state, true).await;
+            stop_playback_guarded(state, true, expected).await?;
+            return Ok(());
         };
 
         let next = {
@@ -325,8 +368,9 @@ impl QueuePlaybackManager {
             // clear the current song (MPD `PlayNext`: `Stop(); current = -1`),
             // then consume the song that just finished.
             debug!("no next song to play, stopping playback");
-            stop_playback(state, true).await?;
-            consume_finished(state, current).await;
+            if stop_playback_guarded(state, true, expected).await? {
+                consume_finished(state, current).await;
+            }
             return Ok(());
         };
 
@@ -339,7 +383,8 @@ impl QueuePlaybackManager {
         };
         let Some((song, item_id, range)) = target else {
             debug!("resolved next position vanished, stopping playback");
-            return stop_playback(state, true).await;
+            stop_playback_guarded(state, true, expected).await?;
+            return Ok(());
         };
 
         let playback_song = match prepare_song_for_playback(
@@ -363,15 +408,25 @@ impl QueuePlaybackManager {
                     });
                     status.next_song = None;
                 }
+                let generation = state.engine.read().await.generation();
                 state.event_bus.emit(Event::PlaybackError {
                     message: format!("Failed to decode {:?}: {e}", song.path.as_str()),
                     output: false,
+                    generation,
                 });
                 return Ok(());
             }
         };
 
-        match state.engine.write().await.play(playback_song).await {
+        let played = {
+            let mut engine = state.engine.write().await;
+            if expected.is_some_and(|g| engine.generation() != g) {
+                debug!("playback moved on while advancing; dropping stale advance");
+                return Ok(());
+            }
+            engine.play(playback_song).await
+        };
+        match played {
             Ok(_) => {
                 {
                     let mut status = state.status.write().await;
@@ -815,9 +870,15 @@ mod tests {
         let state = state_with_queue(3);
         state.status.write().await.current_song = Some(QueuePosition { position: 1, id: 2 });
 
-        QueuePlaybackManager::handle_playback_error(&state, "no device".to_owned(), true)
-            .await
-            .unwrap();
+        let generation = state.engine.read().await.generation();
+        QueuePlaybackManager::handle_playback_error(
+            &state,
+            "no device".to_owned(),
+            true,
+            generation,
+        )
+        .await
+        .unwrap();
 
         let status = state.status.read().await;
         assert_eq!(status.error.as_deref(), Some("no device"));
@@ -837,7 +898,8 @@ mod tests {
 
         // First failure: below the budget -> carries on with the next song
         // (the engine starts it; its own decode failure would come later).
-        QueuePlaybackManager::handle_playback_error(&state, "first".to_owned(), false)
+        let generation = state.engine.read().await.generation();
+        QueuePlaybackManager::handle_playback_error(&state, "first".to_owned(), false, generation)
             .await
             .unwrap();
         assert_eq!(
@@ -847,7 +909,9 @@ mod tests {
         assert_eq!(state.playback_error_count.load(Ordering::Acquire), 1);
 
         // Second failure in a row == queue length: give up, keep the song.
-        QueuePlaybackManager::handle_playback_error(&state, "second".to_owned(), false)
+        // Skipping started the next song, i.e. a new playback generation.
+        let generation = state.engine.read().await.generation();
+        QueuePlaybackManager::handle_playback_error(&state, "second".to_owned(), false, generation)
             .await
             .unwrap();
         let status = state.status.read().await;
@@ -862,11 +926,78 @@ mod tests {
         state.status.write().await.current_song = Some(QueuePosition { position: 0, id: 1 });
         state.begin_playback_attempt(true).await;
 
-        QueuePlaybackManager::handle_playback_error(&state, "broken".to_owned(), false)
+        let generation = state.engine.read().await.generation();
+        QueuePlaybackManager::handle_playback_error(&state, "broken".to_owned(), false, generation)
             .await
             .unwrap();
         let status = state.status.read().await;
         assert_eq!(status.state, PlayerState::Stop);
         assert_eq!(status.current_song.map(|c| c.id), Some(1), "no skip");
+    }
+    /// A failure report from a song the user has since stopped or replaced
+    /// (different engine generation) must be dropped: it neither sets
+    /// `error:` nor stops/advances what is playing now.
+    #[tokio::test]
+    async fn stale_playback_error_is_ignored() {
+        let state = state_with_queue(3);
+        state.status.write().await.current_song = Some(QueuePosition { position: 0, id: 1 });
+        state.status.write().await.state = PlayerState::Play;
+        let current = state.engine.read().await.generation();
+
+        for stale in [current.wrapping_add(1), current.wrapping_sub(1)] {
+            QueuePlaybackManager::handle_playback_error(
+                &state,
+                "from an aborted song".to_owned(),
+                false,
+                stale,
+            )
+            .await
+            .unwrap();
+        }
+        // An output error would stop playback if it were taken seriously.
+        QueuePlaybackManager::handle_playback_error(
+            &state,
+            "dead output".to_owned(),
+            true,
+            current.wrapping_add(7),
+        )
+        .await
+        .unwrap();
+
+        let status = state.status.read().await;
+        assert_eq!(status.error, None, "stale reports leave no error");
+        assert_eq!(status.state, PlayerState::Play, "nothing was stopped");
+        assert_eq!(
+            status.current_song.map(|c| c.id),
+            Some(1),
+            "nothing advanced"
+        );
+        assert_eq!(state.playback_error_count.load(Ordering::Acquire), 0);
+    }
+
+    /// `stop_playback_guarded` re-checks the generation under the engine
+    /// lock: a mismatch changes nothing, a match stops.
+    #[tokio::test]
+    async fn guarded_stop_only_acts_on_the_expected_generation() {
+        let state = state_with_queue(2);
+        state.status.write().await.state = PlayerState::Play;
+        state.status.write().await.current_song = Some(QueuePosition { position: 0, id: 1 });
+        let generation = state.engine.read().await.generation();
+
+        assert!(
+            !stop_playback_guarded(&state, true, Some(generation.wrapping_add(1)))
+                .await
+                .unwrap()
+        );
+        assert_eq!(state.status.read().await.state, PlayerState::Play);
+        assert!(state.status.read().await.current_song.is_some());
+
+        assert!(
+            stop_playback_guarded(&state, true, Some(generation))
+                .await
+                .unwrap()
+        );
+        assert_eq!(state.status.read().await.state, PlayerState::Stop);
+        assert!(state.status.read().await.current_song.is_none());
     }
 }

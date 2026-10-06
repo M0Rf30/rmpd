@@ -27,6 +27,10 @@ pub enum Event {
     PlaybackError {
         message: String,
         output: bool,
+        /// `PlaybackEngine::generation` of the playback attempt that failed;
+        /// a report that no longer matches the engine's current generation
+        /// concerns a song that was since stopped or replaced.
+        generation: u64,
     },
     /// The engine advanced to the look-ahead (next) song in-thread — gaplessly
     /// or via crossfade — instead of stopping. The protocol promotes its fed
@@ -176,6 +180,7 @@ mod tests {
         let event = Event::PlaybackError {
             message: "Failed to decode \"x.flac\": boom".to_owned(),
             output: false,
+            generation: 1,
         };
         assert_eq!(event.subsystems(), &[Subsystem::Player]);
     }
