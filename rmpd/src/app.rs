@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Gianluca Boiano
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+use crate::systemd::{self, Activated};
 use rmpd_core::config::Config;
 use rmpd_core::error::Result;
 use rmpd_core::state::PlayerState;
@@ -9,7 +10,11 @@ use std::sync::Arc;
 use tokio::signal;
 use tracing::{error, info, warn};
 
-pub async fn run(bind_address: String, config: Config) -> Result<()> {
+/// Run the daemon. When `activated` carries sockets inherited from systemd
+/// (socket activation), they are served instead of binding `bind_address` and
+/// `network.unix_socket` — like MPD, which skips its own listeners whenever
+/// activation fds exist.
+pub async fn run(bind_address: String, config: Config, activated: Option<Activated>) -> Result<()> {
     // Create application state with database and music directory paths
     let db_path = config.general.db_file.to_string();
     let music_dir = config.general.music_directory.to_string();
@@ -268,6 +273,7 @@ pub async fn run(bind_address: String, config: Config) -> Result<()> {
             match sig {
                 Ok(sig) => {
                     info!("received {}, saving state", sig);
+                    systemd::notify_stopping();
                     save_state(&shutdown_state, &shutdown_state_file).await;
                     let _ = shutdown_tx.send(());
                 }
@@ -281,6 +287,7 @@ pub async fn run(bind_address: String, config: Config) -> Result<()> {
             match signal::ctrl_c().await {
                 Ok(()) => {
                     info!("received SIGINT, saving state");
+                    systemd::notify_stopping();
                     save_state(&shutdown_state, &shutdown_state_file).await;
                     let _ = shutdown_tx.send(());
                 }
@@ -292,7 +299,9 @@ pub async fn run(bind_address: String, config: Config) -> Result<()> {
     });
 
     // Create and run server
-    let server = MpdServer::with_state(bind_address.clone(), state.clone(), shutdown_rx);
+    let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+    let server = MpdServer::with_state(bind_address.clone(), state.clone(), shutdown_rx)
+        .with_ready_signal(ready_tx);
     let server =
         server.with_unix_socket(config.network.unix_socket.as_ref().map(|p| p.to_string()));
     let server = server
@@ -301,21 +310,73 @@ pub async fn run(bind_address: String, config: Config) -> Result<()> {
             config.network.connection_timeout,
         ));
 
-    if let Some(sock) = &config.network.unix_socket {
-        info!("unix socket: {}", sock);
-    }
+    // systemd `Type=notify`: report readiness once every listener is bound
+    // and the accept loop is about to run (MPD sends READY=1 after startup).
+    // The sender is dropped unfired if the server fails first, so a failed
+    // start never reports ready. A no-op without $NOTIFY_SOCKET.
+    tokio::spawn(async move {
+        if ready_rx.await.is_ok() {
+            systemd::notify_ready();
+        }
+    });
 
-    let listener = tokio::net::TcpListener::bind(&bind_address).await?;
-    info!("mpd server listening on {}", bind_address);
+    let server_result = match activated {
+        Some(activated) => {
+            // Socket activation: serve the inherited sockets and bind nothing.
+            let mut tcp = Vec::new();
+            for l in activated.tcp {
+                let l = tokio::net::TcpListener::from_std(l)?;
+                match l.local_addr() {
+                    Ok(addr) => info!("mpd server listening on {} (socket activation)", addr),
+                    Err(_) => info!("mpd server listening on inherited TCP socket"),
+                }
+                tcp.push(l);
+            }
+            let mut unix = Vec::new();
+            for l in activated.unix {
+                let l = tokio::net::UnixListener::from_std(l)?;
+                info!("mpd server listening on inherited unix socket (socket activation)");
+                unix.push(l);
+            }
 
-    // Advertise rmpd via mDNS only once the TCP listener is actually
-    // accepting connections, and only when zeroconf is enabled.
-    if config.network.zeroconf_enabled {
-        state.advertise_mdns(config.network.port);
-    }
+            // Advertise the port systemd actually bound, and only when there
+            // is a TCP listener to advertise.
+            if config.network.zeroconf_enabled
+                && let Some(port) = tcp
+                    .iter()
+                    .find_map(|l| l.local_addr().ok())
+                    .map(|a| a.port())
+            {
+                state.advertise_mdns(port);
+            }
 
-    // Run server and handle result
-    let server_result = server.run_with_listener(listener).await;
+            server.run_with_listeners(tcp, unix).await
+        }
+        None => {
+            if let Some(sock) = &config.network.unix_socket {
+                info!("unix socket: {}", sock);
+            }
+
+            let listener = tokio::net::TcpListener::bind(&bind_address).await?;
+            info!("mpd server listening on {}", bind_address);
+
+            // Advertise rmpd via mDNS only once the TCP listener is actually
+            // accepting connections, and only when zeroconf is enabled. Use
+            // the port actually bound (`--port` overrides the config value).
+            if config.network.zeroconf_enabled {
+                let port = listener
+                    .local_addr()
+                    .map_or(config.network.port, |a| a.port());
+                state.advertise_mdns(port);
+            }
+
+            server.run_with_listener(listener).await
+        }
+    };
+
+    // Under systemd the service is stopping from here on (covers shutdown
+    // paths that bypass the signal handler, e.g. the `kill` command).
+    systemd::notify_stopping();
 
     // Stop the periodic ticker before the final save. This send is a no-op
     // if the signal handler above already sent it; it exists as a fallback

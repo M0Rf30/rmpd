@@ -70,7 +70,7 @@ mdns-sd = "0.21"                  # Network discovery
 mpris-server = { version = "0.10", features = ["tokio"] }  # MPRIS D-Bus media player interface
 chromaprint-sys-next = "1.6"      # Audio fingerprinting
 base64 = "0.23"                   # Base64 encoding
-nix = { version = "0.31", features = ["process", "fs"] }  # daemonize: fork/setsid/dup2
+nix = { version = "0.31", features = ["process", "fs", "socket"] }  # daemonize: fork/setsid/dup2; systemd socket activation: getsockname
 
 # Shared workspace crates
 rmpd-core = { path = "rmpd-core" }

@@ -7,6 +7,7 @@ use rmpd_core::config::{Config, ConfigSource, DiagLevel, DiscoverOptions};
 use tracing::{info, warn};
 
 mod app;
+mod systemd;
 
 /// Daemonize the process using double-fork + setsid.
 #[cfg(unix)]
@@ -253,6 +254,7 @@ fn main() -> Result<()> {
     }
 
     // Override with CLI arguments
+    let cli_listen_override = args.bind.is_some() || args.port.is_some();
     let bind_address = args
         .bind
         .unwrap_or_else(|| config.network.bind_address.clone());
@@ -263,17 +265,42 @@ fn main() -> Result<()> {
     info!("music directory: {}", config.general.music_directory);
     info!("database: {}", config.general.db_file);
 
+    // systemd integration (see systemd.rs). Take any socket-activation fds
+    // now: this clears LISTEN_* from the environment, which is only sound
+    // while the process is still single-threaded, and LISTEN_PID is only
+    // valid for this exact PID, so it must happen before any fork.
+    let activated = systemd::take_activated_listeners()
+        .map_err(|e| anyhow!("systemd socket activation failed: {e}"))?;
+    if activated.is_some() {
+        info!("socket activation: serving sockets passed by systemd");
+        if cli_listen_override {
+            warn!("--bind/--port are ignored: listening on the sockets passed by systemd");
+        }
+    }
+
     // Daemonize (double-fork) BEFORE the tokio runtime is built: forking a
     // live multi-threaded runtime loses every worker/reactor thread except
     // the calling one in the child, which then hangs or corrupts state the
     // instant it touches an async primitive.
+    //
+    // Never daemonize under a supervisor that tracks the main PID:
+    // `Type=notify` only accepts READY=1 from that PID (the forked child
+    // would be rejected and the unit would time out), and LISTEN_PID only
+    // matches the original process. Foreground is what systemd wants anyway.
     if args.daemonize {
-        daemonize()?;
+        if activated.is_some() || systemd::notify_socket_present() {
+            warn!(
+                "--daemonize ignored: running under systemd (NOTIFY_SOCKET/socket activation); \
+                 use Type=notify without --daemonize"
+            );
+        } else {
+            daemonize()?;
+        }
     }
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
-    runtime.block_on(app::run(full_address, config))?;
+    runtime.block_on(app::run(full_address, config, activated))?;
     Ok(())
 }

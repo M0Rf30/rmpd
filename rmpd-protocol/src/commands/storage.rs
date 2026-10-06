@@ -27,23 +27,36 @@ use std::path::PathBuf;
 /// Set `disable_actual_mount` on AppState to disable actual mounting
 /// and only track mounts in registry (Tier 1 mode).
 pub async fn handle_mount_command(state: &AppState, path: &str, uri: &str) -> String {
-    // MPD: empty mount point is always rejected ("Bad mount point").
-    if path.is_empty() {
+    // Mirrors MPD's `handle_mount` (src/command/StorageCommands.cxx): an
+    // empty mount point, or any containing '/' ("allow only top-level mounts
+    // for now"), is a "Bad mount point". "." and ".." are additionally
+    // rejected here because rmpd really mounts at `<music_dir>/<path>`, so
+    // they would otherwise escape the music directory.
+    if path.is_empty() || path.contains('/') || path == "." || path == ".." {
         return ResponseBuilder::error(ACK_ERROR_ARG, 0, "mount", "Bad mount point");
     }
 
-    // Validate path (no ../, no absolute paths)
-    if path.contains("..") || path.starts_with('/') {
-        return ResponseBuilder::error(
-            50,
-            0,
-            "mount",
-            "Invalid path: no absolute paths or path traversal allowed",
-        );
+    // Any registered entry at this mount point (tracked or really mounted)
+    // makes it busy (MPD: `composite.IsMountPoint`).
+    if state.mount_registry.get(path).await.is_some() {
+        return ResponseBuilder::error(ACK_ERROR_ARG, 0, "mount", "Mount point busy");
     }
 
-    if state.mount_registry.is_mounted(path).await {
-        return ResponseBuilder::error(ACK_ERROR_ARG, 0, "mount", "Mount point busy");
+    // The same remote storage may only be mounted once (MPD:
+    // `composite.IsMounted(remote_uri)`).
+    if state
+        .mount_registry
+        .list()
+        .await
+        .iter()
+        .any(|m| m.uri == uri)
+    {
+        return ResponseBuilder::error(
+            ACK_ERROR_ARG,
+            0,
+            "mount",
+            "This storage is already mounted",
+        );
     }
 
     // Check if music directory is configured

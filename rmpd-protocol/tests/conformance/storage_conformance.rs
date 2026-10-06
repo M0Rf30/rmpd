@@ -66,4 +66,28 @@ async fn mount_invalid_path() {
         resp.starts_with("ACK "),
         "mount with absolute path should ACK: {resp}"
     );
+    assert!(
+        resp.contains("Bad mount point"),
+        "mount with absolute path should be a bad mount point: {resp}"
+    );
+}
+
+#[tokio::test]
+async fn mount_nested_path_is_bad_mount_point() {
+    let (_server, mut client, _tmp) = setup_with_db(1).await;
+    // MPD only allows top-level mount points (no '/').
+    let resp = client.command("mount \"a/b\" \"nfs://h/s\"").await;
+    assert_eq!(resp, "ACK [2@0] {mount} Bad mount point\n");
+}
+
+#[tokio::test]
+async fn mount_busy_and_already_mounted() {
+    let (_server, mut client, _tmp) = setup_with_db(1).await;
+    assert_ok(&client.command("mount \"net\" \"nfs://h/s\"").await);
+
+    let resp = client.command("mount \"net\" \"nfs://h/other\"").await;
+    assert_eq!(resp, "ACK [2@0] {mount} Mount point busy\n");
+
+    let resp = client.command("mount \"net2\" \"nfs://h/s\"").await;
+    assert_eq!(resp, "ACK [2@0] {mount} This storage is already mounted\n");
 }

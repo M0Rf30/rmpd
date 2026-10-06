@@ -8,10 +8,13 @@ use std::sync::LazyLock;
 /// Lazy-initialized HashMap for O(1) VorbisComment tag lookups
 static VORBIS_TAG_MAP_HASH: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| {
     let mut m = HashMap::new();
+    m.insert("name", "name");
     m.insert("title", "title");
     m.insert("artist", "artist");
     m.insert("album", "album");
+    m.insert("albumsort", "albumsort");
     m.insert("albumartist", "albumartist");
+    m.insert("titlesort", "titlesort");
     m.insert("albumartistsort", "albumartistsort");
     m.insert("artistsort", "artistsort");
     m.insert("composer", "composer");

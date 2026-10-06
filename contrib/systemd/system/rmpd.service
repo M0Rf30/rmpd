@@ -1,0 +1,62 @@
+# rmpd system service (systemd, system-wide daemon).
+#
+# Install:
+#   useradd --system --home-dir /var/lib/rmpd --groups audio rmpd   # or sysusers.d
+#   install -Dm644 rmpd.service rmpd.socket -t /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable --now rmpd.socket     # socket activation, or
+#   systemctl enable --now rmpd.service
+#
+# The daemon runs as the unprivileged `rmpd` user (rmpd has no setuid/user=
+# option of its own). HOME=/var/lib/rmpd keeps everything it writes -- config
+# ($XDG_CONFIG_HOME defaults to $HOME/.config), database, playlists and the
+# state file ($STATE_DIRECTORY) -- inside StateDirectory=, the only writable
+# location. Put music somewhere readable by that user and point
+# `music_directory` at it (the default is ~/Music = /var/lib/rmpd/Music);
+# to use a directory under /home, see BindReadOnlyPaths= below.
+#
+# Type=notify: rmpd sends READY=1 over $NOTIFY_SOCKET once every listener is
+# bound and it accepts connections (MPD behaves the same), and STOPPING=1 when
+# it shuts down. Do NOT pass --daemonize: systemd must track the main process
+# (rmpd ignores --daemonize when it detects NOTIFY_SOCKET anyway).
+#
+# Socket activation: with rmpd.socket enabled, systemd binds the sockets and
+# rmpd serves exactly those, ignoring `bind_address`, `port` and `unix_socket`
+# from its configuration (as MPD does). Without it rmpd binds its own.
+
+[Unit]
+Description=Rust music player daemon
+Documentation=https://github.com/M0Rf30/rmpd
+After=network.target sound.target
+
+[Service]
+Type=notify
+User=rmpd
+Group=rmpd
+SupplementaryGroups=audio
+Environment=HOME=/var/lib/rmpd
+ExecStart=/usr/bin/rmpd
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+# Creates /var/lib/rmpd (owned by User=) before the sandbox is set up and
+# exports it as $STATE_DIRECTORY, so the state file lands in /var/lib/rmpd/state.
+StateDirectory=rmpd
+# No RuntimeDirectory= here: /run/rmpd belongs to rmpd.socket, and a
+# RuntimeDirectory= would be wiped (socket file included) when the service
+# stops. ProtectHome=true hides /home; uncomment to expose a music directory:
+#BindReadOnlyPaths=/home/you/Music
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target
+Also=rmpd.socket
