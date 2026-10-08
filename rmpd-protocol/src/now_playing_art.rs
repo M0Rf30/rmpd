@@ -418,4 +418,29 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_song_name_with_a_space_still_yields_a_file_url() {
+        let dir = tempdir();
+        let flac = build_flac_with_picture(&dir);
+        std::fs::copy(&flac, dir.join("with art.flac")).unwrap();
+
+        let url = artwork_url_for_song(Some(dir.to_str().unwrap()), "with art.flac")
+            .expect("the picture should still be found");
+
+        assert!(url.starts_with("file:///"), "unexpected url: {url}");
+        assert!(url.ends_with(".png"), "unexpected url: {url}");
+    }
+
+    #[test]
+    fn reserved_characters_are_percent_encoded() {
+        let url = file_url(Path::new("/home/john doe/.cache/rmpd/nowplaying/art-1.png"));
+        assert_eq!(
+            url,
+            "file:///home/john%20doe/.cache/rmpd/nowplaying/art-1.png"
+        );
+
+        let url = file_url(Path::new("/tmp/a b#c?d.png"));
+        assert_eq!(url, "file:///tmp/a%20b%23c%3Fd.png");
+        assert!(!url.contains(' '), "raw space in the url: {url}");
+    }
 }
