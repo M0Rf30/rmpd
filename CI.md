@@ -183,12 +183,12 @@ Multi-purpose dependency checker; `cargo deny check` runs all four checks below.
 
 **Checks:**
 
-1. **Advisories** - Security vulnerabilities from RustSec. Two are explicitly ignored:
-   `RUSTSEC-2024-0014` (`generational-arena`, pulled in by tantivy, no maintained alternative)
-   and `RUSTSEC-2024-0436` (`paste`, feature-complete proc-macro).
+1. **Advisories** - Security vulnerabilities from RustSec. One is explicitly ignored:
+   `RUSTSEC-2024-0436` (`paste`, feature-complete proc-macro).
 2. **Licenses** - Only these are allowed: MIT, Apache-2.0, `Apache-2.0 WITH LLVM-exception`,
    BSD-2-Clause, BSD-3-Clause, ISC, Unicode-DFS-2016, Unicode-3.0, Zlib, 0BSD, CC0-1.0,
-   Unlicense, MPL-2.0. `aws-lc-sys` has an explicit exception for its OpenSSL license.
+   Unlicense, MPL-2.0. `aws-lc-sys` (OpenSSL) and `chromaprint-next` (LGPL-2.1-or-later)
+   have explicit exceptions.
 3. **Bans** - Denies `openssl < 0.10` and `rustls < 0.21`; duplicate versions warn instead of
    fail.
 4. **Sources** - Only `crates.io` is an allowed registry. Two git sources are allowed, both
@@ -240,7 +240,7 @@ Automated dependency updates, run every Monday at 05:00 UTC by the `renovate.yml
 - GitHub Actions updates grouped and auto-merged for minor/patch
 - Async runtime (`tokio`, `async-trait`, `futures`) grouped, no auto-merge
 - Audio stack (`symphonia`, `cpal`, `rubato`) grouped, no auto-merge
-- Database (`rusqlite`, `tantivy`) grouped, no auto-merge
+- Database (`rusqlite`) grouped, no auto-merge
 - Dev-dependency minor/patch updates auto-merged
 - Workspace dependencies get elevated PR priority
 

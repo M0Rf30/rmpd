@@ -24,7 +24,6 @@ dirs.workspace = true
 rusqlite = { workspace = true, optional = true }
 symphonia = { workspace = true, optional = true }
 cpal = { workspace = true, optional = true }
-tantivy = { workspace = true, optional = true }
 notify = { workspace = true, optional = true }
 mdns-sd = { workspace = true, optional = true }
 
@@ -32,7 +31,7 @@ mdns-sd = { workspace = true, optional = true }
 default = []
 database-errors = ["rusqlite"]
 player-errors = ["symphonia", "cpal"]
-library-errors = ["tantivy", "notify"]
+library-errors = ["notify"]
 protocol-errors = ["mdns-sd"]
 test-utils = []
 

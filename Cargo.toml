@@ -49,7 +49,6 @@ winnow = "1.0"
 
 # Database & Storage
 rusqlite = { version = "0.40", features = ["bundled"] }
-tantivy = "0.26"
 toml = "1.1"
 parking_lot = "0.12"
 
@@ -90,7 +89,7 @@ too_many_arguments = "allow"
 type_complexity = "allow"
 empty_line_after_doc_comments = "allow"
 
-# This is a DSP-heavy workspace (symphonia, rubato, rayon, tantivy); building
+# This is a DSP-heavy workspace (symphonia, rubato, rayon); building
 # their dependency tree at the default -O0 makes even `cargo test`/`cargo
 # check` crawl through real decode/resample/index work. Opt dependencies
 # into -O2 under the dev profile while leaving workspace-member crates (and

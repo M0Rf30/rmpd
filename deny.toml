@@ -16,8 +16,6 @@ db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/rustsec/advisory-db"]
 yanked = "warn"
 ignore = [
-    # generational-arena is used by tantivy, no maintained alternatives available
-    "RUSTSEC-2024-0014",
     # paste is a proc-macro that is feature-complete and stable
     "RUSTSEC-2024-0436",
 ]
@@ -71,7 +69,7 @@ skip = [
     # (they may have multiple versions in the dep tree)
     #
     # base64 0.22 is pinned internally by hyper-util (part of reqwest's
-    # HTTP stack) and by tantivy; both are third-party crates whose
+    # HTTP stack), a third-party crate whose
     # Cargo.toml we don't control from this workspace. Our own dependents
     # (reqwest itself, rmpd-library) already pull the current major via
     # `base64 = "0.23"` in [workspace.dependencies] — nothing to bump here.
