@@ -60,7 +60,11 @@ pub fn socket_only_path(bind_address: &str, unix_socket: Option<&str>) -> Result
         if unix_socket.is_some() {
             warn!("network.bind_address names a socket, so network.unix_socket is ignored");
         }
-        return Ok(Some(bind_address.to_string()));
+
+        // `~` is expanded for the other configured paths, so do the same here:
+        // the listener would otherwise land in a literal `~` directory.
+        let path = rmpd_core::path::expand_tilde(&camino::Utf8PathBuf::from(bind_address));
+        return Ok(Some(path.as_str().to_string()));
     }
 
     if bind_address.is_empty() {

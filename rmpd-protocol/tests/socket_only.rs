@@ -140,3 +140,17 @@ async fn socket_only_server_serves_a_socket() {
         "server did not stop cleanly: {stopped:?}"
     );
 }
+
+/// `~` is expanded for a socket path, the same way the other paths are.
+#[test]
+fn tilde_in_a_socket_path_is_expanded() {
+    use rmpd_protocol::server::socket_only_path;
+
+    let home = std::env::var("HOME").expect("HOME");
+    let resolved = socket_only_path("~/rmpd.sock", None)
+        .expect("a home path is valid")
+        .expect("names a socket");
+
+    assert_eq!(resolved, format!("{home}/rmpd.sock"));
+    assert!(!resolved.starts_with('~'), "left unexpanded: {resolved}");
+}
