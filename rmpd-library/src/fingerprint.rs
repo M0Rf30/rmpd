@@ -4,48 +4,22 @@
 use rmpd_core::error::{Result, RmpdError};
 use rmpd_player::SymphoniaDecoder;
 use std::path::Path;
-use std::sync::Mutex;
 
 /// Maximum duration to fingerprint (120 seconds recommended by Chromaprint)
 const MAX_FINGERPRINT_DURATION_SECS: u64 = 120;
 
-/// Serializes Chromaprint context creation/destruction.
-///
-/// `chromaprint_new` / `chromaprint_free` are NOT safe to call concurrently
-/// (context setup/teardown touches non-reentrant global state, e.g. FFT plan
-/// allocation), which corrupts the heap ("double free or corruption") when two
-/// `Fingerprinter`s are created/dropped on different threads — as happens with
-/// parallel `getfingerprint` commands or parallel tests. Holding this lock only
-/// around the alloc/free FFI calls keeps that lifecycle serialized while leaving
-/// per-context feeding/finishing concurrent.
-static CHROMAPRINT_LOCK: Mutex<()> = Mutex::new(());
-
-/// Audio fingerprinter using Chromaprint library
+/// Audio fingerprinter backed by `chromaprint-next`, a pure-Rust port of
+/// Chromaprint producing bit-identical output to the C library.
 pub struct Fingerprinter {
-    ctx: *mut chromaprint_sys_next::ChromaprintContext,
+    inner: chromaprint::Fingerprinter,
 }
 
 impl Fingerprinter {
-    /// Create a new fingerprinter instance
+    /// Create a new fingerprinter instance (default algorithm, as libchromaprint)
     pub fn new() -> Result<Self> {
-        // Use CHROMAPRINT_ALGORITHM_DEFAULT (value = 1)
-        // SAFETY: chromaprint_new is a safe FFI call that allocates and initializes a new
-        // Chromaprint context. The returned pointer is either valid or null; we check for
-        // null immediately after and return an error if allocation failed.
-        let ctx = {
-            let _guard = CHROMAPRINT_LOCK
-                .lock()
-                .unwrap_or_else(|poison| poison.into_inner());
-            unsafe { chromaprint_sys_next::chromaprint_new(1) }
-        };
-
-        if ctx.is_null() {
-            return Err(RmpdError::Library(
-                "Failed to create chromaprint context".to_string(),
-            ));
-        }
-
-        Ok(Self { ctx })
+        Ok(Self {
+            inner: chromaprint::Fingerprinter::new(chromaprint::Algorithm::default()),
+        })
     }
 
     /// Generate a fingerprint for an audio file
@@ -53,149 +27,53 @@ impl Fingerprinter {
     /// Returns a base64-encoded fingerprint string compatible with AcoustID.
     /// Only processes the first 120 seconds of audio as recommended by Chromaprint.
     pub fn fingerprint_file(&mut self, path: &Path) -> Result<String> {
-        // Open audio file with Symphonia decoder
-        let mut decoder = SymphoniaDecoder::open(path)?;
+        let lib_err =
+            |what: &str, e: chromaprint::Error| RmpdError::Library(format!("{what}: {e}"));
 
-        // Get audio format info
+        let mut decoder = SymphoniaDecoder::open(path)?;
         let sample_rate = decoder.sample_rate();
         let channels = decoder.channels();
 
-        // Initialize chromaprint with audio format
-        // SAFETY: self.ctx is guaranteed to be non-null (checked in new()) and valid for the
-        // lifetime of self. chromaprint_start initializes the context with audio format parameters.
-        // The sample_rate and channels are valid i32 values derived from the decoder.
-        let result = unsafe {
-            chromaprint_sys_next::chromaprint_start(self.ctx, sample_rate as i32, channels as i32)
-        };
+        self.inner
+            .start(sample_rate, u16::from(channels))
+            .map_err(|e| lib_err("Failed to initialize chromaprint", e))?;
 
-        if result == 0 {
-            return Err(RmpdError::Library(
-                "Failed to initialize chromaprint".to_string(),
-            ));
-        }
-
-        // Calculate maximum samples to process (120 seconds)
         let max_samples =
             (sample_rate as u64 * channels as u64 * MAX_FINGERPRINT_DURATION_SECS) as usize;
         let mut total_samples = 0;
 
-        // Buffer for reading audio data
         let buffer_size = 4096;
         let mut f32_buffer = vec![0.0f32; buffer_size];
         let mut i16_buffer = vec![0i16; buffer_size];
 
-        // Read and feed audio data to chromaprint
-        loop {
-            if total_samples >= max_samples {
-                break;
-            }
-
-            // Read samples from decoder
+        while total_samples < max_samples {
             let samples_read = match decoder.read(&mut f32_buffer) {
                 Ok(n) => n,
-                Err(RmpdError::Player(ref msg)) if msg.contains("end of stream") => {
-                    // Reached end of file
-                    break;
-                }
+                Err(RmpdError::Player(ref msg)) if msg.contains("end of stream") => break,
                 Err(e) => return Err(e),
             };
-
             if samples_read == 0 {
                 break;
             }
 
-            // Convert f32 samples to i16 for chromaprint
-            // Clamp to prevent overflow
-            for (i, &sample) in f32_buffer[..samples_read].iter().enumerate() {
-                let clamped = sample.clamp(-1.0, 1.0);
-                i16_buffer[i] = (clamped * 32767.0) as i16;
+            // Convert f32 samples to i16, clamping to prevent overflow
+            for (dst, &sample) in i16_buffer.iter_mut().zip(&f32_buffer[..samples_read]) {
+                *dst = (sample.clamp(-1.0, 1.0) * 32767.0) as i16;
             }
 
-            // Feed samples to chromaprint
-            // SAFETY: self.ctx is valid and non-null (checked in new()). i16_buffer.as_ptr()
-            // is a valid pointer to samples_read i16 elements. The pointer remains valid for
-            // the duration of the FFI call. samples_read is guaranteed to be <= buffer_size.
-            let result = unsafe {
-                chromaprint_sys_next::chromaprint_feed(
-                    self.ctx,
-                    i16_buffer.as_ptr(),
-                    samples_read as i32,
-                )
-            };
-
-            if result == 0 {
-                return Err(RmpdError::Library(
-                    "Failed to feed samples to chromaprint".to_string(),
-                ));
-            }
-
+            self.inner
+                .feed(&i16_buffer[..samples_read])
+                .map_err(|e| lib_err("Failed to feed samples to chromaprint", e))?;
             total_samples += samples_read;
         }
 
-        // Finalize fingerprint
-        // SAFETY: self.ctx is valid and non-null (checked in new()). chromaprint_finish
-        // finalizes the fingerprint computation and prepares it for retrieval.
-        let result = unsafe { chromaprint_sys_next::chromaprint_finish(self.ctx) };
+        self.inner
+            .finish()
+            .map_err(|e| lib_err("Failed to finalize fingerprint", e))?;
 
-        if result == 0 {
-            return Err(RmpdError::Library(
-                "Failed to finalize fingerprint".to_string(),
-            ));
-        }
-
-        // Use chromaprint_get_fingerprint_hash for a compact hash representation
-        // or chromaprint_get_fingerprint for the compressed base64 string
-        let mut fp_str: *mut std::os::raw::c_char = std::ptr::null_mut();
-
-        // SAFETY: self.ctx is valid and non-null (checked in new()). &mut fp_str is a valid
-        // mutable pointer to a C string pointer. chromaprint_get_fingerprint will write a
-        // pointer to the fingerprint string into fp_str if successful.
-        let result =
-            unsafe { chromaprint_sys_next::chromaprint_get_fingerprint(self.ctx, &mut fp_str) };
-
-        if result == 0 || fp_str.is_null() {
-            return Err(RmpdError::Library("Failed to get fingerprint".to_string()));
-        }
-
-        // Convert C string to Rust String
-        // SAFETY: fp_str is guaranteed to be non-null (checked above) and points to a
-        // valid null-terminated C string allocated by Chromaprint. CStr::from_ptr is safe
-        // because the pointer is valid and the string is null-terminated.
-        let encoded = unsafe {
-            let c_str = std::ffi::CStr::from_ptr(fp_str);
-            c_str.to_string_lossy().into_owned()
-        };
-
-        // Free chromaprint memory
-        // SAFETY: fp_str is a valid pointer to memory allocated by Chromaprint's
-        // chromaprint_get_fingerprint. chromaprint_dealloc is the correct deallocation
-        // function for this memory. We only deallocate once.
-        unsafe {
-            chromaprint_sys_next::chromaprint_dealloc(fp_str as *mut std::ffi::c_void);
-        }
-
-        Ok(encoded)
+        Ok(self.inner.encode())
     }
 }
-
-impl Drop for Fingerprinter {
-    fn drop(&mut self) {
-        if !self.ctx.is_null() {
-            // SAFETY: self.ctx is a valid pointer to a Chromaprint context allocated by
-            // chromaprint_new. chromaprint_free is the correct deallocation function.
-            // We only call it once per Fingerprinter instance, and the null check ensures
-            // we don't double-free.
-            let _guard = CHROMAPRINT_LOCK
-                .lock()
-                .unwrap_or_else(|poison| poison.into_inner());
-            unsafe {
-                chromaprint_sys_next::chromaprint_free(self.ctx);
-            }
-        }
-    }
-}
-
-unsafe impl Send for Fingerprinter {}
 
 #[cfg(test)]
 mod tests {

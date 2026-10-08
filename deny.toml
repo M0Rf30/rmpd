@@ -44,6 +44,9 @@ confidence-threshold = 0.8
 exceptions = [
     # aws-lc-sys uses OpenSSL license
     { allow = ["ISC", "Apache-2.0", "OpenSSL"], name = "aws-lc-sys" },
+    # chromaprint-next: pure-Rust Chromaprint port; its resampler is an FFmpeg
+    # port under LGPL (libchromaprint, which it replaced, is LGPL too)
+    { allow = ["LGPL-2.1-or-later"], name = "chromaprint-next" },
 ]
 
 [licenses.private]
