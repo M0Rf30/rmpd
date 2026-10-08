@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Gianluca Boiano
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Native macOS media integration: Control Center / lock-screen Now Playing
 //! entry plus hardware remote commands (headphone play/pause/next/previous).
 //!
@@ -26,7 +29,6 @@ use souvlaki::{
 use std::ptr::NonNull;
 use std::rc::Rc;
 use std::sync::mpsc::{Receiver, Sender};
-use tokio::sync::mpsc as tokio_mpsc;
 use tracing::{debug, info};
 
 /// Owned playback picture handed from the async half to the main thread;
@@ -64,9 +66,7 @@ impl MediaSnapshot {
         key.push_str(&format!("{:?}", self.duration));
         key
     }
-}
 
-impl MediaSnapshot {
     fn empty() -> Self {
         Self {
             title: String::new(),
@@ -347,16 +347,6 @@ async fn dispatch_event(state: &AppState, event: MediaControlEvent) -> Result<()
     Ok(())
 }
 
-// Silence unused-import warning for platforms where this module compiles but
-// the metadata type only flows through souvlaki's own API surface.
-#[allow(unused_imports)]
-use MediaMetadata as _MediaMetadataUsed;
-
-/// Reference kept so rustc treats `tokio_mpsc` import as used on non-macOS
-/// staging builds of this module in IDEs; remove when the module is fully
-/// wired behind its cfg gate.
-#[allow(dead_code)]
-type __TokioMpsc = tokio_mpsc::Sender<()>;
 
 #[cfg(test)]
 mod tests {
