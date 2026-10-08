@@ -1,0 +1,120 @@
+//! Regression tests for socket-only mode (empty `bind_address`).
+
+/// A bind address naming a path is a socket, matching MPD's `bind_to_address`.
+#[test]
+fn socket_paths_are_recognised() {
+    use rmpd_protocol::server::is_socket_path;
+
+    assert!(is_socket_path("/run/user/1000/rmpd.sock"));
+    assert!(is_socket_path("~/rmpd.sock"));
+    assert!(!is_socket_path("127.0.0.1"));
+    assert!(!is_socket_path("::1"));
+    assert!(!is_socket_path("localhost"));
+    assert!(!is_socket_path(""));
+}
+
+/// A path in `bind_address` wins, and no TCP listener is configured.
+#[test]
+fn socket_path_selects_socket_only() {
+    use rmpd_protocol::server::socket_only_path;
+
+    assert_eq!(
+        socket_only_path("/tmp/rmpd.sock", None).unwrap(),
+        Some("/tmp/rmpd.sock".to_string())
+    );
+    // an address means normal TCP service
+    assert_eq!(socket_only_path("127.0.0.1", None).unwrap(), None);
+}
+
+/// An empty `bind_address` takes its path from `unix_socket`.
+#[test]
+fn empty_bind_address_uses_the_unix_socket_key() {
+    use rmpd_protocol::server::socket_only_path;
+
+    assert_eq!(
+        socket_only_path("", Some("/tmp/rmpd.sock")).unwrap(),
+        Some("/tmp/rmpd.sock".to_string())
+    );
+}
+
+/// With neither configured, there is nothing to serve and startup must fail
+/// rather than bind a port the user did not ask for.
+#[test]
+fn empty_bind_address_without_unix_socket_errors() {
+    use rmpd_protocol::server::socket_only_path;
+
+    let err = socket_only_path("", None).expect_err("empty address must be rejected");
+    assert!(
+        err.to_string().contains("nothing to listen on"),
+        "unexpected error: {err}"
+    );
+}
+
+
+/// The address the server binds: ports are appended to TCP addresses only.
+#[test]
+fn resolve_bind_address_shape() {
+    use rmpd_protocol::server::resolve_bind_address;
+
+    assert_eq!(resolve_bind_address("127.0.0.1", 6600), "127.0.0.1:6600");
+    assert_eq!(resolve_bind_address("::1", 6600), "[::1]:6600");
+    assert_eq!(resolve_bind_address("[::1]", 6600), "[::1]:6600");
+    assert_eq!(resolve_bind_address("localhost", 6600), "localhost:6600");
+
+    // a socket path and an empty address must reach the server untouched,
+    // otherwise they end up looking like addresses and cannot be bound
+    assert_eq!(
+        resolve_bind_address("/run/user/1000/rmpd.sock", 6600),
+        "/run/user/1000/rmpd.sock"
+    );
+    assert_eq!(resolve_bind_address("", 6600), "");
+}
+
+/// Socket-only mode serves a socket and binds no TCP port.
+///
+/// Exercises the accept loop, not just the policy: the server starts with no TCP
+/// listener, so the socket has to appear, answer with the greeting, and shut
+/// down when the broadcast fires.
+#[tokio::test]
+async fn socket_only_server_serves_a_socket() {
+    use rmpd_protocol::server::MpdServer;
+    use rmpd_protocol::state::AppState;
+    use tokio::io::{AsyncBufReadExt, BufReader};
+    use tokio::sync::broadcast;
+
+    let temp = tempfile::TempDir::new().expect("temp dir");
+    let sock = temp.path().join("rmpd.sock");
+
+    let (shutdown_tx, shutdown_rx) = broadcast::channel::<()>(1);
+    let server = MpdServer::with_state(String::new(), AppState::new(), shutdown_rx);
+    let path = sock.to_string_lossy().to_string();
+    let handle = tokio::spawn(async move { server.run_unix_socket(path).await });
+
+    let mut greeting = String::new();
+    for _ in 0..40 {
+        if let Ok(stream) = tokio::net::UnixStream::connect(&sock).await {
+            let mut reader = BufReader::new(stream);
+            if tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                reader.read_line(&mut greeting),
+            )
+            .await
+            .is_ok()
+            {
+                break;
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(
+        greeting.starts_with("OK MPD"),
+        "no greeting, got {greeting:?}"
+    );
+
+    let _ = shutdown_tx.send(());
+    let stopped = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await;
+    assert!(
+        matches!(stopped, Ok(Ok(Ok(())))),
+        "server did not stop cleanly: {stopped:?}"
+    );
+}

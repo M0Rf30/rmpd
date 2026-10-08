@@ -357,6 +357,17 @@ pub async fn run(bind_address: String, config: Config, activated: Option<Activat
                 info!("unix socket: {}", sock);
             }
 
+            // MPD's `bind_to_address` rule: a path names a socket, and naming
+            // only a socket serves no TCP at all. An empty address says the same
+            // thing, taking its path from `unix_socket`.
+            if let Some(path) = rmpd_protocol::server::socket_only_path(
+                &bind_address,
+                config.network.unix_socket.as_ref().map(|p| p.as_str()),
+            )? {
+                info!("TCP listener disabled; serving on unix socket {path} only");
+                return server.run_unix_socket(path).await;
+            }
+
             let listener = tokio::net::TcpListener::bind(&bind_address).await?;
             info!("mpd server listening on {}", bind_address);
 

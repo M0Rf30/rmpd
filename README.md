@@ -163,6 +163,14 @@ log_level = "info"
 [network]
 bind_address = "127.0.0.1"
 port = 6600
+# A UNIX socket for local clients, in addition to TCP:
+# unix_socket = "/run/user/1000/rmpd.sock"   # mpc -h /run/user/1000/rmpd.sock status
+# Socket-only daemon. Either name the socket as the address, the way MPD's
+# `bind_to_address` accepts a path...
+# bind_address = "/run/user/1000/rmpd.sock"
+# ...or empty the address and keep the separate key:
+# bind_address = ""
+# unix_socket = "/run/user/1000/rmpd.sock"
 
 [audio]
 default_output = "alsa"
@@ -221,6 +229,8 @@ warning naming each one:
 ### MPRIS & mDNS
 
 rmpd exposes a native [MPRIS](https://specifications.freedesktop.org/mpris-spec/latest/) interface on the session D-Bus as `org.mpris.MediaPlayer2.rmpd`. This lets Linux desktops (GNOME Shell, KDE Plasma), `playerctl`, lock screens, and multimedia keys discover and control rmpd directly — no external bridge such as `mpDris2` required. It is enabled by default and can be toggled with `mpris` under `[network]`.
+
+On macOS, playback also pauses when the default output device disappears while playing (for example a Bluetooth headset powering off). Disable with `pause_on_device_loss = false` under `[audio]`.
 
 ```bash
 playerctl -p rmpd metadata

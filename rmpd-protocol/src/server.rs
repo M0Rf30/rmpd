@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Gianluca Boiano
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-use rmpd_core::error::Result;
+use rmpd_core::error::{Result, RmpdError};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UnixStream};
 use tokio::sync::broadcast;
@@ -16,6 +16,64 @@ use crate::parser::{Command, parse_command};
 use crate::queue_playback::QueuePlaybackManager;
 use crate::response::{Response, ResponseBuilder, Stats};
 use crate::state::AppState;
+
+/// Whether a configured bind address names a UNIX domain socket rather than a
+/// TCP address.
+///
+/// This mirrors MPD's `bind_to_address`, which accepts either an address or a
+/// socket path; naming only a path means no TCP listener is bound at all.
+/// Linux abstract sockets (`@name`) are not supported.
+pub fn is_socket_path(addr: &str) -> bool {
+    addr.starts_with('/') || addr.starts_with('~')
+}
+
+/// Append the port to a TCP bind address, bracketing bare IPv6 addresses.
+pub fn make_bind_addr(addr: &str, port: u16) -> String {
+    // IPv6 bare addresses (contain ':' but aren't already bracketed) need wrapping
+    if addr.contains(':') && !addr.starts_with('[') {
+        format!("[{addr}]:{port}")
+    } else {
+        format!("{addr}:{port}")
+    }
+}
+
+/// Turn the configured bind address into the string the server should bind.
+///
+/// A socket path and an empty address pass through untouched: appending a port
+/// to either produces something that cannot be bound, which is how an empty
+/// `bind_address` used to fail with a name-resolution error.
+pub fn resolve_bind_address(bind_address: &str, port: u16) -> String {
+    if bind_address.is_empty() || is_socket_path(bind_address) {
+        bind_address.to_string()
+    } else {
+        make_bind_addr(bind_address, port)
+    }
+}
+
+/// Decide whether the daemon should serve a socket instead of TCP.
+///
+/// Returns the socket path to serve, or `None` for a normal TCP listener. An
+/// empty `bind_address` means "no TCP" and takes its path from `unix_socket`;
+/// with neither configured there is nothing to listen on.
+pub fn socket_only_path(bind_address: &str, unix_socket: Option<&str>) -> Result<Option<String>> {
+    if is_socket_path(bind_address) {
+        if unix_socket.is_some() {
+            warn!("network.bind_address names a socket, so network.unix_socket is ignored");
+        }
+        return Ok(Some(bind_address.to_string()));
+    }
+
+    if bind_address.is_empty() {
+        return unix_socket.map(str::to_string).map(Some).ok_or_else(|| {
+            RmpdError::Config(
+                "network.bind_address is empty and no unix socket is configured; there is nothing to listen on"
+                    .to_string(),
+            )
+        });
+    }
+
+    Ok(None)
+}
 
 /// MPD protocol version we implement. This is the MPD protocol spec version,
 /// not the rmpd software version.
@@ -165,7 +223,20 @@ impl MpdServer {
     ///
     /// This is useful for tests that need to bind to port 0 and discover the
     /// actual port before handing the listener to the server.
-    pub async fn run_with_listener(mut self, listener: TcpListener) -> Result<()> {
+    pub async fn run_with_listener(self, listener: TcpListener) -> Result<()> {
+        self.run_with_optional_tcp(Some(listener)).await
+    }
+
+    /// Serve a single UNIX socket, with no TCP listener.
+    ///
+    /// Used for socket-only mode, where `bind_address` named a path or was left
+    /// empty with `unix_socket` supplying one.
+    pub async fn run_unix_socket(mut self, path: String) -> Result<()> {
+        self.unix_socket = Some(path);
+        self.run_with_optional_tcp(None).await
+    }
+
+    async fn run_with_optional_tcp(mut self, listener: Option<TcpListener>) -> Result<()> {
         // Start queue playback manager
         let mut playback_manager = QueuePlaybackManager::new(self.state.clone());
         playback_manager.start();
@@ -211,8 +282,19 @@ impl MpdServer {
 
         loop {
             tokio::select! {
-                // Handle incoming connections
-                result = listener.accept() => {
+                // Handle incoming connections. The TCP arm parks in `pending()`
+                // when there is no TCP listener (socket-only mode), the same way
+                // the unix arm behaves without a configured socket.
+                result = async {
+                    if let Some(l) = &listener {
+                        l.accept().await
+                    } else {
+                        std::future::pending::<
+                            std::io::Result<(TcpStream, std::net::SocketAddr)>,
+                        >()
+                        .await
+                    }
+                } => {
                     match result {
                         Ok((stream, addr)) => {
                             debug!("new connection from {}", addr);

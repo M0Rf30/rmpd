@@ -48,8 +48,16 @@ save_absolute_paths_in_playlists = false
 # metadata_to_use = ["artist", "album", "title", "track", "genre", "date"]
 
 [network]
+# Address to listen on for TCP clients. As with MPD's `bind_to_address`, this
+# accepts either an address or a path: a path (absolute, or starting with ~)
+# names a UNIX socket and binds no TCP listener at all.
 bind_address = "127.0.0.1"
 port = 6600
+# Optional extra listener: a UNIX domain socket for local clients
+#   mpc -h /run/user/1000/rmpd.sock status
+# It is served in addition to the address above. For a socket-only daemon,
+# name the path in bind_address instead, or empty the address and keep this.
+# unix_socket = "/run/user/1000/rmpd.sock"
 max_connections = 100
 connection_timeout = 60
 # Advertise rmpd on the session D-Bus via MPRIS (org.mpris.MediaPlayer2.rmpd)
