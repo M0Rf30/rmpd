@@ -13,11 +13,10 @@ categories.workspace = true
 workspace = true
 
 [package.metadata.cargo-machete]
-# tantivy used in examples and tests
 # thiserror used for error handling macros
 # base64 used in fingerprint module for encoding
 # chromaprint-next is imported as `chromaprint` (its [lib] name)
-ignored = ["tantivy", "thiserror", "base64", "chromaprint-next"]
+ignored = ["thiserror", "base64", "chromaprint-next"]
 
 [features]
 # Chromaprint audio fingerprinting (`getfingerprint`) via chromaprint-next, a
@@ -31,7 +30,6 @@ rmpd-core = { workspace = true, features = ["database-errors", "library-errors"]
 rmpd-player.workspace = true
 rusqlite = { workspace = true, features = ["functions"] }
 symphonia.workspace = true
-tantivy.workspace = true
 notify.workspace = true
 notify-debouncer-full.workspace = true
 tokio.workspace = true

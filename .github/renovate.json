@@ -72,8 +72,7 @@
     {
       "description": "Database dependencies - group together",
       "matchPackageNames": [
-        "rusqlite",
-        "tantivy"
+        "rusqlite"
       ],
       "groupName": "database",
       "automerge": false
