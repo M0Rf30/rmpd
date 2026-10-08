@@ -11,6 +11,9 @@
 use std::path::{Path, PathBuf};
 use tracing::debug;
 
+/// Prefix of the files this module writes, and the only ones it prunes.
+const ART_PREFIX: &str = "art-";
+
 /// File extension for an image MIME type.
 fn extension_for(mime: &str) -> &'static str {
     match mime {
@@ -44,7 +47,9 @@ pub fn cache_dir() -> PathBuf {
         return home.join("Library/Caches/rmpd/nowplaying");
     }
     home.map(|h| h.join(".cache/rmpd/nowplaying"))
-        .unwrap_or_else(std::env::temp_dir)
+        // Never the bare temp directory: pruning must not reach files that are
+        // not ours.
+        .unwrap_or_else(|| std::env::temp_dir().join("rmpd-nowplaying"))
 }
 
 /// Write a picture into `dir` under a name derived from its content, and return
@@ -57,7 +62,11 @@ pub fn cache_artwork(dir: &Path, bytes: &[u8], mime: &str) -> std::io::Result<Pa
 
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     bytes.hash(&mut hasher);
-    let name = format!("art-{:016x}.{}", hasher.finish(), extension_for(mime));
+    let name = format!(
+        "{ART_PREFIX}{:016x}.{}",
+        hasher.finish(),
+        extension_for(mime)
+    );
     let path = dir.join(name);
     if path.exists() {
         return Ok(path);
@@ -79,6 +88,7 @@ fn prune_cache(dir: &Path, keep: usize) {
     };
     let mut files: Vec<(std::time::SystemTime, PathBuf)> = entries
         .flatten()
+        .filter(|entry| entry.file_name().to_string_lossy().starts_with(ART_PREFIX))
         .filter_map(|entry| {
             let path = entry.path();
             let modified = entry.metadata().ok()?.modified().ok()?;
@@ -119,6 +129,24 @@ pub fn artwork_url_for_song(music_dir: Option<&str>, song_path: &str) -> Option<
     url
 }
 
+/// `file://` URL for a path, percent-encoded.
+///
+/// A path with a space or another reserved character gives NSURL a string it
+/// refuses to parse, and the panel then shows no picture at all.
+fn file_url(path: &Path) -> String {
+    let mut url = String::from("file://");
+    for byte in path.to_string_lossy().bytes() {
+        let plain =
+            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~' | b'/');
+        if plain {
+            url.push(byte as char);
+        } else {
+            url.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    url
+}
+
 fn resolve_artwork_url(music_dir: Option<&str>, song_path: &str) -> Option<String> {
     let absolute = rmpd_core::path::resolve_path(song_path, music_dir);
     let (bytes, mime) = artwork_for_song(Path::new(&absolute))?;
@@ -129,7 +157,7 @@ fn resolve_artwork_url(music_dir: Option<&str>, song_path: &str) -> Option<Strin
             return None;
         }
     };
-    Some(format!("file://{}", file.display()))
+    Some(file_url(&file))
 }
 
 /// Artwork for one song: the embedded picture when there is one, otherwise a
@@ -349,6 +377,21 @@ mod tests {
     }
 
     #[test]
+    fn pruning_leaves_files_that_are_not_ours_alone() {
+        let dir = tempdir().join("foreign");
+        std::fs::create_dir_all(&dir).unwrap();
+        let stranger = dir.join("keep.txt");
+        std::fs::write(&stranger, b"not ours").unwrap();
+        for i in 0..(CACHE_KEEP + 8) {
+            cache_artwork(&dir, &[i as u8; 64], "image/jpeg").unwrap();
+        }
+
+        prune_cache(&dir, CACHE_KEEP);
+
+        assert!(stranger.exists(), "pruning reached a foreign file");
+    }
+
+    #[test]
     fn song_with_embedded_art_yields_a_file_url() {
         let dir = tempdir();
         build_flac_with_picture(&dir);
@@ -374,4 +417,5 @@ mod tests {
             None
         );
     }
+
 }
