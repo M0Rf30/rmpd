@@ -301,7 +301,13 @@ fn apply_snapshot(
     published: &mut Option<String>,
 ) {
     let key = snap.meta_key();
-    if published.as_deref() != Some(key.as_str()) {
+    if snap.title.is_empty() {
+        // Nothing is loaded: leave the panel instead of publishing an empty
+        // title, which macOS replaces with the process name.
+        if published.take().is_some() {
+            clear_now_playing();
+        }
+    } else if published.as_deref() != Some(key.as_str()) {
         let meta = MediaMetadata {
             title: Some(&snap.title),
             artist: Some(&snap.artist),
@@ -320,6 +326,22 @@ fn apply_snapshot(
         (false, false) => MediaPlayback::Paused { progress },
     };
     controls.set_playback(pb).ok();
+}
+
+/// Drop the Now Playing entry. souvlaki always writes a metadata dictionary, so
+/// an empty one leaves macOS showing the process name; clearing the dictionary is
+/// what removes the entry, and souvlaki does not expose it.
+fn clear_now_playing() {
+    // SAFETY: runs on the main thread, and the selector is valid whenever
+    // MediaPlayer is loaded, which it is once souvlaki has attached.
+    unsafe {
+        let Some(center_class) = objc2::runtime::AnyClass::get(c"MPNowPlayingInfoCenter") else {
+            return;
+        };
+        let center: *mut objc2::runtime::AnyObject = objc2::msg_send![center_class, defaultCenter];
+        let nil: Option<&objc2::runtime::AnyObject> = None;
+        let _: () = objc2::msg_send![center, setNowPlayingInfo: nil];
+    }
 }
 
 async fn dispatch_event(state: &AppState, event: MediaControlEvent) -> Result<(), String> {
