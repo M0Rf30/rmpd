@@ -85,15 +85,6 @@ struct Args {
     print_config_path: bool,
 }
 
-fn make_bind_addr(addr: &str, port: u16) -> String {
-    // IPv6 bare addresses (contain ':' but aren't already bracketed) need wrapping
-    if addr.contains(':') && !addr.starts_with('[') {
-        format!("[{addr}]:{port}")
-    } else {
-        format!("{addr}:{port}")
-    }
-}
-
 /// Build the tracing filter. Honors `RUST_LOG` when set; otherwise applies
 /// `level` to rmpd's own crates while pinning noisy third-party crates down so
 /// the default (non-debug) output stays readable.
@@ -260,7 +251,9 @@ fn main() -> Result<()> {
         .unwrap_or_else(|| config.network.bind_address.clone());
     let port = args.port.unwrap_or(config.network.port);
 
-    let full_address = make_bind_addr(&bind_address, port);
+    // A socket path or an empty address ("no TCP") passes through untouched;
+    // appending a port would make it unboundable.
+    let full_address = rmpd_protocol::server::resolve_bind_address(&bind_address, port);
 
     info!("music directory: {}", config.general.music_directory);
     info!("database: {}", config.general.db_file);

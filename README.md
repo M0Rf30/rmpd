@@ -163,6 +163,14 @@ log_level = "info"
 [network]
 bind_address = "127.0.0.1"
 port = 6600
+# A UNIX socket for local clients, in addition to TCP:
+# unix_socket = "/run/user/1000/rmpd.sock"   # mpc -h /run/user/1000/rmpd.sock status
+# Socket-only daemon. Either name the socket as the address, the way MPD's
+# `bind_to_address` accepts a path...
+# bind_address = "/run/user/1000/rmpd.sock"
+# ...or empty the address and keep the separate key:
+# bind_address = ""
+# unix_socket = "/run/user/1000/rmpd.sock"
 
 [audio]
 default_output = "alsa"
