@@ -248,7 +248,9 @@ fn spawn_watchers(
             // error); relay that into the main-thread pump channel.
             let _ = tokio::task::spawn_blocking(move || {
                 let _ = exit_rx.recv();
-                tx.send(PumpMsg::Exit)
+                // Nothing reads the send error, and returning it would make the
+                // task's error variant the largest part of the result.
+                let _ = tx.send(PumpMsg::Exit);
             })
             .await;
         });
