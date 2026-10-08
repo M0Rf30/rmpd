@@ -34,10 +34,8 @@ impl Fingerprinter {
         let sample_rate = decoder.sample_rate();
         let channels = decoder.channels();
 
-        let channels_u16 = u16::try_from(channels)
-            .map_err(|_| RmpdError::Library(format!("unsupported channel count {channels}")))?;
         self.inner
-            .start(sample_rate, channels_u16)
+            .start(sample_rate, u16::from(channels))
             .map_err(|e| lib_err("Failed to initialize chromaprint", e))?;
 
         let max_samples =

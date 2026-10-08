@@ -16,7 +16,8 @@ workspace = true
 # tantivy used in examples and tests
 # thiserror used for error handling macros
 # base64 used in fingerprint module for encoding
-ignored = ["tantivy", "thiserror", "base64"]
+# chromaprint-next is imported as `chromaprint` (its [lib] name)
+ignored = ["tantivy", "thiserror", "base64", "chromaprint-next"]
 
 [features]
 # Chromaprint audio fingerprinting (`getfingerprint`) via chromaprint-next, a
