@@ -341,12 +341,6 @@ dependencies = [
 
 [[package]]
 name = "base64"
-version = "0.22.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
-
-[[package]]
-name = "base64"
 version = "0.23.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
@@ -508,10 +502,8 @@ dependencies = [
 [[package]]
 name = "chromaprint-next"
 version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7771e0c40a406beee6f6e1104448c8d4d87c83e59808c689c19b0db6d14ed201"
+source = "git+https://github.com/M0Rf30/chromaprint-next?branch=improvements%2Fdeps-and-review#716d6966a2d2b9c12efeeb96f5f92e40c121be15"
 dependencies = [
- "base64 0.22.1",
  "realfft",
  "thiserror 2.0.21",
 ]
@@ -1320,7 +1312,7 @@ version = "0.1.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ddc03d96684f9226b8a787cdb71488417b53ab5ea8fdb1dac946cb9431cc8bff"
 dependencies = [
- "base64 0.23.1",
+ "base64",
  "bytes",
  "futures-channel",
  "futures-util",
@@ -2609,7 +2601,7 @@ version = "0.13.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "16a1cfa75cc186dd73d5818e510e042e40927bccc9c236b061cea97e1eb08029"
 dependencies = [
- "base64 0.23.1",
+ "base64",
  "bytes",
  "encoding_rs",
  "futures-channel",
@@ -2702,7 +2694,7 @@ dependencies = [
 name = "rmpd-library"
 version = "0.13.0"
 dependencies = [
- "base64 0.23.1",
+ "base64",
  "camino",
  "chromaprint-next",
  "icu_collator",

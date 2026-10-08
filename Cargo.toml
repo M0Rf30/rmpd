@@ -67,7 +67,8 @@ sha2 = "0.11"
 # Advanced features
 mdns-sd = "0.21"                  # Network discovery
 mpris-server = { version = "0.10", features = ["tokio"] }  # MPRIS D-Bus media player interface
-chromaprint-next = "0.1"          # Audio fingerprinting (pure-Rust Chromaprint)
+# TODO: back to crates.io once attilagyorffy/chromaprint-next#2 is released
+chromaprint-next = { git = "https://github.com/M0Rf30/chromaprint-next", branch = "improvements/deps-and-review" }  # Audio fingerprinting (pure-Rust Chromaprint)
 base64 = "0.23"                   # Base64 encoding
 nix = { version = "0.31", features = ["process", "fs", "socket"] }  # daemonize: fork/setsid/dup2; systemd socket activation: getsockname
 
