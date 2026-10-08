@@ -565,17 +565,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "chromaprint-sys-next"
-version = "1.6.0"
+name = "chromaprint-next"
+version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "76fc5953dd0f119db6f40ab5ab03059e88bdb4b6ec9d23d3bf4fb46ecafca991"
+checksum = "7771e0c40a406beee6f6e1104448c8d4d87c83e59808c689c19b0db6d14ed201"
 dependencies = [
- "bindgen",
- "cfg-if",
- "cmake",
- "libc",
- "pkg-config",
- "vcpkg",
+ "base64 0.22.1",
+ "realfft",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -2987,7 +2984,7 @@ version = "0.12.0"
 dependencies = [
  "base64 0.23.1",
  "camino",
- "chromaprint-sys-next",
+ "chromaprint-next",
  "icu_collator",
  "notify",
  "notify-debouncer-full",

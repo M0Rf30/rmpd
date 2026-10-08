@@ -47,13 +47,15 @@ Requires Rust 1.85+ (the workspace uses edition 2024).
 
 ```bash
 # Ubuntu/Debian
-sudo apt-get install libasound2-dev pkg-config cmake
+sudo apt-get install libasound2-dev pkg-config
 
 # macOS
-brew install pkg-config cmake
+brew install pkg-config
 ```
 
-`cmake` is needed because `chromaprint` is built from source on every platform.
+Audio fingerprinting (`getfingerprint`) uses
+[chromaprint-next](https://github.com/attilagyorffy/chromaprint-next), a pure-Rust
+Chromaprint port, so no C library or `cmake` is needed.
 
 ### Build
 
