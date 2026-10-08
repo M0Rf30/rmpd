@@ -244,6 +244,19 @@ impl MpdServer {
 
         // Optionally bind Unix socket
         let unix_listener = if let Some(path) = &self.unix_socket {
+            // A missing parent directory surfaces as a bare ENOENT from bind();
+            // name the directory instead so misconfiguration is obvious.
+            if let Some(parent) = std::path::Path::new(path)
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                && !parent.exists()
+            {
+                return Err(RmpdError::Config(format!(
+                    "network.unix_socket: directory {} does not exist",
+                    parent.display()
+                )));
+            }
+
             // Remove stale socket file if present
             let _ = std::fs::remove_file(path);
             let listener = tokio::net::UnixListener::bind(path)?;

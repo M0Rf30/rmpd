@@ -50,6 +50,28 @@ fn empty_bind_address_without_unix_socket_errors() {
     );
 }
 
+/// A socket path whose parent directory does not exist must be reported by
+/// name, instead of surfacing the bare `ENOENT` from `bind()`.
+#[tokio::test]
+async fn missing_socket_parent_directory_is_reported() {
+    use rmpd_protocol::server::MpdServer;
+    use rmpd_protocol::state::AppState;
+    use tokio::sync::broadcast;
+
+    let temp = tempfile::TempDir::new().expect("temp dir");
+    let sock_path = temp.path().join("nope").join("rmpd.sock"); // parent "nope" is absent
+
+    let (_shutdown_tx, shutdown_rx) = broadcast::channel::<()>(1);
+    let server = MpdServer::with_state(String::new(), AppState::new(), shutdown_rx);
+
+    let err = server
+        .run_unix_socket(sock_path.to_string_lossy().to_string())
+        .await
+        .expect_err("missing parent directory must fail");
+
+    let msg = err.to_string();
+    assert!(msg.contains("does not exist"), "unexpected error: {msg}");
+}
 
 /// The address the server binds: ports are appended to TCP addresses only.
 #[test]
