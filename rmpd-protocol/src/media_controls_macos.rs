@@ -196,17 +196,20 @@ fn spawn_watchers(
                 Ok(Event::SongChanged(_))
                 | Ok(Event::PlayerStateChanged(_))
                 | Ok(Event::PositionChanged(_)) => {
-                    let snap = snapshot_media_state(&watch_state).await;
-                    if tx.send(PumpMsg::Refresh(snap)).is_err() {
-                        break;
-                    }
-                    // Coalesce bursts — position ticks arrive frequently.
+                    // Coalesce bursts first: position ticks arrive frequently.
+                    // Draining after the snapshot would drop an event that
+                    // arrived while it was taken, leaving the panel stale.
                     while matches!(
                         rx.try_recv(),
                         Ok(Event::PositionChanged(_))
                             | Ok(Event::PlayerStateChanged(_))
                             | Ok(Event::SongChanged(_))
                     ) {}
+
+                    let snap = snapshot_media_state(&watch_state).await;
+                    if tx.send(PumpMsg::Refresh(snap)).is_err() {
+                        break;
+                    }
                 }
                 Ok(_) => {}
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
