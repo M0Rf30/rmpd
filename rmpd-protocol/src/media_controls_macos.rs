@@ -239,7 +239,9 @@ async fn snapshot_media_state(state: &AppState) -> MediaSnapshot {
     use rmpd_core::state::PlayerState;
 
     let status = state.status.read().await;
-    let position = status.elapsed;
+    // `status.elapsed` is refreshed about once a second by another subscriber,
+    // so the panel would lag. Ask the engine for the audible position instead.
+    let position = state.engine.read().await.get_elapsed_live();
     let playing = matches!(status.state, PlayerState::Play);
     let stopped = matches!(status.state, PlayerState::Stop);
     let song_id = status.current_song.map(|p| p.id);
