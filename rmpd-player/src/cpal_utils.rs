@@ -160,7 +160,10 @@ fn find_dop_device(host: &cpal::Host, rate: SampleRate, channels: u16) -> Option
         if !id.starts_with("hw:") {
             continue;
         }
-        let desc = device.to_string().to_lowercase();
+        let Ok(description) = device.description() else {
+            continue;
+        };
+        let desc = description.name().to_lowercase();
         // HDMI/SPDIF take high PCM rates but are not DoP DACs — never auto-pick.
         if desc.contains("hdmi") || desc.contains("s/pdif") || desc.contains("iec958") {
             continue;
