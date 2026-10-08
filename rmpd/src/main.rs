@@ -298,9 +298,52 @@ fn main() -> Result<()> {
         }
     }
 
+    // macOS desktop integration needs the process main thread for AppKit, so
+    // the server moves to a background thread there; everywhere else the
+    // runtime drives it directly.
+    #[cfg(target_os = "macos")]
+    let want_media_controls = config.network.media_controls && !args.daemonize;
+
+    #[cfg(target_os = "macos")]
+    if !want_media_controls {
+        if config.network.media_controls {
+            info!("media controls unavailable: --daemonize leaves no AppKit session");
+        } else {
+            info!("media controls disabled: set media_controls = true to enable Now Playing");
+        }
+    }
+
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
-    runtime.block_on(app::run(full_address, config, activated))?;
+
+    #[cfg(target_os = "macos")]
+    if want_media_controls {
+        use rmpd_protocol::media_controls_macos;
+
+        let (state_tx, state_rx) = std::sync::mpsc::channel();
+        let (exit_tx, exit_rx) = std::sync::mpsc::channel();
+        let handle = runtime.handle().clone();
+        let addr = full_address.clone();
+        std::thread::Builder::new()
+            .name("rmpd-server".into())
+            .spawn(move || {
+                if let Err(e) = handle.block_on(app::run(addr, config, Some(state_tx), activated)) {
+                    eprintln!("rmpd: server error: {e}");
+                    // Fatal startup failure: the AppKit loop on the main thread
+                    // would keep the process alive, so exit here. Same exemption
+                    // the daemonize path above uses.
+                    #[allow(clippy::disallowed_methods)]
+                    std::process::exit(1);
+                }
+                // Clean shutdown: let the AppKit run loop terminate.
+                let _ = exit_tx.send(());
+            })?;
+
+        media_controls_macos::run_blocking(state_rx, exit_rx, runtime.handle().clone());
+        return Ok(());
+    }
+
+    runtime.block_on(app::run(full_address, config, None, activated))?;
     Ok(())
 }

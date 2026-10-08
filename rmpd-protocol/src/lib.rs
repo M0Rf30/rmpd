@@ -7,7 +7,11 @@ pub mod commands;
 pub mod connection;
 pub mod discovery;
 pub(crate) mod helpers;
+#[cfg(target_os = "linux")]
 pub mod mpris;
+
+#[cfg(target_os = "macos")]
+pub mod media_controls_macos;
 pub mod parser;
 pub mod queue_playback;
 pub mod response;

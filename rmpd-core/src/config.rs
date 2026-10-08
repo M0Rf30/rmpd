@@ -125,11 +125,12 @@ pub struct NetworkConfig {
     /// with the machine hostname. Matches mpd.conf's `zeroconf_name`.
     #[serde(default = "default_zeroconf_name")]
     pub zeroconf_name: String,
-    /// Advertise the daemon on the session D-Bus via the MPRIS interface
-    /// (`org.mpris.MediaPlayer2.rmpd`) so desktop environments, `playerctl`,
-    /// and media keys can discover and control rmpd.
-    #[serde(default = "default_true")]
-    pub mpris: bool,
+    /// Desktop media integration: MPRIS over D-Bus on Linux, native Now
+    /// Playing + remote commands on macOS.
+    ///
+    /// The previous key name `mpris` is still accepted.
+    #[serde(default = "default_true", alias = "mpris")]
+    pub media_controls: bool,
     /// Advertise the daemon on the LAN via mDNS/Zeroconf (`_mpd._tcp`) so
     /// clients can auto-discover it. Matches MPD's `zeroconf_enabled`.
     #[serde(default = "default_true")]
@@ -1320,7 +1321,7 @@ impl Default for NetworkConfig {
             max_command_list_size: default_max_command_list_size(),
             max_output_buffer_size: default_max_output_buffer_size(),
             zeroconf_name: default_zeroconf_name(),
-            mpris: true,
+            media_controls: true,
             zeroconf_enabled: true,
         }
     }

@@ -40,6 +40,16 @@ regex = "1"
 mdns-sd.workspace = true
 mpris-server.workspace = true
 
+# Native macOS Now Playing / remote commands (souvlaki wraps
+# MPNowPlayingInfoCenter + MPRemoteCommandCenter; the objc2 crates drive the
+# AppKit main-thread run loop).
+[target.'cfg(target_os = "macos")'.dependencies]
+souvlaki = "0.8"
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSRunningApplication"] }
+objc2-foundation = { version = "0.3", features = ["NSTimer"] }
+block2 = "0.6"
+
 [dev-dependencies]
 rmpd-core = { workspace = true, features = ["test-utils"] }
 tempfile = "3"

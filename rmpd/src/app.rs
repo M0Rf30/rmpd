@@ -14,7 +14,16 @@ use tracing::{error, info, warn};
 /// (socket activation), they are served instead of binding `bind_address` and
 /// `network.unix_socket` — like MPD, which skips its own listeners whenever
 /// activation fds exist.
-pub async fn run(bind_address: String, config: Config, activated: Option<Activated>) -> Result<()> {
+///
+/// `state_tx` hands the fully-built [`AppState`] to the macOS Now Playing
+/// controller, which owns the process main thread; every other platform passes
+/// `None`.
+pub async fn run(
+    bind_address: String,
+    config: Config,
+    state_tx: Option<std::sync::mpsc::Sender<rmpd_protocol::state::AppState>>,
+    activated: Option<Activated>,
+) -> Result<()> {
     // Create application state with database and music directory paths
     let db_path = config.general.db_file.to_string();
     let music_dir = config.general.music_directory.to_string();
@@ -184,7 +193,11 @@ pub async fn run(bind_address: String, config: Config, activated: Option<Activat
     // `playerctl`, and media keys can discover and control it. Kept alive
     // (`_mpris`) for the lifetime of the server; dropping it releases the
     // D-Bus name. Failure (e.g. no session bus) is non-fatal.
-    let _mpris = if config.network.mpris {
+    // Linux desktop integration. macOS uses the native Now Playing stack,
+    // which has to run on the process main thread (see media_controls_macos),
+    // so it is started from main.rs instead.
+    #[cfg(target_os = "linux")]
+    let _media_integration = if config.network.media_controls {
         match rmpd_protocol::mpris::spawn(state.clone()).await {
             Ok(handle) => {
                 info!("MPRIS interface enabled (org.mpris.MediaPlayer2.rmpd)");
@@ -299,6 +312,12 @@ pub async fn run(bind_address: String, config: Config, activated: Option<Activat
     });
 
     // Create and run server
+    // Hand the fully-built state to the macOS Now Playing controller, which
+    // owns the process main thread; a no-op elsewhere.
+    if let Some(tx) = &state_tx {
+        let _ = tx.send(state.clone());
+    }
+
     let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
     let server = MpdServer::with_state(bind_address.clone(), state.clone(), shutdown_rx)
         .with_ready_signal(ready_tx);
