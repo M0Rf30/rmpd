@@ -29,7 +29,7 @@ use souvlaki::{
 use std::ptr::NonNull;
 use std::rc::Rc;
 use std::sync::mpsc::{Receiver, Sender};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 /// Owned playback picture handed from the async half to the main thread;
 /// souvlaki's metadata type borrows `&str`s, so the strings must outlive the
@@ -102,8 +102,15 @@ pub fn run_blocking(
     exit_rx: Receiver<()>,
     rt: tokio::runtime::Handle,
 ) {
-    let mtm = MainThreadMarker::new().expect("media controls must start on the main thread");
-    let state = ready_rx.recv().expect("server readiness signal");
+    let Some(mtm) = MainThreadMarker::new() else {
+        warn!("media controls unavailable: not on the main thread");
+        wait_for_server(&exit_rx);
+        return;
+    };
+    let Ok(state) = ready_rx.recv() else {
+        warn!("media controls unavailable: the server stopped before the UI started");
+        return;
+    };
 
     {
         let app = NSApplication::sharedApplication(mtm);
@@ -115,7 +122,14 @@ pub fn run_blocking(
             display_name: "rmpd",
             hwnd: None,
         };
-        let mut controls = MediaControls::new(config).expect("create media controls");
+        let mut controls = match MediaControls::new(config) {
+            Ok(controls) => controls,
+            Err(e) => {
+                warn!("media controls unavailable: {e}");
+                wait_for_server(&exit_rx);
+                return;
+            }
+        };
 
         // Remote-command handler: route hardware buttons into the same
         // command handlers the MPD protocol uses. The closure must be
@@ -123,14 +137,16 @@ pub fn run_blocking(
         // handle here is fine because these handlers are quick state flips.
         let event_state = state.clone();
         let event_rt = rt.clone();
-        controls
-            .attach(move |event| {
-                let fut = dispatch_event(&event_state, event);
-                if let Err(e) = event_rt.block_on(fut) {
-                    debug!("media controls: command failed: {e}");
-                }
-            })
-            .expect("attach remote command handler");
+        if let Err(e) = controls.attach(move |event| {
+            let fut = dispatch_event(&event_state, event);
+            if let Err(e) = event_rt.block_on(fut) {
+                debug!("media controls: command failed: {e}");
+            }
+        }) {
+            warn!("media controls unavailable: {e}");
+            wait_for_server(&exit_rx);
+            return;
+        }
 
         // Initial snapshot so the Now Playing tile is populated immediately.
         let snap = rt.block_on(snapshot_media_state(&state));
@@ -176,6 +192,12 @@ pub fn run_blocking(
         // Keep `cell` alive until after the run loop ends.
         drop(cell);
     }
+}
+
+/// Block the main thread until the async half finishes, so a daemon without
+/// media controls still exits when the server does.
+fn wait_for_server(exit_rx: &Receiver<()>) {
+    let _ = exit_rx.recv();
 }
 
 /// Spawn the async watchers: one translating bus events into refresh pings,
@@ -334,10 +356,6 @@ async fn dispatch_event(state: &AppState, event: MediaControlEvent) -> Result<()
             tracing::debug!("media control:-> previous");
             playback::handle_previous_command(state).await;
         }
-        MediaControlEvent::Stop => {
-            tracing::debug!("media control:-> stop");
-            playback::handle_stop_command(state).await;
-        }
         MediaControlEvent::SetPosition(pos) => {
             let MediaPosition(target) = pos;
             playback::handle_seekcur_command(state, target.as_secs_f64(), false).await;
@@ -346,7 +364,6 @@ async fn dispatch_event(state: &AppState, event: MediaControlEvent) -> Result<()
     }
     Ok(())
 }
-
 
 #[cfg(test)]
 mod tests {
