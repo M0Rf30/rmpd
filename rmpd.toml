@@ -90,6 +90,9 @@ zeroconf_name = "rmpd@%h"
 
 [audio]
 default_output = "default"
+# Pause playback when the default output device disappears mid-track (macOS
+# only), e.g. a Bluetooth headset switching off. Set to false to keep playing.
+pause_on_device_loss = true
 buffer_time = 500
 # Sample-rate conversion quality, used whenever the output device cannot play a
 # stream's native rate — including DSD-to-PCM conversion, which decodes DSD to a
