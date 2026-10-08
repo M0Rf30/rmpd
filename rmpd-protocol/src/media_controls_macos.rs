@@ -14,7 +14,7 @@
 //! run loop drains those channels because souvlaki's controls must be touched
 //! from the main thread only.
 
-use crate::commands::{options, playback};
+use crate::commands::playback;
 use crate::state::AppState;
 use objc2::MainThreadMarker;
 use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
@@ -338,20 +338,9 @@ async fn dispatch_event(state: &AppState, event: MediaControlEvent) -> Result<()
             tracing::debug!("media control:-> stop");
             playback::handle_stop_command(state).await;
         }
-        MediaControlEvent::SeekBy(direction, duration) => {
-            let sign = match direction {
-                souvlaki::SeekDirection::Forward => 1.0,
-                souvlaki::SeekDirection::Backward => -1.0,
-            };
-            playback::handle_seekcur_command(state, sign * duration.as_secs_f64(), true).await;
-        }
         MediaControlEvent::SetPosition(pos) => {
             let MediaPosition(target) = pos;
             playback::handle_seekcur_command(state, target.as_secs_f64(), false).await;
-        }
-        MediaControlEvent::SetVolume(volume) => {
-            let vol = (volume.clamp(0.0, 1.0) * 100.0).round() as u8;
-            options::handle_setvol_command(state, vol).await;
         }
         other => debug!("media controls: ignoring event {other:?}"),
     }

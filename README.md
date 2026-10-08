@@ -222,7 +222,7 @@ warning naming each one:
 
 rmpd exposes a native [MPRIS](https://specifications.freedesktop.org/mpris-spec/latest/) interface on the session D-Bus as `org.mpris.MediaPlayer2.rmpd`. This lets Linux desktops (GNOME Shell, KDE Plasma), `playerctl`, lock screens, and multimedia keys discover and control rmpd directly — no external bridge such as `mpDris2` required. It is enabled by default and can be toggled with `media_controls` under `[network]` (the previous name, `mpris`, is still accepted).
 
-On **macOS** the same setting enables the native Now Playing integration: rmpd appears in Control Center and on the lock screen, and the hardware remote commands (headphone play/pause/next/previous, seek and volume) control playback directly. `--daemonize` disables it there, since a detached daemon has no AppKit session.
+On **macOS** the same setting enables the native Now Playing integration: rmpd appears in Control Center and on the lock screen, and hardware remote commands (play/pause, next and previous) control playback directly. `--daemonize` disables it there, since a detached daemon has no AppKit session.
 
 
 On macOS, playback also auto-pauses when the default output device disappears while playing (for example a Bluetooth headset powering off), matching the platform convention of other media players. Disable it with `pause_on_device_loss = false` under `[audio]`.
