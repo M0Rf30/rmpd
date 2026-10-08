@@ -196,7 +196,7 @@ pub async fn run(
     // Linux desktop integration. macOS uses the native Now Playing stack,
     // which has to run on the process main thread (see media_controls_macos),
     // so it is started from main.rs instead.
-    #[cfg(target_os = "linux")]
+    #[cfg(not(target_os = "macos"))]
     let _media_integration = if config.network.media_controls {
         match rmpd_protocol::mpris::spawn(state.clone()).await {
             Ok(handle) => {
@@ -316,14 +316,18 @@ pub async fn run(
     // speakers silently and macOS keeps playing. A short poll of cpal detects
     // the vanish without unsafe CoreAudio FFI. Deliberate switching
     // (speakers <-> headphones) never pauses: the old device stays listed.
+    // Only when rmpd follows the system default: with a pinned device, the
+    // watcher would pause on the loss of a device this daemon is not using.
     #[cfg(target_os = "macos")]
-    if config.audio.pause_on_device_loss {
+    if config.audio.pause_on_device_loss && config.audio.device.is_none() {
         let device_watch_state = state.clone();
         tokio::spawn(async move {
             use rmpd_core::state::PlayerState;
             use rmpd_player::cpal_utils;
 
-            let mut active_device = cpal_utils::default_output_name();
+            // Cleared whenever playback stops: the device a pause resumes on is
+            // not necessarily the one it paused on.
+            let mut active_device: Option<String> = None;
             loop {
                 tokio::time::sleep(std::time::Duration::from_millis(250)).await;
 
@@ -337,12 +341,20 @@ pub async fn run(
                     PlayerState::Play
                 );
                 if !playing {
+                    active_device = None;
                     continue;
                 }
 
-                if let Some(prev) = active_device.as_deref() {
+                let previous = active_device.as_deref();
+                let current = cpal_utils::default_output_name();
+
+                // Ask for the device list only when the default moved away from
+                // the device that was playing.
+                if let Some(prev) = previous
+                    && Some(prev) != current.as_deref()
+                {
                     let available = cpal_utils::output_device_names();
-                    if let Some(lost) = lost_device(Some(prev), &available) {
+                    if let Some(lost) = lost_device(previous, current.as_deref(), &available) {
                         info!("output device {lost:?} disappeared; pausing");
                         let _ = rmpd_protocol::commands::playback::handle_pause_command(
                             &device_watch_state,
@@ -352,7 +364,7 @@ pub async fn run(
                     }
                 }
 
-                active_device = cpal_utils::default_output_name();
+                active_device = current;
             }
         });
     }
@@ -467,8 +479,15 @@ pub async fn run(
 /// list, returning its name. A move between two listed devices (speakers and
 /// headphones) is not a loss.
 #[cfg(target_os = "macos")]
-fn lost_device(previous: Option<&str>, available: &[String]) -> Option<String> {
+fn lost_device(
+    previous: Option<&str>,
+    current: Option<&str>,
+    available: &[String],
+) -> Option<String> {
     let previous = previous?;
+    if current == Some(previous) {
+        return None;
+    }
     (!available.iter().any(|name| name == previous)).then(|| previous.to_owned())
 }
 
@@ -840,7 +859,16 @@ mod device_loss_tests {
     fn a_device_still_in_the_list_is_not_lost() {
         let listed = names(&["Headphones", "Speakers"]);
         assert_eq!(
-            lost_device(Some("Headphones"), &listed),
+            lost_device(Some("Headphones"), Some("Headphones"), &listed),
+            None
+        );
+    }
+
+    #[test]
+    fn a_move_to_another_listed_device_is_not_a_loss() {
+        let listed = names(&["Headphones", "Speakers"]);
+        assert_eq!(
+            lost_device(Some("Headphones"), Some("Speakers"), &listed),
             None
         );
     }
@@ -849,7 +877,7 @@ mod device_loss_tests {
     fn a_device_that_left_the_list_is_reported() {
         let listed = names(&["Speakers"]);
         assert_eq!(
-            lost_device(Some("Headphones"), &listed).as_deref(),
+            lost_device(Some("Headphones"), Some("Speakers"), &listed).as_deref(),
             Some("Headphones")
         );
     }
@@ -857,6 +885,6 @@ mod device_loss_tests {
     #[test]
     fn nothing_is_reported_without_a_previous_device() {
         let listed = names(&["Speakers"]);
-        assert_eq!(lost_device(None, &listed), None);
+        assert_eq!(lost_device(None, Some("Speakers"), &listed), None);
     }
 }
