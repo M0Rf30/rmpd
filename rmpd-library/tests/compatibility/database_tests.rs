@@ -265,12 +265,14 @@ fn test_case_insensitive_listing() {
     let generator = FixtureGenerator::new().unwrap();
     let harness = RmpdTestHarness::new().unwrap();
 
-    // Add artists with different casings
-    let artists = vec!["The Beatles", "the beatles", "THE BEATLES"];
+    // The fixture cache names files after the metadata, so artists that differ
+    // only by case collapse to one path on a case-insensitive filesystem. Give
+    // each song its own title to keep the paths apart.
+    let artists = ["The Beatles", "the beatles", "THE BEATLES"];
 
-    for artist in &artists {
+    for (index, artist) in artists.iter().enumerate() {
         let metadata = TestMetadata {
-            title: "Song".to_string(),
+            title: format!("Song {index}"),
             artist: artist.to_string(),
             album: "Album".to_string(),
             ..Default::default()
