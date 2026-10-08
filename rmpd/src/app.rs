@@ -360,28 +360,33 @@ pub async fn run(bind_address: String, config: Config, activated: Option<Activat
             // MPD's `bind_to_address` rule: a path names a socket, and naming
             // only a socket serves no TCP at all. An empty address says the same
             // thing, taking its path from `unix_socket`.
-            if let Some(path) = rmpd_protocol::server::socket_only_path(
+            match rmpd_protocol::server::socket_only_path(
                 &bind_address,
                 config.network.unix_socket.as_ref().map(|p| p.as_str()),
             )? {
-                info!("TCP listener disabled; serving on unix socket {path} only");
-                return server.run_unix_socket(path).await;
+                Some(path) => {
+                    info!("TCP listener disabled; serving on unix socket {path} only");
+                    // Evaluated as the arm's value: the shutdown cleanup below
+                    // still runs when the accept loop ends.
+                    server.run_unix_socket(path).await
+                }
+                None => {
+                    let listener = tokio::net::TcpListener::bind(&bind_address).await?;
+                    info!("mpd server listening on {}", bind_address);
+
+                    // Advertise rmpd via mDNS only once the TCP listener is actually
+                    // accepting connections, and only when zeroconf is enabled. Use
+                    // the port actually bound (`--port` overrides the config value).
+                    if config.network.zeroconf_enabled {
+                        let port = listener
+                            .local_addr()
+                            .map_or(config.network.port, |a| a.port());
+                        state.advertise_mdns(port);
+                    }
+
+                    server.run_with_listener(listener).await
+                }
             }
-
-            let listener = tokio::net::TcpListener::bind(&bind_address).await?;
-            info!("mpd server listening on {}", bind_address);
-
-            // Advertise rmpd via mDNS only once the TCP listener is actually
-            // accepting connections, and only when zeroconf is enabled. Use
-            // the port actually bound (`--port` overrides the config value).
-            if config.network.zeroconf_enabled {
-                let port = listener
-                    .local_addr()
-                    .map_or(config.network.port, |a| a.port());
-                state.advertise_mdns(port);
-            }
-
-            server.run_with_listener(listener).await
         }
     };
 
