@@ -652,7 +652,8 @@ const NETWORK_KEYS: &[&str] = &[
     "max_command_list_size",
     "max_output_buffer_size",
     "zeroconf_name",
-    "mpris",
+    "media_controls",
+    "mpris", // still accepted through the serde alias
     "zeroconf_enabled",
 ];
 
@@ -670,6 +671,7 @@ const AUDIO_KEYS: &[&str] = &[
     "mixramp_db",
     "mixramp_delay",
     "restore_paused",
+    "pause_on_device_loss",
 ];
 
 const DATABASE_KEYS: &[&str] = &[

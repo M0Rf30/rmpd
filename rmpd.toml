@@ -52,9 +52,11 @@ bind_address = "127.0.0.1"
 port = 6600
 max_connections = 100
 connection_timeout = 60
-# Advertise rmpd on the session D-Bus via MPRIS (org.mpris.MediaPlayer2.rmpd)
-# so desktop environments, playerctl, and media keys can detect and control it.
-mpris = true
+# Desktop media integration: on Linux the session D-Bus MPRIS interface
+# (org.mpris.MediaPlayer2.rmpd) lets desktop environments, playerctl and media
+# keys detect and control rmpd. On macOS the same switch enables Now Playing and
+# the headphone remote commands.
+media_controls = true
 # Advertise rmpd on the LAN via mDNS/Zeroconf (_mpd._tcp) so clients can
 # auto-discover it. Disable if you don't want the daemon's presence and
 # hostname broadcast on the network (e.g. bind_address = "127.0.0.1").
