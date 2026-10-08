@@ -445,7 +445,9 @@ impl CpalDeviceConfig {
 pub fn default_output_name() -> Option<String> {
     let host = cpal::default_host();
     let device = host.default_output_device()?;
-    Some(device.to_string())
+    // `Device`'s Display panics when the description cannot be read, which is
+    // what happens when a device disappears between enumeration and lookup.
+    device.description().ok().map(|d| d.name().to_owned())
 }
 
 /// Descriptions of every currently available output device.
@@ -455,6 +457,10 @@ pub fn default_output_name() -> Option<String> {
 pub fn output_device_names() -> Vec<String> {
     let host = cpal::default_host();
     host.output_devices()
-        .map(|it| it.map(|d| d.to_string()).collect())
+        .map(|devices| {
+            devices
+                .filter_map(|d| d.description().ok().map(|d| d.name().to_owned()))
+                .collect()
+        })
         .unwrap_or_default()
 }
