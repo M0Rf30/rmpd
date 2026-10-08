@@ -230,8 +230,6 @@ warning naming each one:
 
 rmpd exposes a native [MPRIS](https://specifications.freedesktop.org/mpris-spec/latest/) interface on the session D-Bus as `org.mpris.MediaPlayer2.rmpd`. This lets Linux desktops (GNOME Shell, KDE Plasma), `playerctl`, lock screens, and multimedia keys discover and control rmpd directly — no external bridge such as `mpDris2` required. It is enabled by default and can be toggled with `mpris` under `[network]`.
 
-On macOS, playback also pauses when the default output device disappears while playing (for example a Bluetooth headset powering off). Disable with `pause_on_device_loss = false` under `[audio]`.
-
 ```bash
 playerctl -p rmpd metadata
 busctl --user introspect org.mpris.MediaPlayer2.rmpd /org/mpris/MediaPlayer2
