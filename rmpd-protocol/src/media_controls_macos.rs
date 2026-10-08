@@ -42,6 +42,28 @@ struct MediaSnapshot {
     position: Option<std::time::Duration>,
     playing: bool,
     stopped: bool,
+    /// `file://` URL of the track's picture, when it has one.
+    cover_url: Option<String>,
+}
+
+impl MediaSnapshot {
+    /// Identity of the metadata block. Position is deliberately excluded: it
+    /// changes every tick, and pushing metadata again makes the OS reload the
+    /// artwork (visible as the panel flickering between the art and nothing).
+    fn meta_key(&self) -> String {
+        let mut key = String::with_capacity(64);
+        for part in [
+            self.title.as_str(),
+            self.artist.as_str(),
+            self.album.as_deref().unwrap_or(""),
+            self.cover_url.as_deref().unwrap_or(""),
+        ] {
+            key.push_str(part);
+            key.push('\u{1}');
+        }
+        key.push_str(&format!("{:?}", self.duration));
+        key
+    }
 }
 
 impl MediaSnapshot {
@@ -54,6 +76,7 @@ impl MediaSnapshot {
             position: None,
             playing: false,
             stopped: true,
+            cover_url: None,
         }
     }
 }
@@ -111,7 +134,8 @@ pub fn run_blocking(
 
         // Initial snapshot so the Now Playing tile is populated immediately.
         let snap = rt.block_on(snapshot_media_state(&state));
-        apply_snapshot(&mut controls, &snap);
+        let published = std::cell::RefCell::new(None::<String>);
+        apply_snapshot(&mut controls, &snap, &mut published.borrow_mut());
 
         // Async half: forward bus events as refresh requests, watch shutdown.
         let (tx, rx) = std::sync::mpsc::channel::<PumpMsg>();
@@ -132,7 +156,7 @@ pub fn run_blocking(
             while let Ok(msg) = rx.try_recv() {
                 match msg {
                     PumpMsg::Refresh(snap) => {
-                        apply_snapshot(controls, &snap);
+                        apply_snapshot(controls, &snap, &mut published.borrow_mut());
                     }
                     PumpMsg::Exit => {
                         controls.set_playback(MediaPlayback::Stopped {}).ok();
@@ -233,6 +257,10 @@ async fn snapshot_media_state(state: &AppState) -> MediaSnapshot {
             snap.artist = song.display_artist().to_owned();
             snap.album = song.tag("album").map(str::to_owned);
             snap.duration = song.duration;
+            snap.cover_url = crate::now_playing_art::artwork_url_for_song(
+                state.music_dir.as_deref(),
+                song.path.as_str(),
+            );
         }
     }
     snap
@@ -240,15 +268,23 @@ async fn snapshot_media_state(state: &AppState) -> MediaSnapshot {
 
 /// Push a snapshot into the OS surfaces. Runs on the main thread; the
 /// souvlaki metadata borrows from `snap`, which outlives the call.
-fn apply_snapshot(controls: &mut MediaControls, snap: &MediaSnapshot) {
-    let meta = MediaMetadata {
-        title: Some(&snap.title),
-        artist: Some(&snap.artist),
-        album: snap.album.as_deref(),
-        duration: snap.duration,
-        cover_url: None,
-    };
-    controls.set_metadata(meta).ok();
+fn apply_snapshot(
+    controls: &mut MediaControls,
+    snap: &MediaSnapshot,
+    published: &mut Option<String>,
+) {
+    let key = snap.meta_key();
+    if published.as_deref() != Some(key.as_str()) {
+        let meta = MediaMetadata {
+            title: Some(&snap.title),
+            artist: Some(&snap.artist),
+            album: snap.album.as_deref(),
+            duration: snap.duration,
+            cover_url: snap.cover_url.as_deref(),
+        };
+        controls.set_metadata(meta).ok();
+        *published = Some(key);
+    }
 
     let progress = snap.position.map(MediaPosition);
     let pb = match (snap.stopped, snap.playing) {
@@ -327,3 +363,37 @@ use MediaMetadata as _MediaMetadataUsed;
 /// wired behind its cfg gate.
 #[allow(dead_code)]
 type __TokioMpsc = tokio_mpsc::Sender<()>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn snapshot(title: &str, cover: Option<&str>, position_ms: u64) -> MediaSnapshot {
+        MediaSnapshot {
+            title: title.to_owned(),
+            artist: "Artist".to_owned(),
+            album: Some("Album".to_owned()),
+            duration: Some(Duration::from_secs(180)),
+            position: Some(Duration::from_millis(position_ms)),
+            playing: true,
+            stopped: false,
+            cover_url: cover.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn the_metadata_key_ignores_the_position() {
+        let first = snapshot("Title", Some("file:///a.png"), 0).meta_key();
+        let later = snapshot("Title", Some("file:///a.png"), 42_000).meta_key();
+        assert_eq!(first, later, "a position tick must not republish metadata");
+    }
+
+    #[test]
+    fn the_metadata_key_follows_the_track_and_the_cover() {
+        let base = snapshot("Title", Some("file:///a.png"), 0).meta_key();
+        assert_ne!(base, snapshot("Other", Some("file:///a.png"), 0).meta_key());
+        assert_ne!(base, snapshot("Title", Some("file:///b.png"), 0).meta_key());
+        assert_ne!(base, snapshot("Title", None, 0).meta_key());
+    }
+}

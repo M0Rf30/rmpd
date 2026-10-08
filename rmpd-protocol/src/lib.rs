@@ -12,6 +12,7 @@ pub mod mpris;
 
 #[cfg(target_os = "macos")]
 pub mod media_controls_macos;
+pub mod now_playing_art;
 pub mod parser;
 pub mod queue_playback;
 pub mod response;
