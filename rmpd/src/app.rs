@@ -311,6 +311,52 @@ pub async fn run(
         }
     });
 
+    // macOS: pause when the device we were playing through DISAPPEARS from
+    // the system's output-device list — headphone power-off reroutes to
+    // speakers silently and macOS keeps playing. A short poll of cpal detects
+    // the vanish without unsafe CoreAudio FFI. Deliberate switching
+    // (speakers <-> headphones) never pauses: the old device stays listed.
+    #[cfg(target_os = "macos")]
+    if config.audio.pause_on_device_loss {
+        let device_watch_state = state.clone();
+        tokio::spawn(async move {
+            use rmpd_core::state::PlayerState;
+            use rmpd_player::cpal_utils;
+
+            let mut active_device = cpal_utils::default_output_name();
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+
+                // Skip the CoreAudio queries entirely unless actively playing.
+                let playing = matches!(
+                    PlayerState::from_atomic(
+                        device_watch_state
+                            .atomic_state
+                            .load(std::sync::atomic::Ordering::Acquire)
+                    ),
+                    PlayerState::Play
+                );
+                if !playing {
+                    continue;
+                }
+
+                if let Some(prev) = active_device.as_deref() {
+                    let available = cpal_utils::output_device_names();
+                    if let Some(lost) = lost_device(Some(prev), &available) {
+                        info!("output device {lost:?} disappeared; pausing");
+                        let _ = rmpd_protocol::commands::playback::handle_pause_command(
+                            &device_watch_state,
+                            Some(true),
+                        )
+                        .await;
+                    }
+                }
+
+                active_device = cpal_utils::default_output_name();
+            }
+        });
+    }
+
     // Create and run server
     // Hand the fully-built state to the macOS Now Playing controller, which
     // owns the process main thread; a no-op elsewhere.
@@ -415,6 +461,15 @@ pub async fn run(
 
     server_result?;
     Ok(())
+}
+
+/// Whether the device rmpd was playing through has disappeared from the device
+/// list, returning its name. A move between two listed devices (speakers and
+/// headphones) is not a loss.
+#[cfg(target_os = "macos")]
+fn lost_device(previous: Option<&str>, available: &[String]) -> Option<String> {
+    let previous = previous?;
+    (!available.iter().any(|name| name == previous)).then(|| previous.to_owned())
 }
 
 /// Open a dedicated database handle and start watching the music directory for
@@ -770,5 +825,38 @@ mod tests {
             result.is_ok(),
             "a failed seek must not abort the restore: {result:?}"
         );
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod device_loss_tests {
+    use super::lost_device;
+
+    fn names(list: &[&str]) -> Vec<String> {
+        list.iter().map(|name| (*name).to_owned()).collect()
+    }
+
+    #[test]
+    fn a_device_still_in_the_list_is_not_lost() {
+        let listed = names(&["Headphones", "Speakers"]);
+        assert_eq!(
+            lost_device(Some("Headphones"), &listed),
+            None
+        );
+    }
+
+    #[test]
+    fn a_device_that_left_the_list_is_reported() {
+        let listed = names(&["Speakers"]);
+        assert_eq!(
+            lost_device(Some("Headphones"), &listed).as_deref(),
+            Some("Headphones")
+        );
+    }
+
+    #[test]
+    fn nothing_is_reported_without_a_previous_device() {
+        let listed = names(&["Speakers"]);
+        assert_eq!(lost_device(None, &listed), None);
     }
 }

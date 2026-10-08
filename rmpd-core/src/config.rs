@@ -166,6 +166,11 @@ pub struct AudioConfig {
     /// DSD over PCM mode: "no" (default), "yes", or "auto".
     #[serde(default)]
     pub dop: DopMode,
+    /// macOS only: pause playback when the system default output device
+    /// disappears while playing (e.g. Bluetooth headphones power off). Other
+    /// media players pause as well; Linux and Windows ignore this key.
+    #[serde(default = "default_true")]
+    pub pause_on_device_loss: bool,
     /// Output device id (ALSA PCM name, e.g. "hw:CARD=1,DEV=0"). Unset/empty =
     /// system default. Set a raw `hw:` device for bit-perfect DoP, bypassing
     /// PipeWire/PulseAudio resampling.
@@ -1334,6 +1339,7 @@ impl Default for AudioConfig {
             buffer_time: default_buffer_time(),
             resampler_quality: ResamplerQuality::default(),
             dop: DopMode::default(),
+            pause_on_device_loss: true,
             device: None,
             replay_gain: ReplayGainMode::default(),
             replay_gain_preamp: 0.0,

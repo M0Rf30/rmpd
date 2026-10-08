@@ -437,3 +437,24 @@ impl CpalDeviceConfig {
         Ok(format)
     }
 }
+
+/// Human-readable description of the current default output device.
+///
+/// Used by the macOS device-loss watcher to detect headphones or Bluetooth
+/// headsets powering off (macOS reroutes to the speakers without pausing).
+pub fn default_output_name() -> Option<String> {
+    let host = cpal::default_host();
+    let device = host.default_output_device()?;
+    Some(device.to_string())
+}
+
+/// Descriptions of every currently available output device.
+///
+/// Used by the macOS device-loss watcher: the device we were playing through
+/// vanishing from this list means it was disconnected rather than switched.
+pub fn output_device_names() -> Vec<String> {
+    let host = cpal::default_host();
+    host.output_devices()
+        .map(|it| it.map(|d| d.to_string()).collect())
+        .unwrap_or_default()
+}

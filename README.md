@@ -225,6 +225,8 @@ rmpd exposes a native [MPRIS](https://specifications.freedesktop.org/mpris-spec/
 On **macOS** the same setting enables the native Now Playing integration: rmpd appears in Control Center and on the lock screen, and the hardware remote commands (headphone play/pause/next/previous, seek and volume) control playback directly. `--daemonize` disables it there, since a detached daemon has no AppKit session.
 
 
+On macOS, playback also auto-pauses when the default output device disappears while playing (for example a Bluetooth headset powering off), matching the platform convention of other media players. Disable it with `pause_on_device_loss = false` under `[audio]`.
+
 ```bash
 playerctl -p rmpd metadata
 busctl --user introspect org.mpris.MediaPlayer2.rmpd /org/mpris/MediaPlayer2
