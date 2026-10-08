@@ -50,6 +50,19 @@ pub fn resolve_bind_address(bind_address: &str, port: u16) -> String {
     }
 }
 
+/// The parent directory of a socket path, when it does not exist.
+///
+/// A missing parent surfaces as a bare `ENOENT` from `bind()`, so callers use
+/// this to report which directory is missing instead.
+pub fn missing_socket_parent(path: &str) -> Option<std::path::PathBuf> {
+    let parent = std::path::Path::new(path).parent()?;
+    if parent.as_os_str().is_empty() || parent.exists() {
+        None
+    } else {
+        Some(parent.to_path_buf())
+    }
+}
+
 /// Decide whether the daemon should serve a socket instead of TCP.
 ///
 /// Returns the socket path to serve, or `None` for a normal TCP listener. An
@@ -64,7 +77,16 @@ pub fn socket_only_path(bind_address: &str, unix_socket: Option<&str>) -> Result
         // `~` is expanded for the other configured paths, so do the same here:
         // the listener would otherwise land in a literal `~` directory.
         let path = rmpd_core::path::expand_tilde(&camino::Utf8PathBuf::from(bind_address));
-        return Ok(Some(path.as_str().to_string()));
+        let path = path.as_str().to_string();
+
+        if let Some(parent) = missing_socket_parent(&path) {
+            return Err(RmpdError::Config(format!(
+                "network.bind_address: directory {} does not exist",
+                parent.display()
+            )));
+        }
+
+        return Ok(Some(path));
     }
 
     if bind_address.is_empty() {
@@ -248,13 +270,7 @@ impl MpdServer {
 
         // Optionally bind Unix socket
         let unix_listener = if let Some(path) = &self.unix_socket {
-            // A missing parent directory surfaces as a bare ENOENT from bind();
-            // name the directory instead so misconfiguration is obvious.
-            if let Some(parent) = std::path::Path::new(path)
-                .parent()
-                .filter(|p| !p.as_os_str().is_empty())
-                && !parent.exists()
-            {
+            if let Some(parent) = missing_socket_parent(path) {
                 return Err(RmpdError::Config(format!(
                     "network.unix_socket: directory {} does not exist",
                     parent.display()

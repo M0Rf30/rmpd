@@ -154,3 +154,20 @@ fn tilde_in_a_socket_path_is_expanded() {
     assert_eq!(resolved, format!("{home}/rmpd.sock"));
     assert!(!resolved.starts_with('~'), "left unexpanded: {resolved}");
 }
+
+/// A missing directory is reported against the key the path came from.
+#[test]
+fn missing_directory_names_the_key_in_use() {
+    use rmpd_protocol::server::socket_only_path;
+
+    let temp = tempfile::TempDir::new().expect("temp dir");
+    let path = temp.path().join("nope").join("rmpd.sock");
+    let err = socket_only_path(path.to_str().unwrap(), None)
+        .expect_err("missing parent must be rejected");
+
+    let msg = err.to_string();
+    assert!(
+        msg.contains("network.bind_address") && msg.contains("does not exist"),
+        "unexpected error: {msg}"
+    );
+}
