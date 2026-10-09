@@ -150,6 +150,10 @@ fn content_type_hint(content_type: &str) -> Option<(&'static str, bool)> {
         "audio/aac" | "audio/aacp" | "audio/x-aac" => Some(("aac", false)),
         "audio/mpeg" | "audio/mp3" | "audio/x-mpeg" => Some(("mp3", false)),
         "audio/ogg" | "application/ogg" => Some(("ogg", false)),
+        // MPEG-TS / FLV / MPEG-PS carried over plain HTTP (HLS segments use their own demuxer).
+        "video/mp2t" | "audio/mp2t" => Some(("ts", false)),
+        "video/x-flv" | "audio/x-flv" => Some(("flv", false)),
+        "video/mpeg" | "video/mp2p" | "video/x-mpeg" => Some(("mpg", false)),
         _ => None,
     }
 }

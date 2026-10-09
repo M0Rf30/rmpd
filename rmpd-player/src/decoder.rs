@@ -57,6 +57,8 @@ impl SymphoniaDecoder {
         // Open the media source: a remote stream URL or a local file.
         let mut hint = Hint::new();
         let stream_title;
+        // Local WavPack files pick up a sibling `.wvc` (hybrid lossless); streams never do.
+        let mut format_opts = FormatOptions::default();
         let mss = if let Some(uri) = path.to_str().filter(|s| rmpd_stream::is_input_uri(s)) {
             let input = rmpd_stream::open(uri)
                 .map_err(|e| RmpdError::Player(format!("Failed to open stream: {e}")))?;
@@ -69,6 +71,7 @@ impl SymphoniaDecoder {
             let file = std::fs::File::open(path)
                 .map_err(|e| RmpdError::Player(format!("Failed to open file: {e}")))?;
             stream_title = None;
+            format_opts = crate::format_registry::local_file_format_options(path);
             if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
                 hint.with_extension(ext);
             }
@@ -77,12 +80,7 @@ impl SymphoniaDecoder {
 
         // Probe the media source
         let reader = symphonia::default::get_probe()
-            .probe(
-                &hint,
-                mss,
-                FormatOptions::default(),
-                MetadataOptions::default(),
-            )
+            .probe(&hint, mss, format_opts, MetadataOptions::default())
             .map_err(|e| RmpdError::Player(format!("Failed to probe format: {e}")))?;
 
         // Find the default audio track
