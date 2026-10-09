@@ -7,7 +7,7 @@
 //! at construction time; authentication happens lazily on first use and the
 //! session (access token + user id) is cached for the life of the source.
 //!
-//! * Catalog: [`SyncPolicy::Full`] — `list_all` pages through
+//! * Catalog: `SyncPolicy::Full` — `list_all` pages through
 //!   `/Items?IncludeItemTypes=Audio&Recursive=true`.
 //! * Streaming: `/Audio/{id}/stream?static=true` (original file), or
 //!   `/Audio/{id}/universal` when `max_bitrate` / `format` request transcoding.

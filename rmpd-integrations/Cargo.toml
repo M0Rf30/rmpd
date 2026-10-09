@@ -12,6 +12,10 @@ categories.workspace = true
 [lints]
 workspace = true
 
+[package.metadata.cargo-machete]
+# md-5 is imported as `md5`
+ignored = ["md-5"]
+
 [features]
 # Existing desktop/LAN integrations: on by default to preserve behaviour.
 default = ["mpris", "mdns"]

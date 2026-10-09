@@ -16,4 +16,3 @@ workspace = true
 async-trait = { workspace = true }
 rmpd-core = { workspace = true }
 tokio = { workspace = true }
-tracing = { workspace = true }

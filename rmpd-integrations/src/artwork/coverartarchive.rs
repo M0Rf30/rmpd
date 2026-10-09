@@ -142,7 +142,7 @@ fn score_of(v: Option<&serde_json::Value>) -> u32 {
 }
 
 /// Pick the best release MBID from a MusicBrainz search response: the highest
-/// score at or above [`MIN_SEARCH_SCORE`] (first wins on ties) with a valid ID.
+/// score at or above `MIN_SEARCH_SCORE` (first wins on ties) with a valid ID.
 #[must_use]
 pub fn parse_search_response(body: &[u8]) -> Option<String> {
     let resp: SearchResponse = serde_json::from_slice(body).ok()?;

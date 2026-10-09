@@ -3166,7 +3166,6 @@ dependencies = [
  "async-trait",
  "rmpd-core",
  "tokio",
- "tracing",
 ]
 
 [[package]]
