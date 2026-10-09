@@ -161,7 +161,8 @@ fn send_kill<S: Read + Write>(stream: S, password: Option<&str>) -> Result<()> {
         bail!("unexpected greeting: {}", greeting.trim());
     }
     if let Some(pw) = password {
-        writeln!(reader.get_mut(), "password \"{}\"", pw.replace('"', "\\\""))?;
+        let escaped = pw.replace('\\', "\\\\").replace('"', "\\\"");
+        writeln!(reader.get_mut(), "password \"{escaped}\"")?;
         let mut reply = String::new();
         reader.read_line(&mut reply)?;
         if !reply.starts_with("OK") {
@@ -212,6 +213,19 @@ mod tests {
         assert_eq!(
             String::from_utf8(d.output).unwrap(),
             "password \"pw\"\nkill\n"
+        );
+    }
+
+    #[test]
+    fn kill_escapes_backslashes_before_quotes() {
+        let mut d = Duplex {
+            input: Cursor::new(b"OK MPD 0.24.0\nOK\n".to_vec()),
+            output: Vec::new(),
+        };
+        send_kill(&mut d, Some(r#"a\b"c\"#)).unwrap();
+        assert_eq!(
+            String::from_utf8(d.output).unwrap(),
+            "password \"a\\\\b\\\"c\\\\\"\nkill\n"
         );
     }
 

@@ -8,22 +8,29 @@
 //! can choose an encoder at construction time.
 //!
 //! Encoders are selected by name through [`ENCODER_PLUGINS`] /
-//! [`create_encoder`], using the `encoder`, `bitrate`, `quality` and
-//! `compression` settings of an `[[output]]` block:
+//! [`create_encoder`], using the `encoder`, `bitrate`, `quality` /
+//! `complexity`, `vbr` and `compression` settings of an `[[output]]` block:
 //!
 //! | name     | feature            | settings used                         |
 //! | -------- | ------------------ | ------------------------------------- |
 //! | `pcm`    | —                  | —                                     |
 //! | `wav`    | —                  | —                                     |
 //! | `flac`   | —  (pure Rust)     | `compression` (0–8, default 5)        |
+//! | `opus`   | —  (pure Rust)     | `bitrate` (kbps, default 128), `complexity` / `quality` (0–10, default 9), `vbr` (`vbr` \| `cvbr` \| `cbr`, default `vbr`) |
+//!
+//! `opus` produces an Ogg Opus stream (`audio/ogg`); input that is not 48 kHz
+//! is resampled and more than two channels are folded down to stereo.
 
 mod flac;
+mod opus;
 
 pub use flac::FlacEncoder;
+pub use opus::{OpusEncoder, OpusSettings};
 
 use rmpd_core::config::OutputConfig;
 use rmpd_core::error::{Result, RmpdError};
 use rmpd_core::song::AudioFormat;
+use symphonia_codec_opus::encoder::BitrateMode;
 
 /// Encodes interleaved f32 PCM into a wire byte stream for network outputs.
 pub trait Encoder: Send {
@@ -34,8 +41,28 @@ pub trait Encoder: Send {
     /// Returns an empty `Vec` when no framing header is required.
     fn header(&self) -> Vec<u8>;
 
+    /// Format of the audio actually carried by the stream (sample rate and
+    /// channel count), given the `input` format fed to [`encode`](Self::encode).
+    /// Defaults to `input`; encoders that resample or downmix (Opus) override it
+    /// so servers can be told what listeners will receive.
+    fn output_format(&self, input: AudioFormat) -> AudioFormat {
+        input
+    }
+
     /// Encode one chunk of interleaved f32 samples (−1.0 …= 1.0) to wire bytes.
     fn encode(&mut self, samples: &[f32]) -> Vec<u8>;
+
+    /// Flush any samples still buffered inside the encoder and return the
+    /// trailing wire bytes. Called when a stream or recording ends; the
+    /// encoder is then [`reset`](Self::reset) before reuse. Stateless
+    /// encoders have nothing to flush.
+    fn finish(&mut self) -> Vec<u8> {
+        Vec::new()
+    }
+
+    /// Drop all buffered/stream state so the next [`encode`](Self::encode)
+    /// starts a fresh stream (matching a freshly sent [`header`](Self::header)).
+    fn reset(&mut self) {}
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -154,6 +181,7 @@ pub static ENCODER_PLUGINS: &[(&str, EncoderFactory)] = &[
     ("pcm", pcm_factory),
     ("wav", wav_factory),
     ("flac", flac_factory),
+    ("opus", opus_factory),
 ];
 
 /// Name of the encoder selected by `cfg` (`encoder` setting, default `wav`).
@@ -220,6 +248,32 @@ fn flac_factory(format: AudioFormat, cfg: &OutputConfig) -> Result<Box<dyn Encod
         .map(|v| v.clamp(0.0, f64::from(flac::MAX_COMPRESSION)) as u8)
         .unwrap_or(flac::DEFAULT_COMPRESSION);
     Ok(Box::new(FlacEncoder::new(format, level)?))
+}
+
+fn opus_factory(format: AudioFormat, cfg: &OutputConfig) -> Result<Box<dyn Encoder>> {
+    let mut settings = OpusSettings::default();
+    if let Some(kbps) = setting_f64(cfg, "bitrate") {
+        settings = settings.with_bitrate_kbps(kbps);
+    }
+    if let Some(c) = setting_f64(cfg, "complexity").or_else(|| setting_f64(cfg, "quality")) {
+        settings = settings.with_complexity(c);
+    }
+    match cfg.settings.get("vbr") {
+        Some(toml::Value::Boolean(b)) => {
+            settings.mode = if *b {
+                BitrateMode::Vbr
+            } else {
+                BitrateMode::Cbr
+            };
+        }
+        Some(_) => {
+            if let Some(s) = cfg.setting_str("vbr") {
+                settings.mode = opus::parse_mode(&s)?;
+            }
+        }
+        None => {}
+    }
+    Ok(Box::new(OpusEncoder::new(format, settings)?))
 }
 
 /// Read a numeric setting that may be written as an integer, float or string.
@@ -355,7 +409,7 @@ mod tests {
     #[test]
     fn registry_always_has_core_encoders() {
         let names = encoder_names();
-        for n in ["pcm", "wav", "flac"] {
+        for n in ["pcm", "wav", "flac", "opus"] {
             assert!(names.contains(&n), "missing {n}");
         }
     }
@@ -396,6 +450,33 @@ mod tests {
             .err()
             .expect("must fail");
         assert!(err.to_string().contains("unknown encoder"));
+    }
+
+    #[test]
+    fn opus_encoder_is_created_from_settings() {
+        let mut cfg = cfg_with(Some("opus"));
+        let enc = create_encoder_from_config(stereo_44100(), &cfg).unwrap();
+        assert_eq!(enc.content_type(), "audio/ogg");
+        let h = enc.header();
+        assert_eq!(&h[..4], b"OggS");
+        assert!(h.windows(8).any(|w| w == b"OpusHead"));
+        assert!(h.windows(8).any(|w| w == b"OpusTags"));
+
+        cfg.settings
+            .insert("bitrate".into(), toml::Value::String("96".into()));
+        cfg.settings
+            .insert("complexity".into(), toml::Value::Integer(99));
+        cfg.settings
+            .insert("vbr".into(), toml::Value::String("cvbr".into()));
+        assert!(create_encoder_from_config(stereo_44100(), &cfg).is_ok());
+
+        cfg.settings
+            .insert("vbr".into(), toml::Value::Boolean(false));
+        assert!(create_encoder_from_config(stereo_44100(), &cfg).is_ok());
+
+        cfg.settings
+            .insert("vbr".into(), toml::Value::String("abr".into()));
+        assert!(create_encoder_from_config(stereo_44100(), &cfg).is_err());
     }
 
     #[test]

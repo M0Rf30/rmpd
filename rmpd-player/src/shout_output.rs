@@ -12,9 +12,10 @@
 //! Settings: `host` (default `localhost`), `port` (default `8000`), `mount`
 //! (default `/rmpd`), `password` (required), `user` (default `source`),
 //! `name`, `genre`, `description`, `public` (default `false`), `encoder`
-//! (default `flac`; see [`crate::encoder`]), `bitrate`/`quality`/`compression`
-//! (forwarded to the encoder) and `sync` (default `true`: pace writes to real
-//! time).  The source password is never logged.
+//! (default `flac`; `opus` is recommended for Icecast bandwidth — Ogg Opus at
+//! 96–128 kbps; see [`crate::encoder`]), `bitrate`/`quality`/`complexity`/
+//! `vbr`/`compression` (forwarded to the encoder) and `sync` (default `true`:
+//! pace writes to real time).  The source password is never logged.
 //!
 //! Note: in-band metadata for Ogg streams is not updated by `/admin/metadata`
 //! on every Icecast version; MP3/AAC-style mounts honour it.
@@ -135,9 +136,15 @@ impl ShoutConfig {
             None => 8000,
         };
         Ok(Self {
-            host: cfg
-                .setting_str("host")
-                .unwrap_or_else(|| "localhost".into()),
+            host: {
+                let h = cfg
+                    .setting_str("host")
+                    .unwrap_or_else(|| "localhost".into());
+                // Accept `[::1]` as well as `::1`; resolution wants it bare.
+                h.strip_prefix('[')
+                    .and_then(|h| h.strip_suffix(']'))
+                    .map_or(h.clone(), str::to_owned)
+            },
             port,
             mount,
             user: cfg.setting_str("user").unwrap_or_else(|| "source".into()),
@@ -155,6 +162,16 @@ impl ShoutConfig {
             encoder: crate::encoder::encoder_name_or(cfg, "flac"),
             bitrate: cfg.setting_str("bitrate"),
         })
+    }
+
+    /// `host:port` for the `Host` header; IPv6 literals need brackets.
+    fn host_authority(&self) -> String {
+        let host = sanitize(&self.host);
+        if host.contains(':') {
+            format!("[{host}]:{}", self.port)
+        } else {
+            format!("{host}:{}", self.port)
+        }
     }
 
     fn auth_header(&self) -> String {
@@ -176,7 +193,7 @@ impl ShoutConfig {
         }
         format!(
             "PUT {mount} HTTP/1.1\r\n\
-             Host: {host}:{port}\r\n\
+             Host: {authority}\r\n\
              {auth}\
              User-Agent: {ua}\r\n\
              Content-Type: {ct}\r\n\
@@ -188,8 +205,7 @@ impl ShoutConfig {
              Expect: 100-continue\r\n\
              \r\n",
             mount = sanitize(&self.mount).replace(' ', "%20"),
-            host = sanitize(&self.host),
-            port = self.port,
+            authority = self.host_authority(),
             auth = self.auth_header(),
             ua = USER_AGENT,
             ct = sanitize(content_type),
@@ -205,15 +221,14 @@ impl ShoutConfig {
     fn metadata_request(&self, title: &str) -> String {
         format!(
             "GET /admin/metadata?mode=updinfo&mount={mount}&song={song} HTTP/1.0\r\n\
-             Host: {host}:{port}\r\n\
+             Host: {authority}\r\n\
              {auth}\
              User-Agent: {ua}\r\n\
              Connection: close\r\n\
              \r\n",
             mount = percent_encode(&self.mount),
             song = percent_encode(title),
-            host = sanitize(&self.host),
-            port = self.port,
+            authority = self.host_authority(),
             auth = self.auth_header(),
             ua = USER_AGENT,
         )
@@ -293,9 +308,10 @@ impl ShoutOutput {
             .cfg
             .open()
             .map_err(|e| format!("connect failed: {e}"))?;
-        let request = self
-            .cfg
-            .source_request(self.encoder.content_type(), self.format);
+        let request = self.cfg.source_request(
+            self.encoder.content_type(),
+            self.encoder.output_format(self.format),
+        );
         s.write_all(request.as_bytes())
             .map_err(|e| format!("request failed: {e}"))?;
 
@@ -316,6 +332,9 @@ impl ShoutOutput {
             None => return Err("malformed response".into()),
         }
 
+        // A new connection starts a new stream: restart the encoder so the
+        // header we send matches the frames that follow.
+        self.encoder.reset();
         let header = self.encoder.header();
         if !header.is_empty() {
             s.write_all(&header)
@@ -484,6 +503,30 @@ mod tests {
     }
 
     #[test]
+    fn ipv6_host_is_bracketed_in_host_header() {
+        for setting in ["::1", "[::1]"] {
+            let c = ShoutConfig::from_output_config(&cfg(&[
+                ("password", "pw"),
+                ("host", setting),
+                ("port", "8010"),
+            ]))
+            .unwrap();
+            assert_eq!(c.host, "::1", "stored unbracketed for resolution");
+            assert!(
+                c.source_request("audio/ogg", fmt())
+                    .contains("Host: [::1]:8010\r\n")
+            );
+            assert!(c.metadata_request("t").contains("Host: [::1]:8010\r\n"));
+        }
+        let c = ShoutConfig::from_output_config(&cfg(&[("password", "pw"), ("host", "h.example")]))
+            .unwrap();
+        assert!(
+            c.source_request("audio/ogg", fmt())
+                .contains("Host: h.example:8000\r\n")
+        );
+    }
+
+    #[test]
     fn source_request_format() {
         let c = ShoutConfig::from_output_config(&cfg(&[
             ("password", "hackme"),
@@ -515,6 +558,19 @@ mod tests {
             req.contains("Ice-Audio-Info: ice-samplerate=44100;ice-channels=2;ice-bitrate=128\r\n")
         );
         assert!(req.contains("Expect: 100-continue\r\n"));
+    }
+
+    #[test]
+    fn source_request_advertises_encoded_format_for_opus() {
+        let oc = cfg(&[("password", "pw"), ("encoder", "opus")]);
+        let c = ShoutConfig::from_output_config(&oc).unwrap();
+        let enc = create_encoder(&c.encoder, fmt(), &oc).unwrap();
+        let req = c.source_request(enc.content_type(), enc.output_format(fmt()));
+        assert!(req.contains("Content-Type: audio/ogg\r\n"));
+        assert!(req.contains("Ice-Audio-Info: ice-samplerate=48000;ice-channels=2"));
+        // Encoders that pass audio through keep the input format.
+        let flac = create_encoder("flac", fmt(), &oc).unwrap();
+        assert_eq!(flac.output_format(fmt()), fmt());
     }
 
     #[test]

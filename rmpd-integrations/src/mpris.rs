@@ -31,6 +31,7 @@ use rmpd_plugin::integration::{
     Integration, IntegrationContext, IntegrationPlugin, PlayerHandle, PlayerOptions,
 };
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::sync::broadcast::error::RecvError;
 use tracing::{debug, info, warn};
 
@@ -82,11 +83,12 @@ impl Integration for MprisIntegration {
         .map_err(|e| PluginError::Unavailable(format!("MPRIS interface disabled: {e}")))?;
         info!("MPRIS: registered org.mpris.MediaPlayer2.rmpd on the session bus");
 
+        let mut seek = SeekDetector::new();
         loop {
             tokio::select! {
                 () = shutdown.cancelled() => break,
                 ev = events.recv() => match ev {
-                    Ok(event) => forward_event(&server, &player, event).await,
+                    Ok(event) => forward_event(&server, &player, &mut seek, event).await,
                     Err(RecvError::Lagged(n)) => {
                         debug!("MPRIS: event receiver lagged, skipped {n} events");
                     }
@@ -104,10 +106,71 @@ pub struct MprisPlayer {
     player: Arc<dyn PlayerHandle>,
 }
 
+/// Position jump (beyond normal playback progress) that counts as a seek.
+const SEEK_TOLERANCE: Duration = Duration::from_millis(1500);
+
+/// Distinguishes real seeks from periodic position ticks by extrapolating
+/// the last observed position with wall-clock time while playing.
+#[derive(Debug)]
+struct SeekDetector {
+    last: Option<(Duration, Instant)>,
+    playing: bool,
+}
+
+impl SeekDetector {
+    fn new() -> Self {
+        Self {
+            last: None,
+            playing: false,
+        }
+    }
+
+    fn expected(&self, now: Instant) -> Option<Duration> {
+        self.last.map(|(pos, at)| {
+            if self.playing {
+                pos + now.saturating_duration_since(at)
+            } else {
+                pos
+            }
+        })
+    }
+
+    /// Forget the baseline (new song: the next position is not a seek).
+    fn reset(&mut self) {
+        self.last = None;
+    }
+
+    /// Track play/pause so extrapolation stops while not playing.
+    fn set_state(&mut self, state: PlayerState, now: Instant) {
+        if let Some(expected) = self.expected(now) {
+            self.last = Some((expected, now));
+        }
+        self.playing = state == PlayerState::Play;
+        if state == PlayerState::Stop {
+            self.last = None;
+        }
+    }
+
+    /// Record a reported position; true when it is a discontinuity.
+    fn observe(&mut self, position: Duration, now: Instant) -> bool {
+        let seeked = self
+            .expected(now)
+            .is_some_and(|e| position.abs_diff(e) > SEEK_TOLERANCE);
+        self.last = Some((position, now));
+        seeked
+    }
+}
+
 /// Translate a player event into MPRIS property-change / signal emissions.
-async fn forward_event(server: &Server<MprisPlayer>, player: &Arc<dyn PlayerHandle>, event: Event) {
+async fn forward_event(
+    server: &Server<MprisPlayer>,
+    player: &Arc<dyn PlayerHandle>,
+    seek: &mut SeekDetector,
+    event: Event,
+) {
     let props: Vec<Property> = match event {
         Event::PlayerStateChanged(s) => {
+            seek.set_state(s, Instant::now());
             let queued = player.queue_len().await > 0;
             vec![
                 Property::PlaybackStatus(map_status(s)),
@@ -118,6 +181,7 @@ async fn forward_event(server: &Server<MprisPlayer>, player: &Arc<dyn PlayerHand
             ]
         }
         Event::SongChanged(_) => {
+            seek.reset();
             let metadata = build_metadata(player.as_ref()).await;
             let queued = player.queue_len().await > 0;
             vec![
@@ -144,7 +208,10 @@ async fn forward_event(server: &Server<MprisPlayer>, player: &Arc<dyn PlayerHand
             ]
         }
         Event::PositionChanged(d) => {
-            let position = Time::from_micros(d.as_micros() as i64);
+            if !seek.observe(d, Instant::now()) {
+                return;
+            }
+            let position = Time::from_micros(i64::try_from(d.as_micros()).unwrap_or(i64::MAX));
             if let Err(e) = server.emit(Signal::Seeked { position }).await {
                 warn!("MPRIS: failed to emit Seeked: {e}");
             }
@@ -545,6 +612,24 @@ impl PlayerInterface for MprisPlayer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn seek_detector_only_flags_discontinuities() {
+        let t0 = Instant::now();
+        let s = Duration::from_secs;
+        let mut d = SeekDetector::new();
+        d.set_state(PlayerState::Play, t0);
+        assert!(!d.observe(s(10), t0), "first position is a baseline");
+        assert!(!d.observe(s(11), t0 + s(1)), "regular tick");
+        assert!(!d.observe(s(12), t0 + s(2)), "regular tick");
+        assert!(d.observe(s(60), t0 + s(3)), "forward jump");
+        assert!(d.observe(s(5), t0 + s(4)), "backward jump");
+        d.set_state(PlayerState::Pause, t0 + s(5));
+        assert!(!d.observe(s(6), t0 + s(65)), "paused: no extrapolation");
+        assert!(d.observe(s(30), t0 + s(66)), "seek while paused");
+        d.reset();
+        assert!(!d.observe(s(0), t0 + s(67)), "new song resets baseline");
+    }
 
     #[test]
     fn loop_status_mapping() {

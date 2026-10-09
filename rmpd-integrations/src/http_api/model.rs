@@ -4,6 +4,7 @@
 //! Conversion of rmpd types to Mopidy's JSON data models (`Track`, `TlTrack`,
 //! `Ref`, `SearchResult`). Unset fields are omitted, like Mopidy's encoder.
 
+use rmpd_core::history::HistoryEntry;
 use rmpd_core::song::Song;
 use rmpd_core::state::PlayerState;
 use rmpd_plugin::integration::{BrowseEntry, BrowseKind};
@@ -120,6 +121,28 @@ pub fn search_result_json(songs: &[Song]) -> Value {
     })
 }
 
+/// Mopidy `core.history.get_history` result: `[timestamp_ms, Ref]` pairs in
+/// the given order (newest first). Each `Ref` is a `track` reference.
+#[must_use]
+pub fn history_json(entries: &[HistoryEntry]) -> Value {
+    Value::Array(
+        entries
+            .iter()
+            .map(|e| {
+                json!([
+                    e.timestamp_ms,
+                    {
+                        "__model__": "Ref",
+                        "type": "track",
+                        "name": e.name(),
+                        "uri": e.uri,
+                    }
+                ])
+            })
+            .collect(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -185,5 +208,23 @@ mod tests {
     fn leading_number_parses_prefix() {
         assert_eq!(leading_number("3/12"), Some(3));
         assert_eq!(leading_number("x"), None);
+    }
+
+    #[test]
+    fn history_is_timestamp_ref_pairs() {
+        let e = HistoryEntry {
+            timestamp_ms: 1_700_000_000_000,
+            uri: "a/b.flac".to_owned(),
+            title: Some("Song".to_owned()),
+            artist: Some("Me".to_owned()),
+            album: None,
+        };
+        let v = history_json(&[e]);
+        assert_eq!(v[0][0], 1_700_000_000_000u64);
+        assert_eq!(v[0][1]["__model__"], "Ref");
+        assert_eq!(v[0][1]["type"], "track");
+        assert_eq!(v[0][1]["name"], "Song");
+        assert_eq!(v[0][1]["uri"], "a/b.flac");
+        assert_eq!(history_json(&[]), json!([]));
     }
 }

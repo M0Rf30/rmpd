@@ -26,6 +26,7 @@ alsa-mixer = ["dep:alsa"]
 [dependencies]
 rmpd-core = { workspace = true, features = ["player-errors"] }
 symphonia.workspace = true
+symphonia-codec-opus.workspace = true
 cpal.workspace = true
 rubato.workspace = true
 audioadapter-buffers.workspace = true

@@ -12,7 +12,59 @@ use super::utils::{
     open_db, parse_sort_tag, sort_songs, sys_error,
 };
 use crate::parser::InsertPosition;
+use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
+
+/// Most distinct on-demand entries resolved per playlist command.
+const ON_DEMAND_LOOKUP_LIMIT: usize = 500;
+/// Concurrent `MusicSource::lookup` calls per playlist command.
+const ON_DEMAND_LOOKUP_CONCURRENCY: usize = 8;
+
+/// `true` when `path` lies under a mount owned by an on-demand source.
+fn is_on_demand_path(sources: &rmpd_source::SourceRegistry, path: &str) -> bool {
+    sources
+        .owning_source(path)
+        .is_some_and(|s| s.sync_policy() == rmpd_source::SyncPolicy::OnDemand)
+}
+
+/// Resolve stored-playlist entries that belong to on-demand sources through
+/// `MusicSource::lookup` (bounded: at most [`ON_DEMAND_LOOKUP_LIMIT`] distinct
+/// paths, [`ON_DEMAND_LOOKUP_CONCURRENCY`] in flight). Paths that are not
+/// on-demand, or whose lookup fails / finds nothing, are simply absent from
+/// the result so callers can fall back. Spawned tasks keep the non-Sync
+/// `async_trait` futures out of the caller's bounds.
+async fn lookup_on_demand_entries(
+    sources: &Arc<rmpd_source::SourceRegistry>,
+    paths: &[String],
+) -> HashMap<String, rmpd_core::song::Song> {
+    let permits = Arc::new(tokio::sync::Semaphore::new(ON_DEMAND_LOOKUP_CONCURRENCY));
+    let mut set = tokio::task::JoinSet::new();
+    let mut seen = std::collections::HashSet::new();
+    for path in paths {
+        if seen.len() >= ON_DEMAND_LOOKUP_LIMIT {
+            break;
+        }
+        if !is_on_demand_path(sources, path) || !seen.insert(path.as_str()) {
+            continue;
+        }
+        let (sources, permits, path) = (sources.clone(), permits.clone(), path.clone());
+        set.spawn(async move {
+            let _permit = permits.acquire_owned().await.ok()?;
+            match sources.lookup_on_demand(&path).await {
+                Some(Ok(Some(song))) => Some((path, song)),
+                _ => None,
+            }
+        });
+    }
+    let mut out = HashMap::new();
+    while let Some(joined) = set.join_next().await {
+        if let Ok(Some((path, song))) = joined {
+            out.insert(path, song);
+        }
+    }
+    out
+}
 
 /// Notify idle clients that the set or contents of stored playlists changed,
 /// mirroring MPD's `idle_add(IDLE_STORED_PLAYLIST)` after a successful mutation.
@@ -525,6 +577,7 @@ pub async fn handle_load_command(
     let state_clone = state.clone();
     let playlist_dir_clone = playlist_dir.clone();
     let name_owned = name.to_string();
+    let handle = tokio::runtime::Handle::current();
     let songs = match tokio::task::spawn_blocking(move || {
         let mut paths = read_playlist(&playlist_dir_clone, &name_owned).map_err(|_| {
             ResponseBuilder::error(ACK_ERROR_NO_EXIST, 0, "load", "No such playlist")
@@ -542,9 +595,31 @@ pub async fn handle_load_command(
 
         // Look up songs from DB; fall back to stub Song if not found
         let db = open_db(&state_clone, "load")?;
+        let found: Vec<Option<rmpd_core::song::Song>> = paths
+            .iter()
+            .map(|path| db.get_song_by_path(path).ok().flatten())
+            .collect();
+        let missing: Vec<String> = paths
+            .iter()
+            .zip(&found)
+            .filter(|(_, f)| f.is_none())
+            .map(|(p, _)| p.clone())
+            .collect();
+        // Entries of on-demand sources are resolved through the source; if
+        // that fails the bare path is still queued (playback resolves it
+        // through the owning source by path).
+        let on_demand = handle.block_on(lookup_on_demand_entries(&state_clone.sources, &missing));
         let songs: Vec<rmpd_core::song::Song> = paths
             .iter()
-            .filter_map(|path| db.get_song_by_path(path).ok().flatten())
+            .zip(found)
+            .filter_map(|(path, found)| {
+                found
+                    .or_else(|| on_demand.get(path.as_str()).cloned())
+                    .or_else(|| {
+                        is_on_demand_path(&state_clone.sources, path)
+                            .then(|| crate::helpers::create_stream_song(path))
+                    })
+            })
             .collect();
         Ok(songs)
     })
@@ -893,6 +968,7 @@ pub async fn handle_listplaylistinfo_command(
 
     let state = state.clone();
     let name = name.to_string();
+    let handle = tokio::runtime::Handle::current();
     match tokio::task::spawn_blocking(move || {
         let playlist_dir = match &state.playlist_dir {
             Some(d) => d.clone(),
@@ -951,8 +1027,17 @@ pub async fn handle_listplaylistinfo_command(
         let start = start.min(total);
         let end = end.min(total);
 
+        let on_demand =
+            handle.block_on(lookup_on_demand_entries(&state.sources, &paths[start..end]));
         let mut resp = ResponseBuilder::new();
         for (i, path) in paths.iter().enumerate().take(end).skip(start) {
+            // On-demand source entries are never in the database: use what
+            // the source's `lookup` returned (absent on failure -> falls
+            // through to the #EXTINF / bare `file:` fallbacks below).
+            if let Some(song) = on_demand.get(path.as_str()) {
+                resp.song(song, None, None, None);
+                continue;
+            }
             match db.find_songs("file", path) {
                 Ok(songs) if !songs.is_empty() => {
                     // Database entry always wins over playlist-provided metadata.
@@ -1005,6 +1090,23 @@ pub async fn handle_playlistadd_command(
         return ResponseBuilder::error(ACK_ERROR_ARG, 0, "playlistadd", &e);
     }
 
+    // Songs under an on-demand source mount are not in the database: resolve
+    // them through the source (lookup / bounded browse expansion).
+    let on_demand_songs =
+        match super::queue::resolve_on_demand(state, uri, "playlistadd", true).await {
+            Some(Ok(super::queue::AddOutcome::Song(s))) => Some(vec![s]),
+            Some(Ok(super::queue::AddOutcome::Directory(v))) if !v.is_empty() => Some(v),
+            Some(Ok(super::queue::AddOutcome::Directory(_))) => {
+                return ResponseBuilder::error(
+                    ACK_ERROR_NO_EXIST,
+                    0,
+                    "playlistadd",
+                    "No such directory",
+                );
+            }
+            Some(Err(resp)) => return resp,
+            None => None,
+        };
     let state = state.clone();
     let name = name.to_string();
     let uri = uri.to_string();
@@ -1043,18 +1145,22 @@ pub async fn handle_playlistadd_command(
         };
 
         // Look up songs matching the URI in the database (song or directory prefix)
-        let songs = match db.find_songs_by_prefix(&uri) {
-            Ok(s) if !s.is_empty() => s,
-            Ok(_) => {
-                return ResponseBuilder::error(
-                    ACK_ERROR_NO_EXIST,
-                    0,
-                    "playlistadd",
-                    "No such directory",
-                );
-            }
-            Err(e) => {
-                return sys_error("playlistadd", e);
+        let songs = if let Some(songs) = on_demand_songs {
+            songs
+        } else {
+            match db.find_songs_by_prefix(&uri) {
+                Ok(s) if !s.is_empty() => s,
+                Ok(_) => {
+                    return ResponseBuilder::error(
+                        ACK_ERROR_NO_EXIST,
+                        0,
+                        "playlistadd",
+                        "No such directory",
+                    );
+                }
+                Err(e) => {
+                    return sys_error("playlistadd", e);
+                }
             }
         };
 

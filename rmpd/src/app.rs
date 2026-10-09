@@ -51,6 +51,7 @@ pub async fn run(
     state.set_max_command_list_size(config.network.max_command_list_size);
     state.set_max_output_buffer_size(config.network.max_output_buffer_size);
     state.set_max_playlist_length(config.general.max_playlist_length as u32);
+    state.set_history_length(config.general.history_length);
     state.set_zeroconf_name(config.network.zeroconf_name.clone());
     state.set_symlink_policy(
         config.general.follow_inside_symlinks,
@@ -132,7 +133,10 @@ pub async fn run(
     // masquerade as "no saved state was present".
     let state_file = StateFile::new(state_file_path.clone());
     match tokio::task::spawn_blocking(move || state_file.load()).await {
-        Ok(Ok(Some(saved_state))) => {
+        Ok(Ok(Some(mut saved_state))) => {
+            state
+                .history
+                .restore(std::mem::take(&mut saved_state.history));
             info!("restoring state from file");
             restore_state(
                 &state,
@@ -152,6 +156,11 @@ pub async fn run(
         }
     }
 
+    // Record the songs that start playing (after the saved history is
+    // restored, so new plays append to it). Disabled with history_length = 0.
+    let _history_recorder =
+        (config.general.history_length > 0).then(|| rmpd_protocol::history::spawn_recorder(&state));
+
     // Create shutdown channel
     let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel(1);
 
@@ -163,7 +172,8 @@ pub async fn run(
     // an internal lock, so the ticker below and the shutdown paths can
     // safely share this one instance (see StateFile::save in
     // rmpd-protocol/src/statefile.rs).
-    let state_file = Arc::new(StateFile::new(state_file_path.clone()));
+    let state_file =
+        Arc::new(StateFile::new(state_file_path.clone()).with_history(state.history.clone()));
 
     // Kept so the final save (after the server loop) can force any
     // in-flight ticker to observe shutdown before it saves, even on

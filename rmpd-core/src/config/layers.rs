@@ -73,7 +73,9 @@ pub fn mask_secrets(value: &mut toml::Value) {
         toml::Value::Table(t) => {
             for (k, v) in t.iter_mut() {
                 let key = k.to_ascii_lowercase();
-                if SECRET_KEYS.iter().any(|s| key.contains(s)) {
+                if key == "headers" {
+                    mask_all_strings(v);
+                } else if SECRET_KEYS.iter().any(|s| key.contains(s)) {
                     mask_leaf(v);
                 } else {
                     mask_secrets(v);
@@ -86,6 +88,16 @@ pub fn mask_secrets(value: &mut toml::Value) {
                 *s = stripped;
             }
         }
+        _ => {}
+    }
+}
+
+/// Mask every non-empty string below `v` (HTTP header values).
+fn mask_all_strings(v: &mut toml::Value) {
+    match v {
+        toml::Value::String(s) if !s.is_empty() => *s = MASK.to_owned(),
+        toml::Value::Table(t) => t.iter_mut().for_each(|(_, v)| mask_all_strings(v)),
+        toml::Value::Array(a) => a.iter_mut().for_each(mask_all_strings),
         _ => {}
     }
 }
@@ -118,20 +130,64 @@ fn mask_leaf(v: &mut toml::Value) {
     }
 }
 
+/// Mask userinfo and any query string of a URL (query strings routinely
+/// carry tokens). Returns `None` when nothing needs masking.
 fn strip_url_credentials(s: &str) -> Option<String> {
     let (scheme, rest) = s.split_once("://")?;
-    let authority_end = rest.find('/').unwrap_or(rest.len());
-    let at = rest[..authority_end].rfind('@')?;
-    Some(format!("{scheme}://{MASK}@{}", &rest[at + 1..]))
+    let (rest, fragment) = match rest.find('#') {
+        Some(i) => (&rest[..i], &s[s.len() - (rest.len() - i)..]),
+        None => (rest, ""),
+    };
+    let (before_query, query) = match rest.split_once('?') {
+        Some((b, q)) => (b, Some(q)),
+        None => (rest, None),
+    };
+    let authority_end = before_query.find('/').unwrap_or(before_query.len());
+    let at = before_query[..authority_end].rfind('@');
+    let mask_query = query.is_some_and(|q| !q.is_empty());
+    if at.is_none() && !mask_query {
+        return None;
+    }
+    let host_part = at.map_or(before_query, |at| &before_query[at + 1..]);
+    let userinfo = if at.is_some() {
+        format!("{MASK}@")
+    } else {
+        String::new()
+    };
+    let q = if mask_query {
+        format!("?{MASK}")
+    } else if query.is_some() {
+        "?".to_owned()
+    } else {
+        String::new()
+    };
+    Some(format!("{scheme}://{userinfo}{host_part}{q}{fragment}"))
+}
+
+/// Split one `--config` argument into its parts: `:`-separated on unix
+/// (Mopidy syntax), taken verbatim elsewhere (drive letters contain `:`).
+fn split_config_arg(s: &str) -> Vec<&str> {
+    #[cfg(unix)]
+    {
+        s.split(':').filter(|p| !p.is_empty()).collect()
+    }
+    #[cfg(not(unix))]
+    {
+        if s.is_empty() { Vec::new() } else { vec![s] }
+    }
 }
 
 /// Expand a `--config` argument: a file, a directory (all `*.toml` inside,
-/// sorted), or several of either separated by `:` (Mopidy syntax).
+/// sorted), or several of either separated by `:` on unix (Mopidy syntax).
+///
+/// # Errors
+/// Unreadable directory, or explicit arguments that expand to no files
+/// (never silently falls back to discovery).
 fn expand_config_args(args: &[PathBuf]) -> Result<Vec<PathBuf>> {
     let mut out = Vec::new();
     for arg in args {
         let s = arg.to_string_lossy();
-        for part in s.split(':').filter(|p| !p.is_empty()) {
+        for part in split_config_arg(&s) {
             let p = Path::new(part);
             if p.is_dir() {
                 let mut files: Vec<PathBuf> = std::fs::read_dir(p)
@@ -147,6 +203,11 @@ fn expand_config_args(args: &[PathBuf]) -> Result<Vec<PathBuf>> {
                 out.push(p.to_path_buf());
             }
         }
+    }
+    if out.is_empty() && !args.is_empty() {
+        return Err(RmpdError::Config(
+            "--config given but no config files found".to_owned(),
+        ));
     }
     Ok(out)
 }
@@ -315,5 +376,60 @@ url = "https://music.example"
         assert_eq!(load.config.network.port, 7001);
         assert_eq!(load.config.network.bind_address, "127.0.0.2");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn headers_and_url_queries_are_masked() {
+        let mut v = toml::Value::Table(t(r#"
+[[webhook]]
+url = "https://h.example/hook?token=abc&x=1#frag"
+headers = { Authorization = "Bearer zzz", "X-Other" = "qqq" }
+[stream.proxy]
+url = "http://u:p@proxy:3128/path"
+"#));
+        mask_secrets(&mut v);
+        let s = toml::to_string(&v).unwrap();
+        for leak in ["zzz", "qqq", "abc", "u:p@"] {
+            assert!(!s.contains(leak), "{leak} leaked in {s}");
+        }
+        assert!(s.contains("https://h.example/hook?********#frag"), "{s}");
+        assert!(s.contains("http://********@proxy:3128/path"), "{s}");
+        assert!(s.contains("Authorization"));
+    }
+
+    #[test]
+    fn explicit_empty_config_is_an_error() {
+        let dir = std::env::temp_dir().join(format!("rmpd-layers-empty-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(expand_config_args(std::slice::from_ref(&dir)).is_err());
+        assert!(expand_config_args(&[]).unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn colon_splits_on_unix() {
+        let out = expand_config_args(&[PathBuf::from("/a.toml:/b.toml")]).unwrap();
+        assert_eq!(
+            out,
+            vec![PathBuf::from("/a.toml"), PathBuf::from("/b.toml")]
+        );
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn colon_not_split_on_windows() {
+        let out = expand_config_args(&[PathBuf::from("C:\\a.toml")]).unwrap();
+        assert_eq!(out, vec![PathBuf::from("C:\\a.toml")]);
+    }
+
+    #[test]
+    fn url_query_mask() {
+        assert_eq!(
+            strip_url_credentials("http://h/p?a=1"),
+            Some("http://h/p?********".to_owned())
+        );
+        assert_eq!(strip_url_credentials("http://h/p?"), None);
+        assert_eq!(strip_url_credentials("http://h/p"), None);
     }
 }

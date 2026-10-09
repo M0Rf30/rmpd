@@ -5,7 +5,9 @@
 //! mapped onto [`PlayerHandle`]. Transport-independent: the HTTP and
 //! WebSocket handlers both feed request bodies to [`handle_body`].
 
-use super::model::{ref_json, search_result_json, state_name, tl_track_json, track_json};
+use super::model::{
+    history_json, ref_json, search_result_json, state_name, tl_track_json, track_json,
+};
 use rmpd_core::state::PlayerState;
 use rmpd_plugin::PluginError;
 use rmpd_plugin::integration::PlayerHandle;
@@ -120,6 +122,16 @@ pub const METHODS: &[(&str, &str, &[&str])] = &[
         "core.library.search",
         "Case-insensitive substring search; returns SearchResults.",
         &["query", "uris", "exact"],
+    ),
+    (
+        "core.history.get_history",
+        "Get the recently played tracks as [timestamp_ms, Ref] pairs, newest first.",
+        &[],
+    ),
+    (
+        "core.history.get_length",
+        "Get the number of remembered played tracks.",
+        &[],
     ),
 ];
 
@@ -281,6 +293,8 @@ pub async fn dispatch(
                 tracklist(player, name, &p).await
             } else if let Some(name) = method.strip_prefix("core.library.") {
                 library(player, name, &p).await
+            } else if let Some(name) = method.strip_prefix("core.history.") {
+                history(player, name).await
             } else {
                 Err(not_found(method))
             }
@@ -468,6 +482,14 @@ async fn library(player: &dyn PlayerHandle, name: &str, p: &Params<'_>) -> Resul
     }
 }
 
+async fn history(player: &dyn PlayerHandle, name: &str) -> Result<Value, RpcError> {
+    match name {
+        "get_history" => Ok(history_json(&player.history().await)),
+        "get_length" => Ok(json!(player.history_length().await)),
+        _ => Err(not_found(&format!("core.history.{name}"))),
+    }
+}
+
 /// `uris` (or the deprecated `tracks` list of objects with a `uri`).
 fn add_uris_param(p: &Params<'_>) -> Result<Vec<String>, RpcError> {
     if let Some(v) = p.get(2, "uris") {
@@ -597,6 +619,7 @@ pub async fn handle_body(player: &dyn PlayerHandle, body: &str) -> Option<String
 mod tests {
     use super::*;
     use crate::http_api::testutil::MockPlayer;
+    use rmpd_core::history::HistoryEntry;
 
     async fn call(player: &MockPlayer, request: Value) -> Value {
         let reply = handle_body(player, &request.to_string()).await.unwrap();
@@ -790,6 +813,45 @@ mod tests {
         );
         let bad = call(&p, req("core.library.search", json!({ "query": {} }))).await;
         assert_eq!(bad["error"]["code"], INVALID_PARAMS);
+    }
+
+    #[tokio::test]
+    async fn history_get_history_and_length() {
+        let p = MockPlayer::with_queue();
+        let r = call(&p, req("core.history.get_length", json!([]))).await;
+        assert_eq!(r["result"], 0);
+        let r = call(&p, req("core.history.get_history", json!([]))).await;
+        assert_eq!(r["result"], json!([]));
+
+        // Newest first, as the player hands it over.
+        *p.history.lock() = vec![
+            HistoryEntry {
+                timestamp_ms: 2_000,
+                uri: "b.flac".into(),
+                title: Some("Second".into()),
+                artist: None,
+                album: None,
+            },
+            HistoryEntry {
+                timestamp_ms: 1_000,
+                uri: "dir/a.flac".into(),
+                title: None,
+                artist: None,
+                album: None,
+            },
+        ];
+        let r = call(&p, req("core.history.get_length", json!([]))).await;
+        assert_eq!(r["result"], 2);
+        let r = call(&p, req("core.history.get_history", json!([]))).await;
+        let items = r["result"].as_array().unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0][0], 2_000);
+        assert_eq!(items[0][1]["__model__"], "Ref");
+        assert_eq!(items[0][1]["type"], "track");
+        assert_eq!(items[0][1]["uri"], "b.flac");
+        assert_eq!(items[0][1]["name"], "Second");
+        assert_eq!(items[1][0], 1_000);
+        assert_eq!(items[1][1]["name"], "a.flac");
     }
 
     #[tokio::test]

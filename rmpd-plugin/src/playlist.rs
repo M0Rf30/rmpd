@@ -194,6 +194,44 @@ impl PlaylistParser for PlsParser {
 /// XSPF (`<location>` elements; falls back to `<file>`).
 pub struct XspfParser;
 
+/// Decode the five predefined XML entities and numeric character references
+/// in a single pass; unknown or malformed references are kept verbatim.
+fn decode_xml_entities(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(amp) = rest.find('&') {
+        out.push_str(&rest[..amp]);
+        rest = &rest[amp..];
+        let decoded = rest[1..].find(';').filter(|&n| n <= 10).and_then(|n| {
+            let name = &rest[1..=n];
+            let ch = match name {
+                "amp" => Some('&'),
+                "lt" => Some('<'),
+                "gt" => Some('>'),
+                "quot" => Some('"'),
+                "apos" => Some('\''),
+                _ => name.strip_prefix('#').and_then(|num| {
+                    let code = match num.strip_prefix(['x', 'X']) {
+                        Some(hex) => u32::from_str_radix(hex, 16).ok(),
+                        None => num.parse().ok(),
+                    };
+                    code.and_then(char::from_u32)
+                }),
+            };
+            ch.map(|c| (c, n + 2))
+        });
+        if let Some((c, len)) = decoded {
+            out.push(c);
+            rest = &rest[len..];
+        } else {
+            out.push('&');
+            rest = &rest[1..];
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 fn extract_xml_tag_content(xml: &str, tag: &str) -> Vec<String> {
     let open = format!("<{tag}>");
     let close = format!("</{tag}>");
@@ -231,7 +269,9 @@ impl PlaylistParser for XspfParser {
         }
         paths
             .into_iter()
-            .map(|p| PlaylistEntry::bare(strip_file_uri_prefix(p.trim())))
+            .map(|p| {
+                PlaylistEntry::bare(strip_file_uri_prefix(decode_xml_entities(p.trim()).trim()))
+            })
             .collect()
     }
 }
@@ -271,7 +311,9 @@ impl PlaylistParser for AsxParser {
                     continue;
                 };
                 if let Some(end) = rest.find(quote) {
-                    out.push(PlaylistEntry::bare(strip_file_uri_prefix(&rest[..end])));
+                    out.push(PlaylistEntry::bare(strip_file_uri_prefix(
+                        &decode_xml_entities(&rest[..end]),
+                    )));
                 }
             }
             remaining = &remaining[pos + 5..];
@@ -350,5 +392,19 @@ mod tests {
         );
         let uris: Vec<_> = e.iter().map(|x| x.uri.as_str()).collect();
         assert_eq!(uris, ["http://h/a", "b.mp3"]);
+    }
+
+    #[test]
+    fn xml_entities_decoded() {
+        assert_eq!(
+            decode_xml_entities(
+                "a&amp;b &lt;&gt;&quot;&apos; &#65;&#x42; &amp;amp; &bogus; &#xZZ; &"
+            ),
+            "a&b <>\"' AB &amp; &bogus; &#xZZ; &"
+        );
+        let e = XspfParser.parse("", "<location>http://h/s?sid=1&amp;type=mp3</location>");
+        assert_eq!(e[0].uri, "http://h/s?sid=1&type=mp3");
+        let e = AsxParser.parse("", r#"<REF HREF="http://h/s?sid=1&amp;type=mp3"/>"#);
+        assert_eq!(e[0].uri, "http://h/s?sid=1&type=mp3");
     }
 }

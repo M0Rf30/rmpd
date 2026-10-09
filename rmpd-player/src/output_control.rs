@@ -157,16 +157,14 @@ impl OutputGains {
         self.slots.lock().clear();
     }
 
-    /// Create and register the control block for one output. `gain` is the
-    /// current software gain, used only when `software` is set.
-    pub fn register(
-        &self,
-        master: &OutputControl,
-        software: bool,
-        gain: f32,
-    ) -> Arc<OutputControl> {
-        let control = Arc::new(master.with_own_gain(if software { gain } else { 1.0 }));
-        self.slots.lock().push(GainSlot {
+    /// Create and register the control block for one output. A software
+    /// output is seeded with the master's current gain, read while holding
+    /// the slots lock so a concurrent [`Self::set_software_gain`] (which
+    /// sets the master first, then takes the lock) can never be missed.
+    pub fn register(&self, master: &OutputControl, software: bool) -> Arc<OutputControl> {
+        let mut slots = self.slots.lock();
+        let control = Arc::new(master.with_own_gain(if software { master.gain() } else { 1.0 }));
+        slots.push(GainSlot {
             software,
             control: control.clone(),
         });
@@ -268,9 +266,10 @@ mod tests {
     #[test]
     fn output_gains_only_move_software_outputs() {
         let master = OutputControl::new();
+        master.set_gain(0.4);
         let gains = OutputGains::default();
-        let soft = gains.register(&master, true, 0.4);
-        let hard = gains.register(&master, false, 0.4);
+        let soft = gains.register(&master, true);
+        let hard = gains.register(&master, false);
         assert!((soft.gain() - 0.4).abs() < f32::EPSILON);
         assert!((hard.gain() - 1.0).abs() < f32::EPSILON);
         gains.set_software_gain(0.8);

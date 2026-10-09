@@ -7,6 +7,7 @@ use rmpd_core::error::{Result, RmpdError};
 use rmpd_core::song::{Song, intern_tag_key};
 use rmpd_core::tag::{normalize_decimal, vorbis_tag_map_get};
 use rmpd_core::time::system_time_to_unix_secs;
+use rmpd_player::decoder::chain_duration_secs;
 use std::borrow::Cow;
 use std::fs;
 use std::time::{Duration, SystemTime};
@@ -17,7 +18,9 @@ use symphonia::core::codecs::audio::well_known::{
 };
 use symphonia::core::codecs::audio::{AudioCodecId, AudioDecoder};
 use symphonia::core::formats::probe::Hint;
-use symphonia::core::formats::{FormatOptions, FormatReader, MediaInfo, Track, TrackType};
+use symphonia::core::formats::{
+    FormatId, FormatOptions, FormatReader, MediaInfo, Track, TrackType,
+};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::{
     Metadata, MetadataOptions, MetadataRevision, RawValue, StandardTag, Tag, Visual,
@@ -161,7 +164,7 @@ fn probe_file(path: &Utf8PathBuf, want_visuals: bool) -> Result<Probed> {
                         .and_then(alac_bit_depth_from_cookie)
                 })
         });
-        let duration = track_duration(track, reader.media_info());
+        let duration = track_duration(track, reader.media_info(), reader.format_info().format);
         let track_id = track.map(|t| u64::from(t.id));
         let codec = audio.map(|a| a.codec);
         (
@@ -236,10 +239,25 @@ fn first_decoded_format(
 }
 
 /// Compute a track's duration, falling back through every level of precision symphonia
-/// exposes: the track's own frame count, then its declared duration in timebase units (set by
-/// e.g. isomp4 when frame count isn't derivable), then the reader's overall media duration
-/// (the only value MKV/WebM ever populate, since that demuxer never sets per-track duration).
-fn track_duration(track: Option<&Track>, media_info: &MediaInfo) -> Option<Duration> {
+/// exposes: the whole chain's duration for a chained Ogg stream (the track only describes its
+/// first link), then the track's own frame count, then its declared duration in timebase units
+/// (set by e.g. isomp4 when frame count isn't derivable), then the reader's overall media
+/// duration (the only value MKV/WebM ever populate, since that demuxer never sets per-track
+/// duration).
+///
+/// DSD needs no special casing: the DSF/DFF readers count `num_frames` in 1-bit DSD samples
+/// per channel with a `1 / dsd_rate` timebase, so the quotient is in seconds. (Only the
+/// pass-through *decoder* output uses the `dsd_rate / 8` convention, and it is never decoded
+/// here.)
+fn track_duration(
+    track: Option<&Track>,
+    media_info: &MediaInfo,
+    format: FormatId,
+) -> Option<Duration> {
+    if let Some(secs) = chain_duration_secs(format, media_info) {
+        return Duration::try_from_secs_f64(secs).ok();
+    }
+
     let from_track = track.and_then(|t| {
         let tb = t.time_base?;
         let dur = match t.num_frames {
@@ -879,5 +897,73 @@ mod tag_mapping_tests {
         cap_tag_items(&mut tags);
         assert_eq!(tags.len(), MAX_TAG_ITEMS);
         assert_eq!(tags[0].1, "0");
+    }
+}
+
+#[cfg(test)]
+mod dsd_metadata_tests {
+    use super::*;
+
+    /// A minimal stereo DSF file: `blocks` blocks of 4096 bytes per channel of silence.
+    fn dsf(rate: u32, blocks: u64) -> Vec<u8> {
+        const BLOCK: u64 = 4096;
+        let channels = 2u64;
+        let payload = blocks * BLOCK * channels;
+        let sample_count = blocks * BLOCK * 8;
+        let mut v = Vec::new();
+        v.extend_from_slice(b"DSD ");
+        v.extend_from_slice(&28u64.to_le_bytes());
+        v.extend_from_slice(&(28 + 52 + 12 + payload).to_le_bytes());
+        v.extend_from_slice(&0u64.to_le_bytes()); // no metadata chunk
+        v.extend_from_slice(b"fmt ");
+        v.extend_from_slice(&52u64.to_le_bytes());
+        v.extend_from_slice(&1u32.to_le_bytes()); // version
+        v.extend_from_slice(&0u32.to_le_bytes()); // format id: raw DSD
+        v.extend_from_slice(&2u32.to_le_bytes()); // channel type: stereo
+        v.extend_from_slice(&(channels as u32).to_le_bytes());
+        v.extend_from_slice(&rate.to_le_bytes());
+        v.extend_from_slice(&1u32.to_le_bytes()); // bits per sample
+        v.extend_from_slice(&sample_count.to_le_bytes());
+        v.extend_from_slice(&(BLOCK as u32).to_le_bytes());
+        v.extend_from_slice(&0u32.to_le_bytes());
+        v.extend_from_slice(b"data");
+        v.extend_from_slice(&(12 + payload).to_le_bytes());
+        v.resize(v.len() + payload as usize, 0x69);
+        v
+    }
+
+    fn probe(rate: u32, blocks: u64) -> Probed {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.dsf");
+        fs::write(&path, dsf(rate, blocks)).unwrap();
+        let path = Utf8PathBuf::from_path_buf(path).unwrap();
+        probe_file(&path, false).expect("probe dsf")
+    }
+
+    /// DSD sources are stored with the 1-bit sample rate (2 822 400 for DSD64) and
+    /// `bits_per_sample == 1`, so the protocol layer prints `dsd64:2`. That must hold even
+    /// though the pass-through decoder now reports `rate / 8` (MPD's byte rate) in its
+    /// `AudioSpec`: metadata comes from the container, never from a decoded buffer.
+    #[test]
+    fn dsd64_reports_bit_rate_and_one_bit_depth() {
+        let p = probe(2_822_400, 8);
+        assert_eq!(p.sample_rate, Some(2_822_400));
+        assert_eq!(p.bit_depth, Some(1));
+        assert_eq!(p.channels, Some(2));
+    }
+
+    #[test]
+    fn dsd_duration_counts_dsd_samples_per_channel() {
+        // 8 blocks * 4096 bytes * 8 samples at 2 822 400 Hz.
+        let p = probe(2_822_400, 8);
+        let expected = (8.0 * 4096.0 * 8.0) / 2_822_400.0;
+        let got = p.duration.expect("duration").as_secs_f64();
+        assert!((got - expected).abs() < 1e-6, "{got} vs {expected}");
+
+        // DSD128 doubles the rate, so the same sample count lasts half as long.
+        let p = probe(5_644_800, 8);
+        let got = p.duration.expect("duration").as_secs_f64();
+        assert!((got - expected / 2.0).abs() < 1e-6, "{got}");
+        assert_eq!(p.sample_rate, Some(5_644_800));
     }
 }

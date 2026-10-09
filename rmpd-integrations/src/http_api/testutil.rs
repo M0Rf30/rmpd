@@ -5,6 +5,7 @@
 
 use async_trait::async_trait;
 use parking_lot::Mutex;
+use rmpd_core::history::HistoryEntry;
 use rmpd_core::song::Song;
 use rmpd_core::state::PlayerState;
 use rmpd_plugin::PluginError;
@@ -47,6 +48,8 @@ pub(crate) struct MockPlayer {
     pub volume: Mutex<u8>,
     pub queue: Mutex<Vec<QueueEntry>>,
     pub opts: Mutex<PlayerOptions>,
+    /// Play history, newest first.
+    pub history: Mutex<Vec<HistoryEntry>>,
 }
 
 impl MockPlayer {
@@ -198,5 +201,8 @@ impl PlayerHandle for MockPlayer {
     async fn search(&self, query: &str) -> Result<Vec<Song>, PluginError> {
         self.log(format!("search:{query}"));
         Ok(vec![song("found.flac", &[("title", "Found")])])
+    }
+    async fn history(&self) -> Vec<HistoryEntry> {
+        self.history.lock().clone()
     }
 }

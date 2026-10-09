@@ -188,11 +188,19 @@ fn best_rice(vals: &[u32]) -> (u32, u64) {
 
 /// Evaluate partition orders `0..=max_po` for `residual` (already folded) and
 /// return the cheapest `(partition_order, params, bits)`.
-fn best_partitioning(residual: &[u32], order: usize, max_po: u32) -> (u32, Vec<u32>, u64) {
+fn best_partitioning(
+    residual: &[u32],
+    order: usize,
+    max_po: u32,
+    n: usize,
+) -> (u32, Vec<u32>, u64) {
     let mut best: Option<(u32, Vec<u32>, u64)> = None;
     for po in 0..=max_po {
         let parts = 1usize << po;
-        let part_len = BLOCK_SIZE >> po;
+        if n & (parts - 1) != 0 {
+            break;
+        }
+        let part_len = n >> po;
         if part_len <= order {
             break;
         }
@@ -215,7 +223,8 @@ fn best_partitioning(residual: &[u32], order: usize, max_po: u32) -> (u32, Vec<u
 }
 
 fn write_subframe(bw: &mut BitWriter, samples: &[i32], level: u8) {
-    debug_assert_eq!(samples.len(), BLOCK_SIZE);
+    let n = samples.len();
+    debug_assert!((1..=BLOCK_SIZE).contains(&n));
 
     // CONSTANT (digital silence / DC).
     if samples.iter().all(|&s| s == samples[0]) {
@@ -226,11 +235,11 @@ fn write_subframe(bw: &mut BitWriter, samples: &[i32], level: u8) {
         return;
     }
 
-    let verbatim_bits = 8 + (BLOCK_SIZE as u64) * u64::from(BITS_PER_SAMPLE);
+    let verbatim_bits = 8 + (n as u64) * u64::from(BITS_PER_SAMPLE);
     let mut best_fixed: Option<FixedCandidate> = None;
 
     if level > 0 {
-        let max_order = if level <= 2 { 2 } else { 4 };
+        let max_order = (if level <= 2 { 2 } else { 4 }).min(n - 1);
         let max_po = match level {
             1..=2 => 3,
             3..=5 => 5,
@@ -247,7 +256,7 @@ fn write_subframe(bw: &mut BitWriter, samples: &[i32], level: u8) {
                 .iter()
                 .map(|&r| ((r << 1) ^ (r >> 63)) as u32)
                 .collect();
-            let (partition_order, params, rbits) = best_partitioning(&residual, order, max_po);
+            let (partition_order, params, rbits) = best_partitioning(&residual, order, max_po, n);
             let bits = 8 + (order as u64) * u64::from(BITS_PER_SAMPLE) + rbits;
             if best_fixed.as_ref().is_none_or(|b| bits < b.bits) {
                 best_fixed = Some(FixedCandidate {
@@ -271,7 +280,7 @@ fn write_subframe(bw: &mut BitWriter, samples: &[i32], level: u8) {
             }
             bw.write(0, 2); // residual coding method: 4-bit Rice parameters
             bw.write(u64::from(f.partition_order), 4);
-            let part_len = BLOCK_SIZE >> f.partition_order;
+            let part_len = samples.len() >> f.partition_order;
             let mut idx = 0usize;
             for (p, &param) in f.params.iter().enumerate() {
                 let len = if p == 0 { part_len - f.order } else { part_len };
@@ -353,21 +362,29 @@ impl FlacEncoder {
         h
     }
 
+    /// Encode one frame of `block.len() / channels` sample frames (a full
+    /// [`BLOCK_SIZE`] block, or the shorter final block from `finish`).
     fn encode_frame(&mut self, block: &[i32]) -> Vec<u8> {
         let ch = self.channels;
-        debug_assert_eq!(block.len(), BLOCK_SIZE * ch);
+        let n = block.len() / ch;
+        debug_assert!((1..=BLOCK_SIZE).contains(&n) && block.len() == n * ch);
+        let full = n == BLOCK_SIZE;
 
         let mut head = vec![
             0xFF,
-            0xF8,                                   // sync + fixed block size strategy
-            BLOCK_SIZE_CODE << 4,                   // sample rate: from STREAMINFO
+            0xF8, // sync + fixed block size strategy
+            // block size code (7 = explicit 16-bit value follows); sample rate from STREAMINFO
+            (if full { BLOCK_SIZE_CODE } else { 7 }) << 4,
             (((ch as u8) - 1) << 4) | (0b100 << 1), // independent channels, 16 bps
         ];
         utf8_encode(self.frame_number, &mut head);
+        if !full {
+            head.extend_from_slice(&((n - 1) as u16).to_be_bytes());
+        }
         head.push(crc8(&head));
 
         let mut bw = BitWriter::new();
-        let mut chan = vec![0i32; BLOCK_SIZE];
+        let mut chan = vec![0i32; n];
         for c in 0..ch {
             for (i, s) in chan.iter_mut().enumerate() {
                 *s = block[i * ch + c];
@@ -404,6 +421,25 @@ impl Encoder for FlacEncoder {
             out.extend(self.encode_frame(&block));
         }
         out
+    }
+
+    fn finish(&mut self) -> Vec<u8> {
+        let frames = self.pending.len() / self.channels;
+        let mut pending = std::mem::take(&mut self.pending);
+        pending.truncate(frames * self.channels);
+        let out = if frames == 0 {
+            Vec::new()
+        } else {
+            self.encode_frame(&pending)
+        };
+        pending.clear();
+        self.pending = pending;
+        out
+    }
+
+    fn reset(&mut self) {
+        self.pending.clear();
+        self.frame_number = 0;
     }
 }
 
@@ -458,7 +494,11 @@ mod tests {
     /// Decode one frame; returns interleaved samples and the frame length.
     fn decode_frame(data: &[u8], channels: usize) -> (Vec<i32>, usize) {
         assert_eq!(&data[..2], &[0xFF, 0xF8], "sync code");
-        assert_eq!(data[2], BLOCK_SIZE_CODE << 4);
+        let code = data[2] >> 4;
+        assert!(
+            code == BLOCK_SIZE_CODE || code == 7,
+            "block size code {code}"
+        );
         assert_eq!(data[3] >> 4, (channels - 1) as u8);
         // UTF-8 frame number length.
         let first = data[4];
@@ -467,19 +507,27 @@ mod tests {
         } else {
             first.leading_ones() as usize
         };
-        let hlen = 4 + utf_len + 1;
+        let (bs, hlen) = if code == 7 {
+            let at = 4 + utf_len;
+            (
+                usize::from(u16::from_be_bytes([data[at], data[at + 1]])) + 1,
+                at + 3,
+            )
+        } else {
+            (BLOCK_SIZE, 4 + utf_len + 1)
+        };
         assert_eq!(crc8(&data[..hlen - 1]), data[hlen - 1], "header crc8");
 
         let mut br = BitReader {
             data,
             pos: hlen * 8,
         };
-        let mut out = vec![0i32; BLOCK_SIZE * channels];
+        let mut out = vec![0i32; bs * channels];
         for c in 0..channels {
             assert_eq!(br.read(1), 0);
             let t = br.read(6);
             assert_eq!(br.read(1), 0, "no wasted bits");
-            let mut s = vec![0i32; BLOCK_SIZE];
+            let mut s = vec![0i32; bs];
             match t {
                 0 => {
                     let v = br.read_signed(16);
@@ -497,7 +545,7 @@ mod tests {
                     }
                     assert_eq!(br.read(2), 0, "rice method 0");
                     let po = br.read(4) as u32;
-                    let part_len = BLOCK_SIZE >> po;
+                    let part_len = bs >> po;
                     let mut i = order;
                     for p in 0..(1usize << po) {
                         let len = if p == 0 { part_len - order } else { part_len };
@@ -518,7 +566,7 @@ mod tests {
                             i += 1;
                         }
                     }
-                    assert_eq!(i, BLOCK_SIZE);
+                    assert_eq!(i, bs);
                 }
                 other => panic!("unexpected subframe type {other}"),
             }
@@ -673,5 +721,43 @@ mod tests {
             off += len;
         }
         assert_eq!(off, bytes.len());
+    }
+
+    #[test]
+    fn finish_flushes_short_final_block() {
+        let mut seed = 11;
+        for channels in [1usize, 2] {
+            for frames in [1usize, 2, 3, 5, 100, 4095, 4097, 5000, 8193] {
+                for level in [0u8, 5, 8] {
+                    let samples = pseudo_noise(frames * channels, 3000, &mut seed);
+                    let mut enc = FlacEncoder::new(fmt(channels as u8, 44100), level).unwrap();
+                    let mut bytes = enc.encode(&to_f32(&samples));
+                    bytes.extend(enc.finish());
+                    assert!(enc.finish().is_empty(), "finish is idempotent");
+                    let mut decoded = Vec::new();
+                    let mut off = 0;
+                    while off < bytes.len() {
+                        let (s, len) = decode_frame(&bytes[off..], channels);
+                        decoded.extend(s);
+                        off += len;
+                    }
+                    assert_eq!(decoded, samples, "{channels}ch {frames} frames L{level}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn finish_without_pending_is_empty_and_reset_restarts() {
+        let mut enc = FlacEncoder::new(fmt(1, 44100), 5).unwrap();
+        assert!(enc.finish().is_empty());
+        let mut seed = 3;
+        let samples = to_f32(&pseudo_noise(BLOCK_SIZE + 10, 1000, &mut seed));
+        let first = enc.encode(&samples);
+        assert_eq!(first[4], 0);
+        enc.reset();
+        assert!(enc.finish().is_empty(), "reset drops pending samples");
+        let again = enc.encode(&samples);
+        assert_eq!(again, first, "frame numbering restarts after reset");
     }
 }

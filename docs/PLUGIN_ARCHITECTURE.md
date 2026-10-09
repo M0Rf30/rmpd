@@ -17,7 +17,7 @@ loading**: Rust has no stable ABI, and MPD itself links all plugins statically.
 |-----------------|-------------------------------------------------------|----------------------------------|-------------------------|
 | Outputs         | `rmpd-player` (output SPI)                            | `OUTPUT_PLUGINS` (`rmpd-player`) | `[[output]]`            |
 | Mixers          | `rmpd-player` (mixer SPI)                             | in `rmpd-player`                 | output block settings   |
-| Encoders        | `rmpd-player` (encoder SPI)                           | in `rmpd-player`                 | output block settings   |
+| Encoders        | `rmpd-player` (encoder SPI)                           | `ENCODER_PLUGINS` (`rmpd-player`: `pcm`, `wav`, `flac`, `opus`) | output block settings   |
 | DSP filters     | `rmpd_player::AudioFilter`                            | `FILTER_PLUGINS` (`rmpd-player`) | `[[filter]]` + `[audio].filters` / output `filters` |
 | Music sources   | `rmpd_plugin::MusicSource`                            | `SOURCE_PLUGINS` (`rmpd-source`) | `[[source]]`            |
 | Playlist parsers| `rmpd_plugin::PlaylistParser`                         | `PLAYLIST_PLUGINS` (`rmpd-plugin`)| none (by suffix / MIME)|
@@ -113,6 +113,7 @@ from a bounded prefetch channel (`HlsSource`, not seekable); the first segment
 is fetched during `open` to pick the probe hint (`aac`/`mp3`/`mp4`).
 `[stream]` settings are installed process-wide with
 `rmpd_stream::configure` at startup: `timeout_ms` (default 5000),
+`hls_max_bandwidth` (HLS variant bitrate cap),
 `metadata_blacklist` (fnmatch globs matched against the stream URL and any
 playlist it was unwrapped from; matching streams ignore ICY `StreamTitle`) and
 `[stream.proxy]` (`url`, `username`, `password`).
