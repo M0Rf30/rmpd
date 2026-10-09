@@ -14,6 +14,10 @@ workspace = true
 
 [features]
 subsonic = ["dep:opensubsonic", "dep:reqwest", "dep:futures"]
+# Pure-Rust HTTP sources (reqwest/rustls); no C bindings.
+jellyfin = ["dep:reqwest", "dep:serde", "dep:serde_json", "dep:toml"]
+podcast = ["dep:reqwest", "dep:rss", "dep:futures", "dep:toml"]
+radio = ["dep:reqwest", "dep:serde", "dep:serde_json", "dep:toml"]
 
 [dependencies]
 rmpd-core.workspace = true
@@ -26,6 +30,10 @@ tracing.workspace = true
 opensubsonic = { git = "https://github.com/M0Rf30/opensubsonic-rs", rev = "02d4879803635b03f1cbb7319fb175eb3a75f198", optional = true }
 reqwest = { workspace = true, optional = true }
 futures = { version = "0.3", optional = true }
+serde = { workspace = true, optional = true }
+serde_json = { version = "1", optional = true }
+toml = { workspace = true, optional = true }
+rss = { version = "2", default-features = false, optional = true }
 
 [dev-dependencies]
 toml.workspace = true

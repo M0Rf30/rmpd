@@ -8,14 +8,35 @@
 //! (ICY) metadata de-interleaving. Metadata blocks are stripped so the bytes
 //! handed to the decoder are pure audio, and the "now playing" title is
 //! surfaced through a cheap shared handle ([`TitleHandle`]).
+//!
+//! Inputs are opened through the compile-time [`INPUT_PLUGINS`] registry,
+//! keyed by URI scheme ([`open`]). The `http`/`https` plugin also unwraps radio
+//! playlists (PLS, M3U, ASX, XSPF), rejects HLS with a clear error, and honours
+//! the `[stream]` settings installed with [`configure`].
 #![allow(clippy::cargo_common_metadata)]
 
 use std::io::{self, Read, Seek, SeekFrom};
 use std::sync::Arc;
-use std::time::Duration;
 
 use parking_lot::Mutex;
 use symphonia::core::io::MediaSource;
+
+mod glob;
+mod http;
+mod input;
+mod radio_playlist;
+mod settings;
+
+pub use glob::glob_match;
+pub use http::HttpInput;
+pub use input::{
+    INPUT_PLUGINS, InputPlugin, OpenContext, OpenedInput, input_for_scheme, input_for_uri,
+    is_input_uri, open, open_with, uri_scheme, url_handlers,
+};
+pub use radio_playlist::{
+    MAX_PLAYLIST_BYTES, MAX_PLAYLIST_DEPTH, is_hls_playlist, playlist_parser_for, url_suffix,
+};
+pub use settings::{configure, is_metadata_blacklisted};
 
 /// Shared, thread-safe handle to the latest ICY "now playing" title.
 pub type TitleHandle = Arc<Mutex<Option<String>>>;
@@ -40,49 +61,11 @@ pub struct HttpSource {
     bytes_until_meta: usize,
     /// Latest parsed "now playing" title.
     title: TitleHandle,
+    /// Never publish ICY titles (URL matched `[stream].metadata_blacklist`).
+    ignore_title: bool,
 }
 
 impl HttpSource {
-    /// Connect to `url` and begin streaming. Requests ICY metadata; when the
-    /// server advertises `icy-metaint`, metadata blocks are de-interleaved out
-    /// of the audio stream and the title handle is updated as they arrive.
-    ///
-    /// # Errors
-    /// Returns an error if the client cannot be built, the request fails, or
-    /// the server responds with a non-success status.
-    pub fn connect(url: &str) -> io::Result<Self> {
-        let client = reqwest::blocking::Client::builder()
-            // reqwest's blocking client has no dedicated "total request"
-            // timeout: `.timeout()` bounds the initial connect+headers wait
-            // *and*, per call, each subsequent `Read::read()` on the body
-            // (reqwest's blocking::Response::read wraps every read in this
-            // same deadline, resetting it each time). So this value acts as
-            // a per-read/idle deadline, not a cap on total stream duration -
-            // a server that keeps sending stays connected indefinitely; one
-            // that goes silent mid-stream is dropped within this window
-            // instead of wedging the decoder thread forever.
-            .timeout(Duration::from_secs(25))
-            .connect_timeout(Duration::from_secs(15))
-            .user_agent("rmpd")
-            .build()
-            .map_err(to_io)?;
-        let resp = client
-            .get(url)
-            .header("Icy-MetaData", "1")
-            .send()
-            .map_err(to_io)?
-            .error_for_status()
-            .map_err(to_io)?;
-        let metaint = resp
-            .headers()
-            .get("icy-metaint")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.trim().parse::<usize>().ok())
-            .filter(|n| *n > 0);
-        tracing::debug!(url = %redact_url(url), ?metaint, "opened HTTP stream");
-        Ok(Self::with_reader(Box::new(resp), metaint))
-    }
-
     /// Build a source from an arbitrary byte reader. `metaint` mirrors the
     /// `icy-metaint` header (None disables ICY de-interleaving). Used for tests
     /// and alternative transports.
@@ -93,6 +76,7 @@ impl HttpSource {
             metaint,
             bytes_until_meta: metaint.unwrap_or(0),
             title: Arc::new(Mutex::new(None)),
+            ignore_title: false,
         }
     }
 
@@ -100,6 +84,14 @@ impl HttpSource {
     #[must_use]
     pub fn title_handle(&self) -> TitleHandle {
         Arc::clone(&self.title)
+    }
+
+    /// Discard ICY titles instead of publishing them (blacklisted streams).
+    /// The metadata blocks are still stripped from the audio.
+    #[must_use]
+    pub fn ignore_title(mut self, ignore: bool) -> Self {
+        self.ignore_title = ignore;
+        self
     }
 }
 
@@ -124,7 +116,9 @@ impl Read for HttpSource {
             if len > 0 {
                 let mut block = vec![0u8; len];
                 read_exact_eof(&mut *inner, &mut block)?;
-                if let Some(t) = parse_stream_title(&block) {
+                if !self.ignore_title
+                    && let Some(t) = parse_stream_title(&block)
+                {
                     *self.title.lock() = Some(t);
                 }
             }
@@ -300,6 +294,20 @@ mod tests {
         let src = HttpSource::with_reader(Box::new(Cursor::new(vec![1, 2, 3])), None);
         assert!(!src.is_seekable());
         assert_eq!(src.byte_len(), None);
+    }
+
+    #[test]
+    fn ignore_title_strips_metadata_but_publishes_nothing() {
+        let mut raw: Vec<u8> = (0u8..16).collect();
+        raw.extend_from_slice(&meta_block("Ad Break"));
+        raw.extend((16u8..20).collect::<Vec<_>>());
+        let mut src =
+            HttpSource::with_reader(Box::new(Cursor::new(raw)), Some(16)).ignore_title(true);
+        let title = src.title_handle();
+        let mut out = Vec::new();
+        src.read_to_end(&mut out).unwrap();
+        assert_eq!(out, (0u8..20).collect::<Vec<_>>());
+        assert!(title.lock().is_none());
     }
 
     #[test]

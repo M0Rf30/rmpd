@@ -19,6 +19,15 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{broadcast, watch};
 
+/// Queue playback options.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PlayerOptions {
+    pub repeat: bool,
+    pub random: bool,
+    /// Single mode is on (including one-shot).
+    pub single: bool,
+}
+
 // ─── PlayerHandle ────────────────────────────────────────────────────────────
 
 /// Point-in-time view of the player.
@@ -50,6 +59,45 @@ pub trait PlayerHandle: Send + Sync {
     async fn set_volume(&self, volume: u8) -> Result<(), PluginError>;
     /// Seek within the current song.
     async fn seek(&self, position: Duration) -> Result<(), PluginError>;
+
+    // ── Additive extensions (default impls keep existing handles compiling) ──
+
+    /// Queue id of the current song, if any.
+    async fn current_song_id(&self) -> Option<u32> {
+        None
+    }
+    /// Number of songs in the queue.
+    async fn queue_len(&self) -> usize {
+        0
+    }
+    /// Repeat / random / single flags.
+    async fn options(&self) -> PlayerOptions {
+        PlayerOptions::default()
+    }
+    async fn set_repeat(&self, _on: bool) -> Result<(), PluginError> {
+        Err(PluginError::Unavailable("set_repeat".to_owned()))
+    }
+    async fn set_random(&self, _on: bool) -> Result<(), PluginError> {
+        Err(PluginError::Unavailable("set_random".to_owned()))
+    }
+    /// Enable/disable single mode (stop or repeat-one after the current song).
+    async fn set_single(&self, _on: bool) -> Result<(), PluginError> {
+        Err(PluginError::Unavailable("set_single".to_owned()))
+    }
+    /// Seek by `delta_secs` (may be negative) relative to the current position.
+    async fn seek_relative(&self, _delta_secs: f64) -> Result<(), PluginError> {
+        Err(PluginError::Unavailable("seek_relative".to_owned()))
+    }
+    /// Live playback position (not older than the last periodic event).
+    async fn position(&self) -> Option<Duration> {
+        self.status().await.elapsed
+    }
+    /// Configured music directory, used to build `file://` URIs.
+    fn music_dir(&self) -> Option<String> {
+        None
+    }
+    /// Ask the daemon to shut down.
+    fn request_shutdown(&self) {}
 }
 
 // ─── Shutdown signalling ─────────────────────────────────────────────────────

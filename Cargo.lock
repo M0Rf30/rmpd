@@ -116,7 +116,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "95097ef8efebf7b1e1d638b77935cfce25576163614427b464efe256bb8b2ec1"
 dependencies = [
  "crc32fast",
- "md-5",
+ "md-5 0.10.6",
 ]
 
 [[package]]
@@ -1967,6 +1967,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "md-5"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "69b6441f590336821bb897fb28fc622898ccceb1d6cea3fde5ea86b090c4de98"
+dependencies = [
+ "cfg-if",
+ "digest 0.11.3",
+]
+
+[[package]]
 name = "mdns-sd"
 version = "0.21.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2448,7 +2458,7 @@ dependencies = [
  "chrono",
  "futures-util",
  "log",
- "md-5",
+ "md-5 0.10.6",
  "rand 0.9.5",
  "reqwest",
  "serde",
@@ -2624,6 +2634,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "quick-xml"
+version = "0.41.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e660451e55124f798a69a5af3f49ccfbefbd41910eefd25caf2393e1f3473ec1"
+dependencies = [
+ "encoding_rs",
+ "memchr",
 ]
 
 [[package]]
@@ -2914,6 +2934,7 @@ dependencies = [
  "rmpd-plugin",
  "rmpd-protocol",
  "rmpd-source",
+ "rmpd-stream",
  "tokio",
  "tracing",
  "tracing-journald",
@@ -2943,8 +2964,16 @@ dependencies = [
 name = "rmpd-integrations"
 version = "0.14.0"
 dependencies = [
+ "async-trait",
+ "md-5 0.11.0",
+ "mdns-sd",
+ "mpris-server",
+ "reqwest",
  "rmpd-core",
  "rmpd-plugin",
+ "serde",
+ "serde_json",
+ "sha2",
  "tokio",
  "toml",
  "tracing",
@@ -2985,6 +3014,7 @@ dependencies = [
 name = "rmpd-player"
 version = "0.14.0"
 dependencies = [
+ "alsa",
  "approx",
  "audioadapter-buffers",
  "cpal",
@@ -2997,6 +3027,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
+ "toml",
  "tracing",
 ]
 
@@ -3019,7 +3050,6 @@ dependencies = [
  "bytes",
  "camino",
  "mdns-sd",
- "mpris-server",
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
@@ -3050,6 +3080,8 @@ dependencies = [
  "rmpd-core",
  "rmpd-library",
  "rmpd-plugin",
+ "rss",
+ "serde",
  "serde_json",
  "tempfile",
  "tokio",
@@ -3063,6 +3095,8 @@ version = "0.14.0"
 dependencies = [
  "parking_lot",
  "reqwest",
+ "rmpd-core",
+ "rmpd-plugin",
  "symphonia",
  "tracing",
 ]
@@ -3075,6 +3109,15 @@ checksum = "c51c9ae4df8a7fba42103df5c621fa3c37eccf3a3c650879e90fc48b11cc192c"
 dependencies = [
  "hashbrown 0.16.1",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "rss"
+version = "2.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5fdc977a288e79bfacb4faeaba370da8aef9893ac38b68ae1df6a30d4224a2f9"
+dependencies = [
+ "quick-xml",
 ]
 
 [[package]]

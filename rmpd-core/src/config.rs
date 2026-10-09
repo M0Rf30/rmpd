@@ -24,6 +24,8 @@ pub struct Config {
     pub database: DatabaseConfig,
     #[serde(default)]
     pub playlist: PlaylistConfig,
+    #[serde(default)]
+    pub stream: StreamConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -395,6 +397,62 @@ impl Default for PlaylistConfig {
     }
 }
 
+const fn default_stream_timeout_ms() -> u64 {
+    5000
+}
+
+/// `[stream]`: HTTP(S) radio input settings (Mopidy `[stream]` equivalent).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct StreamConfig {
+    /// Connect and per-read timeout, in milliseconds. Default 5000.
+    #[serde(default = "default_stream_timeout_ms")]
+    pub timeout_ms: u64,
+    /// `fnmatch`-style globs (`*`, `?`, `[abc]`); a stream whose URL matches
+    /// any of them has its ICY `StreamTitle` ignored (some stations send
+    /// advertising or garbage in-band metadata).
+    #[serde(default)]
+    pub metadata_blacklist: Vec<String>,
+    /// Optional HTTP proxy for all stream and playlist requests
+    /// (`[stream.proxy]`).
+    #[serde(default)]
+    pub proxy: Option<ProxyConfig>,
+}
+
+impl Default for StreamConfig {
+    fn default() -> Self {
+        Self {
+            timeout_ms: default_stream_timeout_ms(),
+            metadata_blacklist: Vec::new(),
+            proxy: None,
+        }
+    }
+}
+
+/// `[stream.proxy]`: HTTP proxy used for stream requests.
+#[derive(Clone, Default, Deserialize, Serialize)]
+pub struct ProxyConfig {
+    /// Proxy URL, e.g. `http://proxy.example:3128`.
+    #[serde(default)]
+    pub url: String,
+    /// Optional basic-auth user name.
+    #[serde(default)]
+    pub username: Option<String>,
+    /// Optional basic-auth password.
+    #[serde(default)]
+    pub password: Option<String>,
+}
+
+impl std::fmt::Debug for ProxyConfig {
+    // The URL may embed credentials and the password is a secret: never print them.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProxyConfig")
+            .field("url", &"<redacted>")
+            .field("username", &self.username.as_ref().map(|_| "<redacted>"))
+            .field("password", &self.password.as_ref().map(|_| "<redacted>"))
+            .finish()
+    }
+}
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReplayGainMode {
@@ -685,6 +743,7 @@ const KNOWN_SECTIONS: &[&str] = &[
     "integration",
     "database",
     "playlist",
+    "stream",
 ];
 
 const GENERAL_KEYS: &[&str] = &[
@@ -748,6 +807,10 @@ const DATABASE_KEYS: &[&str] = &[
 ];
 
 const PLAYLIST_KEYS: &[&str] = &["embedded_cue_as_directory"];
+
+const STREAM_KEYS: &[&str] = &["timeout_ms", "metadata_blacklist", "proxy"];
+
+const PROXY_KEYS: &[&str] = &["url", "username", "password"];
 
 /// Levenshtein edit distance between two strings (two-row DP, no allocation
 /// beyond the two rows).
@@ -1095,6 +1158,14 @@ impl Config {
                 "audio" => lint_section("audio", value, AUDIO_KEYS, &mut diagnostics),
                 "database" => lint_section("database", value, DATABASE_KEYS, &mut diagnostics),
                 "playlist" => lint_section("playlist", value, PLAYLIST_KEYS, &mut diagnostics),
+                "stream" => {
+                    lint_section("stream", value, STREAM_KEYS, &mut diagnostics);
+                    if let toml::Value::Table(table) = value
+                        && let Some(proxy) = table.get("proxy")
+                    {
+                        lint_section("stream.proxy", proxy, PROXY_KEYS, &mut diagnostics);
+                    }
+                }
                 "output" => lint_tables("output", value, &mut diagnostics),
                 "source" => lint_tables("source", value, &mut diagnostics),
                 "integration" => lint_tables("integration", value, &mut diagnostics),
@@ -1353,6 +1424,25 @@ impl Config {
                 config.general.log_level
             )));
             config.general.log_level = "info".to_owned();
+        }
+
+        if config.stream.timeout_ms == 0 {
+            config.stream.timeout_ms = default_stream_timeout_ms();
+            diagnostics.push(Diagnostic::warn(format!(
+                "stream.timeout_ms was 0; using {}",
+                config.stream.timeout_ms
+            )));
+        }
+        if config
+            .stream
+            .proxy
+            .as_ref()
+            .is_some_and(|p| p.url.trim().is_empty())
+        {
+            config.stream.proxy = None;
+            diagnostics.push(Diagnostic::warn(
+                "[stream.proxy] has no `url`; the proxy is ignored",
+            ));
         }
 
         Ok(())
@@ -1802,6 +1892,10 @@ max_bitrate = 320
             format!("{:?}", parsed.playlist),
             format!("{:?}", default.playlist)
         );
+        assert_eq!(
+            format!("{:?}", parsed.stream),
+            format!("{:?}", default.stream)
+        );
     }
 
     #[test]
@@ -2076,5 +2170,49 @@ some_backend_specific_key = 1
         );
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn stream_section_parses_and_lints_clean() {
+        let content = "[stream]\ntimeout_ms = 1500\nmetadata_blacklist = [\"*://ads.example/*\"]\n\n[stream.proxy]\nurl = \"http://p:3128\"\nusername = \"u\"\npassword = \"s3cret\"\n";
+        assert!(Config::lint(content).is_empty());
+        let cfg: Config = toml::from_str(content).unwrap();
+        assert_eq!(cfg.stream.timeout_ms, 1500);
+        assert_eq!(cfg.stream.metadata_blacklist, vec!["*://ads.example/*"]);
+        let proxy = cfg.stream.proxy.as_ref().unwrap();
+        assert_eq!(proxy.url, "http://p:3128");
+        assert_eq!(proxy.username.as_deref(), Some("u"));
+        // Debug must not leak secrets.
+        let dbg = format!("{:?}", cfg.stream);
+        assert!(!dbg.contains("s3cret") && !dbg.contains("p:3128"));
+    }
+
+    #[test]
+    fn stream_unknown_keys_are_reported_with_hint() {
+        let diags = Config::lint(
+            "[stream]\ntimeout = 1\nmetadata_blacklst = []\n\n[stream.proxy]\nusr = \"x\"\n",
+        );
+        let msgs: Vec<&str> = diags.iter().map(|d| d.message.as_str()).collect();
+        assert!(
+            msgs.iter().any(|m| m.contains("stream.timeout")),
+            "{msgs:?}"
+        );
+        assert!(
+            msgs.iter()
+                .any(|m| m.contains("did you mean `metadata_blacklist`")),
+            "{msgs:?}"
+        );
+        assert!(
+            msgs.iter().any(|m| m.contains("stream.proxy.usr")),
+            "{msgs:?}"
+        );
+    }
+
+    #[test]
+    fn stream_defaults() {
+        let cfg = StreamConfig::default();
+        assert_eq!(cfg.timeout_ms, 5000);
+        assert!(cfg.metadata_blacklist.is_empty());
+        assert!(cfg.proxy.is_none());
     }
 }

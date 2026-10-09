@@ -10,8 +10,18 @@
 //!
 //! `sync_source` (PR5 catalog-sync integration) is intentionally absent here.
 
+#[cfg(any(feature = "jellyfin", feature = "podcast", feature = "radio"))]
+mod common;
 pub mod filesystem;
+#[cfg(feature = "jellyfin")]
+pub mod jellyfin;
+#[cfg(feature = "podcast")]
+pub mod podcast;
+#[cfg(feature = "radio")]
+pub mod radio;
 pub mod registry;
+#[cfg(feature = "radio")]
+pub mod somafm;
 #[cfg(feature = "subsonic")]
 pub mod subsonic;
 

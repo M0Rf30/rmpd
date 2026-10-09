@@ -139,43 +139,6 @@ impl DiscoveryService {
         Ok(neighbors)
     }
 
-    /// Advertise this rmpd instance on the local network via mDNS.
-    ///
-    /// Registers a `_mpd._tcp.local.` service so MPD clients can auto-discover
-    /// this server. `zeroconf_name` is the configured instance-name template
-    /// (`network.zeroconf_name`, default `"rmpd@%h"`); any `%h` in it is
-    /// expanded to the local hostname here, mirroring MPD's `ZeroconfGlue.cxx`
-    /// `%h` substitution for `zeroconf_name`.
-    pub fn advertise(&self, port: u16, zeroconf_name: &str) -> rmpd_core::error::Result<()> {
-        use mdns_sd::ServiceInfo;
-
-        let hostname = std::fs::read_to_string("/etc/hostname")
-            .unwrap_or_default()
-            .trim()
-            .to_string();
-        let hostname = if hostname.is_empty() {
-            "rmpd".to_string()
-        } else {
-            hostname
-        };
-
-        let instance_name = zeroconf_name.replace("%h", &hostname);
-        let host_name = format!("{}.local.", hostname);
-
-        let service_info = ServiceInfo::new(
-            "_mpd._tcp.local.",
-            &instance_name,
-            &host_name,
-            (),
-            port,
-            None,
-        )?;
-
-        self.mdns.register(service_info)?;
-        info!("advertising rmpd as '{}' on port {}", instance_name, port);
-        Ok(())
-    }
-
     /// Convert async receiver to tokio-compatible async operation
     async fn recv_async(
         receiver: mdns_sd::Receiver<ServiceEvent>,

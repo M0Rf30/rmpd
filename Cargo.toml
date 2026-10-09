@@ -64,6 +64,8 @@ bytes = "1"
 rand = "0.10"
 dirs = "7"
 sha2 = "0.11"
+serde_json = "1"
+md-5 = "0.11"                    # MD5 (Last.fm API signatures; protocol-mandated)
 
 # Advanced features
 mdns-sd = "0.21"                  # Network discovery

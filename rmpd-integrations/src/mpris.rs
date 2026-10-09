@@ -1,93 +1,114 @@
 // SPDX-FileCopyrightText: 2026 Gianluca Boiano
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! MPRIS D-Bus media player interface.
+//! MPRIS D-Bus media player integration.
 //!
 //! Exposes rmpd on the **session** D-Bus as `org.mpris.MediaPlayer2.rmpd`,
 //! implementing the `org.mpris.MediaPlayer2` and `org.mpris.MediaPlayer2.Player`
 //! interfaces. This is what makes rmpd discoverable and controllable by desktop
-//! environments (GNOME Shell, KDE Plasma), `playerctl`, and multimedia keys —
-//! the standard Linux mechanism for "music player detection". (Real MPD relies on
-//! the external `mpDris2` bridge for this; rmpd does it natively.)
+//! environments (GNOME Shell, KDE Plasma), `playerctl`, and multimedia keys.
+//! (Real MPD relies on the external `mpDris2` bridge; rmpd does it natively.)
 //!
-//! All control methods route through the existing protocol command handlers so
-//! that queue advancement, state transitions, and idle events stay consistent
-//! with the MPD-protocol surface.
+//! All control goes through the [`PlayerHandle`], which routes into the same
+//! command handlers the MPD protocol uses, so queue advancement, state
+//! transitions and idle events stay consistent.
+//!
+//! Enabled implicitly by `network.media_controls` (alias `mpris`), or
+//! explicitly with `[[integration]] type = "mpris"`.
 
-use std::sync::Arc;
-
+use async_trait::async_trait;
 use mpris_server::{
     LoopStatus, Metadata, PlaybackRate, PlaybackStatus, PlayerInterface, Property, RootInterface,
     Server, Signal, Time, TrackId, Volume,
     zbus::{Result as ZbusResult, fdo},
 };
+use rmpd_core::config::IntegrationConfig;
 use rmpd_core::event::Event;
 use rmpd_core::song::Song;
-use rmpd_core::state::{PlayerState, SingleMode};
+use rmpd_core::state::PlayerState;
+use rmpd_plugin::PluginError;
+use rmpd_plugin::integration::{
+    Integration, IntegrationContext, IntegrationPlugin, PlayerHandle, PlayerOptions,
+};
+use std::sync::Arc;
 use tokio::sync::broadcast::error::RecvError;
 use tracing::{debug, info, warn};
 
-use crate::commands::{options, playback};
-use crate::state::AppState;
+/// Settings accepted by the MPRIS integration (none).
+pub const SETTINGS: &[&str] = &[];
+
+/// Registry entry.
+pub const PLUGIN: IntegrationPlugin = IntegrationPlugin {
+    name: "mpris",
+    settings: SETTINGS,
+    factory,
+};
 
 /// Object-path prefix used to mint per-queue-song MPRIS track identifiers.
 const TRACK_ID_PREFIX: &str = "/org/rmpd/Track/";
 
-/// Handle that keeps the MPRIS server registered and the event-forwarding task
-/// alive. Dropping it releases the D-Bus name and stops forwarding events.
-pub struct MprisHandle {
-    _server: Arc<Server<MprisPlayer>>,
-    task: tokio::task::JoinHandle<()>,
+fn factory(cfg: &IntegrationConfig) -> Result<Box<dyn Integration>, PluginError> {
+    Ok(Box::new(MprisIntegration {
+        name: cfg.name.clone(),
+    }))
 }
 
-impl Drop for MprisHandle {
-    fn drop(&mut self) {
-        self.task.abort();
+/// The MPRIS integration.
+pub struct MprisIntegration {
+    name: String,
+}
+
+#[async_trait]
+impl Integration for MprisIntegration {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    async fn run(self: Box<Self>, ctx: IntegrationContext) -> Result<(), PluginError> {
+        let IntegrationContext {
+            mut events,
+            player,
+            mut shutdown,
+            ..
+        } = ctx;
+
+        let server = Server::new(
+            "rmpd",
+            MprisPlayer {
+                player: Arc::clone(&player),
+            },
+        )
+        .await
+        .map_err(|e| PluginError::Unavailable(format!("MPRIS interface disabled: {e}")))?;
+        info!("MPRIS: registered org.mpris.MediaPlayer2.rmpd on the session bus");
+
+        loop {
+            tokio::select! {
+                () = shutdown.cancelled() => break,
+                ev = events.recv() => match ev {
+                    Ok(event) => forward_event(&server, &player, event).await,
+                    Err(RecvError::Lagged(n)) => {
+                        debug!("MPRIS: event receiver lagged, skipped {n} events");
+                    }
+                    Err(RecvError::Closed) => break,
+                },
+            }
+        }
+        // Dropping `server` releases the D-Bus name.
+        Ok(())
     }
 }
 
-/// MPRIS interface implementation backed by the shared [`AppState`].
+/// MPRIS interface implementation backed by a [`PlayerHandle`].
 pub struct MprisPlayer {
-    state: AppState,
-}
-
-/// Register the MPRIS interface on the session bus and start forwarding player
-/// events as `PropertiesChanged` / `Seeked` signals.
-///
-/// Returns an error if no session bus is reachable (e.g. a headless host with no
-/// D-Bus session); callers should treat that as non-fatal.
-pub async fn spawn(state: AppState) -> ZbusResult<MprisHandle> {
-    let player = MprisPlayer {
-        state: state.clone(),
-    };
-    let server = Arc::new(Server::new("rmpd", player).await?);
-    info!("MPRIS: registered org.mpris.MediaPlayer2.rmpd on the session bus");
-
-    let bus_server = server.clone();
-    let task = tokio::spawn(async move {
-        let mut rx = state.event_bus.subscribe();
-        loop {
-            match rx.recv().await {
-                Ok(event) => forward_event(&bus_server, &state, event).await,
-                Err(RecvError::Lagged(n)) => {
-                    debug!("MPRIS: event receiver lagged, skipped {n} events");
-                }
-                Err(RecvError::Closed) => break,
-            }
-        }
-    });
-
-    Ok(MprisHandle {
-        _server: server,
-        task,
-    })
+    player: Arc<dyn PlayerHandle>,
 }
 
 /// Translate a player event into MPRIS property-change / signal emissions.
-async fn forward_event(server: &Server<MprisPlayer>, state: &AppState, event: Event) {
+async fn forward_event(server: &Server<MprisPlayer>, player: &Arc<dyn PlayerHandle>, event: Event) {
     let props: Vec<Property> = match event {
         Event::PlayerStateChanged(s) => {
-            let queued = !state.queue.read().await.is_empty();
+            let queued = player.queue_len().await > 0;
             vec![
                 Property::PlaybackStatus(map_status(s)),
                 Property::CanPlay(queued),
@@ -97,8 +118,8 @@ async fn forward_event(server: &Server<MprisPlayer>, state: &AppState, event: Ev
             ]
         }
         Event::SongChanged(_) => {
-            let metadata = build_metadata(state).await;
-            let queued = !state.queue.read().await.is_empty();
+            let metadata = build_metadata(player.as_ref()).await;
+            let queued = player.queue_len().await > 0;
             vec![
                 Property::Metadata(metadata),
                 Property::CanGoNext(queued),
@@ -108,14 +129,14 @@ async fn forward_event(server: &Server<MprisPlayer>, state: &AppState, event: Ev
         }
         Event::VolumeChanged(v) => vec![Property::Volume(f64::from(v) / 100.0)],
         Event::QueueOptionsChanged => {
-            let (loop_status, shuffle) = loop_and_shuffle(state).await;
+            let opts = player.options().await;
             vec![
-                Property::LoopStatus(loop_status),
-                Property::Shuffle(shuffle),
+                Property::LoopStatus(loop_status(opts)),
+                Property::Shuffle(opts.random),
             ]
         }
         Event::QueueChanged => {
-            let queued = !state.queue.read().await.is_empty();
+            let queued = player.queue_len().await > 0;
             vec![
                 Property::CanGoNext(queued),
                 Property::CanGoPrevious(queued),
@@ -146,45 +167,36 @@ fn map_status(state: PlayerState) -> PlaybackStatus {
     }
 }
 
-/// Read the current player state without taking the engine lock.
-fn current_state(state: &AppState) -> PlayerState {
-    PlayerState::from_atomic(
-        state
-            .atomic_state
-            .load(std::sync::atomic::Ordering::Acquire),
-    )
-}
-
-/// Derive the MPRIS loop status and shuffle flag from queue options.
-async fn loop_and_shuffle(state: &AppState) -> (LoopStatus, bool) {
-    let status = state.status.read().await;
-    let loop_status = if !status.repeat {
+/// Derive the MPRIS loop status from queue options.
+fn loop_status(opts: PlayerOptions) -> LoopStatus {
+    if !opts.repeat {
         LoopStatus::None
-    } else if status.single == SingleMode::Off {
+    } else if !opts.single {
         LoopStatus::Playlist
     } else {
         LoopStatus::Track
-    };
-    (loop_status, status.random)
+    }
 }
 
 /// Build the MPRIS metadata map for the currently selected queue song.
-async fn build_metadata(state: &AppState) -> Metadata {
-    let status = state.status.read().await;
-    let Some(pos) = status.current_song else {
+async fn build_metadata(player: &dyn PlayerHandle) -> Metadata {
+    let Some(id) = player.current_song_id().await else {
         return Metadata::new();
     };
-    let id = pos.id;
-    let length = status.duration;
-    drop(status);
-
-    let queue = state.queue.read().await;
-    let Some(item) = queue.get_by_id(id) else {
+    let snapshot = player.status().await;
+    let Some(song) = snapshot.song else {
         return Metadata::new();
     };
-    let song: Song = (*item.song).clone();
-    drop(queue);
+    metadata_for(&song, id, snapshot.duration, player.music_dir().as_deref())
+}
 
+/// Pure metadata mapping for one song.
+fn metadata_for(
+    song: &Song,
+    id: u32,
+    length: Option<std::time::Duration>,
+    music_dir: Option<&str>,
+) -> Metadata {
     let mut m = Metadata::new();
     m.set_trackid(Some(track_id(id)));
     m.set_title(Some(song.display_title().to_owned()));
@@ -206,25 +218,24 @@ async fn build_metadata(state: &AppState) -> Metadata {
     if !genres.is_empty() {
         m.set_genre(Some(genres));
     }
-    if let Some(track) = song
-        .tag("track")
-        .and_then(|t| t.split(['/', ' ']).next())
-        .and_then(|t| t.trim().parse::<i32>().ok())
-    {
+    if let Some(track) = song.tag("track").and_then(parse_leading_number) {
         m.set_track_number(Some(track));
     }
-    if let Some(disc) = song.tag("disc").and_then(|d| {
-        d.split(['/', ' '])
-            .next()
-            .and_then(|d| d.trim().parse::<i32>().ok())
-    }) {
+    if let Some(disc) = song.tag("disc").and_then(parse_leading_number) {
         m.set_disc_number(Some(disc));
     }
     if let Some(d) = song.duration.or(length) {
         m.set_length(Some(Time::from_micros(d.as_micros() as i64)));
     }
-    m.set_url(Some(song_url(&song, state.music_dir.as_deref())));
+    m.set_url(Some(song_url(song, music_dir)));
     m
+}
+
+/// Parse the number before a `/` or space (`"3/12"` -> 3).
+fn parse_leading_number(s: &str) -> Option<i32> {
+    s.split(['/', ' '])
+        .next()
+        .and_then(|t| t.trim().parse::<i32>().ok())
 }
 
 /// Mint a D-Bus object-path track identifier for a queue song id.
@@ -234,7 +245,11 @@ fn track_id(id: u32) -> TrackId {
 
 /// Build a `file://` URI (or pass through an existing stream URL) for a song.
 fn song_url(song: &Song, music_dir: Option<&str>) -> String {
-    let path = song.path.as_str();
+    path_url(song.path.as_str(), music_dir)
+}
+
+/// Path/URL -> URI (see [`song_url`]).
+fn path_url(path: &str, music_dir: Option<&str>) -> String {
     if path.contains("://") {
         return path.to_owned();
     }
@@ -259,9 +274,7 @@ impl RootInterface for MprisPlayer {
 
     async fn quit(&self) -> fdo::Result<()> {
         info!("MPRIS: Quit requested");
-        if let Some(tx) = &self.state.shutdown_tx {
-            let _ = tx.send(());
-        }
+        self.player.request_shutdown();
         Ok(())
     }
 
@@ -316,47 +329,68 @@ impl RootInterface for MprisPlayer {
     }
 }
 
+impl MprisPlayer {
+    /// Run a `PlayerHandle` call on the tokio runtime. `mpris-server` needs
+    /// `Send + Sync` futures, but `async_trait` futures are only `Send`;
+    /// awaiting a `JoinHandle` is both.
+    fn on<T, F, Fut>(
+        &self,
+        f: F,
+    ) -> impl std::future::Future<Output = T> + Send + Sync + use<T, F, Fut>
+    where
+        T: Send + 'static,
+        F: FnOnce(Arc<dyn PlayerHandle>) -> Fut,
+        Fut: std::future::Future<Output = T> + Send + 'static,
+    {
+        let handle = tokio::spawn(f(Arc::clone(&self.player)));
+        async move {
+            match handle.await {
+                Ok(v) => v,
+                Err(e) => std::panic::resume_unwind(e.into_panic()),
+            }
+        }
+    }
+}
+
 impl PlayerInterface for MprisPlayer {
     async fn next(&self) -> fdo::Result<()> {
-        let _ = playback::handle_next_command(&self.state).await;
+        let _ = self.on(move |p| async move { p.next().await }).await;
         Ok(())
     }
 
     async fn previous(&self) -> fdo::Result<()> {
-        let _ = playback::handle_previous_command(&self.state).await;
+        let _ = self.on(move |p| async move { p.previous().await }).await;
         Ok(())
     }
 
     async fn pause(&self) -> fdo::Result<()> {
-        let _ = playback::handle_pause_command(&self.state, Some(true)).await;
+        let _ = self.on(move |p| async move { p.pause().await }).await;
         Ok(())
     }
 
     async fn play_pause(&self) -> fdo::Result<()> {
-        match current_state(&self.state) {
-            PlayerState::Stop => {
-                let _ = playback::handle_play_command(&self.state, None).await;
-            }
-            _ => {
-                let _ = playback::handle_pause_command(&self.state, None).await;
-            }
-        }
+        let _ = self.on(move |p| async move { p.toggle().await }).await;
         Ok(())
     }
 
     async fn stop(&self) -> fdo::Result<()> {
-        let _ = playback::handle_stop_command(&self.state).await;
+        let _ = self.on(move |p| async move { p.stop().await }).await;
         Ok(())
     }
 
     async fn play(&self) -> fdo::Result<()> {
-        match current_state(&self.state) {
-            // Resume from the paused position rather than restarting the track.
+        match self
+            .on(move |p| async move { p.status().await })
+            .await
+            .state
+        {
+            // Resume from the paused position rather than restarting the track
+            // (`toggle` on a paused player resumes).
             PlayerState::Pause => {
-                let _ = playback::handle_pause_command(&self.state, Some(false)).await;
+                let _ = self.on(move |p| async move { p.toggle().await }).await;
             }
             PlayerState::Stop => {
-                let _ = playback::handle_play_command(&self.state, None).await;
+                let _ = self.on(move |p| async move { p.play().await }).await;
             }
             PlayerState::Play => {}
         }
@@ -365,13 +399,17 @@ impl PlayerInterface for MprisPlayer {
 
     async fn seek(&self, offset: Time) -> fdo::Result<()> {
         let secs = offset.as_micros() as f64 / 1_000_000.0;
-        let _ = playback::handle_seekcur_command(&self.state, secs, true).await;
+        let _ = self
+            .on(move |p| async move { p.seek_relative(secs).await })
+            .await;
         Ok(())
     }
 
     async fn set_position(&self, track_id: TrackId, position: Time) -> fdo::Result<()> {
         // Per spec, ignore the request if the track id is not the current song.
-        let current_id = self.state.status.read().await.current_song.map(|p| p.id);
+        let current_id = self
+            .on(move |p| async move { p.current_song_id().await })
+            .await;
         let requested_id = track_id
             .into_inner()
             .as_str()
@@ -380,8 +418,10 @@ impl PlayerInterface for MprisPlayer {
         if current_id.is_none() || current_id != requested_id {
             return Ok(());
         }
-        let secs = (position.as_micros() as f64 / 1_000_000.0).max(0.0);
-        let _ = playback::handle_seekcur_command(&self.state, secs, false).await;
+        let micros = position.as_micros().max(0) as u64;
+        let _ = self
+            .on(move |p| async move { p.seek(std::time::Duration::from_micros(micros)).await })
+            .await;
         Ok(())
     }
 
@@ -390,28 +430,31 @@ impl PlayerInterface for MprisPlayer {
     }
 
     async fn playback_status(&self) -> fdo::Result<PlaybackStatus> {
-        Ok(map_status(current_state(&self.state)))
+        Ok(map_status(
+            self.on(move |p| async move { p.status().await })
+                .await
+                .state,
+        ))
     }
 
     async fn loop_status(&self) -> fdo::Result<LoopStatus> {
-        Ok(loop_and_shuffle(&self.state).await.0)
+        Ok(loop_status(
+            self.on(move |p| async move { p.options().await }).await,
+        ))
     }
 
     async fn set_loop_status(&self, loop_status: LoopStatus) -> ZbusResult<()> {
-        match loop_status {
-            LoopStatus::None => {
-                let _ = options::handle_repeat_command(&self.state, false).await;
-                let _ = options::handle_single_command(&self.state, "0").await;
-            }
-            LoopStatus::Playlist => {
-                let _ = options::handle_repeat_command(&self.state, true).await;
-                let _ = options::handle_single_command(&self.state, "0").await;
-            }
-            LoopStatus::Track => {
-                let _ = options::handle_repeat_command(&self.state, true).await;
-                let _ = options::handle_single_command(&self.state, "1").await;
-            }
-        }
+        let (repeat, single) = match loop_status {
+            LoopStatus::None => (false, false),
+            LoopStatus::Playlist => (true, false),
+            LoopStatus::Track => (true, true),
+        };
+        let _ = self
+            .on(move |p| async move { p.set_repeat(repeat).await })
+            .await;
+        let _ = self
+            .on(move |p| async move { p.set_single(single).await })
+            .await;
         Ok(())
     }
 
@@ -424,39 +467,43 @@ impl PlayerInterface for MprisPlayer {
     }
 
     async fn shuffle(&self) -> fdo::Result<bool> {
-        Ok(loop_and_shuffle(&self.state).await.1)
+        Ok(self
+            .on(move |p| async move { p.options().await })
+            .await
+            .random)
     }
 
     async fn set_shuffle(&self, shuffle: bool) -> ZbusResult<()> {
-        let _ = options::handle_random_command(&self.state, shuffle).await;
+        let _ = self
+            .on(move |p| async move { p.set_random(shuffle).await })
+            .await;
         Ok(())
     }
 
     async fn metadata(&self) -> fdo::Result<Metadata> {
-        Ok(build_metadata(&self.state).await)
+        Ok(self
+            .on(|p| async move { build_metadata(p.as_ref()).await })
+            .await)
     }
 
     async fn volume(&self) -> fdo::Result<Volume> {
-        let vol = self.state.status.read().await.volume;
-        Ok(f64::from(vol) / 100.0)
+        Ok(f64::from(
+            self.on(move |p| async move { p.status().await })
+                .await
+                .volume,
+        ) / 100.0)
     }
 
     async fn set_volume(&self, volume: Volume) -> ZbusResult<()> {
         let clamped = (volume.clamp(0.0, 1.0) * 100.0).round() as u8;
-        let _ = options::handle_setvol_command(&self.state, clamped).await;
+        let _ = self
+            .on(move |p| async move { p.set_volume(clamped).await })
+            .await;
         Ok(())
     }
 
     async fn position(&self) -> fdo::Result<Time> {
-        // Live at query time (see server.rs Command::Status for the
-        // rationale): avoids MPRIS clients (media key widgets, OSD seek
-        // bars) reading a position up to ~1s stale from the last
-        // periodic PositionChanged event.
-        let elapsed = self.state.engine.read().await.get_elapsed_live();
-        let elapsed = match elapsed {
-            Some(d) => Some(d),
-            None => self.state.status.read().await.elapsed,
-        };
+        let elapsed = self.on(move |p| async move { p.position().await }).await;
         Ok(elapsed.map_or(Time::ZERO, |d| Time::from_micros(d.as_micros() as i64)))
     }
 
@@ -469,15 +516,15 @@ impl PlayerInterface for MprisPlayer {
     }
 
     async fn can_go_next(&self) -> fdo::Result<bool> {
-        Ok(!self.state.queue.read().await.is_empty())
+        Ok(self.on(move |p| async move { p.queue_len().await }).await > 0)
     }
 
     async fn can_go_previous(&self) -> fdo::Result<bool> {
-        Ok(!self.state.queue.read().await.is_empty())
+        Ok(self.on(move |p| async move { p.queue_len().await }).await > 0)
     }
 
     async fn can_play(&self) -> fdo::Result<bool> {
-        Ok(!self.state.queue.read().await.is_empty())
+        Ok(self.on(move |p| async move { p.queue_len().await }).await > 0)
     }
 
     async fn can_pause(&self) -> fdo::Result<bool> {
@@ -486,11 +533,48 @@ impl PlayerInterface for MprisPlayer {
 
     async fn can_seek(&self) -> fdo::Result<bool> {
         // A stopped player keeps its current song but cannot seek in it.
-        Ok(current_state(&self.state) != PlayerState::Stop
-            && self.state.status.read().await.current_song.is_some())
+        let snap = self.on(move |p| async move { p.status().await }).await;
+        Ok(snap.state != PlayerState::Stop && snap.song.is_some())
     }
 
     async fn can_control(&self) -> fdo::Result<bool> {
         Ok(true)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn loop_status_mapping() {
+        let o = |repeat, single| PlayerOptions {
+            repeat,
+            random: false,
+            single,
+        };
+        assert_eq!(loop_status(o(false, false)), LoopStatus::None);
+        assert_eq!(loop_status(o(false, true)), LoopStatus::None);
+        assert_eq!(loop_status(o(true, false)), LoopStatus::Playlist);
+        assert_eq!(loop_status(o(true, true)), LoopStatus::Track);
+    }
+
+    #[test]
+    fn leading_number_parsing() {
+        assert_eq!(parse_leading_number("3/12"), Some(3));
+        assert_eq!(parse_leading_number("7"), Some(7));
+        assert_eq!(parse_leading_number("x"), None);
+    }
+
+    #[test]
+    fn urls_pass_through_and_files_are_escaped() {
+        assert_eq!(
+            path_url("http://example.com/a.mp3", None),
+            "http://example.com/a.mp3"
+        );
+        assert_eq!(
+            path_url("/music/a b.flac", None),
+            "file:///music/a%20b.flac"
+        );
     }
 }

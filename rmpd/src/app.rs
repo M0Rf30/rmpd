@@ -56,6 +56,8 @@ pub async fn run(
         config.playlist.embedded_cue_as_directory,
         config.database.hide_playlist_targets,
     );
+    // HTTP(S) radio input: timeout, proxy and ICY metadata blacklist.
+    rmpd_stream::configure(&config.stream);
     if !config
         .general
         .filesystem_charset
@@ -189,29 +191,6 @@ pub async fn run(
         None
     };
 
-    // Expose rmpd on the session D-Bus via MPRIS so desktop environments,
-    // `playerctl`, and media keys can discover and control it. Kept alive
-    // (`_mpris`) for the lifetime of the server; dropping it releases the
-    // D-Bus name. Failure (e.g. no session bus) is non-fatal.
-    // Linux desktop integration. macOS uses the native Now Playing stack,
-    // which has to run on the process main thread (see media_controls_macos),
-    // so it is started from main.rs instead.
-    #[cfg(not(target_os = "macos"))]
-    let _media_integration = if config.network.media_controls {
-        match rmpd_protocol::mpris::spawn(state.clone()).await {
-            Ok(handle) => {
-                info!("MPRIS interface enabled (org.mpris.MediaPlayer2.rmpd)");
-                Some(handle)
-            }
-            Err(e) => {
-                warn!("MPRIS interface disabled: {}", e);
-                None
-            }
-        }
-    } else {
-        None
-    };
-
     // A missing music_directory is not fatal (config warns about it), but the
     // scanner and the watcher both need a real directory. Skipping them here is
     // what makes that warning honest: without this the daemon would immediately
@@ -234,24 +213,42 @@ pub async fn run(
         state.spawn_source_sync();
     }
 
-    // Start enabled `[[integration]]` plugins (scrobblers, notifiers, ...).
+    // Start enabled `[[integration]]` plugins (scrobblers, notifiers, MPRIS,
+    // ...). Legacy `[network]` switches are translated into built-in
+    // integration blocks here (explicit `[[integration]]` blocks win).
+    // macOS Now Playing is the exception: it must run on the main thread and
+    // is started from main.rs.
     let (integration_shutdown, integration_signal) = rmpd_plugin::shutdown_channel();
-    let integration_handles = if config.integration.iter().any(|c| c.enabled) {
-        let player: Arc<dyn rmpd_plugin::PlayerHandle> =
-            Arc::new(rmpd_protocol::ServerPlayerHandle::new(state.clone()));
-        let integration_dir = std::path::Path::new(&state_file_path)
-            .parent()
-            .unwrap_or_else(|| std::path::Path::new("."))
-            .join("integrations");
-        rmpd_integrations::spawn_integrations(
-            &config.integration,
-            &state.event_bus,
-            &player,
-            &integration_dir,
-            &integration_signal,
-        )
-    } else {
-        Vec::new()
+    let player: Arc<dyn rmpd_plugin::PlayerHandle> =
+        Arc::new(rmpd_protocol::ServerPlayerHandle::new(state.clone()));
+    let integration_dir = std::path::Path::new(&state_file_path)
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join("integrations");
+    let mut integration_cfgs = config.integration.clone();
+    integration_cfgs.extend(rmpd_integrations::synthesize_builtin(
+        &config.network,
+        &config.integration,
+    ));
+    let mut integration_handles = rmpd_integrations::spawn_integrations(
+        &integration_cfgs,
+        &state.event_bus,
+        &player,
+        &integration_dir,
+        &integration_signal,
+    );
+    // mDNS needs the bound port, so it starts once the listener is up.
+    let spawn_mdns = |port: u16| -> Vec<tokio::task::JoinHandle<()>> {
+        match rmpd_integrations::mdns_config(&config.network, &config.integration, port) {
+            Some(cfg) => rmpd_integrations::spawn_integrations(
+                &[cfg],
+                &state.event_bus,
+                &player,
+                &integration_dir,
+                &integration_signal,
+            ),
+            None => Vec::new(),
+        }
     };
 
     // Start the filesystem watcher so the database stays in sync with on-disk
@@ -438,13 +435,12 @@ pub async fn run(
 
             // Advertise the port systemd actually bound, and only when there
             // is a TCP listener to advertise.
-            if config.network.zeroconf_enabled
-                && let Some(port) = tcp
-                    .iter()
-                    .find_map(|l| l.local_addr().ok())
-                    .map(|a| a.port())
+            if let Some(port) = tcp
+                .iter()
+                .find_map(|l| l.local_addr().ok())
+                .map(|a| a.port())
             {
-                state.advertise_mdns(port);
+                integration_handles.extend(spawn_mdns(port));
             }
 
             server.run_with_listeners(tcp, unix).await
@@ -472,14 +468,12 @@ pub async fn run(
                     info!("mpd server listening on {}", bind_address);
 
                     // Advertise rmpd via mDNS only once the TCP listener is actually
-                    // accepting connections, and only when zeroconf is enabled. Use
-                    // the port actually bound (`--port` overrides the config value).
-                    if config.network.zeroconf_enabled {
-                        let port = listener
-                            .local_addr()
-                            .map_or(config.network.port, |a| a.port());
-                        state.advertise_mdns(port);
-                    }
+                    // accepting connections. Use the port actually bound (`--port`
+                    // overrides the config value).
+                    let port = listener
+                        .local_addr()
+                        .map_or(config.network.port, |a| a.port());
+                    integration_handles.extend(spawn_mdns(port));
 
                     server.run_with_listener(listener).await
                 }
@@ -588,6 +582,9 @@ async fn restore_state(
         engine.set_crossfade(saved_state.crossfade);
         engine.set_mixramp(saved_state.mixramp_db, saved_state.mixramp_delay);
         engine.set_random(saved_state.random);
+        // Software mixers take the persisted volume (hardware mixers keep the
+        // level the device already has, like MPD).
+        engine.restore_volume(saved_state.volume);
     }
 
     // Restore per-output enabled state, then point the engine at the first

@@ -19,6 +19,9 @@ jack = ["cpal/jack"]
 # Enable the native PipeWire audio backend. Requires bindgen at build time
 # (slow): the pipewire-sys crate generates libpipewire/libspa bindings via clang.
 pipewire = ["dep:pipewire"]
+# Hardware (ALSA simple-mixer) volume for `mixer_type = "hardware"` outputs.
+# Linux only; reuses the `alsa` crate cpal already links (needs libasound).
+alsa-mixer = ["dep:alsa"]
 
 [dependencies]
 rmpd-core = { workspace = true, features = ["player-errors"] }
@@ -31,14 +34,17 @@ thiserror.workspace = true
 tracing.workspace = true
 parking_lot.workspace = true
 rmpd-stream.workspace = true
+toml.workspace = true
 
 # PipeWire is a Linux-only audio backend; gate the optional dependency to Linux
 # targets so `--all-features` builds on macOS/Windows don't require the system
 # libpipewire/libspa libraries.
 [target.'cfg(target_os = "linux")'.dependencies]
 pipewire = { version = "0.10", optional = true }
+alsa = { version = "0.12", optional = true }
 
 [dev-dependencies]
 rmpd-core = { workspace = true, features = ["test-utils"] }
 tempfile = "3"
 approx = "0.5"
+toml.workspace = true

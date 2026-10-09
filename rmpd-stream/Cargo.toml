@@ -17,3 +17,5 @@ symphonia.workspace = true
 reqwest = { workspace = true, features = ["blocking"] }
 parking_lot.workspace = true
 tracing.workspace = true
+rmpd-core.workspace = true
+rmpd-plugin.workspace = true

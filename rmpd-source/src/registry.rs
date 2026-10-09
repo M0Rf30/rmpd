@@ -39,6 +39,30 @@ pub static SOURCE_PLUGINS: &[SourcePlugin] = &[
         settings: crate::subsonic::SETTINGS,
         factory: crate::subsonic::subsonic_source_factory,
     },
+    #[cfg(feature = "jellyfin")]
+    SourcePlugin {
+        name: "jellyfin",
+        settings: crate::jellyfin::SETTINGS,
+        factory: crate::jellyfin::jellyfin_source_factory,
+    },
+    #[cfg(feature = "podcast")]
+    SourcePlugin {
+        name: "podcast",
+        settings: crate::podcast::SETTINGS,
+        factory: crate::podcast::podcast_source_factory,
+    },
+    #[cfg(feature = "radio")]
+    SourcePlugin {
+        name: "radio",
+        settings: crate::radio::SETTINGS,
+        factory: crate::radio::radio_source_factory,
+    },
+    #[cfg(feature = "radio")]
+    SourcePlugin {
+        name: "somafm",
+        settings: crate::somafm::SETTINGS,
+        factory: crate::somafm::somafm_source_factory,
+    },
 ];
 
 /// Select and construct a `MusicSource` from a `[[source]]` config block.

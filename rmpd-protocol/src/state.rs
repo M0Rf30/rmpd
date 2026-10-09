@@ -321,14 +321,6 @@ impl AppState {
         self.hide_playlist_targets = hide_playlist_targets;
     }
 
-    pub fn advertise_mdns(&self, port: u16) {
-        if let Some(discovery) = &self.discovery
-            && let Err(e) = discovery.advertise(port, &self.zeroconf_name)
-        {
-            tracing::warn!("mDNS advertisement failed: {}", e);
-        }
-    }
-
     /// Spawn a background library scan of the configured music directory.
     ///
     /// Shared by the `update`/`rescan` commands and by auto-update on

@@ -1,10 +1,16 @@
 // SPDX-FileCopyrightText: 2026 Gianluca Boiano
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Recorder audio output — writes a WAV file.
+//! Recorder audio output — writes a file.
+//!
+//! By default (no `encoder` setting, or `encoder = "wav"`) it writes a
+//! canonical WAV file whose RIFF/data sizes are patched when recording stops.
+//! Any other encoder from [`crate::encoder::ENCODER_PLUGINS`] (`flac`, `pcm`,
+//! and `opus`/`vorbis` when compiled in) is streamed to the file as-is.
 
 use crate::audio_output::{AudioOutput, PauseState};
 use crate::conversion;
+use crate::encoder::Encoder;
 use rmpd_core::error::{Result, RmpdError};
 use rmpd_core::song::AudioFormat;
 use std::fs::File;
@@ -18,6 +24,8 @@ pub struct RecorderOutput {
     frames_written: u64,
     pause_state: PauseState,
     conversion_buf: Vec<u8>,
+    /// `Some` for non-WAV recordings; `None` keeps the legacy WAV path.
+    encoder: Option<Box<dyn Encoder>>,
 }
 
 impl RecorderOutput {
@@ -29,7 +37,19 @@ impl RecorderOutput {
             frames_written: 0,
             pause_state: PauseState::new(),
             conversion_buf: Vec::new(),
+            encoder: None,
         }
+    }
+
+    /// Record through `encoder` instead of the built-in WAV writer.
+    pub fn with_encoder(
+        path: impl Into<String>,
+        format: AudioFormat,
+        encoder: Box<dyn Encoder>,
+    ) -> Self {
+        let mut out = Self::new(path, format);
+        out.encoder = Some(encoder);
+        out
     }
 
     fn write_wav_header(w: &mut BufWriter<File>, sample_rate: u32, channels: u8) -> Result<()> {
@@ -91,7 +111,12 @@ impl AudioOutput for RecorderOutput {
         let file = File::create(&self.path)
             .map_err(|e| RmpdError::Player(format!("cannot create {}: {e}", self.path)))?;
         let mut w = BufWriter::new(file);
-        Self::write_wav_header(&mut w, self.format.sample_rate, self.format.channels)?;
+        match &self.encoder {
+            Some(enc) => w
+                .write_all(&enc.header())
+                .map_err(|e| RmpdError::Player(format!("recorder write: {e}")))?,
+            None => Self::write_wav_header(&mut w, self.format.sample_rate, self.format.channels)?,
+        }
         self.writer = Some(w);
         self.frames_written = 0;
         self.pause_state.set_paused(false);
@@ -104,9 +129,14 @@ impl AudioOutput for RecorderOutput {
             return Ok(());
         }
         if let Some(w) = &mut self.writer {
-            conversion::samples_to_s16le_into(samples, &mut self.conversion_buf);
-            w.write_all(&self.conversion_buf)
-                .map_err(|e| RmpdError::Player(format!("recorder write: {e}")))?;
+            if let Some(enc) = &mut self.encoder {
+                w.write_all(&enc.encode(samples))
+                    .map_err(|e| RmpdError::Player(format!("recorder write: {e}")))?;
+            } else {
+                conversion::samples_to_s16le_into(samples, &mut self.conversion_buf);
+                w.write_all(&self.conversion_buf)
+                    .map_err(|e| RmpdError::Player(format!("recorder write: {e}")))?;
+            }
             self.frames_written += (samples.len() / self.format.channels as usize) as u64;
         }
         Ok(())
@@ -116,7 +146,10 @@ impl AudioOutput for RecorderOutput {
         if let Some(mut w) = self.writer.take() {
             let _ = w.flush();
         }
-        Self::finalize(&self.path, self.frames_written, self.format.channels);
+        // Only the built-in WAV writer needs its header sizes patched.
+        if self.encoder.is_none() {
+            Self::finalize(&self.path, self.frames_written, self.format.channels);
+        }
         info!("recorder output stopped: {}", self.path);
         Ok(())
     }
@@ -126,5 +159,62 @@ impl AudioOutput for RecorderOutput {
     }
     fn pause_state_mut(&mut self) -> &mut PauseState {
         &mut self.pause_state
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::encoder::{FlacEncoder, WavEncoder};
+
+    fn fmt() -> AudioFormat {
+        AudioFormat {
+            sample_rate: 44100,
+            channels: 2,
+            bits_per_sample: 16,
+        }
+    }
+
+    #[test]
+    fn default_recorder_writes_patched_wav() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("out.wav");
+        let mut rec = RecorderOutput::new(path.to_string_lossy().into_owned(), fmt());
+        rec.start().unwrap();
+        rec.write(&[0.0f32; 200]).unwrap();
+        rec.stop().unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        assert_eq!(&bytes[..4], b"RIFF");
+        assert_eq!(bytes.len(), 44 + 400);
+        let data = u32::from_le_bytes(bytes[40..44].try_into().unwrap());
+        assert_eq!(data, 400, "data size patched on stop");
+    }
+
+    #[test]
+    fn flac_recorder_streams_encoder_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("out.flac");
+        let enc = Box::new(FlacEncoder::new(fmt(), 5).unwrap());
+        let mut rec = RecorderOutput::with_encoder(path.to_string_lossy().into_owned(), fmt(), enc);
+        rec.start().unwrap();
+        rec.write(&vec![0.0f32; 4096 * 2]).unwrap();
+        rec.stop().unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        assert_eq!(&bytes[..4], b"fLaC");
+        assert!(bytes.len() > 42, "header plus one frame");
+    }
+
+    #[test]
+    fn wav_encoder_recorder_skips_header_patching() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("out2.wav");
+        let enc = Box::new(WavEncoder::new(fmt()));
+        let mut rec = RecorderOutput::with_encoder(path.to_string_lossy().into_owned(), fmt(), enc);
+        rec.start().unwrap();
+        rec.write(&[0.0f32; 8]).unwrap();
+        rec.stop().unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        // Streaming sizes stay at 0xFFFFFFFF (not patched).
+        assert_eq!(&bytes[4..8], &[0xFF; 4]);
     }
 }

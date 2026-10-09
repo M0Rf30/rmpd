@@ -49,14 +49,14 @@ impl SymphoniaDecoder {
         // Open the media source: a remote stream URL or a local file.
         let mut hint = Hint::new();
         let stream_title;
-        let mss = if let Some(url) = path.to_str().filter(|s| rmpd_stream::is_http_uri(s)) {
-            let source = rmpd_stream::HttpSource::connect(url)
+        let mss = if let Some(uri) = path.to_str().filter(|s| rmpd_stream::is_input_uri(s)) {
+            let input = rmpd_stream::open(uri)
                 .map_err(|e| RmpdError::Player(format!("Failed to open stream: {e}")))?;
-            stream_title = Some(source.title_handle());
-            if let Some(ext) = url_extension(url) {
+            stream_title = input.title;
+            if let Some(ext) = input.extension_hint.as_deref() {
                 hint.with_extension(ext);
             }
-            MediaSourceStream::new(Box::new(source), Default::default())
+            MediaSourceStream::new(input.source, Default::default())
         } else {
             let file = std::fs::File::open(path)
                 .map_err(|e| RmpdError::Player(format!("Failed to open file: {e}")))?;
@@ -548,19 +548,4 @@ pub fn decoder_for_suffix(suffix: &str) -> Option<&'static DecoderPlugin> {
 #[must_use]
 pub fn is_supported_suffix(suffix: &str) -> bool {
     decoder_for_suffix(suffix).is_some()
-}
-
-/// Extract a file extension from a stream URL's path component (ignoring any
-/// query string or fragment), e.g. `http://h/x/song.mp3?b=1` → `Some("mp3")`.
-/// Returns `None` when the path has no extension (common for radio streams,
-/// where Symphonia falls back to content-based probing).
-fn url_extension(url: &str) -> Option<&str> {
-    let after_scheme = url.split("://").nth(1)?;
-    let path = after_scheme.split(['?', '#']).next()?.rsplit('/').next()?;
-    let (_, ext) = path.rsplit_once('.')?;
-    if ext.is_empty() || ext.contains('/') {
-        None
-    } else {
-        Some(ext)
-    }
 }

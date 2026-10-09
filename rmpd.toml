@@ -69,6 +69,56 @@ media_controls = true
 # auto-discover it. Disable if you don't want the daemon's presence and
 # hostname broadcast on the network (e.g. bind_address = "127.0.0.1").
 zeroconf_enabled = true
+# The two switches above (and zeroconf_name) are implemented by the built-in
+# `mpris` and `mdns` integrations. To configure them explicitly instead, add
+# (an explicit block replaces the implicit one; `mdns` then needs a fixed port):
+# [[integration]]
+# name = "desktop"
+# type = "mpris"
+#
+# [[integration]]
+# name = "zeroconf"
+# type = "mdns"
+# port = 6600
+# zeroconf_name = "rmpd@%h"
+#
+# Scrobblers and notifiers (opt-in Cargo features: `listenbrainz`, `lastfm`,
+# `webhook`; e.g. `cargo build --release --features listenbrainz,lastfm`).
+# Completed listens (played >= min(duration/2, 4 min), track >= 30 s, pauses
+# and seeks excluded) are queued in the state directory while offline.
+# `scrobble_streams = true` also scrobbles radio streams (ICY "Artist - Title").
+# `max_queue` caps the offline queue (default 10000).
+# [[integration]]
+# name = "listenbrainz"
+# type = "listenbrainz"
+# token = "<user token from https://listenbrainz.org/settings/>"
+# api_url = "https://api.listenbrainz.org"   # default
+# scrobble_streams = false
+#
+# Last.fm / libre.fm. Get api_key + api_secret at
+# https://www.last.fm/api/account/create, then a permanent session_key via the
+# web auth flow (auth.getToken -> https://www.last.fm/api/auth/?api_key=KEY&token=TOKEN
+# -> auth.getSession signed with md5; see the README "Scrobbling" section).
+# [[integration]]
+# name = "lastfm"
+# type = "lastfm"
+# api_key = "..."
+# api_secret = "..."
+# session_key = "..."
+# api_url = "https://ws.audioscrobbler.com/2.0/"   # libre.fm: "https://libre.fm/2.0/"
+#
+# POST every event as JSON {"event", "timestamp", "payload"}. `events` defaults
+# to all except position_changed / bitrate_changed / database_update_progress
+# (use ["*"] for literally everything). `secret` adds an
+# `X-Rmpd-Signature: sha256=<hex HMAC-SHA256 of the body>` header.
+# [[integration]]
+# name = "hook"
+# type = "webhook"
+# url = "https://example.org/rmpd-hook"
+# events = ["song_changed", "player_state_changed"]
+# secret = "shared secret"
+# signature_header = "X-Rmpd-Signature"
+# headers = { Authorization = "Bearer abc" }
 # Restrict access with passwords, each granting its own permission set
 # (one of "read", "add", "control", "admin", "player"). Matches mpd.conf's
 # repeatable `password "pw@perms"` directive.
@@ -151,6 +201,52 @@ enabled = true
 # name = "PipeWire"
 # type = "pipewire"
 # enabled = true
+#
+# # Per-output volume control (MPD's mixer_type). Default = "software" (rmpd's
+# # own gain stage). "hardware" drives the device's own mixer (ALSA simple
+# # mixer; Linux, cpal/alsa outputs, build with `--features alsa-mixer`) and
+# # keeps the software gain at 100%. "none" (alias "null") disables volume:
+# # `setvol` returns an error and `status` omits `volume`.
+# [[output]]
+# name = "DAC"
+# type = "alsa"
+# enabled = true
+# device = "hw:CARD=1,DEV=0"
+# mixer_type = "hardware"        # software | hardware | none
+# mixer_device = "hw:1"          # default: card of `device`, else "default"
+# mixer_control = "PCM"          # default: tries "PCM", then "Master"
+# mixer_index = 0                # default 0
+#
+# # Network/file outputs with pluggable encoders. `encoder` is one of
+# # "wav" (default), "pcm", "flac" (pure Rust). `compression` (0-8, default 5)
+# # tunes flac. `bitrate` / `quality` are reserved for lossy encoders.
+# [[output]]
+# name = "HTTP stream"
+# type = "httpd"
+# port = 8000
+# encoder = "flac"
+# compression = 5
+#
+# [[output]]
+# name = "Recording"
+# type = "recorder"
+# path = "/tmp/rmpd-recording.flac"
+# encoder = "flac"               # omit for the default WAV writer
+#
+# # Icecast2 source client (plain HTTP PUT; no TLS). Streams the encoded audio
+# # to <host>:<port><mount> and sends /admin/metadata on song change.
+# [[output]]
+# name = "Icecast"
+# type = "shout"
+# host = "localhost"
+# port = 8000
+# mount = "/rmpd"
+# user = "source"                # default "source"
+# password = "hackme"            # required; never logged
+# encoder = "flac"               # default "flac"
+# genre = "Various"
+# description = "rmpd stream"
+# public = false
 
 [database]
 auto_update = true
@@ -174,6 +270,22 @@ hide_playlist_targets = true
 # expand it into range-restricted tracks either way.
 embedded_cue_as_directory = true
 
+[stream]
+# HTTP(S) radio input. Playlist URLs (.pls, .m3u, .m3u8, .asx, .xspf, or a
+# matching Content-Type) are fetched and unwrapped automatically; HLS
+# (adaptive) streams are not supported.
+# Connect and per-read timeout in milliseconds.
+timeout_ms = 5000
+# fnmatch-style globs (*, ?, [abc]) of stream URLs whose in-band ICY
+# StreamTitle must be ignored (stations that send ads or junk as titles).
+# metadata_blacklist = ["*://ads.example.com/*", "http://*.noisy-radio.net/*"]
+#
+# Route all stream and playlist requests through an HTTP proxy.
+# [stream.proxy]
+# url = "http://proxy.example.com:3128"
+# username = "alice"      # optional
+# password = "s3cr3t"     # optional
+
 # ── Music Sources ────────────────────────────────────────────────────────────
 # Remote catalogs are declared as [[source]] blocks. Each enabled source is
 # synced into rmpd's SQLite index under a mount-style virtual path of the form
@@ -193,3 +305,46 @@ embedded_cue_as_directory = true
 # # max_bitrate = 320
 # # Optional: preferred transcoding format ("raw" = original, "mp3", "opus", …).
 # # format = "raw"
+#
+# Example: Jellyfin server (requires the `jellyfin` feature). Catalog is synced
+# like Subsonic; streams use /Audio/<id>/stream (or /universal when
+# `max_bitrate` / `format` ask for transcoding).
+#
+# [[source]]
+# name = "jelly"
+# type = "jellyfin"
+# url = "https://jellyfin.example.com"
+# username = "alice"
+# password = "s3cr3t"     # or: api_key = "..." (then also set user_id)
+# # user_id = "<32-hex user id>"   # optional with username/password
+# # max_bitrate = 320     # kbps; enables /universal transcoding
+# # format = "mp3"        # transcode target (mp3, opus, aac, ...)
+# # accept_invalid_certs = false
+#
+# Example: podcasts (requires the `podcast` feature). On-demand: nothing is
+# synced; `lsinfo podcasts` lists one directory per feed, newest episode first.
+# `feeds` takes feed URLs and/or OPML documents (path or URL ending in .opml).
+#
+# [[source]]
+# name = "podcasts"
+# type = "podcast"
+# feeds = ["https://example.com/feed.xml", "~/subscriptions.opml"]
+# # max_episodes = 50     # episodes listed per podcast
+# # cache_ttl = 900       # seconds feeds are cached
+#
+# Example: internet radio via Radio-Browser (requires the `radio` feature).
+# On-demand tree: favourites, top-voted, top-clicked, countries/<c>, tags/<t>.
+# The API server is discovered via all.api.radio-browser.info unless pinned.
+#
+# [[source]]
+# name = "radio"
+# type = "radio"
+# # api_url = "https://de1.api.radio-browser.info"
+# # stations = ["<stationuuid>", "<stationuuid>"]   # shown under `favourites`
+# # limit = 100           # stations per listing (1..1000)
+# # hide_broken = true
+#
+# [[source]]              # SomaFM channels (also part of the `radio` feature)
+# name = "somafm"
+# type = "somafm"
+# # format = "mp3"        # mp3, aac or aacp

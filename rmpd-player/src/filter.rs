@@ -7,9 +7,11 @@
 //! them in order.  [`VolumeFilter`] reads a live `Arc<AtomicU8>` (0..=100) so
 //! the volume can be changed without touching the chain.
 //!
-//! [`Mixer`] is the seam for future hardware mixer integration (ALSA, Pulse).
-//! [`SoftwareMixer`] is the v1 implementation backed by the same atomic.
+//! [`Mixer`] is the per-output volume seam; the registry of mixer plugins
+//! (software, hardware/ALSA, none) lives in [`crate::mixer`].
+//! [`SoftwareMixer`] is the software implementation backed by the same atomic.
 
+use crate::mixer::MixerError;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 
@@ -93,11 +95,30 @@ impl FilterChain {
 
 /// Per-output volume control seam.
 ///
-/// v1 is software-only; the trait is the extension point for future hardware
-/// mixers (ALSA amixer, PulseAudio sink input) attached to a specific output.
-pub trait Mixer: Send {
-    fn set_volume(&self, v: u8);
-    fn volume(&self) -> u8;
+/// Implementations: [`SoftwareMixer`] (in-process gain), the ALSA hardware
+/// mixer and the null mixer (see [`crate::mixer`]).  Calls are synchronous and
+/// may block briefly (hardware mixers talk to the sound card), so async
+/// callers should keep them off the hot path.
+pub trait Mixer: Send + Sync {
+    /// Registry name (`"software"`, `"alsa"`, `"none"`).
+    fn name(&self) -> &str;
+
+    /// `true` when volume is applied by rmpd's own gain stage (the
+    /// [`VolumeFilter`] / `OutputControl` gain) rather than by a device.
+    fn is_software(&self) -> bool {
+        false
+    }
+
+    /// `false` for the null mixer: volume cannot be set or read at all.
+    fn controls_volume(&self) -> bool {
+        true
+    }
+
+    /// Set the volume in percent (values above 100 are clamped).
+    fn set_volume(&self, v: u8) -> Result<(), MixerError>;
+
+    /// Current volume in percent.
+    fn volume(&self) -> Result<u8, MixerError>;
 }
 
 /// Software [`Mixer`] backed by an `Arc<AtomicU8>`.
@@ -121,12 +142,21 @@ impl SoftwareMixer {
 }
 
 impl Mixer for SoftwareMixer {
-    fn set_volume(&self, v: u8) {
-        self.volume.store(v.min(100), Ordering::Release);
+    fn name(&self) -> &str {
+        "software"
     }
 
-    fn volume(&self) -> u8 {
-        self.volume.load(Ordering::Acquire)
+    fn is_software(&self) -> bool {
+        true
+    }
+
+    fn set_volume(&self, v: u8) -> Result<(), MixerError> {
+        self.volume.store(v.min(100), Ordering::Release);
+        Ok(())
+    }
+
+    fn volume(&self) -> Result<u8, MixerError> {
+        Ok(self.volume.load(Ordering::Acquire))
     }
 }
 
@@ -209,8 +239,8 @@ mod tests {
     fn software_mixer_set_get() {
         let vol = Arc::new(AtomicU8::new(0));
         let mixer = SoftwareMixer::new(Arc::clone(&vol));
-        mixer.set_volume(75);
-        assert_eq!(mixer.volume(), 75);
+        mixer.set_volume(75).unwrap();
+        assert_eq!(mixer.volume().unwrap(), 75);
     }
 
     // SoftwareMixer: values >100 are clamped to 100.
@@ -218,10 +248,10 @@ mod tests {
     fn software_mixer_clamps_above_100() {
         let vol = Arc::new(AtomicU8::new(0));
         let mixer = SoftwareMixer::new(Arc::clone(&vol));
-        mixer.set_volume(200);
-        assert_eq!(mixer.volume(), 100);
-        mixer.set_volume(101);
-        assert_eq!(mixer.volume(), 100);
+        mixer.set_volume(200).unwrap();
+        assert_eq!(mixer.volume().unwrap(), 100);
+        mixer.set_volume(101).unwrap();
+        assert_eq!(mixer.volume().unwrap(), 100);
     }
 
     // SoftwareMixer: volume_handle() shares the same atomic.
@@ -230,7 +260,7 @@ mod tests {
         let vol = Arc::new(AtomicU8::new(50));
         let mixer = SoftwareMixer::new(Arc::clone(&vol));
         let handle = mixer.volume_handle();
-        mixer.set_volume(80);
+        mixer.set_volume(80).unwrap();
         // handle sees the update immediately
         assert_eq!(handle.load(Ordering::Acquire), 80);
     }

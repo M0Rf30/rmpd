@@ -20,7 +20,7 @@ loading**: Rust has no stable ABI, and MPD itself links all plugins statically.
 | Encoders        | `rmpd-player` (encoder SPI)                           | in `rmpd-player`                 | output block settings   |
 | Music sources   | `rmpd_plugin::MusicSource`                            | `SOURCE_PLUGINS` (`rmpd-source`) | `[[source]]`            |
 | Playlist parsers| `rmpd_plugin::PlaylistParser`                         | `PLAYLIST_PLUGINS` (`rmpd-plugin`)| none (by suffix / MIME)|
-| Input schemes   | `rmpd-stream` (`http`, `https`, ...)                  | in `rmpd-stream`                 | none (by URI scheme)    |
+| Input schemes   | `rmpd_stream::InputPlugin`                            | `INPUT_PLUGINS` (`rmpd-stream`)  | `[stream]` (timeout, proxy, ICY blacklist) |
 | Integrations    | `rmpd_plugin::Integration`                            | `INTEGRATION_PLUGINS` (`rmpd-integrations`) | `[[integration]]` |
 
 ## Placement rule
@@ -63,6 +63,29 @@ Built-ins: `m3u` (incl. extended M3U `#EXTINF`), `pls`, `xspf`, `asx`. Look up
 with `parser_for_suffix`, `parser_for_mime`, `parser_by_name`. Stored-playlist
 commands in `rmpd-protocol` call this registry.
 
+## Input schemes
+
+`InputPlugin` (`rmpd-stream/src/input.rs`): `name()`, `schemes()` (lowercase,
+without `://`) and `open(uri, &OpenContext) -> io::Result<OpenedInput>`.
+`OpenedInput { source: Box<dyn MediaSource>, title: Option<TitleHandle>,
+extension_hint, uri }`. `rmpd_stream::open(uri)` dispatches through
+`INPUT_PLUGINS` by URI scheme (`input_for_uri`, `is_input_uri`,
+`url_handlers`); the decoder calls it for every `scheme://` path. Built-in:
+`http` (`http`, `https`).
+
+The HTTP plugin unwraps **radio playlists**: when the URL suffix or response
+`Content-Type` selects a `PlaylistParser` (`parser_for_mime` first, audio MIME
+types win over suffixes, otherwise `parser_for_suffix`), the body is fetched
+(1 MiB cap), parsed, and each entry (relative ones resolved against the
+playlist URL) is opened through the registry until one succeeds. Nesting is
+limited to 3 levels (`MAX_PLAYLIST_DEPTH`). HLS playlists
+(`#EXT-X-TARGETDURATION`, `#EXT-X-STREAM-INF`, `#EXT-X-MEDIA-SEQUENCE`) yield an
+`Unsupported` error. `[stream]` settings are installed process-wide with
+`rmpd_stream::configure` at startup: `timeout_ms` (default 5000),
+`metadata_blacklist` (fnmatch globs matched against the stream URL and any
+playlist it was unwrapped from; matching streams ignore ICY `StreamTitle`) and
+`[stream.proxy]` (`url`, `username`, `password`).
+
 ## Integrations
 
 Long-running background tasks (scrobblers, notifiers, remote bridges).
@@ -87,6 +110,28 @@ song) and `play/pause/toggle/next/previous/stop/set_volume/seek`; the daemon
 implements it as `rmpd_protocol::ServerPlayerHandle` over the live server
 state. `run` MUST return promptly once `ctx.shutdown` fires; the daemon waits
 up to five seconds. Errors are logged and never crash the daemon.
+
+### Built-in integrations: MPRIS and mDNS
+
+Linux MPRIS (`type = "mpris"`, D-Bus name `org.mpris.MediaPlayer2.rmpd`) and
+mDNS/Zeroconf (`type = "mdns"`, advertises `_mpd._tcp`) are ordinary
+integrations in `rmpd-integrations` (features `mpris`, `mdns`, default on).
+They are enabled implicitly by the legacy `[network]` switches: at startup
+`rmpd_integrations::synthesize_builtin` turns `media_controls` into an `mpris`
+block, and `mdns_config` turns `zeroconf_enabled`/`zeroconf_name` into an
+`mdns` block once the TCP listener is bound (the advertised port is only known
+then). An explicit `[[integration]]` block of the same type suppresses the
+synthesized one. MPRIS needs more than the basic controls, so `PlayerHandle`
+has additive, default-bodied extras: `current_song_id`, `queue_len`, `options`
+(`PlayerOptions`), `set_repeat/random/single`, `seek_relative`, `position`
+(live), `music_dir`, `request_shutdown`.
+
+**macOS Now Playing is intentionally *not* an integration.** AppKit's
+`MPNowPlayingInfoCenter`/remote-command stack must be driven from the process
+main thread's run loop, which owns the process, whereas integrations run as
+Tokio tasks on worker threads. It stays in `rmpd-protocol`
+(`media_controls_macos`) and is started from `main.rs`; `network.media_controls`
+still controls it.
 
 ## Settings and unknown-key diagnostics
 

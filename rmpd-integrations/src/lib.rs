@@ -22,8 +22,35 @@ use std::path::Path;
 use std::sync::Arc;
 use tokio::task::JoinHandle;
 
-/// All compiled-in integrations. Empty until concrete integrations land.
-pub static INTEGRATION_PLUGINS: &[IntegrationPlugin] = &[];
+pub mod builtin;
+#[cfg(feature = "lastfm")]
+pub mod lastfm;
+#[cfg(feature = "listenbrainz")]
+pub mod listenbrainz;
+#[cfg(feature = "mdns")]
+pub mod mdns;
+#[cfg(all(feature = "mpris", not(target_os = "macos")))]
+pub mod mpris;
+#[cfg(any(feature = "listenbrainz", feature = "lastfm"))]
+pub mod scrobble;
+#[cfg(feature = "webhook")]
+pub mod webhook;
+
+pub use builtin::{mdns_config, synthesize_builtin};
+
+/// All compiled-in integrations.
+pub static INTEGRATION_PLUGINS: &[IntegrationPlugin] = &[
+    #[cfg(all(feature = "mpris", not(target_os = "macos")))]
+    mpris::PLUGIN,
+    #[cfg(feature = "mdns")]
+    mdns::PLUGIN,
+    #[cfg(feature = "listenbrainz")]
+    listenbrainz::PLUGIN,
+    #[cfg(feature = "lastfm")]
+    lastfm::PLUGIN,
+    #[cfg(feature = "webhook")]
+    webhook::PLUGIN,
+];
 
 /// Look up a plugin by (case-insensitive) type name.
 #[must_use]

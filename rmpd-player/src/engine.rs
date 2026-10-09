@@ -5,6 +5,7 @@ use crate::audio_output::AudioOutput;
 use crate::decoder::SymphoniaDecoder;
 use crate::dop::DopEncoder;
 use crate::dop_output::DopOutput;
+use crate::mixer::{MixerError, MixerSet};
 use crate::output::CpalOutput;
 use crate::output_control::OutputControl;
 use parking_lot::Mutex;
@@ -211,6 +212,13 @@ pub struct PlaybackEngine {
     playback_thread: Option<thread::JoinHandle<()>>,
     current_song: Arc<Mutex<Option<Song>>>,
     volume: Arc<AtomicU8>,
+    /// Mixers of the enabled outputs (`mixer_type` per output). `volume` above
+    /// is only the SOFTWARE gain: it stays at 100 unless a software mixer is
+    /// active, so a hardware mixer never stacks with digital attenuation.
+    mixers: Arc<MixerSet>,
+    /// Last volume requested through `set_volume`/`restore_volume`; applied as
+    /// software gain whenever a software mixer is (again) active.
+    last_volume: u8,
     command_tx: Option<mpsc::Sender<PlaybackCommand>>,
     outputs: Vec<OutputConfig>,
     replay_gain_mode: ReplayGainMode,
@@ -283,6 +291,9 @@ impl PlaybackEngine {
         status: Arc<RwLock<rmpd_core::state::PlayerStatus>>,
         atomic_state: Arc<AtomicU8>,
     ) -> Self {
+        let volume = Arc::new(AtomicU8::new(100));
+        let outputs = vec![OutputConfig::cpal_default()];
+        let mixers = Arc::new(MixerSet::from_outputs(&outputs, &volume));
         Self {
             status,
             event_bus,
@@ -290,9 +301,11 @@ impl PlaybackEngine {
             atomic_state,
             playback_thread: None,
             current_song: Arc::new(Mutex::new(None)),
-            volume: Arc::new(AtomicU8::new(100)),
+            volume,
+            mixers,
+            last_volume: 100,
             command_tx: None,
-            outputs: vec![OutputConfig::cpal_default()],
+            outputs,
             replay_gain_mode: ReplayGainMode::default(),
             replay_gain_preamp: 0.0,
             replay_gain_missing_preamp: 0.0,
@@ -317,6 +330,43 @@ impl PlaybackEngine {
 
     pub fn set_outputs(&mut self, outputs: Vec<OutputConfig>) {
         self.outputs = outputs;
+        self.mixers = Arc::new(MixerSet::from_outputs(&self.outputs, &self.volume));
+        self.apply_software_gain();
+    }
+
+    /// Keep the software gain stage consistent with the active mixers: the
+    /// requested volume while a software mixer is in use, unity (100%)
+    /// otherwise (hardware / no mixer).
+    fn apply_software_gain(&self) {
+        let sw = if self.mixers.has_software() {
+            self.last_volume
+        } else {
+            100
+        };
+        self.volume.store(sw, Ordering::Release);
+        self.control.set_gain(f32::from(sw) / 100.0);
+    }
+
+    /// Whether any enabled output has a usable mixer (`false` when all are
+    /// `mixer_type = none`: MPD then omits `volume` from `status`).
+    #[must_use]
+    pub fn volume_available(&self) -> bool {
+        self.mixers.controls_volume()
+    }
+
+    /// Volume currently reported by the hardware mixers of the enabled
+    /// outputs, or `None` when none uses one (software volume is tracked in
+    /// the player status).
+    #[must_use]
+    pub fn hardware_volume(&self) -> Option<u8> {
+        self.mixers.hardware_volume()
+    }
+
+    /// Apply a persisted volume (state file) to the software mixer. Hardware
+    /// mixers keep the level the device already has, like MPD.
+    pub fn restore_volume(&mut self, vol: u8) {
+        self.last_volume = vol.min(100);
+        self.apply_software_gain();
     }
 
     /// Set the output buffer time in milliseconds. Sizes the PCM ring buffer
@@ -743,18 +793,38 @@ impl PlaybackEngine {
     }
 
     pub async fn set_volume(&mut self, vol: u8) -> Result<()> {
-        self.volume.store(vol, Ordering::Release);
+        let vol = vol.min(100);
+        let mixers = self.mixers.clone();
+        // Hardware mixers talk to the sound card: keep that off the async worker.
+        let result = if mixers.has_hardware() {
+            tokio::task::spawn_blocking(move || mixers.set_volume(vol))
+                .await
+                .map_err(|e| RmpdError::Player(format!("mixer task failed: {e}")))?
+        } else {
+            mixers.set_volume(vol)
+        };
+        result.map_err(|e| match e {
+            MixerError::NoMixer => RmpdError::Player("problems setting volume".to_owned()),
+            other => RmpdError::Player(format!("problems setting volume: {other}")),
+        })?;
+        self.last_volume = vol;
         // Instant: every self-managed backend's real-time callback ramps
         // toward this over a few ms (see `conversion::GainRamp`), instead of
         // the old write-time `VolumeFilter` which could lag by the full
         // queue depth (up to ~1s) before a change reached the device.
-        self.control.set_gain(f32::from(vol) / 100.0);
-        self.event_bus.emit(Event::VolumeChanged(vol));
+        // With only hardware mixers the software gain stays at unity.
+        if self.mixers.has_software() {
+            self.control.set_gain(f32::from(vol) / 100.0);
+        }
+        let reported = self.mixers.volume().unwrap_or(vol);
+        self.event_bus.emit(Event::VolumeChanged(reported));
         Ok(())
     }
 
     pub async fn get_volume(&self) -> u8 {
-        self.volume.load(Ordering::Acquire)
+        self.mixers
+            .volume()
+            .unwrap_or_else(|| self.volume.load(Ordering::Acquire))
     }
 
     #[allow(clippy::too_many_arguments)]

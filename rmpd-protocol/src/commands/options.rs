@@ -16,27 +16,65 @@ fn notify_options(state: &AppState) {
         .emit(rmpd_core::event::Event::QueueOptionsChanged);
 }
 
+/// Apply `volume` through the engine's active mixers (software gain or the
+/// outputs' hardware mixers) and return the volume the mixer reports back
+/// (hardware may round to its own step size).
+async fn apply_volume(state: &AppState, volume: u8) -> rmpd_core::error::Result<u8> {
+    let mut engine = state.engine.write().await;
+    engine.set_volume(volume).await?;
+    Ok(engine.hardware_volume().unwrap_or(volume))
+}
+
+/// MPD's reply when no mixer can change the volume (`mixer_type = none`, or a
+/// failing hardware mixer).
+fn volume_error(command: &str, e: &rmpd_core::error::RmpdError) -> String {
+    tracing::warn!("{command}: {e}");
+    ResponseBuilder::error(ACK_ERROR_SYS, 0, command, "problems setting volume")
+}
+
+/// The volume `status`/`getvol` report: `None` when no enabled output has a
+/// mixer (MPD omits the field then), the hardware mixer's level when one is
+/// active (it can be moved by other applications), else the tracked software
+/// volume.
+pub async fn current_volume(state: &AppState) -> Option<u8> {
+    {
+        let engine = state.engine.read().await;
+        if !engine.volume_available() {
+            return None;
+        }
+        if let Some(v) = engine.hardware_volume() {
+            return Some(v);
+        }
+    }
+    Some(state.status.read().await.volume)
+}
+
 pub async fn handle_setvol_command(state: &AppState, volume: u8) -> String {
-    match state.engine.write().await.set_volume(volume).await {
-        Ok(_) => {
-            let mut status = state.status.write().await;
-            status.volume = volume;
+    match apply_volume(state, volume).await {
+        Ok(actual) => {
+            state.status.write().await.volume = actual;
             ResponseBuilder::new().ok()
         }
-        Err(e) => ResponseBuilder::error(ACK_ERROR_SYS, 0, "setvol", &format!("Volume error: {e}")),
+        Err(e) => volume_error("setvol", &e),
     }
 }
 
 pub async fn handle_volume_command(state: &AppState, change: i32) -> String {
-    let current_vol = state.status.read().await.volume;
+    // The active mixer is the source of truth (a hardware mixer can be moved
+    // by other applications); software volume lives in the status.
+    let hardware = state.engine.read().await.hardware_volume();
+    let current_vol = match hardware {
+        Some(v) => v,
+        None => state.status.read().await.volume,
+    };
     let new_vol = (current_vol as i32 + change).clamp(0, 100) as u8;
 
-    match state.engine.write().await.set_volume(new_vol).await {
-        Ok(_) => {
-            state.status.write().await.volume = new_vol;
+    match apply_volume(state, new_vol).await {
+        Ok(actual) => {
+            state.status.write().await.volume = actual;
             ResponseBuilder::new().ok()
         }
-        Err(e) => ResponseBuilder::error(ACK_ERROR_SYS, 0, "volume", &format!("Volume error: {e}")),
+        Err(e) => volume_error("volume", &e),
     }
 }
 

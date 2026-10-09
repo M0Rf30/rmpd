@@ -43,12 +43,8 @@ mdns-sd.workspace = true
 
 # Native macOS Now Playing / remote commands (souvlaki wraps
 # MPNowPlayingInfoCenter + MPRemoteCommandCenter; the objc2 crates drive the
-# AppKit main-thread run loop).
-# MPRIS needs a session bus, which macOS does not have: the native Now Playing
-# integration covers macOS instead.
-[target.'cfg(not(target_os = "macos"))'.dependencies]
-mpris-server.workspace = true
-
+# AppKit main-thread run loop). Must run on the main thread, so it stays here
+# rather than in rmpd-integrations. MPRIS (Linux) lives in rmpd-integrations.
 [target.'cfg(target_os = "macos")'.dependencies]
 souvlaki = "0.8"
 objc2 = "0.6"

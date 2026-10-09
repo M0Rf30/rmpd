@@ -1234,11 +1234,18 @@ async fn handle_command(
             }
 
             let last_loaded_playlist = state.queue.read().await.last_loaded_playlist().to_string();
+            // Volume comes from the active mixer (hardware level, or omitted
+            // when every output has `mixer_type = none`).
+            let volume = options::current_volume(state).await;
+            if let Some(v) = volume {
+                status.volume = v;
+            }
             let mut resp = ResponseBuilder::new();
-            resp.status(
+            resp.status_with_volume(
                 &status,
                 &conn_state.current_partition,
                 &last_loaded_playlist,
+                volume.is_some(),
             );
             resp.ok()
         }
@@ -1397,9 +1404,10 @@ async fn handle_command(
         Command::Crossfade { seconds } => options::handle_crossfade_command(state, seconds).await,
         Command::Volume { change } => options::handle_volume_command(state, change).await,
         Command::GetVol => {
-            let status = state.status.read().await;
             let mut resp = ResponseBuilder::new();
-            resp.field("volume", status.volume.to_string());
+            if let Some(volume) = options::current_volume(state).await {
+                resp.field("volume", volume.to_string());
+            }
             resp.ok()
         }
         Command::ReplayGainMode { mode } => {

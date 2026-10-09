@@ -242,6 +242,20 @@ busctl --user introspect org.mpris.MediaPlayer2.rmpd /org/mpris/MediaPlayer2
 
 rmpd also advertises itself over **mDNS/Zeroconf** so MPD clients on the local network can auto-discover the server.
 
+Both are implemented as built-in [integration plugins](docs/PLUGIN_ARCHITECTURE.md) (`mpris`, `mdns`; Cargo features of `rmpd-integrations`, on by default). The `[network]` switches `media_controls`, `zeroconf_enabled` and `zeroconf_name` keep working and implicitly enable them; you can also configure them explicitly with `[[integration]] type = "mpris"` / `type = "mdns"` (explicit blocks replace the implicit ones).
+
+### Scrobbling & Webhooks
+
+Three opt-in [integration plugins](docs/PLUGIN_ARCHITECTURE.md) (pure Rust, off by default; enable with `cargo build --release --features listenbrainz,lastfm,webhook`):
+
+- **`listenbrainz`** — `token` (from <https://listenbrainz.org/settings/>), optional `api_url`. Sends *playing now* and listens, including MusicBrainz IDs from your tags.
+- **`lastfm`** — `api_key`, `api_secret`, `session_key`; optional `api_url` (`https://libre.fm/2.0/` for libre.fm). Signed `track.updateNowPlaying` / `track.scrobble`.
+- **`webhook`** — `url`, optional `events` filter, `headers`, and `secret` (adds `X-Rmpd-Signature: sha256=<HMAC-SHA256 of the body>`). POSTs `{"event", "timestamp", "payload"}` through a bounded, non-blocking queue.
+
+A listen is submitted once a track of at least 30 s has been *actually played* for `min(duration/2, 4 min)`; paused time and seeks don't count. Listens that can't be delivered are kept in a JSONL queue under the state directory and retried with exponential backoff (cap: `max_queue`, default 10000). `scrobble_streams = true` also scrobbles radio streams from their ICY `Artist - Title`.
+
+To get a Last.fm `session_key` (web auth flow): create an API account at <https://www.last.fm/api/account/create>; open `https://ws.audioscrobbler.com/2.0/?method=auth.getToken&api_key=KEY&format=json` to get a `TOKEN`; authorise it at `https://www.last.fm/api/auth/?api_key=KEY&token=TOKEN`; compute `SIG` with `echo -n 'api_keyKEYmethodauth.getSessiontokenTOKENSECRET' | md5sum` and open `https://ws.audioscrobbler.com/2.0/?method=auth.getSession&api_key=KEY&token=TOKEN&api_sig=SIG&format=json`. The returned `session.key` does not expire. Secrets are never logged.
+
 ### systemd
 
 rmpd speaks systemd's protocols natively, without linking libsystemd:
@@ -294,6 +308,58 @@ password = "secret"                # or use `api_key = "..."` instead
 Credentials are never written to logs. An unreachable server is skipped at
 startup without aborting (previously-synced tracks remain browsable).
 
+### Jellyfin, Podcast & Radio Sources
+
+Three more pure-Rust (reqwest/rustls, no C libraries) music sources, each behind
+its own Cargo feature: `jellyfin`, `podcast` and `radio` (which also provides
+`somafm`). Enable them with e.g. `cargo build --release --features jellyfin,podcast,radio`.
+
+- **`jellyfin`** — like Subsonic: the catalog is synced into the database.
+  Authenticates with `username`/`password` (`/Users/AuthenticateByName`) or an
+  `api_key` (+ `user_id`); `max_bitrate`/`format` request `/Audio/{id}/universal`
+  transcoding, otherwise the original file streams. Cover art and server-side
+  playlists are supported.
+- **`podcast`** — on-demand: `feeds` lists RSS URLs and/or OPML files; each
+  podcast is a directory of episodes (newest first, `max_episodes`), with
+  `itunes:image` cover art. Feeds are cached for `cache_ttl` seconds.
+- **`radio`** — on-demand [Radio-Browser](https://www.radio-browser.info/)
+  tree (favourites from `stations`, top voted/clicked, by country, by tag) plus
+  `search`; **`somafm`** lists SomaFM channels. Entries are live streams.
+
+```toml
+[[source]]
+name = "podcasts"
+type = "podcast"
+feeds = ["https://example.com/feed.xml", "~/subscriptions.opml"]
+
+[[source]]
+name = "radio"
+type = "radio"
+```
+
+See `rmpd.toml` for every setting.
+
+### Internet Radio (`[stream]`)
+
+`http://` and `https://` URLs play as radio streams with Shoutcast/Icecast
+(ICY) "now playing" titles. Playlist URLs — `.pls`, `.m3u`/`.m3u8`, `.asx`,
+`.xspf`, or anything served with a matching `Content-Type` — are fetched (1 MiB
+cap), unwrapped, and their entries tried in order until one opens (nesting is
+limited to 3 levels). HLS (adaptive) playlists are detected and rejected with a
+clear error instead of being misparsed.
+
+```toml
+[stream]
+timeout_ms = 5000                                  # connect / per-read timeout
+metadata_blacklist = ["*://ads.example.com/*"]     # fnmatch globs: ignore ICY titles
+
+[stream.proxy]                                     # optional HTTP proxy
+url = "http://proxy.example.com:3128"
+username = "alice"                                 # optional
+password = "s3cr3t"                                # optional
+```
+
+
 ### Multi-Room, HTTP Streaming & Snapcast
 
 rmpd plays to **all enabled outputs simultaneously**, so local audio and a
@@ -307,6 +373,33 @@ network stream can run at once. Two routes to networked/multi-room playback:
 - **Snapcast (synchronized)** — enable a `type = "fifo"` output writing to
   `/tmp/snapfifo` and run an external [Snapcast](https://github.com/badaix/snapcast)
   `snapserver` reading that FIFO for sample-accurate multi-room sync.
+- **Encoders** — `httpd`, `recorder` and `shout` outputs take an `encoder`
+  setting from the compile-time encoder registry: `wav` (default), `pcm`, or
+  `flac` (pure Rust, streamable native FLAC; tune with `compression = 0..8`).
+- **Icecast source (`shout`)** — a `type = "shout"` output pushes the encoded
+  stream to an Icecast2 server over an HTTP `PUT` source connection
+  (`host`, `port`, `mount`, `user` = `source`, `password`, `name`, `genre`,
+  `description`, `public`, `encoder`) and updates the title via
+  `/admin/metadata` on every song change. Plain HTTP only (no TLS); the
+  default `flac` encoder needs a server/mount that accepts `audio/flac`.
+
+### Volume & Mixers
+
+Each `[[output]]` selects its volume control with `mixer_type`, like MPD:
+
+| `mixer_type` | Behaviour |
+|---|---|
+| `software` (default) | rmpd's own gain stage (unchanged behaviour) |
+| `hardware` | the output's native mixer — ALSA simple mixer for `cpal`/`alsa` outputs on Linux; build with `--features alsa-mixer` (reuses the `alsa` crate cpal already links, no extra native dependency). The software gain stays at 100%. |
+| `none` / `null` | no volume control: `setvol`/`volume` fail with `problems setting volume`, and `status`/`getvol` omit `volume` |
+
+Hardware mixers accept `mixer_device` (default: the card of the output's `hw:`
+device, else `default`), `mixer_control` (default: `PCM`, then `Master`) and
+`mixer_index` (default `0`). The reported volume comes from the active mixer;
+an unavailable mixer type logs a warning and falls back to `software`. With
+several outputs, `setvol` is applied to every mixer and `status` reports the
+average; the software gain is shared by all outputs, so mixing software and
+hardware outputs attenuates the hardware ones twice.
 
 ## Status & Roadmap
 
@@ -320,7 +413,9 @@ network stream can run at once. Two routes to networked/multi-room playback:
 
 ### In Progress
 
-- Compressed stream encoders (FLAC / Opus / Vorbis) for the `httpd` output
+- Lossy stream encoders (Opus / Vorbis) for `httpd`/`shout`/`recorder`: no
+  production-ready pure-Rust encoder exists yet, and rmpd avoids C bindings.
+  `wav`, `pcm` and a native pure-Rust `flac` encoder are available today.
 
 ## Compatibility
 

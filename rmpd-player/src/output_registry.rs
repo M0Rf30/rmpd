@@ -14,6 +14,7 @@ use crate::output::CpalOutput;
 use crate::output_control::OutputControl;
 use crate::pipe_output::PipeOutput;
 use crate::recorder_output::RecorderOutput;
+use crate::shout_output::ShoutOutput;
 use rmpd_core::config::{OutputConfig, ResamplerQuality};
 use rmpd_core::error::{Result, RmpdError};
 use rmpd_core::song::AudioFormat;
@@ -90,7 +91,19 @@ fn recorder_factory(
     let path = cfg
         .setting_str("path")
         .ok_or_else(|| RmpdError::Player("recorder output requires a 'path' setting".into()))?;
-    Ok(Box::new(RecorderOutput::new(path, format)))
+    match cfg.setting_str("encoder") {
+        // Default: the built-in WAV writer (header sizes patched on stop).
+        None => Ok(Box::new(RecorderOutput::new(path, format))),
+        Some(name) if name.eq_ignore_ascii_case("wav") => {
+            Ok(Box::new(RecorderOutput::new(path, format)))
+        }
+        Some(name) => {
+            let encoder = crate::encoder::create_encoder(&name, format, cfg)?;
+            Ok(Box::new(RecorderOutput::with_encoder(
+                path, format, encoder,
+            )))
+        }
+    }
 }
 
 #[cfg(feature = "jack")]
@@ -124,7 +137,15 @@ fn httpd_factory(
     _quality: ResamplerQuality,
     cfg: &OutputConfig,
 ) -> Result<Box<dyn AudioOutput>> {
-    Ok(Box::new(HttpdOutput::new(format, cfg)))
+    Ok(Box::new(HttpdOutput::try_new(format, cfg)?))
+}
+
+fn shout_factory(
+    format: AudioFormat,
+    _quality: ResamplerQuality,
+    cfg: &OutputConfig,
+) -> Result<Box<dyn AudioOutput>> {
+    Ok(Box::new(ShoutOutput::try_new(format, cfg)?))
 }
 
 pub static OUTPUT_PLUGINS: &[(&str, OutputFactory)] = &[
@@ -139,6 +160,7 @@ pub static OUTPUT_PLUGINS: &[(&str, OutputFactory)] = &[
     #[cfg(all(feature = "asio", target_os = "windows"))]
     ("asio", asio_factory),
     ("httpd", httpd_factory),
+    ("shout", shout_factory),
 ];
 
 pub fn create_output(
