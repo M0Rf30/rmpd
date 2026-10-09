@@ -25,6 +25,9 @@ pub struct FilesystemSource {
 
 // ─── Factory ─────────────────────────────────────────────────────────────────
 
+/// Setting keys accepted in a `[[source]] type = "filesystem"` block.
+pub const SETTINGS: &[&str] = &["music_directory", "db"];
+
 /// Sync, no-I/O factory registered in `SOURCE_PLUGINS`.
 pub fn filesystem_source_factory(cfg: &SourceConfig) -> Result<Box<dyn MusicSource>, SourceError> {
     let music_dir = cfg.setting_str("music_directory").ok_or_else(|| {

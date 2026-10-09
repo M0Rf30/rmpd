@@ -33,6 +33,12 @@ fn configured_device() -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
+/// The configured output device id (config value, then `RMPD_AUDIO_DEVICE`),
+/// for deriving the matching hardware mixer card (see `crate::mixer`).
+pub fn configured_output_device() -> Option<String> {
+    configured_device()
+}
+
 /// Whether an explicit output device is configured (via config or env). Used to
 /// decide auto-DoP: a dedicated device implies a real (likely DoP-capable) DAC.
 pub fn output_device_configured() -> bool {

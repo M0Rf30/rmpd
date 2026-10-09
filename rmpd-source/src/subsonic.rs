@@ -187,6 +187,17 @@ pub struct SubsonicSource {
 
 // ─── Factory ─────────────────────────────────────────────────────────────────
 
+/// Setting keys accepted in a `[[source]] type = "subsonic"` block.
+pub const SETTINGS: &[&str] = &[
+    "url",
+    "username",
+    "password",
+    "api_key",
+    "max_bitrate",
+    "format",
+    "accept_invalid_certs",
+];
+
 /// Sync, no-I/O factory registered in `SOURCE_PLUGINS` under `feature = "subsonic"`.
 pub fn subsonic_source_factory(cfg: &SourceConfig) -> Result<Box<dyn MusicSource>, SourceError> {
     let sc = SubsonicConfig::from_source_config(cfg)?;
@@ -341,6 +352,92 @@ impl SubsonicSource {
     }
 }
 
+// ─── Lazy-browse helpers (pure) ──────────────────────────────────────────────
+
+/// Decode `%XX` escapes (inverse of [`enc`]); malformed escapes pass through.
+fn dec(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let Some(v) = std::str::from_utf8(&bytes[i + 1..i + 3])
+                .ok()
+                .and_then(|h| u8::from_str_radix(h, 16).ok())
+        {
+            out.push(v);
+            i += 3;
+            continue;
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Split a source-relative directory into decoded, non-empty segments.
+fn dir_segments(dir: &str) -> Vec<String> {
+    dir.split('/').filter(|s| !s.is_empty()).map(dec).collect()
+}
+
+/// Id of the first artist whose name equals `name`.
+fn find_artist_id<'a>(artists: &'a opensubsonic::data::ArtistsId3, name: &str) -> Option<&'a str> {
+    artists
+        .index
+        .iter()
+        .flat_map(|idx| idx.artist.iter())
+        .find(|a| a.name == name)
+        .map(|a| a.id.as_str())
+}
+
+/// Ids of every album named `name` (duplicate names are merged).
+fn matching_album_ids<'a>(albums: &'a [opensubsonic::data::AlbumId3], name: &str) -> Vec<&'a str> {
+    albums
+        .iter()
+        .filter(|a| a.name == name)
+        .map(|a| a.id.as_str())
+        .collect()
+}
+
+impl SubsonicSource {
+    /// One `Dir` per artist, as full virtual paths.
+    fn artist_entries(&self, artists: &opensubsonic::data::ArtistsId3) -> Vec<SourceEntry> {
+        artists
+            .index
+            .iter()
+            .flat_map(|idx| idx.artist.iter())
+            .map(|a| SourceEntry::Dir(format!("{}/{}", self.name, enc(&a.name))))
+            .collect()
+    }
+
+    /// One `Dir` per album under `artist`.
+    fn album_entries(
+        &self,
+        artist: &str,
+        albums: &[opensubsonic::data::AlbumId3],
+    ) -> Vec<SourceEntry> {
+        albums
+            .iter()
+            .map(|al| SourceEntry::Dir(format!("{}/{}/{}", self.name, enc(artist), enc(&al.name))))
+            .collect()
+    }
+
+    /// Songs of an album, mapped identically to `list_all`.
+    fn album_song_entries(&self, a: &opensubsonic::data::AlbumWithSongsId3) -> Vec<SourceEntry> {
+        a.song
+            .iter()
+            .map(|c| {
+                SourceEntry::Song(self.map_album_song(
+                    c,
+                    a.artist.as_deref(),
+                    Some(a.name.as_str()),
+                ))
+            })
+            .collect()
+    }
+}
+
 // ─── MusicSource impl ────────────────────────────────────────────────────────
 
 #[async_trait]
@@ -358,25 +455,77 @@ impl MusicSource for SubsonicSource {
         self.client.ping().await.map_err(map_err)
     }
 
-    /// Browse the remote library.
+    /// Lazily browse the remote library (source-relative `dir`):
     ///
-    /// When `dir` is empty (root), returns one `SourceEntry::Dir` per artist.
-    /// Deeper levels return an empty list — real browsing is DB-backed via `lsinfo`
-    /// after a catalog sync.
+    /// - `""` → one `Dir` per artist (`getArtists`)
+    /// - `<artist>` → one `Dir` per album (`getArtist`)
+    /// - `<artist>/<album>` → the album's songs (`getAlbum`), mapped exactly like
+    ///   `list_all` so browsed songs carry the same virtual paths as synced ones
+    ///
+    /// Directory entries are full virtual paths (`<source>/<enc(artist)>[/<enc(album)>]`).
     async fn browse(&self, dir: &str) -> SourceResult<Vec<SourceEntry>> {
-        if dir.is_empty() || dir == "/" {
-            let artists = self.client.get_artists(None).await.map_err(map_err)?;
-            let entries = artists
-                .index
-                .iter()
-                .flat_map(|idx| idx.artist.iter())
-                .map(|a| SourceEntry::Dir(format!("{}/{}", self.name, enc(&a.name))))
-                .collect();
-            Ok(entries)
-        } else {
-            // TODO: lazy deep browse; DB-backed lsinfo is the real path
-            Ok(vec![])
+        let segs = dir_segments(dir);
+        match segs.as_slice() {
+            [] => {
+                let artists = self.client.get_artists(None).await.map_err(map_err)?;
+                Ok(self.artist_entries(&artists))
+            }
+            [artist] => {
+                let artists = self.client.get_artists(None).await.map_err(map_err)?;
+                let id = find_artist_id(&artists, artist)
+                    .ok_or_else(|| SourceError::NotFound(format!("artist: {artist}")))?;
+                let detail = self.client.get_artist(id).await.map_err(map_err)?;
+                Ok(self.album_entries(artist, &detail.album))
+            }
+            [artist, album] => {
+                let artists = self.client.get_artists(None).await.map_err(map_err)?;
+                let id = find_artist_id(&artists, artist)
+                    .ok_or_else(|| SourceError::NotFound(format!("artist: {artist}")))?;
+                let detail = self.client.get_artist(id).await.map_err(map_err)?;
+                let ids = matching_album_ids(&detail.album, album);
+                if ids.is_empty() {
+                    return Err(SourceError::NotFound(format!("album: {album}")));
+                }
+                let mut out = Vec::new();
+                for album_id in ids {
+                    let a = self.client.get_album(album_id).await.map_err(map_err)?;
+                    out.extend(self.album_song_entries(&a));
+                }
+                Ok(out)
+            }
+            _ => Err(SourceError::NotFound(format!("subsonic directory: {dir}"))),
         }
+    }
+
+    /// Resolve a virtual path (or bare id) to a single song via `getSong`.
+    async fn lookup(&self, uri: &str) -> SourceResult<Option<Song>> {
+        let id = crate::extract_remote_id(uri);
+        if id.is_empty() {
+            return Ok(None);
+        }
+        match self.client.get_song(id).await {
+            Ok(c) => Ok(Some(self.map_song(&c))),
+            Err(SubsonicError::Api(SubsonicApiError { code: 70, .. })) => Ok(None),
+            Err(e) => Err(map_err(e)),
+        }
+    }
+
+    /// Names of the server-side playlists (`getPlaylists`).
+    async fn playlists(&self) -> SourceResult<Vec<String>> {
+        let lists = self.client.get_playlists(None).await.map_err(map_err)?;
+        Ok(lists.into_iter().map(|p| p.name).collect())
+    }
+
+    /// Songs of the playlist called `name` (`getPlaylists` + `getPlaylist`).
+    async fn playlist_items(&self, name: &str) -> SourceResult<Vec<Song>> {
+        let lists = self.client.get_playlists(None).await.map_err(map_err)?;
+        let id = lists
+            .iter()
+            .find(|p| p.name == name)
+            .map(|p| p.id.clone())
+            .ok_or_else(|| SourceError::NotFound(format!("playlist: {name}")))?;
+        let pl = self.client.get_playlist(&id).await.map_err(map_err)?;
+        Ok(pl.entry.iter().map(|c| self.map_song(c)).collect())
     }
 
     /// Enumerate the entire catalog.
@@ -800,5 +949,101 @@ mod tests {
     fn map_err_parse_is_protocol() {
         let e = SubsonicError::Parse("bad json".to_owned());
         assert!(matches!(map_err(e), SourceError::Protocol(_)));
+    }
+
+    // ── Lazy browse fixtures ────────────────────────────────────────────────
+
+    fn artists_fixture() -> opensubsonic::data::ArtistsId3 {
+        serde_json::from_value(serde_json::json!({
+            "index": [
+                {"name": "A", "artist": [
+                    {"id": "ar1", "name": "AC/DC"},
+                    {"id": "ar2", "name": "Air"}
+                ]},
+                {"name": "P", "artist": [{"id": "ar3", "name": "Portishead"}]}
+            ]
+        }))
+        .expect("valid artists JSON")
+    }
+
+    fn albums_fixture() -> Vec<opensubsonic::data::AlbumId3> {
+        serde_json::from_value(serde_json::json!([
+            {"id": "al1", "name": "Back/In Black"},
+            {"id": "al2", "name": "Highway"},
+            {"id": "al3", "name": "Highway"}
+        ]))
+        .expect("valid albums JSON")
+    }
+
+    fn dirs(entries: Vec<SourceEntry>) -> Vec<String> {
+        entries
+            .into_iter()
+            .filter_map(|e| match e {
+                SourceEntry::Dir(d) => Some(d),
+                SourceEntry::Song(_) => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn dec_inverts_enc_and_tolerates_malformed() {
+        assert_eq!(dec(&enc("AC/DC 100%")), "AC/DC 100%");
+        assert_eq!(dec("a%2"), "a%2");
+        assert_eq!(dec("%zz"), "%zz");
+        assert_eq!(dir_segments("/AC%2FDC//Back/"), vec!["AC/DC", "Back"]);
+        assert!(dir_segments("").is_empty());
+    }
+
+    #[test]
+    fn artist_entries_are_encoded_virtual_dirs() {
+        let src = make_source("home");
+        let d = dirs(src.artist_entries(&artists_fixture()));
+        assert_eq!(d, vec!["home/AC%2FDC", "home/Air", "home/Portishead"]);
+    }
+
+    #[test]
+    fn find_artist_id_matches_decoded_name() {
+        let a = artists_fixture();
+        assert_eq!(find_artist_id(&a, "AC/DC"), Some("ar1"));
+        assert_eq!(find_artist_id(&a, "Nobody"), None);
+    }
+
+    #[test]
+    fn album_entries_and_duplicate_album_ids() {
+        let src = make_source("home");
+        let albums = albums_fixture();
+        let d = dirs(src.album_entries("AC/DC", &albums));
+        assert_eq!(d[0], "home/AC%2FDC/Back%2FIn Black");
+        assert_eq!(matching_album_ids(&albums, "Highway"), vec!["al2", "al3"]);
+        assert!(matching_album_ids(&albums, "Nope").is_empty());
+    }
+
+    #[test]
+    fn browsed_album_songs_match_synced_paths() {
+        let src = make_source("home");
+        let album: opensubsonic::data::AlbumWithSongsId3 =
+            serde_json::from_value(serde_json::json!({
+                "id": "al1",
+                "name": "Dummy",
+                "artist": "Portishead",
+                "song": [
+                    {"id": "s1", "title": "Roads", "suffix": "flac", "isDir": false},
+                    {"id": "s2", "title": "Glory Box", "isDir": false}
+                ]
+            }))
+            .expect("valid album JSON");
+        let entries = src.album_song_entries(&album);
+        let paths: Vec<String> = entries
+            .into_iter()
+            .filter_map(|e| match e {
+                SourceEntry::Song(s) => Some(s.path.to_string()),
+                SourceEntry::Dir(_) => None,
+            })
+            .collect();
+        // Same grammar and fallbacks as `list_all` (`map_album_song`).
+        assert_eq!(
+            paths,
+            vec!["home/Portishead/Dummy/s1.flac", "home/Portishead/Dummy/s2"]
+        );
     }
 }

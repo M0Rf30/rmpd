@@ -496,6 +496,161 @@ fn synth_cover_filename(uri: &str, mime_type: &str) -> String {
     }
 }
 
+/// Key for the per-song artwork cache: the canonicalized path *relative to the
+/// music directory* (what `songs.path` stores, and what the `artwork` table's
+/// foreign key references), falling back to the request URI.
+fn local_cache_key(music_dir: &str, absolute_path: &str, uri: &str) -> String {
+    std::path::Path::new(music_dir)
+        .canonicalize()
+        .ok()
+        .and_then(|root| {
+            std::path::Path::new(absolute_path)
+                .strip_prefix(root)
+                .ok()
+                .map(|rel| rel.to_string_lossy().into_owned())
+        })
+        .unwrap_or_else(|| uri.to_string())
+}
+
+/// What the remote-artwork cache decided for a song (see
+/// [`remote_artwork_for`]).
+enum RemoteStep {
+    /// Nothing to do: no usable metadata, or embedded art exists.
+    Skip,
+    /// Cached image bytes and MIME type.
+    Cached(Vec<u8>, String),
+    /// A still-valid negative cache entry.
+    Miss,
+    /// Not cached: ask the providers (song, cache key).
+    Fetch(Box<rmpd_core::song::Song>, String),
+}
+
+/// Cover art from the configured `[[artwork]]` providers, used by `albumart`
+/// and `readpicture` when a local song has no cover file / embedded picture.
+///
+/// Results — hits and misses alike — are cached per album in the artwork
+/// database, so providers are asked at most once per album per negative-cache
+/// window (7 days for a definitive miss, 10 minutes for a transient failure).
+/// `embedded`, when given as `(cache_key, absolute_path)`, makes the lookup
+/// yield nothing if the file has an embedded picture (used by `albumart`,
+/// which does not itself serve embedded art).
+async fn remote_artwork_for(
+    state: &AppState,
+    uri: &str,
+    command: &'static str,
+    embedded: Option<(String, String)>,
+) -> Option<(Vec<u8>, String)> {
+    if state.artwork.is_empty() {
+        return None;
+    }
+    let step = {
+        let state = state.clone();
+        let uri = uri.to_string();
+        tokio::task::spawn_blocking(move || {
+            let db = open_db(&state, command).ok()?;
+            let song = db.get_song_by_path(&uri).ok().flatten()?;
+            let key = rmpd_plugin::artwork_cache_key(&song)?;
+            let extractor = rmpd_library::AlbumArtExtractor::new(db);
+            if let Some((cache_key, absolute_path)) = embedded
+                && matches!(
+                    extractor.extract_and_cache(&cache_key, &absolute_path),
+                    Ok(Some(_))
+                )
+            {
+                return Some(RemoteStep::Skip);
+            }
+            Some(
+                match extractor.remote_cached(&key, rmpd_library::unix_now()) {
+                    Ok(rmpd_library::RemoteArtState::Hit(data, mime)) => {
+                        RemoteStep::Cached(data, mime)
+                    }
+                    Ok(rmpd_library::RemoteArtState::KnownMiss) => RemoteStep::Miss,
+                    _ => RemoteStep::Fetch(Box::new(song), key),
+                },
+            )
+        })
+        .await
+        .ok()??
+    };
+    match step {
+        RemoteStep::Skip | RemoteStep::Miss => None,
+        RemoteStep::Cached(data, mime) => Some((data, mime)),
+        RemoteStep::Fetch(song, key) => {
+            let outcome = state.artwork.resolve(&song).await;
+            let state = state.clone();
+            tokio::task::spawn_blocking(move || {
+                let extractor =
+                    rmpd_library::AlbumArtExtractor::new(open_db(&state, command).ok()?);
+                let (stored, found) = match outcome {
+                    rmpd_plugin::ArtworkOutcome::Found(data, mime) => (
+                        extractor.store_remote_hit(&key, &data, &mime),
+                        Some((data, mime)),
+                    ),
+                    rmpd_plugin::ArtworkOutcome::NotFound => {
+                        (extractor.store_remote_miss(&key, false), None)
+                    }
+                    rmpd_plugin::ArtworkOutcome::Unavailable => {
+                        (extractor.store_remote_miss(&key, true), None)
+                    }
+                };
+                if let Err(e) = stored {
+                    tracing::warn!("could not cache remote artwork for {key}: {e}");
+                }
+                found
+            })
+            .await
+            .ok()
+            .flatten()
+        }
+    }
+}
+
+/// [`remote_artwork_for`] sliced to the chunk at `offset`.
+async fn remote_artwork_chunk(
+    state: &AppState,
+    uri: &str,
+    command: &'static str,
+    embedded: Option<(String, String)>,
+    offset: usize,
+    binary_limit: usize,
+) -> Option<rmpd_library::ArtLookup<rmpd_library::ArtworkData>> {
+    let (data, mime) = remote_artwork_for(state, uri, command, embedded).await?;
+    Some(rmpd_library::slice_artwork(
+        &data,
+        &mime,
+        offset,
+        binary_limit,
+    ))
+}
+
+/// `readpicture` fallback when a local file has no embedded picture: the
+/// remote providers' art if any, else an empty OK (MPD semantics).
+async fn readpicture_remote_or_empty(
+    state: &AppState,
+    uri: &str,
+    offset: usize,
+    binary_limit: usize,
+) -> Response {
+    match remote_artwork_chunk(state, uri, "readpicture", None, offset, binary_limit).await {
+        Some(rmpd_library::ArtLookup::Found(artwork)) => {
+            let mut resp = ResponseBuilder::new();
+            resp.field("size", artwork.total_size);
+            resp.field("type", &artwork.mime_type);
+            resp.binary_field("binary", &artwork.data);
+            Response::Binary(resp.to_binary_response())
+        }
+        Some(rmpd_library::ArtLookup::OffsetTooLarge) => Response::Text(ResponseBuilder::error(
+            ACK_ERROR_ARG,
+            0,
+            "readpicture",
+            "Bad file offset",
+        )),
+        Some(rmpd_library::ArtLookup::NotFound) | None => {
+            Response::Text(ResponseBuilder::new().ok())
+        }
+    }
+}
+
 pub async fn handle_albumart_command(
     state: &AppState,
     uri: &str,
@@ -617,6 +772,12 @@ pub async fn handle_albumart_command(
         }
     };
     let uri_dir = uri.rsplit_once('/').map(|(d, _)| d.to_string());
+    // Remote provider fallback (only when `[[artwork]]` providers are
+    // configured): skipped when the file carries an embedded picture.
+    let embedded = (!state.artwork.is_empty()).then(|| {
+        let absolute = path.to_string_lossy().into_owned();
+        (local_cache_key(&music_dir, &absolute, uri), absolute)
+    });
 
     match tokio::task::spawn_blocking(move || {
         rmpd_library::find_external_cover(&dir, offset, binary_limit)
@@ -634,12 +795,25 @@ pub async fn handle_albumart_command(
             resp.binary_field("binary", &art.data);
             Response::Binary(resp.to_binary_response())
         }
-        Ok(rmpd_library::ArtLookup::NotFound) => Response::Text(ResponseBuilder::error(
-            ACK_ERROR_NO_EXIST,
-            0,
-            "albumart",
-            "No file exists",
-        )),
+        Ok(rmpd_library::ArtLookup::NotFound) => {
+            match remote_artwork_chunk(state, uri, "albumart", embedded, offset, binary_limit).await
+            {
+                Some(rmpd_library::ArtLookup::Found(artwork)) => {
+                    let file_field = synth_cover_filename(uri, &artwork.mime_type);
+                    let mut resp = ResponseBuilder::new();
+                    resp.field("file", &file_field);
+                    resp.field("size", artwork.total_size);
+                    resp.binary_field("binary", &artwork.data);
+                    Response::Binary(resp.to_binary_response())
+                }
+                Some(rmpd_library::ArtLookup::OffsetTooLarge) => Response::Text(
+                    ResponseBuilder::error(ACK_ERROR_ARG, 0, "albumart", "Offset too large"),
+                ),
+                Some(rmpd_library::ArtLookup::NotFound) | None => Response::Text(
+                    ResponseBuilder::error(ACK_ERROR_NO_EXIST, 0, "albumart", "No file exists"),
+                ),
+            }
+        }
         Ok(rmpd_library::ArtLookup::OffsetTooLarge) => Response::Text(ResponseBuilder::error(
             ACK_ERROR_ARG,
             0,
@@ -753,16 +927,7 @@ pub async fn handle_readpicture_command(
     // a foreign key on it. Canonicalizing first still makes differing URI
     // spellings (symlinks, `.`/`..` already rejected by resolve_safe_music_path)
     // share one cache entry.
-    let cache_key = std::path::Path::new(&music_dir)
-        .canonicalize()
-        .ok()
-        .and_then(|root| {
-            std::path::Path::new(&absolute_path)
-                .strip_prefix(root)
-                .ok()
-                .map(|rel| rel.to_string_lossy().into_owned())
-        })
-        .unwrap_or_else(|| uri.to_string());
+    let cache_key = local_cache_key(&music_dir, &absolute_path, uri);
     let absolute_path_for_check = absolute_path.clone();
     match tokio::task::spawn_blocking(move || {
         let extractor = rmpd_library::AlbumArtExtractor::new(db);
@@ -778,8 +943,9 @@ pub async fn handle_readpicture_command(
             Response::Binary(resp.to_binary_response())
         }
         Ok(Ok(rmpd_library::ArtLookup::NotFound)) => {
-            // File exists but no embedded picture — return empty OK
-            Response::Text(ResponseBuilder::new().ok())
+            // File exists but no embedded picture: try the remote providers,
+            // else an empty OK.
+            readpicture_remote_or_empty(state, uri, offset, binary_limit).await
         }
         Ok(Ok(rmpd_library::ArtLookup::OffsetTooLarge)) => Response::Text(ResponseBuilder::error(
             ACK_ERROR_ARG,
@@ -789,10 +955,10 @@ pub async fn handle_readpicture_command(
         )),
         Ok(Err(_)) => {
             // Check if the file actually exists
-            // If it does, treat the error as "no embedded picture" -> OK
-            // If it doesn't, return "No such song"
+            // If it does, treat the error as "no embedded picture" -> remote
+            // providers / empty OK. If it doesn't, return "No such song".
             if std::path::Path::new(&absolute_path_for_check).exists() {
-                Response::Text(ResponseBuilder::new().ok())
+                readpicture_remote_or_empty(state, uri, offset, binary_limit).await
             } else {
                 Response::Text(ResponseBuilder::error(
                     ACK_ERROR_NO_EXIST,
@@ -841,8 +1007,46 @@ pub async fn handle_currentsong_command(state: &AppState) -> String {
     ResponseBuilder::new().ok()
 }
 
+/// `lsinfo` under an [`rmpd_source::SyncPolicy::OnDemand`] mount: delegate to
+/// `MusicSource::browse` instead of the database.
+async fn lsinfo_on_demand(state: &AppState, path: &str) -> String {
+    let sources = state.sources.clone();
+    let path = path.to_owned();
+    // Spawned so the (non-Sync) async_trait future does not leak into the
+    // caller's future bounds.
+    let result = tokio::spawn(async move { sources.browse_on_demand(&path).await }).await;
+    match result {
+        Ok(Some(Ok(entries))) => {
+            let mut resp = ResponseBuilder::new();
+            for entry in &entries {
+                match entry {
+                    rmpd_source::SourceEntry::Song(song) => {
+                        resp.song(song, None, None, None);
+                    }
+                    rmpd_source::SourceEntry::Dir(dir) => {
+                        resp.field("directory", dir);
+                    }
+                }
+            }
+            resp.ok()
+        }
+        Ok(Some(Err(e))) => ResponseBuilder::error(ACK_ERROR_SYS, 0, "lsinfo", &e.to_string()),
+        Ok(None) => ResponseBuilder::error(ACK_ERROR_NO_EXIST, 0, "lsinfo", "No such directory"),
+        Err(_) => internal_error("lsinfo"),
+    }
+}
+
 // Browsing commands
 pub async fn handle_lsinfo_command(state: &AppState, path: Option<&str>) -> String {
+    // A path under an on-demand source mount is answered by the source itself.
+    if let Some(p) = path
+        && state
+            .sources
+            .owning_source(p)
+            .is_some_and(|s| s.sync_policy() == rmpd_source::SyncPolicy::OnDemand)
+    {
+        return lsinfo_on_demand(state, p).await;
+    }
     let state = state.clone();
     let path = path.map(|s| s.to_string());
     match tokio::task::spawn_blocking(move || {
@@ -878,6 +1082,16 @@ pub async fn handle_lsinfo_command(state: &AppState, path: Option<&str>) -> Stri
                     if *mtime > 0 {
                         let ts = format_iso8601_timestamp(*mtime);
                         resp.field("Last-Modified", &ts);
+                    }
+                }
+
+                // On-demand sources are never mirrored into the database, so
+                // surface their mount points at the root explicitly.
+                if path_str.is_empty() || path_str == "/" {
+                    for source in state.sources.iter() {
+                        if source.sync_policy() == rmpd_source::SyncPolicy::OnDemand {
+                            resp.field("directory", source.name());
+                        }
                     }
                 }
 

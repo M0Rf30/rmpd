@@ -8,6 +8,7 @@ members = [
     "rmpd-player",
     "rmpd-library",
     "rmpd-plugin",
+    "rmpd-integrations",
     "rmpd-source",
     "rmpd-stream",
 ]
@@ -46,6 +47,7 @@ audioadapter-buffers = "5.2"     # Buffer wrappers (InterleavedSlice) for rubato
 # Networking & Protocol
 reqwest = { version = "0.13", features = ["stream"] }
 winnow = "1.0"
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "ws"] }  # HTTP/WebSocket server (pure Rust; `http-api` integration)
 
 # Database & Storage
 rusqlite = { version = "0.40", features = ["bundled"] }
@@ -63,6 +65,10 @@ bytes = "1"
 rand = "0.10"
 dirs = "7"
 sha2 = "0.11"
+serde_json = "1"
+md-5 = "0.11"                    # MD5 (Last.fm API signatures; protocol-mandated)
+aes = "0.8"                       # AES-128 block cipher (pure Rust RustCrypto; HLS segment decryption)
+cbc = "0.1"                       # CBC mode (pure Rust RustCrypto; HLS AES-128 segments)
 
 # Advanced features
 mdns-sd = "0.21"                  # Network discovery
@@ -82,6 +88,7 @@ rmpd-player = { path = "rmpd-player" }
 # Cargo.toml), not inherited automatically by every dependent.
 rmpd-library = { path = "rmpd-library", default-features = false }
 rmpd-plugin = { path = "rmpd-plugin" }
+rmpd-integrations = { path = "rmpd-integrations" }
 rmpd-stream = { path = "rmpd-stream" }
 rmpd-source = { path = "rmpd-source" }
 

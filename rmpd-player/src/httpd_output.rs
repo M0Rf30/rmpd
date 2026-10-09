@@ -12,7 +12,9 @@
 //! interleaved ICY metadata blocks every `ICY_METAINT` audio bytes.
 
 use crate::audio_output::{AudioOutput, PauseState};
-use crate::encoder::{Encoder, PcmEncoder, WavEncoder};
+#[cfg(test)]
+use crate::encoder::PcmEncoder;
+use crate::encoder::{Encoder, WavEncoder, create_encoder_from_config};
 use parking_lot::Mutex;
 use rmpd_core::config::OutputConfig;
 use rmpd_core::error::{Result, RmpdError};
@@ -45,7 +47,7 @@ pub fn set_now_playing(title: Option<String>) {
     }
 }
 
-fn now_playing() -> Option<String> {
+pub(crate) fn now_playing() -> Option<String> {
     NOW_PLAYING.read().ok().and_then(|g| g.clone())
 }
 
@@ -201,9 +203,31 @@ impl HttpdOutput {
     /// - `bind_to_address` — interface to bind (default `"127.0.0.1"`; set
     ///   explicitly to `"0.0.0.0"` to expose the stream off-host)
     /// - `port`            — TCP port (default `8000`; `0` = OS-assigned)
-    /// - `encoder`         — `"wav"` (default) or `"pcm"`
+    /// - `encoder`         — any name from [`crate::encoder::ENCODER_PLUGINS`]
+    ///   (`wav` default, `pcm`, `flac`, plus `opus`/`vorbis` when built with
+    ///   the matching feature); `bitrate`, `quality` and `compression` tune
+    ///   the encoder
     /// - `max_clients`     — simultaneous client cap (default `32`)
+    ///
+    /// An unknown/unavailable encoder falls back to `wav` with a warning; use
+    /// [`HttpdOutput::try_new`] to get the error instead.
     pub fn new(format: AudioFormat, cfg: &OutputConfig) -> Self {
+        let encoder = create_encoder_from_config(format, cfg).unwrap_or_else(|e| {
+            tracing::warn!("httpd: {e}; falling back to the wav encoder");
+            Box::new(WavEncoder::new(format))
+        });
+        Self::with_encoder(cfg, encoder)
+    }
+
+    /// Like [`HttpdOutput::new`] but fails on an unknown/invalid encoder.
+    pub fn try_new(format: AudioFormat, cfg: &OutputConfig) -> Result<Self> {
+        Ok(Self::with_encoder(
+            cfg,
+            create_encoder_from_config(format, cfg)?,
+        ))
+    }
+
+    fn with_encoder(cfg: &OutputConfig, encoder: Box<dyn Encoder>) -> Self {
         let addr = cfg
             .setting_str("bind_to_address")
             .unwrap_or_else(|| "127.0.0.1".to_owned());
@@ -217,12 +241,6 @@ impl HttpdOutput {
             .setting_str("max_clients")
             .and_then(|s| s.parse().ok())
             .unwrap_or(32);
-
-        let encoder: Box<dyn Encoder> = match cfg.setting_str("encoder").as_deref().unwrap_or("wav")
-        {
-            "pcm" => Box::new(PcmEncoder::new(format)),
-            _ => Box::new(WavEncoder::new(format)),
-        };
 
         let name = if cfg.name.is_empty() {
             "rmpd".to_owned()

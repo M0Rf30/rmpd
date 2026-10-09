@@ -5,6 +5,7 @@ use crate::audio_output::AudioOutput;
 use crate::decoder::SymphoniaDecoder;
 use crate::dop::DopEncoder;
 use crate::dop_output::DopOutput;
+use crate::mixer::{MixerError, MixerSet};
 use crate::output::CpalOutput;
 use crate::output_control::OutputControl;
 use parking_lot::Mutex;
@@ -211,6 +212,13 @@ pub struct PlaybackEngine {
     playback_thread: Option<thread::JoinHandle<()>>,
     current_song: Arc<Mutex<Option<Song>>>,
     volume: Arc<AtomicU8>,
+    /// Mixers of the enabled outputs (`mixer_type` per output). `volume` above
+    /// is only the SOFTWARE gain: it stays at 100 unless a software mixer is
+    /// active, so a hardware mixer never stacks with digital attenuation.
+    mixers: Arc<MixerSet>,
+    /// Last volume requested through `set_volume`/`restore_volume`; applied as
+    /// software gain whenever a software mixer is (again) active.
+    last_volume: u8,
     command_tx: Option<mpsc::Sender<PlaybackCommand>>,
     outputs: Vec<OutputConfig>,
     replay_gain_mode: ReplayGainMode,
@@ -249,6 +257,9 @@ pub struct PlaybackEngine {
     /// `seek()` / `set_volume()` act on the same block a reused (gapless
     /// next/previous) cached output's callback is already reading.
     control: Arc<OutputControl>,
+    /// Per-output control blocks (own software gain each); see
+    /// [`crate::output_control::OutputGains`].
+    output_gains: Arc<crate::output_control::OutputGains>,
     /// Audible-position base (seconds, f64 bits) for [`Self::get_elapsed_live`]:
     /// the decode thread updates this on every seek and at every natural
     /// song-boundary reset, in lockstep with `control`'s played-frame
@@ -283,6 +294,9 @@ impl PlaybackEngine {
         status: Arc<RwLock<rmpd_core::state::PlayerStatus>>,
         atomic_state: Arc<AtomicU8>,
     ) -> Self {
+        let volume = Arc::new(AtomicU8::new(100));
+        let outputs = vec![OutputConfig::cpal_default()];
+        let mixers = Arc::new(MixerSet::from_outputs(&outputs, &volume));
         Self {
             status,
             event_bus,
@@ -290,9 +304,11 @@ impl PlaybackEngine {
             atomic_state,
             playback_thread: None,
             current_song: Arc::new(Mutex::new(None)),
-            volume: Arc::new(AtomicU8::new(100)),
+            volume,
+            mixers,
+            last_volume: 100,
             command_tx: None,
-            outputs: vec![OutputConfig::cpal_default()],
+            outputs,
             replay_gain_mode: ReplayGainMode::default(),
             replay_gain_preamp: 0.0,
             replay_gain_missing_preamp: 0.0,
@@ -307,6 +323,7 @@ impl PlaybackEngine {
             next_song: Arc::new(Mutex::new(None)),
             buffer_time_ms: 500, // matches AudioConfig::default_buffer_time()
             control: Arc::new(OutputControl::new()),
+            output_gains: Arc::new(crate::output_control::OutputGains::default()),
             live_position_base_bits: Arc::new(AtomicU64::new(0.0f64.to_bits())),
             live_sample_rate: Arc::new(AtomicU32::new(0)),
             play_time_ns: Arc::new(AtomicU64::new(0)),
@@ -317,6 +334,52 @@ impl PlaybackEngine {
 
     pub fn set_outputs(&mut self, outputs: Vec<OutputConfig>) {
         self.outputs = outputs;
+        self.mixers = Arc::new(MixerSet::from_outputs(&self.outputs, &self.volume));
+        self.apply_software_gain();
+    }
+
+    /// Keep the software gain stage consistent with the active mixers: the
+    /// requested volume while a software mixer is in use, unity (100%)
+    /// otherwise (hardware / no mixer).
+    fn apply_software_gain(&self) {
+        let sw = if self.mixers.has_software() {
+            self.last_volume
+        } else {
+            100
+        };
+        self.volume.store(sw, Ordering::Release);
+        let gain = f32::from(sw) / 100.0;
+        self.control.set_gain(gain);
+        self.output_gains.set_software_gain(gain);
+    }
+
+    /// Whether any enabled output has a usable mixer (`false` when all are
+    /// `mixer_type = none`: MPD then omits `volume` from `status`).
+    #[must_use]
+    pub fn volume_available(&self) -> bool {
+        self.mixers.controls_volume()
+    }
+
+    /// Volume currently reported by the hardware mixers of the enabled
+    /// outputs, or `None` when none uses one (software volume is tracked in
+    /// the player status).
+    #[must_use]
+    pub fn hardware_volume(&self) -> Option<u8> {
+        self.mixers.hardware_volume()
+    }
+
+    /// The mixer set when at least one enabled output uses a hardware mixer
+    /// (for off-thread polling of external volume changes), else `None`.
+    #[must_use]
+    pub fn hardware_mixers(&self) -> Option<Arc<MixerSet>> {
+        self.mixers.has_hardware().then(|| self.mixers.clone())
+    }
+
+    /// Apply a persisted volume (state file) to the software mixer. Hardware
+    /// mixers keep the level the device already has, like MPD.
+    pub fn restore_volume(&mut self, vol: u8) {
+        self.last_volume = vol.min(100);
+        self.apply_software_gain();
     }
 
     /// Set the output buffer time in milliseconds. Sizes the PCM ring buffer
@@ -468,6 +531,7 @@ impl PlaybackEngine {
         let event_bus = self.event_bus.clone();
         let stop_flag = self.stop_flag.clone();
         let volume = self.volume.clone();
+        let output_gains = self.output_gains.clone();
         let status_clone = self.status.clone();
         let atomic_state_clone = self.atomic_state.clone();
         let outputs = self.outputs.clone();
@@ -517,6 +581,7 @@ impl PlaybackEngine {
                 event_bus,
                 stop_flag,
                 volume,
+                output_gains,
                 &command_rx,
                 outputs,
                 resampler_quality,
@@ -743,18 +808,40 @@ impl PlaybackEngine {
     }
 
     pub async fn set_volume(&mut self, vol: u8) -> Result<()> {
-        self.volume.store(vol, Ordering::Release);
+        let vol = vol.min(100);
+        let mixers = self.mixers.clone();
+        // Hardware mixers talk to the sound card: keep that off the async worker.
+        let result = if mixers.has_hardware() {
+            tokio::task::spawn_blocking(move || mixers.set_volume(vol))
+                .await
+                .map_err(|e| RmpdError::Player(format!("mixer task failed: {e}")))?
+        } else {
+            mixers.set_volume(vol)
+        };
+        result.map_err(|e| match e {
+            MixerError::NoMixer => RmpdError::Player("problems setting volume".to_owned()),
+            other => RmpdError::Player(format!("problems setting volume: {other}")),
+        })?;
+        self.last_volume = vol;
         // Instant: every self-managed backend's real-time callback ramps
         // toward this over a few ms (see `conversion::GainRamp`), instead of
         // the old write-time `VolumeFilter` which could lag by the full
         // queue depth (up to ~1s) before a change reached the device.
-        self.control.set_gain(f32::from(vol) / 100.0);
-        self.event_bus.emit(Event::VolumeChanged(vol));
+        // With only hardware mixers the software gain stays at unity.
+        if self.mixers.has_software() {
+            let gain = f32::from(vol) / 100.0;
+            self.control.set_gain(gain);
+            self.output_gains.set_software_gain(gain);
+        }
+        let reported = self.mixers.volume().unwrap_or(vol);
+        self.event_bus.emit(Event::VolumeChanged(reported));
         Ok(())
     }
 
     pub async fn get_volume(&self) -> u8 {
-        self.volume.load(Ordering::Acquire)
+        self.mixers
+            .volume()
+            .unwrap_or_else(|| self.volume.load(Ordering::Acquire))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -765,6 +852,7 @@ impl PlaybackEngine {
         event_bus: EventBus,
         stop_flag: Arc<AtomicBool>,
         volume: Arc<AtomicU8>,
+        output_gains: Arc<crate::output_control::OutputGains>,
         command_rx: &mpsc::Receiver<PlaybackCommand>,
         outputs: Vec<rmpd_core::config::OutputConfig>,
         resampler_quality: ResamplerQuality,
@@ -897,7 +985,17 @@ impl PlaybackEngine {
 
         let signature: Vec<String> = effective_outputs
             .iter()
-            .map(|c| format!("{}|{}", c.output_type, c.name))
+            .map(|c| {
+                // The resolved DSP chain is part of the identity: changing the
+                // filter setup rebuilds the outputs. Empty when no filters are
+                // configured, which leaves the key (and gapless reuse) as before.
+                let fp = crate::filter::chain_fingerprint(c);
+                if fp.is_empty() {
+                    format!("{}|{}", c.output_type, c.name)
+                } else {
+                    format!("{}|{}|{fp}", c.output_type, c.name)
+                }
+            })
             .collect();
         let key = crate::output_slot::OutputKey {
             sample_rate: format.sample_rate,
@@ -910,18 +1008,39 @@ impl PlaybackEngine {
         // change. The closure (which opens devices) runs only on a cache miss.
         let multi = output_slot
             .acquire(key, || {
-                let mut boxes: Vec<Box<dyn AudioOutput>> =
+                // Per-output gain: software-mixer outputs follow the requested
+                // volume, hardware / `none` ones stay at unity so the device
+                // mixer is never stacked with digital attenuation.
+                output_gains.clear();
+                let master_gain = control.gain();
+                let mut boxes: Vec<(Box<dyn AudioOutput>, Arc<AtomicU8>)> =
+                    Vec::with_capacity(effective_outputs.len());
+                let mut chains: Vec<crate::filter::FilterChain> =
                     Vec::with_capacity(effective_outputs.len());
                 for (i, cfg) in effective_outputs.iter().enumerate() {
+                    let software = crate::mixer::output_uses_software_gain(cfg);
+                    let out_control = output_gains.register(&control, software, master_gain);
                     match Self::create_output(
                         format,
                         cfg,
                         resampler_quality,
                         buffer_time_ms,
                         dsd_target_rate,
-                        control.clone(),
+                        out_control,
                     ) {
-                        Ok(b) => boxes.push(b),
+                        Ok(b) => {
+                            let filter_volume = if software {
+                                volume.clone()
+                            } else {
+                                Arc::new(AtomicU8::new(100))
+                            };
+                            boxes.push((b, filter_volume));
+                            chains.push(crate::filter::chain_for_output(
+                                cfg,
+                                format.sample_rate,
+                                format.channels,
+                            ));
+                        }
                         Err(e) => {
                             if i == 0 {
                                 // MPD (`Filtered::Open`): `Failed to open "name" (plugin)`.
@@ -939,12 +1058,14 @@ impl PlaybackEngine {
                         }
                     }
                 }
-                Ok(Arc::new(crate::multi_output::MultiOutput::spawn(
-                    boxes,
-                    16,
-                    volume.clone(),
-                    control.clone(),
-                )?))
+                Ok(Arc::new(
+                    crate::multi_output::MultiOutput::spawn_with_filters(
+                        boxes,
+                        chains,
+                        16,
+                        control.clone(),
+                    )?,
+                ))
             })
             .map_err(PlaybackFailure::Output)?;
 

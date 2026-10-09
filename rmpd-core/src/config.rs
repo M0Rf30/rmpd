@@ -6,6 +6,9 @@ use camino::Utf8PathBuf;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+mod layers;
+pub use layers::{apply_override, mask_secrets, merge_tables};
+
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct Config {
     #[serde(default)]
@@ -19,9 +22,21 @@ pub struct Config {
     #[serde(default)]
     pub source: Vec<SourceConfig>,
     #[serde(default)]
+    pub integration: Vec<IntegrationConfig>,
+    /// `[[filter]]` blocks: named DSP filters (normalize, equalizer, route)
+    /// referenced by `[audio].filters` or an output's `filters` list.
+    #[serde(default)]
+    pub filter: Vec<FilterConfig>,
+    /// `[[artwork]]` blocks: cover-art providers consulted by `albumart` /
+    /// `readpicture` when a song has no local or embedded art.
+    #[serde(default)]
+    pub artwork: Vec<ArtworkConfig>,
+    #[serde(default)]
     pub database: DatabaseConfig,
     #[serde(default)]
     pub playlist: PlaylistConfig,
+    #[serde(default)]
+    pub stream: StreamConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -194,6 +209,11 @@ pub struct AudioConfig {
     /// Default: false (auto-resume if was playing)
     #[serde(default)]
     pub restore_paused: bool,
+    /// Global filter chain: names of `[[filter]]` blocks applied, in order, to
+    /// every output that has no `filters` setting of its own. Empty (the
+    /// default) leaves the audio path untouched.
+    #[serde(default)]
+    pub filters: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -276,6 +296,128 @@ impl SourceConfig {
     }
 }
 
+/// `[[integration]]` block: a compile-time-registered integration plugin
+/// (scrobbler, notifier, ...). Same shape as [`SourceConfig`].
+#[derive(Clone, Deserialize, Serialize)]
+pub struct IntegrationConfig {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub integration_type: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(flatten)]
+    pub settings: toml::Table,
+}
+
+impl std::fmt::Debug for IntegrationConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IntegrationConfig")
+            .field("name", &self.name)
+            .field("integration_type", &self.integration_type)
+            .field("enabled", &self.enabled)
+            .field("settings", &"<redacted>")
+            .finish()
+    }
+}
+
+impl IntegrationConfig {
+    /// Look up a string-valued setting (trimmed, non-empty; scalars are
+    /// stringified). Returns `None` when absent or empty.
+    #[must_use]
+    pub fn setting_str(&self, key: &str) -> Option<String> {
+        setting_str(&self.settings, key)
+    }
+}
+
+/// `[[artwork]]` block: a compile-time-registered cover-art provider
+/// (`type = "coverartarchive"`, ...). Same shape as [`IntegrationConfig`].
+#[derive(Clone, Deserialize, Serialize)]
+pub struct ArtworkConfig {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub artwork_type: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(flatten)]
+    pub settings: toml::Table,
+}
+
+impl std::fmt::Debug for ArtworkConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ArtworkConfig")
+            .field("name", &self.name)
+            .field("artwork_type", &self.artwork_type)
+            .field("enabled", &self.enabled)
+            .field("settings", &"<redacted>")
+            .finish()
+    }
+}
+
+impl ArtworkConfig {
+    /// Look up a string-valued setting (trimmed, non-empty; scalars are
+    /// stringified). Returns `None` when absent or empty.
+    #[must_use]
+    pub fn setting_str(&self, key: &str) -> Option<String> {
+        setting_str(&self.settings, key)
+    }
+
+    /// Look up a boolean setting (`true`/`false`, or the strings
+    /// `"true"`/`"false"`/`"yes"`/`"no"`/`"1"`/`"0"`); `default` when absent
+    /// or unparsable.
+    #[must_use]
+    pub fn setting_bool(&self, key: &str, default: bool) -> bool {
+        match self.settings.get(key) {
+            Some(toml::Value::Boolean(b)) => *b,
+            Some(toml::Value::String(s)) => match s.trim().to_ascii_lowercase().as_str() {
+                "true" | "yes" | "1" | "on" => true,
+                "false" | "no" | "0" | "off" => false,
+                _ => default,
+            },
+            Some(toml::Value::Integer(i)) => *i != 0,
+            _ => default,
+        }
+    }
+}
+
+/// `[[filter]]` block: a compile-time-registered DSP filter plugin
+/// (`normalize`, `equalizer`, `route`). `name` is what `[audio].filters` and
+/// an `[[output]]`'s `filters` list refer to. Plugin settings are flattened
+/// next to `name`/`type`/`enabled`.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct FilterConfig {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub filter_type: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(flatten)]
+    pub settings: toml::Table,
+}
+
+/// Check a plugin settings table against the keys the plugin accepts.
+///
+/// Returns one human-readable message per unknown key (with a "did you
+/// mean" hint when a close match exists). Never fatal: callers log these as
+/// warnings. Values are never included in messages.
+#[must_use]
+pub fn unknown_setting_messages(
+    kind: &str,
+    name: &str,
+    settings: &toml::Table,
+    accepted: &[&'static str],
+) -> Vec<String> {
+    settings
+        .keys()
+        .filter(|k| !accepted.contains(&k.as_str()))
+        .map(|key| match suggest(key, accepted) {
+            Some(s) => {
+                format!("unknown setting `{key}` in [[{kind}]] `{name}` (did you mean `{s}`?)")
+            }
+            None => format!("unknown setting `{key}` in [[{kind}]] `{name}`"),
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 pub struct DatabaseConfig {
     #[serde(default = "default_true")]
@@ -333,6 +475,70 @@ impl Default for PlaylistConfig {
         Self {
             embedded_cue_as_directory: true,
         }
+    }
+}
+
+const fn default_stream_timeout_ms() -> u64 {
+    5000
+}
+
+/// `[stream]`: HTTP(S) radio input settings (Mopidy `[stream]` equivalent).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct StreamConfig {
+    /// Connect and per-read timeout, in milliseconds. Default 5000.
+    #[serde(default = "default_stream_timeout_ms")]
+    pub timeout_ms: u64,
+    /// `fnmatch`-style globs (`*`, `?`, `[abc]`); a stream whose URL matches
+    /// any of them has its ICY `StreamTitle` ignored (some stations send
+    /// advertising or garbage in-band metadata).
+    #[serde(default)]
+    pub metadata_blacklist: Vec<String>,
+    /// Optional HTTP proxy for all stream and playlist requests
+    /// (`[stream.proxy]`).
+    #[serde(default)]
+    pub proxy: Option<ProxyConfig>,
+    /// Optional ceiling for HLS adaptive streams, in bits per second (the
+    /// unit of the playlist `BANDWIDTH` attribute). The best variant not
+    /// exceeding it is played; when every variant exceeds it the lowest one
+    /// is used. Unset: the best audio-only variant (lowest overall when the
+    /// playlist has no audio-only variant).
+    #[serde(default)]
+    pub hls_max_bandwidth: Option<u64>,
+}
+
+impl Default for StreamConfig {
+    fn default() -> Self {
+        Self {
+            timeout_ms: default_stream_timeout_ms(),
+            metadata_blacklist: Vec::new(),
+            proxy: None,
+            hls_max_bandwidth: None,
+        }
+    }
+}
+
+/// `[stream.proxy]`: HTTP proxy used for stream requests.
+#[derive(Clone, Default, Deserialize, Serialize)]
+pub struct ProxyConfig {
+    /// Proxy URL, e.g. `http://proxy.example:3128`.
+    #[serde(default)]
+    pub url: String,
+    /// Optional basic-auth user name.
+    #[serde(default)]
+    pub username: Option<String>,
+    /// Optional basic-auth password.
+    #[serde(default)]
+    pub password: Option<String>,
+}
+
+impl std::fmt::Debug for ProxyConfig {
+    // The URL may embed credentials and the password is a secret: never print them.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProxyConfig")
+            .field("url", &"<redacted>")
+            .field("username", &self.username.as_ref().map(|_| "<redacted>"))
+            .field("password", &self.password.as_ref().map(|_| "<redacted>"))
+            .finish()
     }
 }
 
@@ -618,7 +824,17 @@ fn default_true() -> bool {
 // settings and are intentionally not covered here beyond `name`/`type`.
 
 const KNOWN_SECTIONS: &[&str] = &[
-    "general", "network", "audio", "output", "source", "database", "playlist",
+    "general",
+    "network",
+    "audio",
+    "output",
+    "source",
+    "integration",
+    "artwork",
+    "filter",
+    "database",
+    "playlist",
+    "stream",
 ];
 
 const GENERAL_KEYS: &[&str] = &[
@@ -671,6 +887,7 @@ const AUDIO_KEYS: &[&str] = &[
     "mixramp_db",
     "mixramp_delay",
     "restore_paused",
+    "filters",
     "pause_on_device_loss",
 ];
 
@@ -682,6 +899,10 @@ const DATABASE_KEYS: &[&str] = &[
 ];
 
 const PLAYLIST_KEYS: &[&str] = &["embedded_cue_as_directory"];
+
+const STREAM_KEYS: &[&str] = &["timeout_ms", "metadata_blacklist", "proxy"];
+
+const PROXY_KEYS: &[&str] = &["url", "username", "password"];
 
 /// Levenshtein edit distance between two strings (two-row DP, no allocation
 /// beyond the two rows).
@@ -998,10 +1219,15 @@ impl Config {
         let content = std::fs::read_to_string(path).map_err(|e| {
             RmpdError::Config(format!("failed to read config {}: {e}", path.display()))
         })?;
+        Self::load_content(&content, &path.display().to_string())
+    }
 
-        let mut config: Config = toml::from_str(&content).map_err(|e| {
-            RmpdError::Config(format!("failed to parse config {}: {e}", path.display()))
-        })?;
+    /// Same as [`Self::load_file`] for already-read TOML; `label` names the
+    /// origin in parse errors.
+    pub(crate) fn load_content(content: &str, label: &str) -> Result<(Self, Vec<Diagnostic>)> {
+        let content = content.to_owned();
+        let mut config: Config = toml::from_str(&content)
+            .map_err(|e| RmpdError::Config(format!("failed to parse config {label}: {e}")))?;
 
         let mut diagnostics = Self::lint(&content);
         apply_follow_symlinks_alias(&content, &mut config, &mut diagnostics);
@@ -1029,8 +1255,19 @@ impl Config {
                 "audio" => lint_section("audio", value, AUDIO_KEYS, &mut diagnostics),
                 "database" => lint_section("database", value, DATABASE_KEYS, &mut diagnostics),
                 "playlist" => lint_section("playlist", value, PLAYLIST_KEYS, &mut diagnostics),
+                "stream" => {
+                    lint_section("stream", value, STREAM_KEYS, &mut diagnostics);
+                    if let toml::Value::Table(table) = value
+                        && let Some(proxy) = table.get("proxy")
+                    {
+                        lint_section("stream.proxy", proxy, PROXY_KEYS, &mut diagnostics);
+                    }
+                }
                 "output" => lint_tables("output", value, &mut diagnostics),
                 "source" => lint_tables("source", value, &mut diagnostics),
+                "integration" => lint_tables("integration", value, &mut diagnostics),
+                "artwork" => lint_tables("artwork", value, &mut diagnostics),
+                "filter" => lint_tables("filter", value, &mut diagnostics),
                 "decoder" => diagnostics.push(Diagnostic::warn(
                     "config section `[decoder]` was removed: decoders are selected at build time",
                 )),
@@ -1288,6 +1525,25 @@ impl Config {
             config.general.log_level = "info".to_owned();
         }
 
+        if config.stream.timeout_ms == 0 {
+            config.stream.timeout_ms = default_stream_timeout_ms();
+            diagnostics.push(Diagnostic::warn(format!(
+                "stream.timeout_ms was 0; using {}",
+                config.stream.timeout_ms
+            )));
+        }
+        if config
+            .stream
+            .proxy
+            .as_ref()
+            .is_some_and(|p| p.url.trim().is_empty())
+        {
+            config.stream.proxy = None;
+            diagnostics.push(Diagnostic::warn(
+                "[stream.proxy] has no `url`; the proxy is ignored",
+            ));
+        }
+
         Ok(())
     }
 }
@@ -1351,6 +1607,7 @@ impl Default for AudioConfig {
             mixramp_db: default_mixramp_db(),
             mixramp_delay: 0.0,
             restore_paused: false,
+            filters: Vec::new(),
         }
     }
 }
@@ -1735,6 +1992,10 @@ max_bitrate = 320
             format!("{:?}", parsed.playlist),
             format!("{:?}", default.playlist)
         );
+        assert_eq!(
+            format!("{:?}", parsed.stream),
+            format!("{:?}", default.stream)
+        );
     }
 
     #[test]
@@ -2009,5 +2270,78 @@ some_backend_specific_key = 1
         );
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn stream_section_parses_and_lints_clean() {
+        let content = "[stream]\ntimeout_ms = 1500\nmetadata_blacklist = [\"*://ads.example/*\"]\n\n[stream.proxy]\nurl = \"http://p:3128\"\nusername = \"u\"\npassword = \"s3cret\"\n";
+        assert!(Config::lint(content).is_empty());
+        let cfg: Config = toml::from_str(content).unwrap();
+        assert_eq!(cfg.stream.timeout_ms, 1500);
+        assert_eq!(cfg.stream.metadata_blacklist, vec!["*://ads.example/*"]);
+        let proxy = cfg.stream.proxy.as_ref().unwrap();
+        assert_eq!(proxy.url, "http://p:3128");
+        assert_eq!(proxy.username.as_deref(), Some("u"));
+        // Debug must not leak secrets.
+        let dbg = format!("{:?}", cfg.stream);
+        assert!(!dbg.contains("s3cret") && !dbg.contains("p:3128"));
+    }
+
+    #[test]
+    fn stream_unknown_keys_are_reported_with_hint() {
+        let diags = Config::lint(
+            "[stream]\ntimeout = 1\nmetadata_blacklst = []\n\n[stream.proxy]\nusr = \"x\"\n",
+        );
+        let msgs: Vec<&str> = diags.iter().map(|d| d.message.as_str()).collect();
+        assert!(
+            msgs.iter().any(|m| m.contains("stream.timeout")),
+            "{msgs:?}"
+        );
+        assert!(
+            msgs.iter()
+                .any(|m| m.contains("did you mean `metadata_blacklist`")),
+            "{msgs:?}"
+        );
+        assert!(
+            msgs.iter().any(|m| m.contains("stream.proxy.usr")),
+            "{msgs:?}"
+        );
+    }
+
+    #[test]
+    fn stream_defaults() {
+        let cfg = StreamConfig::default();
+        assert_eq!(cfg.timeout_ms, 5000);
+        assert!(cfg.metadata_blacklist.is_empty());
+        assert!(cfg.proxy.is_none());
+    }
+
+    #[test]
+    fn filter_blocks_and_global_chain_parse() {
+        let content = r#"
+[audio]
+filters = ["eq"]
+
+[[filter]]
+name = "eq"
+type = "equalizer"
+preamp_db = -3.0
+bands = [{ freq = 60, gain_db = 4.0, q = 0.7 }]
+
+[[output]]
+name = "A"
+type = "null"
+filters = ["eq"]
+"#;
+        assert!(Config::lint(content).is_empty());
+        let cfg: Config = toml::from_str(content).unwrap();
+        assert_eq!(cfg.audio.filters, vec!["eq"]);
+        assert_eq!(cfg.filter.len(), 1);
+        assert_eq!(cfg.filter[0].name, "eq");
+        assert_eq!(cfg.filter[0].filter_type, "equalizer");
+        assert!(cfg.filter[0].enabled);
+        assert!(cfg.filter[0].settings.contains_key("bands"));
+        assert!(Config::default().filter.is_empty());
+        assert!(Config::default().audio.filters.is_empty());
     }
 }

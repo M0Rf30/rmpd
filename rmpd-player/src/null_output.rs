@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 /// Real-time pacer, mirroring MPD's `Timer` (`src/output/Timer.cxx`): it
 /// tracks how many frames have been handed over and sleeps out the
 /// difference between that playback position and the wall clock.
-struct Pacer {
+pub(crate) struct Pacer {
     frames_per_second: f64,
     channels: usize,
     started: Option<Instant>,
@@ -34,7 +34,7 @@ struct Pacer {
 }
 
 impl Pacer {
-    fn new(format: AudioFormat) -> Self {
+    pub(crate) fn new(format: AudioFormat) -> Self {
         Self {
             frames_per_second: f64::from(format.sample_rate.max(1)),
             channels: usize::from(format.channels).max(1),
@@ -44,7 +44,7 @@ impl Pacer {
         }
     }
 
-    fn add(&mut self, samples: usize) {
+    pub(crate) fn add(&mut self, samples: usize) {
         let start = *self.started.get_or_insert_with(Instant::now);
         self.frames += (samples / self.channels) as u64;
         let target = Duration::from_secs_f64(self.frames as f64 / self.frames_per_second);
@@ -53,13 +53,13 @@ impl Pacer {
         }
     }
 
-    fn pause(&mut self) {
+    pub(crate) fn pause(&mut self) {
         if self.started.is_some() && self.paused_at.is_none() {
             self.paused_at = Some(Instant::now());
         }
     }
 
-    fn resume(&mut self) {
+    pub(crate) fn resume(&mut self) {
         if let Some(paused_at) = self.paused_at.take()
             && let Some(started) = self.started.as_mut()
         {
@@ -67,7 +67,7 @@ impl Pacer {
         }
     }
 
-    fn reset(&mut self) {
+    pub(crate) fn reset(&mut self) {
         self.started = None;
         self.frames = 0;
         self.paused_at = None;

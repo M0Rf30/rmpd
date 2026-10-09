@@ -37,6 +37,10 @@ pub async fn run(
     // Build music-source registry from [[source]] config blocks.
     let source_registry = Arc::new(rmpd_source::SourceRegistry::from_config(&config.source));
     state.set_sources(source_registry);
+    // Cover-art providers from [[artwork]] blocks (albumart/readpicture fallback).
+    state.set_artwork(Arc::new(rmpd_integrations::build_artwork_resolver(
+        &config.artwork,
+    )));
     state.set_password(config.network.password.clone());
     state.set_passwords(config.network.passwords.clone());
     state.set_permission_rules(
@@ -56,6 +60,8 @@ pub async fn run(
         config.playlist.embedded_cue_as_directory,
         config.database.hide_playlist_targets,
     );
+    // HTTP(S) radio input: timeout, proxy and ICY metadata blacklist.
+    rmpd_stream::configure(&config.stream);
     if !config
         .general
         .filesystem_charset
@@ -104,6 +110,14 @@ pub async fn run(
         });
     }
     rmpd_player::set_output_device(config.output_device());
+    // DSP filter plugins ([[filter]] blocks, [audio].filters, per-output
+    // `filters`). Installed process-wide; outputs pick their chain up when
+    // they are (re)opened. Misconfiguration only warns.
+    let filter_warnings =
+        rmpd_player::filter::configure(&config.filter, &config.audio.filters, &config.output);
+    for msg in filter_warnings {
+        warn!("filter config: {msg}");
+    }
 
     // Build the protocol-visible output list from the [[output]] config blocks
     // so `outputs`/`enableoutput`/`disableoutput` report the real configuration.
@@ -189,29 +203,6 @@ pub async fn run(
         None
     };
 
-    // Expose rmpd on the session D-Bus via MPRIS so desktop environments,
-    // `playerctl`, and media keys can discover and control it. Kept alive
-    // (`_mpris`) for the lifetime of the server; dropping it releases the
-    // D-Bus name. Failure (e.g. no session bus) is non-fatal.
-    // Linux desktop integration. macOS uses the native Now Playing stack,
-    // which has to run on the process main thread (see media_controls_macos),
-    // so it is started from main.rs instead.
-    #[cfg(not(target_os = "macos"))]
-    let _media_integration = if config.network.media_controls {
-        match rmpd_protocol::mpris::spawn(state.clone()).await {
-            Ok(handle) => {
-                info!("MPRIS interface enabled (org.mpris.MediaPlayer2.rmpd)");
-                Some(handle)
-            }
-            Err(e) => {
-                warn!("MPRIS interface disabled: {}", e);
-                None
-            }
-        }
-    } else {
-        None
-    };
-
     // A missing music_directory is not fatal (config warns about it), but the
     // scanner and the watcher both need a real directory. Skipping them here is
     // what makes that warning honest: without this the daemon would immediately
@@ -233,6 +224,44 @@ pub async fn run(
         info!("syncing music source catalogs");
         state.spawn_source_sync();
     }
+
+    // Start enabled `[[integration]]` plugins (scrobblers, notifiers, MPRIS,
+    // ...). Legacy `[network]` switches are translated into built-in
+    // integration blocks here (explicit `[[integration]]` blocks win).
+    // macOS Now Playing is the exception: it must run on the main thread and
+    // is started from main.rs.
+    let (integration_shutdown, integration_signal) = rmpd_plugin::shutdown_channel();
+    let player: Arc<dyn rmpd_plugin::PlayerHandle> =
+        Arc::new(rmpd_protocol::ServerPlayerHandle::new(state.clone()));
+    let integration_dir = std::path::Path::new(&state_file_path)
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join("integrations");
+    let mut integration_cfgs = config.integration.clone();
+    integration_cfgs.extend(rmpd_integrations::synthesize_builtin(
+        &config.network,
+        &config.integration,
+    ));
+    let mut integration_handles = rmpd_integrations::spawn_integrations(
+        &integration_cfgs,
+        &state.event_bus,
+        &player,
+        &integration_dir,
+        &integration_signal,
+    );
+    // mDNS needs the bound port, so it starts once the listener is up.
+    let spawn_mdns = |port: u16| -> Vec<tokio::task::JoinHandle<()>> {
+        match rmpd_integrations::mdns_config(&config.network, &config.integration, port) {
+            Some(cfg) => rmpd_integrations::spawn_integrations(
+                &[cfg],
+                &state.event_bus,
+                &player,
+                &integration_dir,
+                &integration_signal,
+            ),
+            None => Vec::new(),
+        }
+    };
 
     // Start the filesystem watcher so the database stays in sync with on-disk
     // changes. Kept alive (`_watcher`) for the lifetime of the server; dropping
@@ -310,6 +339,9 @@ pub async fn run(
             }
         }
     });
+
+    // Track volume moved outside rmpd (hardware mixers) for `idle mixer`.
+    state.spawn_mixer_watch();
 
     // macOS: pause when the device we were playing through DISAPPEARS from
     // the system's output-device list — headphone power-off reroutes to
@@ -418,13 +450,12 @@ pub async fn run(
 
             // Advertise the port systemd actually bound, and only when there
             // is a TCP listener to advertise.
-            if config.network.zeroconf_enabled
-                && let Some(port) = tcp
-                    .iter()
-                    .find_map(|l| l.local_addr().ok())
-                    .map(|a| a.port())
+            if let Some(port) = tcp
+                .iter()
+                .find_map(|l| l.local_addr().ok())
+                .map(|a| a.port())
             {
-                state.advertise_mdns(port);
+                integration_handles.extend(spawn_mdns(port));
             }
 
             server.run_with_listeners(tcp, unix).await
@@ -452,14 +483,12 @@ pub async fn run(
                     info!("mpd server listening on {}", bind_address);
 
                     // Advertise rmpd via mDNS only once the TCP listener is actually
-                    // accepting connections, and only when zeroconf is enabled. Use
-                    // the port actually bound (`--port` overrides the config value).
-                    if config.network.zeroconf_enabled {
-                        let port = listener
-                            .local_addr()
-                            .map_or(config.network.port, |a| a.port());
-                        state.advertise_mdns(port);
-                    }
+                    // accepting connections. Use the port actually bound (`--port`
+                    // overrides the config value).
+                    let port = listener
+                        .local_addr()
+                        .map_or(config.network.port, |a| a.port());
+                    integration_handles.extend(spawn_mdns(port));
 
                     server.run_with_listener(listener).await
                 }
@@ -481,6 +510,13 @@ pub async fn run(
     let _ = final_shutdown_tx.send(());
     if let Some(ticker) = state_save_ticker {
         let _ = ticker.await;
+    }
+
+    // Integrations were signalled via `integration_shutdown`; give them a
+    // moment to wind down so they can flush their own state.
+    integration_shutdown.trigger();
+    for handle in integration_handles {
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await;
     }
 
     // Save state on clean shutdown
@@ -561,6 +597,9 @@ async fn restore_state(
         engine.set_crossfade(saved_state.crossfade);
         engine.set_mixramp(saved_state.mixramp_db, saved_state.mixramp_delay);
         engine.set_random(saved_state.random);
+        // Software mixers take the persisted volume (hardware mixers keep the
+        // level the device already has, like MPD).
+        engine.restore_volume(saved_state.volume);
     }
 
     // Restore per-output enabled state, then point the engine at the first

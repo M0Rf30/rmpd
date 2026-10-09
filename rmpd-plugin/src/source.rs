@@ -50,6 +50,19 @@ impl std::error::Error for SourceError {}
 
 pub type SourceResult<T> = Result<T, SourceError>;
 
+// ─── SyncPolicy ──────────────────────────────────────────────────────────────
+
+/// How a source's catalog is exposed to clients.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SyncPolicy {
+    /// `list_all` is mirrored into the local database on `update` (default).
+    #[default]
+    Full,
+    /// Catalog is too large/dynamic to mirror: `list_all` is never called and
+    /// browsing under the source's mount delegates to [`MusicSource::browse`].
+    OnDemand,
+}
+
 // ─── SourceEntry ─────────────────────────────────────────────────────────────
 
 /// One child in a virtual browse listing (one `lsinfo` level).
@@ -102,5 +115,32 @@ pub trait MusicSource: Send + Sync {
     /// override it; the caller caches the bytes and infers the MIME type.
     async fn cover_art(&self, _song_id: &str) -> SourceResult<Option<Vec<u8>>> {
         Ok(None)
+    }
+
+    /// Resolve a single virtual path / remote URI to a `Song` (tags + path)
+    /// without a full catalog sync. Default: `Ok(None)` (unsupported).
+    async fn lookup(&self, _uri: &str) -> SourceResult<Option<Song>> {
+        Ok(None)
+    }
+
+    /// Names of server-side playlists the source exposes. Default: none.
+    async fn playlists(&self) -> SourceResult<Vec<String>> {
+        Ok(Vec::new())
+    }
+
+    /// Songs of the server-side playlist `name`. Default: `NotFound`.
+    async fn playlist_items(&self, name: &str) -> SourceResult<Vec<Song>> {
+        Err(SourceError::NotFound(format!("playlist: {name}")))
+    }
+
+    /// Whether `song_id` is an unbounded live stream (radio, ...): no known
+    /// duration, not seekable. Default: `false`.
+    fn is_live(&self, _song_id: &str) -> bool {
+        false
+    }
+
+    /// How the catalog is mirrored into the local database.
+    fn sync_policy(&self) -> SyncPolicy {
+        SyncPolicy::Full
     }
 }

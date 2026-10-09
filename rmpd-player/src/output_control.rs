@@ -17,6 +17,8 @@
 //! regardless of whether `OutputSlot` rebuilt the output or reused a cached
 //! one (e.g. gapless `next`/`previous` reusing the same open device).
 
+use parking_lot::Mutex;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 /// Shared out-of-band control state for one engine's audio outputs.
@@ -29,42 +31,61 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 /// it, so they are never interrupted.
 #[derive(Debug)]
 pub struct OutputControl {
-    paused: AtomicBool,
-    flush_generation: AtomicU64,
+    shared: Arc<SharedState>,
     /// Linear gain (0.0..=1.0 in normal use), IEEE-754 bits of an `f32`.
     /// Applied at playback time in the callback with a short ramp to avoid
-    /// clicks, not baked into chunks at decode/write time.
+    /// clicks, not baked into chunks at decode/write time. Per-control (see
+    /// [`Self::with_own_gain`]) so every output can carry its own gain.
     gain_bits: AtomicU32,
+}
+
+/// State shared by an engine's control block and every per-output derivative.
+#[derive(Debug)]
+struct SharedState {
+    paused: AtomicBool,
+    flush_generation: AtomicU64,
     /// Frames (not interleaved samples) actually handed to the device since
-    /// the last [`Self::flush`] or [`Self::reset_played_frames`]. Used to
-    /// compute the audible playback position, immune to however deep the
-    /// upstream queues are.
+    /// the last [`OutputControl::flush`] or [`OutputControl::reset_played_frames`].
+    /// Used to compute the audible playback position, immune to however deep
+    /// the upstream queues are.
     played_frames: AtomicU64,
 }
 
 impl OutputControl {
     pub fn new() -> Self {
         Self {
-            paused: AtomicBool::new(false),
-            flush_generation: AtomicU64::new(0),
+            shared: Arc::new(SharedState {
+                paused: AtomicBool::new(false),
+                flush_generation: AtomicU64::new(0),
+                played_frames: AtomicU64::new(0),
+            }),
             gain_bits: AtomicU32::new(1.0f32.to_bits()),
-            played_frames: AtomicU64::new(0),
+        }
+    }
+
+    /// A control block sharing pause / flush / played-frames state with
+    /// `self` but with its OWN gain, initialised to `gain`. Lets each output
+    /// apply (or skip) the software volume independently.
+    pub fn with_own_gain(&self, gain: f32) -> Self {
+        Self {
+            shared: self.shared.clone(),
+            gain_bits: AtomicU32::new(gain.to_bits()),
         }
     }
 
     #[inline]
     pub fn is_paused(&self) -> bool {
-        self.paused.load(Ordering::Acquire)
+        self.shared.paused.load(Ordering::Acquire)
     }
 
     #[inline]
     pub fn set_paused(&self, paused: bool) {
-        self.paused.store(paused, Ordering::Release);
+        self.shared.paused.store(paused, Ordering::Release);
     }
 
     #[inline]
     pub fn generation(&self) -> u64 {
-        self.flush_generation.load(Ordering::Acquire)
+        self.shared.flush_generation.load(Ordering::Acquire)
     }
 
     /// Bump the flush generation and reset the played-frame counter.
@@ -75,8 +96,8 @@ impl OutputControl {
     /// generation, so stale audio never reaches the device. Returns the new
     /// generation.
     pub fn flush(&self) -> u64 {
-        let g = self.flush_generation.fetch_add(1, Ordering::AcqRel) + 1;
-        self.played_frames.store(0, Ordering::Release);
+        let g = self.shared.flush_generation.fetch_add(1, Ordering::AcqRel) + 1;
+        self.shared.played_frames.store(0, Ordering::Release);
         g
     }
 
@@ -92,12 +113,12 @@ impl OutputControl {
 
     #[inline]
     pub fn played_frames(&self) -> u64 {
-        self.played_frames.load(Ordering::Acquire)
+        self.shared.played_frames.load(Ordering::Acquire)
     }
 
     #[inline]
     pub fn add_played_frames(&self, n: u64) {
-        self.played_frames.fetch_add(n, Ordering::AcqRel);
+        self.shared.played_frames.fetch_add(n, Ordering::AcqRel);
     }
 
     /// Reset the played-frame counter WITHOUT bumping the flush generation.
@@ -108,7 +129,55 @@ impl OutputControl {
     /// do, audibly interrupting the transition).
     #[inline]
     pub fn reset_played_frames(&self) {
-        self.played_frames.store(0, Ordering::Release);
+        self.shared.played_frames.store(0, Ordering::Release);
+    }
+}
+
+/// Per-output software gain slots of one engine.
+///
+/// Every output gets a control block (see [`OutputControl::with_own_gain`])
+/// sharing pause/flush/played-frames with the engine but with its own gain:
+/// outputs on the software mixer follow the requested volume, hardware /
+/// `none`-mixer outputs stay at unity so the device mixer is the only
+/// attenuation.
+#[derive(Debug, Default)]
+pub struct OutputGains {
+    slots: Mutex<Vec<GainSlot>>,
+}
+
+#[derive(Debug)]
+struct GainSlot {
+    software: bool,
+    control: Arc<OutputControl>,
+}
+
+impl OutputGains {
+    /// Forget all registered outputs (call before (re)building the outputs).
+    pub fn clear(&self) {
+        self.slots.lock().clear();
+    }
+
+    /// Create and register the control block for one output. `gain` is the
+    /// current software gain, used only when `software` is set.
+    pub fn register(
+        &self,
+        master: &OutputControl,
+        software: bool,
+        gain: f32,
+    ) -> Arc<OutputControl> {
+        let control = Arc::new(master.with_own_gain(if software { gain } else { 1.0 }));
+        self.slots.lock().push(GainSlot {
+            software,
+            control: control.clone(),
+        });
+        control
+    }
+
+    /// Set the software gain of every software-mixer output.
+    pub fn set_software_gain(&self, gain: f32) {
+        for slot in self.slots.lock().iter().filter(|s| s.software) {
+            slot.control.set_gain(gain);
+        }
     }
 }
 
@@ -179,5 +248,33 @@ mod tests {
             gen_before,
             "a soft reset (natural song transition) must not flush queued audio"
         );
+    }
+
+    #[test]
+    fn per_output_gain_shares_state_but_not_gain() {
+        let master = OutputControl::new();
+        let child = master.with_own_gain(0.5);
+        assert!((child.gain() - 0.5).abs() < f32::EPSILON);
+        master.set_gain(0.2);
+        assert!((child.gain() - 0.5).abs() < f32::EPSILON);
+        master.set_paused(true);
+        assert!(child.is_paused());
+        child.add_played_frames(7);
+        assert_eq!(master.played_frames(), 7);
+        master.flush();
+        assert_eq!(child.generation(), 1);
+    }
+
+    #[test]
+    fn output_gains_only_move_software_outputs() {
+        let master = OutputControl::new();
+        let gains = OutputGains::default();
+        let soft = gains.register(&master, true, 0.4);
+        let hard = gains.register(&master, false, 0.4);
+        assert!((soft.gain() - 0.4).abs() < f32::EPSILON);
+        assert!((hard.gain() - 1.0).abs() < f32::EPSILON);
+        gains.set_software_gain(0.8);
+        assert!((soft.gain() - 0.8).abs() < f32::EPSILON);
+        assert!((hard.gain() - 1.0).abs() < f32::EPSILON);
     }
 }

@@ -15,7 +15,8 @@ pub mod scanner;
 pub mod watcher;
 
 pub use artwork::{
-    AlbumArtExtractor, ArtLookup, ArtworkData, ExternalArtwork, find_external_cover,
+    AlbumArtExtractor, ArtLookup, ArtworkData, ExternalArtwork, NEGATIVE_TTL_SECS, RemoteArtState,
+    TRANSIENT_TTL_SECS, classify_remote_entry, find_external_cover, slice_artwork, unix_now,
 };
 pub use cue::{CueTrack, parse_cue};
 pub use database::{Database, DbPool, DirectoryListing, PlaylistInfo, WalkEntry};

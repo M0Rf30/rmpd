@@ -80,6 +80,9 @@ pub struct AppState {
     pub zeroconf_name: String,
     /// Music-source registry built from `[[source]]` config blocks.
     pub sources: std::sync::Arc<rmpd_source::SourceRegistry>,
+    /// Cover-art provider chain built from `[[artwork]]` config blocks
+    /// (empty = no remote artwork fallback).
+    pub artwork: std::sync::Arc<rmpd_plugin::ArtworkResolver>,
     /// Latest ICY "now playing" title for a remote stream (None when not
     /// streaming or no metadata has arrived). Injected into `currentsong`.
     pub stream_title: Arc<RwLock<Option<String>>>,
@@ -207,6 +210,7 @@ impl AppState {
             zeroconf_name: "rmpd@%h".to_string(),
             stream_title: Arc::new(RwLock::new(None)),
             sources: std::sync::Arc::new(rmpd_source::SourceRegistry::from_config(&[])),
+            artwork: std::sync::Arc::new(rmpd_plugin::ArtworkResolver::default()),
             follow_inside_symlinks: true,
             follow_outside_symlinks: true,
             embedded_cue_as_directory: true,
@@ -299,6 +303,12 @@ impl AppState {
         self.sources = sources;
     }
 
+    /// Install the cover-art provider chain used by `albumart` / `readpicture`
+    /// when a song has no local or embedded art.
+    pub fn set_artwork(&mut self, artwork: std::sync::Arc<rmpd_plugin::ArtworkResolver>) {
+        self.artwork = artwork;
+    }
+
     /// Configure the two independent MPD-style symlink-follow flags
     /// (`general.follow_inside_symlinks`/`general.follow_outside_symlinks`).
     pub fn set_symlink_policy(
@@ -319,14 +329,6 @@ impl AppState {
     ) {
         self.embedded_cue_as_directory = embedded_cue_as_directory;
         self.hide_playlist_targets = hide_playlist_targets;
-    }
-
-    pub fn advertise_mdns(&self, port: u16) {
-        if let Some(discovery) = &self.discovery
-            && let Err(e) = discovery.advertise(port, &self.zeroconf_name)
-        {
-            tracing::warn!("mDNS advertisement failed: {}", e);
-        }
     }
 
     /// Spawn a background library scan of the configured music directory.
@@ -434,6 +436,14 @@ impl AppState {
             for source in sources.iter() {
                 let scheme = source.scheme().to_owned();
                 let name = source.name().to_owned();
+                if source.sync_policy() == rmpd_source::SyncPolicy::OnDemand {
+                    tracing::debug!(
+                        "music source '{}://{}' is on-demand, not syncing",
+                        scheme,
+                        name
+                    );
+                    continue;
+                }
                 match source.ping().await {
                     Ok(()) => {
                         tracing::info!("syncing music source '{}://{}'", scheme, name);
@@ -468,6 +478,47 @@ impl AppState {
             }
             event_bus.emit(rmpd_core::event::Event::DatabaseUpdateFinished);
             running.store(false, std::sync::atomic::Ordering::Release);
+        });
+    }
+
+    /// Poll the hardware mixers (about once per second, only while one is
+    /// active) and, when another application moved the volume, sync
+    /// `status.volume` and emit `Event::VolumeChanged` so `idle mixer` fires.
+    /// Stops on shutdown.
+    pub fn spawn_mixer_watch(&self) {
+        let state = self.clone();
+        let mut shutdown_rx = self.shutdown_tx.as_ref().map(|tx| tx.subscribe());
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(MIXER_POLL_INTERVAL);
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                match shutdown_rx.as_mut() {
+                    Some(rx) => {
+                        tokio::select! {
+                            _ = interval.tick() => {}
+                            _ = rx.recv() => break,
+                        }
+                    }
+                    None => {
+                        interval.tick().await;
+                    }
+                }
+                let mixers = state.engine.read().await.hardware_mixers();
+                let Some(mixers) = mixers else { continue };
+                // ALSA access blocks; keep it off the async workers.
+                let Ok(hardware) =
+                    tokio::task::spawn_blocking(move || mixers.hardware_volume()).await
+                else {
+                    continue;
+                };
+                let current = state.status.read().await.volume;
+                if let Some(v) = external_volume_change(current, hardware) {
+                    state.status.write().await.volume = v;
+                    state
+                        .event_bus
+                        .emit(rmpd_core::event::Event::VolumeChanged(v));
+                }
+            }
         });
     }
 
@@ -512,5 +563,26 @@ impl AppState {
 impl Default for AppState {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// How often hardware mixers are polled for external volume changes.
+const MIXER_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// The new volume when the hardware mixer reports a level different from the
+/// tracked one, `None` when unchanged or when no hardware mixer reports.
+fn external_volume_change(tracked: u8, hardware: Option<u8>) -> Option<u8> {
+    hardware.filter(|v| *v != tracked)
+}
+
+#[cfg(test)]
+mod mixer_watch_tests {
+    use super::external_volume_change;
+
+    #[test]
+    fn detects_only_real_changes() {
+        assert_eq!(external_volume_change(40, Some(55)), Some(55));
+        assert_eq!(external_volume_change(40, Some(40)), None);
+        assert_eq!(external_volume_change(40, None), None);
     }
 }

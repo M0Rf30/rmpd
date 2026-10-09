@@ -1,0 +1,60 @@
+[package]
+name = "rmpd-integrations"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[lints]
+workspace = true
+
+[package.metadata.cargo-machete]
+# md-5 is imported as `md5`
+ignored = ["md-5"]
+
+[features]
+# Existing desktop/LAN integrations: on by default to preserve behaviour.
+default = ["mpris", "mdns"]
+# MPRIS D-Bus interface (Linux/BSD session bus; no-op on macOS).
+mpris = ["dep:mpris-server"]
+# mDNS/Zeroconf `_mpd._tcp` advertisement (pure Rust).
+mdns = ["dep:mdns-sd"]
+# Scrobblers. Pure Rust (reqwest with its default rustls TLS). Off by default.
+# ListenBrainz (or compatible) scrobbler with offline queue.
+listenbrainz = ["dep:reqwest", "dep:serde", "dep:serde_json"]
+# Last.fm / libre.fm scrobbler with offline queue.
+lastfm = ["dep:reqwest", "dep:serde", "dep:serde_json", "dep:md-5"]
+# Generic HTTP webhook notifier (JSON POST, optional HMAC-SHA256 signature).
+webhook = ["dep:reqwest", "dep:serde_json", "dep:sha2"]
+# Cover-art provider (`[[artwork]] type = "coverartarchive"`): Cover Art Archive
+# via reqwest (rustls), optional MusicBrainz search. Off by default.
+coverart = ["dep:reqwest", "dep:serde", "dep:serde_json"]
+# HTTP JSON-RPC (Mopidy-compatible) + WebSocket event server with optional
+# static web client. Pure Rust (axum on hyper/tokio). Off by default.
+http-api = ["dep:axum", "dep:serde_json"]
+
+[dependencies]
+rmpd-core.workspace = true
+rmpd-plugin.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+async-trait.workspace = true
+toml.workspace = true
+mdns-sd = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+md-5 = { workspace = true, optional = true }
+axum = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+mpris-server = { workspace = true, optional = true }
+
+[dev-dependencies]
+toml.workspace = true
+parking_lot.workspace = true

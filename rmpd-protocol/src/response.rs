@@ -178,7 +178,21 @@ impl ResponseBuilder {
         partition: &str,
         last_loaded_playlist: &str,
     ) -> &mut Self {
-        self.field("volume", status.volume);
+        self.status_with_volume(status, partition, last_loaded_playlist, true)
+    }
+
+    /// Like [`Self::status`], but `show_volume = false` omits the `volume`
+    /// field (MPD does so when no mixer can report a volume).
+    pub fn status_with_volume(
+        &mut self,
+        status: &PlayerStatus,
+        partition: &str,
+        last_loaded_playlist: &str,
+        show_volume: bool,
+    ) -> &mut Self {
+        if show_volume {
+            self.field("volume", status.volume);
+        }
         self.field("repeat", if status.repeat { 1 } else { 0 });
         self.field("random", if status.random { 1 } else { 0 });
 

@@ -6,7 +6,23 @@
 //! Each encoder converts interleaved f32 samples to the byte format expected
 //! by a particular streaming protocol.  The trait is object-safe so outputs
 //! can choose an encoder at construction time.
+//!
+//! Encoders are selected by name through [`ENCODER_PLUGINS`] /
+//! [`create_encoder`], using the `encoder`, `bitrate`, `quality` and
+//! `compression` settings of an `[[output]]` block:
+//!
+//! | name     | feature            | settings used                         |
+//! | -------- | ------------------ | ------------------------------------- |
+//! | `pcm`    | —                  | —                                     |
+//! | `wav`    | —                  | —                                     |
+//! | `flac`   | —  (pure Rust)     | `compression` (0–8, default 5)        |
 
+mod flac;
+
+pub use flac::FlacEncoder;
+
+use rmpd_core::config::OutputConfig;
+use rmpd_core::error::{Result, RmpdError};
 use rmpd_core::song::AudioFormat;
 
 /// Encodes interleaved f32 PCM into a wire byte stream for network outputs.
@@ -127,6 +143,102 @@ impl Encoder for WavEncoder {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
+// Registry
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// Builds an encoder for `format` from the settings of an output block.
+pub type EncoderFactory = fn(AudioFormat, &OutputConfig) -> Result<Box<dyn Encoder>>;
+
+/// Compile-time encoder registry: `encoder = "<name>"` → factory.
+pub static ENCODER_PLUGINS: &[(&str, EncoderFactory)] = &[
+    ("pcm", pcm_factory),
+    ("wav", wav_factory),
+    ("flac", flac_factory),
+];
+
+/// Name of the encoder selected by `cfg` (`encoder` setting, default `wav`).
+#[must_use]
+pub fn encoder_name(cfg: &OutputConfig) -> String {
+    encoder_name_or(cfg, "wav")
+}
+
+/// Like [`encoder_name`] with a caller-chosen default.
+#[must_use]
+pub fn encoder_name_or(cfg: &OutputConfig, default: &str) -> String {
+    cfg.setting_str("encoder")
+        .unwrap_or_else(|| default.to_owned())
+        .to_ascii_lowercase()
+}
+
+/// Names of all encoders compiled into this build.
+#[must_use]
+pub fn encoder_names() -> Vec<&'static str> {
+    ENCODER_PLUGINS.iter().map(|(n, _)| *n).collect()
+}
+
+/// Create the encoder called `name` (case-insensitive).
+///
+/// # Errors
+/// Returns an error for an unknown (or not compiled-in) encoder name, or when
+/// the encoder rejects `format` / the settings.
+pub fn create_encoder(
+    name: &str,
+    format: AudioFormat,
+    cfg: &OutputConfig,
+) -> Result<Box<dyn Encoder>> {
+    let wanted = name.trim().to_ascii_lowercase();
+    match ENCODER_PLUGINS.iter().find(|(n, _)| *n == wanted) {
+        Some((_, factory)) => factory(format, cfg),
+        None => Err(RmpdError::Player(format!(
+            "unknown encoder '{name}' (available: {})",
+            encoder_names().join(", ")
+        ))),
+    }
+}
+
+/// Create the encoder selected by the `encoder` setting of `cfg`.
+///
+/// # Errors
+/// See [`create_encoder`].
+pub fn create_encoder_from_config(
+    format: AudioFormat,
+    cfg: &OutputConfig,
+) -> Result<Box<dyn Encoder>> {
+    create_encoder(&encoder_name(cfg), format, cfg)
+}
+
+fn pcm_factory(format: AudioFormat, _cfg: &OutputConfig) -> Result<Box<dyn Encoder>> {
+    Ok(Box::new(PcmEncoder::new(format)))
+}
+
+fn wav_factory(format: AudioFormat, _cfg: &OutputConfig) -> Result<Box<dyn Encoder>> {
+    Ok(Box::new(WavEncoder::new(format)))
+}
+
+fn flac_factory(format: AudioFormat, cfg: &OutputConfig) -> Result<Box<dyn Encoder>> {
+    let level = setting_f64(cfg, "compression")
+        .map(|v| v.clamp(0.0, f64::from(flac::MAX_COMPRESSION)) as u8)
+        .unwrap_or(flac::DEFAULT_COMPRESSION);
+    Ok(Box::new(FlacEncoder::new(format, level)?))
+}
+
+/// Read a numeric setting that may be written as an integer, float or string.
+fn setting_f64(cfg: &OutputConfig, key: &str) -> Option<f64> {
+    match cfg.settings.get(key) {
+        Some(toml::Value::Integer(i)) => Some(*i as f64),
+        Some(toml::Value::Float(f)) => Some(*f),
+        Some(toml::Value::String(s)) => s.trim().parse().ok(),
+        _ => None,
+    }
+}
+
+/// Convert one f32 sample to a rounded, clamped signed 16-bit value.
+#[inline]
+pub(crate) fn f32_to_i16(s: f32) -> i16 {
+    (s.clamp(-1.0, 1.0) * f32::from(i16::MAX)).round() as i16
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
 // Tests
 // ──────────────────────────────────────────────────────────────────────────────
 
@@ -223,5 +335,87 @@ mod tests {
         let bytes = enc.encode(&[1.0_f32]);
         let v = i16::from_le_bytes([bytes[0], bytes[1]]);
         assert_eq!(v, i16::MAX);
+    }
+
+    // ── Registry ────────────────────────────────────────────────────────────
+
+    fn cfg_with(encoder: Option<&str>) -> OutputConfig {
+        let mut settings = toml::Table::new();
+        if let Some(e) = encoder {
+            settings.insert("encoder".into(), toml::Value::String(e.into()));
+        }
+        OutputConfig {
+            name: "t".into(),
+            output_type: "httpd".into(),
+            enabled: true,
+            settings,
+        }
+    }
+
+    #[test]
+    fn registry_always_has_core_encoders() {
+        let names = encoder_names();
+        for n in ["pcm", "wav", "flac"] {
+            assert!(names.contains(&n), "missing {n}");
+        }
+    }
+
+    #[test]
+    fn registry_names_are_unique() {
+        let mut names = encoder_names();
+        names.sort_unstable();
+        let before = names.len();
+        names.dedup();
+        assert_eq!(before, names.len());
+    }
+
+    #[test]
+    fn default_encoder_is_wav() {
+        let cfg = cfg_with(None);
+        assert_eq!(encoder_name(&cfg), "wav");
+        let enc = create_encoder_from_config(stereo_44100(), &cfg).unwrap();
+        assert_eq!(enc.content_type(), "audio/wav");
+        assert_eq!(enc.header().len(), 44);
+    }
+
+    #[test]
+    fn create_is_case_insensitive_and_selects_by_name() {
+        let cfg = cfg_with(Some("PCM"));
+        let enc = create_encoder_from_config(stereo_44100(), &cfg).unwrap();
+        assert_eq!(enc.content_type(), "application/octet-stream");
+        assert!(enc.header().is_empty());
+
+        let enc = create_encoder("flac", stereo_44100(), &cfg).unwrap();
+        assert_eq!(enc.content_type(), "audio/flac");
+        assert_eq!(&enc.header()[..4], b"fLaC");
+    }
+
+    #[test]
+    fn unknown_encoder_is_an_error() {
+        let err = create_encoder("mp3-hq", stereo_44100(), &cfg_with(None))
+            .err()
+            .expect("must fail");
+        assert!(err.to_string().contains("unknown encoder"));
+    }
+
+    #[test]
+    fn flac_compression_setting_is_clamped() {
+        let mut cfg = cfg_with(Some("flac"));
+        cfg.settings
+            .insert("compression".into(), toml::Value::Integer(99));
+        assert!(create_encoder_from_config(stereo_44100(), &cfg).is_ok());
+    }
+
+    #[test]
+    fn setting_f64_accepts_int_float_string() {
+        let mut cfg = cfg_with(None);
+        cfg.settings.insert("a".into(), toml::Value::Integer(3));
+        cfg.settings.insert("b".into(), toml::Value::Float(2.5));
+        cfg.settings
+            .insert("c".into(), toml::Value::String(" 7.5 ".into()));
+        assert_eq!(setting_f64(&cfg, "a"), Some(3.0));
+        assert_eq!(setting_f64(&cfg, "b"), Some(2.5));
+        assert_eq!(setting_f64(&cfg, "c"), Some(7.5));
+        assert_eq!(setting_f64(&cfg, "missing"), None);
     }
 }

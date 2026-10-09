@@ -9,12 +9,14 @@ pub mod crossfade;
 pub mod decoder;
 pub mod dop;
 pub mod dop_output;
+pub mod dsp;
 pub mod encoder;
 pub mod engine;
 pub mod fifo_output;
 pub mod filter;
 pub mod format_registry;
 pub mod httpd_output;
+pub mod mixer;
 pub mod multi_output;
 pub mod null_output;
 pub mod output;
@@ -26,6 +28,7 @@ pub mod pipe_output;
 pub mod pipewire_output;
 pub mod recorder_output;
 pub mod resampler;
+pub mod shout_output;
 
 pub use cpal_utils::set_output_device;
 pub use decoder::{
@@ -35,8 +38,12 @@ pub use decoder::{
 pub use dop::DopEncoder;
 pub use encoder::{Encoder, PcmEncoder, WavEncoder};
 pub use engine::PlaybackEngine;
-pub use filter::{AudioFilter, FilterChain, Mixer, SoftwareMixer, VolumeFilter};
+pub use filter::{
+    AudioFilter, FILTER_PLUGINS, FilterChain, FilterError, FilterFactory, FilterParams,
+    FilterPlugin, FilterSet, Mixer, SoftwareMixer, VolumeFilter,
+};
 pub use httpd_output::HttpdOutput;
+pub use mixer::{MIXER_PLUGINS, MixerError, MixerPlugin, MixerSet, MixerType};
 pub use multi_output::MultiOutput;
 pub use null_output::NullOutput;
 pub use output::CpalOutput;

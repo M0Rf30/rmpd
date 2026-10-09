@@ -24,6 +24,15 @@ path = "src/main.rs"
 [features]
 pipewire = ["rmpd-player/pipewire"]
 subsonic = ["rmpd-source/subsonic"]
+jellyfin = ["rmpd-source/jellyfin"]
+podcast = ["rmpd-source/podcast"]
+radio = ["rmpd-source/radio"]
+alsa-mixer = ["rmpd-player/alsa-mixer"]
+listenbrainz = ["rmpd-integrations/listenbrainz"]
+lastfm = ["rmpd-integrations/lastfm"]
+webhook = ["rmpd-integrations/webhook"]
+http-api = ["rmpd-integrations/http-api"]
+coverart = ["rmpd-integrations/coverart"]
 
 [dependencies]
 rmpd-core.workspace = true
@@ -31,6 +40,9 @@ rmpd-protocol.workspace = true
 rmpd-player.workspace = true
 rmpd-library.workspace = true
 rmpd-source.workspace = true
+rmpd-plugin.workspace = true
+rmpd-integrations.workspace = true
+rmpd-stream.workspace = true
 
 tokio.workspace = true
 anyhow.workspace = true

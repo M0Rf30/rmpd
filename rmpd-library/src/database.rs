@@ -675,6 +675,22 @@ impl Database {
             [],
         )?;
 
+        // Remote (provider-fetched) artwork cache, keyed by album identity
+        // rather than song path so every track of an album shares one entry
+        // and no `songs` row is required. `data IS NULL` is a negative
+        // entry, valid until `fetched_at + ttl_secs`.
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS remote_artwork (
+                cache_key TEXT PRIMARY KEY,
+                mime_type TEXT NOT NULL DEFAULT '',
+                data BLOB,
+                hash TEXT NOT NULL DEFAULT '',
+                fetched_at INTEGER NOT NULL,
+                ttl_secs INTEGER NOT NULL DEFAULT 0
+            )",
+            [],
+        )?;
+
         // Full-text search index over song tags. See SONGS_FTS_CREATE_SQL.
         self.conn.execute(SONGS_FTS_CREATE_SQL, [])?;
 
@@ -1642,6 +1658,61 @@ impl Database {
         )?)
     }
 
+    /// Look up a remote-artwork cache entry (positive or negative).
+    pub fn get_remote_artwork(&self, cache_key: &str) -> Result<Option<RemoteArtEntry>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT data, mime_type, fetched_at, ttl_secs FROM remote_artwork
+                 WHERE cache_key = ?1",
+                params![cache_key],
+                |row| {
+                    let data: Option<Vec<u8>> = row.get(0)?;
+                    let mime: String = row.get(1)?;
+                    Ok(RemoteArtEntry {
+                        image: data.map(|d| (d, mime)),
+                        fetched_at: row.get(2)?,
+                        ttl_secs: row.get(3)?,
+                    })
+                },
+            )
+            .optional()?)
+    }
+
+    /// Cache fetched remote artwork (replaces any previous entry).
+    pub fn store_remote_artwork(
+        &self,
+        cache_key: &str,
+        mime_type: &str,
+        data: &[u8],
+        hash: &str,
+        now: i64,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO remote_artwork
+                 (cache_key, mime_type, data, hash, fetched_at, ttl_secs)
+             VALUES (?1, ?2, ?3, ?4, ?5, 0)",
+            params![cache_key, mime_type, data, hash, now],
+        )?;
+        Ok(())
+    }
+
+    /// Record a negative cache entry valid for `ttl_secs` from `now`.
+    pub fn store_remote_artwork_miss(
+        &self,
+        cache_key: &str,
+        now: i64,
+        ttl_secs: i64,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO remote_artwork
+                 (cache_key, mime_type, data, hash, fetched_at, ttl_secs)
+             VALUES (?1, '', NULL, '', ?2, ?3)",
+            params![cache_key, now, ttl_secs],
+        )?;
+        Ok(())
+    }
+
     /// List directory contents (songs + subdirectories)
     pub fn list_directory(&self, path: &str) -> Result<DirectoryListing> {
         let dir_id = self.resolve_dir_id(path)?;
@@ -2268,6 +2339,17 @@ impl Database {
             .query_row(&sql, params_refs.as_slice(), |row| row.get(0))?;
         Ok(found != 0)
     }
+}
+
+/// One row of the remote-artwork cache (see `Database::get_remote_artwork`).
+#[derive(Debug, Clone)]
+pub struct RemoteArtEntry {
+    /// Image bytes and MIME type; `None` for a negative entry.
+    pub image: Option<(Vec<u8>, String)>,
+    /// Unix time the entry was written.
+    pub fetched_at: i64,
+    /// Validity of a negative entry, in seconds (unused for positive rows).
+    pub ttl_secs: i64,
 }
 
 /// Directory listing result
