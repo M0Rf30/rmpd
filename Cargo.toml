@@ -39,9 +39,9 @@ rayon = "1.12"
 # hybrid and multichannel, Musepack SV7/SV8, native Opus, HE-AAC v1/v2 and multichannel AAC,
 # format/codec enumeration, MP4 gapless, RF64/MP3-in-WAV, WAV/Matroska/CAF metadata, and
 # selected upstream fix PRs)
-symphonia = { git = "https://github.com/M0Rf30/Symphonia", rev = "1abd92c4ac39482f40b0335d176b56c38e2b48c1", features = ["all", "dsd"] }
+symphonia = { git = "https://github.com/M0Rf30/Symphonia", rev = "8d61ac9e2e6d0648c2a7eae986ddb50da6f32924", features = ["all", "dsd"] }
 # Pure-Rust Opus encoder + Ogg Opus muxer (used by the `opus` stream encoder)
-symphonia-codec-opus = { git = "https://github.com/M0Rf30/Symphonia", rev = "1abd92c4ac39482f40b0335d176b56c38e2b48c1", features = ["encoder", "ogg"] }
+symphonia-codec-opus = { git = "https://github.com/M0Rf30/Symphonia", rev = "8d61ac9e2e6d0648c2a7eae986ddb50da6f32924", features = ["encoder", "ogg"] }
 cpal = { git = "https://github.com/RustAudio/cpal", rev = "79275c2313da30e9f8b1ad8168385d091a2c9ada", default-features = false }
 rubato = "5.0"                   # High-quality (anti-aliased) sample-rate conversion
 audioadapter-buffers = "5.2"     # Buffer wrappers (InterleavedSlice) for rubato 5.x

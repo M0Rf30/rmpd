@@ -31,6 +31,11 @@ impl Fingerprinter {
             |what: &str, e: chromaprint::Error| RmpdError::Library(format!("{what}: {e}"));
 
         let mut decoder = SymphoniaDecoder::open(path)?;
+        // A pass-through DSD decoder yields raw 1-bit bytes (its buffers have a rate of
+        // `dsd_rate / 8`), not audio: decode DSD to 44.1 kHz PCM like playback does.
+        if decoder.is_dsd() {
+            decoder.enable_pcm_conversion(44_100)?;
+        }
         let sample_rate = decoder.sample_rate();
         let channels = decoder.channels();
 

@@ -153,4 +153,35 @@ mod tests {
             .expect("isomp4 registered");
         assert!(isomp4.extensions.contains(&"alac"));
     }
+
+    /// W64, BW64 (and RF64) are registered by the RIFF reader, LATM/LOAS by the LOAS reader:
+    /// they must reach the scanner through the registry, with no alias entry.
+    #[test]
+    fn new_containers_come_from_the_registry() {
+        for ext in [
+            "w64", "bw64", "rf64", "latm", "loas", "mpc", "opus", "aif", "aifc",
+        ] {
+            assert!(
+                is_supported_extension(ext),
+                "expected {ext} to be supported"
+            );
+        }
+        let wave = FORMAT_PLUGINS
+            .iter()
+            .find(|f| f.plugin == "wave")
+            .expect("wave registered");
+        for ext in ["w64", "bw64", "rf64"] {
+            assert!(wave.extensions.contains(&ext), "{ext}");
+        }
+        let loas = FORMAT_PLUGINS
+            .iter()
+            .find(|f| f.plugin == "loas")
+            .expect("loas registered");
+        assert!(loas.extensions.contains(&"latm") && loas.extensions.contains(&"loas"));
+        assert!(loas.mime_types.contains(&"audio/mp4a-latm"));
+        for (ext, _) in EXTRA_EXTENSION_ALIASES {
+            // Aliases are only for what Symphonia does not declare itself.
+            assert!(!["w64", "bw64", "rf64", "latm", "loas"].contains(ext));
+        }
+    }
 }

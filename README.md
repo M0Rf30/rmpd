@@ -96,18 +96,20 @@ Library scanning/tagging and playback both go through `symphonia`, but they are 
 | ----------------------------- | :---: | :---: |
 | `flac`                        | ✅ | ✅ |
 | `mp3`                          | ✅ | ✅ |
-| `ogg`, `oga`                   | ✅ | ✅ |
-| `opus`                         | ✅ | ✅ — pure-Rust Opus decoder (SILK/CELT/hybrid) |
-| `wav`                          | ✅ | ✅ |
+| `ogg`, `oga`                   | ✅ | ✅ — chained streams (several links) are played through, and seeking works across links |
+| `opus`                         | ✅ | ✅ — pure-Rust Opus decoder (SILK/CELT/hybrid), channel mapping families 0, 1, 2 and 255 |
+| `wav`, `wave`                  | ✅ | ✅ — PCM, float, A-law/µ-law, ADPCM, and MPEG layer II/III in WAV |
+| `rf64`, `bw64`, `w64`          | ✅ | ✅ — RF64, BW64 (ITU-R BS.2088) and Sony Wave64, for files over 4 GiB |
 | `aiff`, `aif`                  | ✅ | ✅ |
-| `m4a`                          | ✅ | ✅ |
-| `aac`                          | ✅ | ✅ |
+| `m4a`, `mp4`, `mov`, `alac`    | ✅ | ✅ — AAC (incl. HE-AAC v1/v2) and ALAC |
+| `aac`                          | ✅ | ✅ — ADTS; HE-AAC is reported at its decoded rate and channel count |
+| `latm`, `loas`                 | ✅ | ✅ — AAC in LATM/LOAS (also `.aac` files and `audio/mp4a-latm` radio streams in that framing) |
+| `caf`                          | ✅ | ✅ — PCM, ALAC, A-law and µ-law |
 | `ape` (Monkey's Audio)         | ✅ | ✅ — pure-Rust decoder |
 | `wv` (WavPack)                 | ✅ | ✅ — pure-Rust decoder |
 | `dsf`, `dff` (DSD)             | ✅ | ✅ — see [DSD](#dsd) |
-| `mka`, `webm`                  | ✅ | ✅ |
+| `mka`, `webm`                  | ✅ | ✅ — seeking is sample-accurate (including the seek pre-roll of MP3/AAC/Vorbis tracks) |
 | `mpc` (Musepack SV7/SV8)       | ✅ | ✅ — pure-Rust decoder |
-| `wave`, `mp4`, `alac`, `caf`    | ❌ (not scanned into the library) | ✅ — playable if referenced directly |
 
 ### DSD
 
