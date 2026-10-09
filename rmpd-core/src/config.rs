@@ -23,6 +23,14 @@ pub struct Config {
     pub source: Vec<SourceConfig>,
     #[serde(default)]
     pub integration: Vec<IntegrationConfig>,
+    /// `[[filter]]` blocks: named DSP filters (normalize, equalizer, route)
+    /// referenced by `[audio].filters` or an output's `filters` list.
+    #[serde(default)]
+    pub filter: Vec<FilterConfig>,
+    /// `[[artwork]]` blocks: cover-art providers consulted by `albumart` /
+    /// `readpicture` when a song has no local or embedded art.
+    #[serde(default)]
+    pub artwork: Vec<ArtworkConfig>,
     #[serde(default)]
     pub database: DatabaseConfig,
     #[serde(default)]
@@ -201,6 +209,11 @@ pub struct AudioConfig {
     /// Default: false (auto-resume if was playing)
     #[serde(default)]
     pub restore_paused: bool,
+    /// Global filter chain: names of `[[filter]]` blocks applied, in order, to
+    /// every output that has no `filters` setting of its own. Empty (the
+    /// default) leaves the audio path untouched.
+    #[serde(default)]
+    pub filters: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -316,6 +329,71 @@ impl IntegrationConfig {
     }
 }
 
+/// `[[artwork]]` block: a compile-time-registered cover-art provider
+/// (`type = "coverartarchive"`, ...). Same shape as [`IntegrationConfig`].
+#[derive(Clone, Deserialize, Serialize)]
+pub struct ArtworkConfig {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub artwork_type: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(flatten)]
+    pub settings: toml::Table,
+}
+
+impl std::fmt::Debug for ArtworkConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ArtworkConfig")
+            .field("name", &self.name)
+            .field("artwork_type", &self.artwork_type)
+            .field("enabled", &self.enabled)
+            .field("settings", &"<redacted>")
+            .finish()
+    }
+}
+
+impl ArtworkConfig {
+    /// Look up a string-valued setting (trimmed, non-empty; scalars are
+    /// stringified). Returns `None` when absent or empty.
+    #[must_use]
+    pub fn setting_str(&self, key: &str) -> Option<String> {
+        setting_str(&self.settings, key)
+    }
+
+    /// Look up a boolean setting (`true`/`false`, or the strings
+    /// `"true"`/`"false"`/`"yes"`/`"no"`/`"1"`/`"0"`); `default` when absent
+    /// or unparsable.
+    #[must_use]
+    pub fn setting_bool(&self, key: &str, default: bool) -> bool {
+        match self.settings.get(key) {
+            Some(toml::Value::Boolean(b)) => *b,
+            Some(toml::Value::String(s)) => match s.trim().to_ascii_lowercase().as_str() {
+                "true" | "yes" | "1" | "on" => true,
+                "false" | "no" | "0" | "off" => false,
+                _ => default,
+            },
+            Some(toml::Value::Integer(i)) => *i != 0,
+            _ => default,
+        }
+    }
+}
+
+/// `[[filter]]` block: a compile-time-registered DSP filter plugin
+/// (`normalize`, `equalizer`, `route`). `name` is what `[audio].filters` and
+/// an `[[output]]`'s `filters` list refer to. Plugin settings are flattened
+/// next to `name`/`type`/`enabled`.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct FilterConfig {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub filter_type: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(flatten)]
+    pub settings: toml::Table,
+}
+
 /// Check a plugin settings table against the keys the plugin accepts.
 ///
 /// Returns one human-readable message per unknown key (with a "did you
@@ -419,6 +497,13 @@ pub struct StreamConfig {
     /// (`[stream.proxy]`).
     #[serde(default)]
     pub proxy: Option<ProxyConfig>,
+    /// Optional ceiling for HLS adaptive streams, in bits per second (the
+    /// unit of the playlist `BANDWIDTH` attribute). The best variant not
+    /// exceeding it is played; when every variant exceeds it the lowest one
+    /// is used. Unset: the best audio-only variant (lowest overall when the
+    /// playlist has no audio-only variant).
+    #[serde(default)]
+    pub hls_max_bandwidth: Option<u64>,
 }
 
 impl Default for StreamConfig {
@@ -427,6 +512,7 @@ impl Default for StreamConfig {
             timeout_ms: default_stream_timeout_ms(),
             metadata_blacklist: Vec::new(),
             proxy: None,
+            hls_max_bandwidth: None,
         }
     }
 }
@@ -744,6 +830,8 @@ const KNOWN_SECTIONS: &[&str] = &[
     "output",
     "source",
     "integration",
+    "artwork",
+    "filter",
     "database",
     "playlist",
     "stream",
@@ -799,6 +887,7 @@ const AUDIO_KEYS: &[&str] = &[
     "mixramp_db",
     "mixramp_delay",
     "restore_paused",
+    "filters",
     "pause_on_device_loss",
 ];
 
@@ -1177,6 +1266,8 @@ impl Config {
                 "output" => lint_tables("output", value, &mut diagnostics),
                 "source" => lint_tables("source", value, &mut diagnostics),
                 "integration" => lint_tables("integration", value, &mut diagnostics),
+                "artwork" => lint_tables("artwork", value, &mut diagnostics),
+                "filter" => lint_tables("filter", value, &mut diagnostics),
                 "decoder" => diagnostics.push(Diagnostic::warn(
                     "config section `[decoder]` was removed: decoders are selected at build time",
                 )),
@@ -1516,6 +1607,7 @@ impl Default for AudioConfig {
             mixramp_db: default_mixramp_db(),
             mixramp_delay: 0.0,
             restore_paused: false,
+            filters: Vec::new(),
         }
     }
 }
@@ -2222,5 +2314,34 @@ some_backend_specific_key = 1
         assert_eq!(cfg.timeout_ms, 5000);
         assert!(cfg.metadata_blacklist.is_empty());
         assert!(cfg.proxy.is_none());
+    }
+
+    #[test]
+    fn filter_blocks_and_global_chain_parse() {
+        let content = r#"
+[audio]
+filters = ["eq"]
+
+[[filter]]
+name = "eq"
+type = "equalizer"
+preamp_db = -3.0
+bands = [{ freq = 60, gain_db = 4.0, q = 0.7 }]
+
+[[output]]
+name = "A"
+type = "null"
+filters = ["eq"]
+"#;
+        assert!(Config::lint(content).is_empty());
+        let cfg: Config = toml::from_str(content).unwrap();
+        assert_eq!(cfg.audio.filters, vec!["eq"]);
+        assert_eq!(cfg.filter.len(), 1);
+        assert_eq!(cfg.filter[0].name, "eq");
+        assert_eq!(cfg.filter[0].filter_type, "equalizer");
+        assert!(cfg.filter[0].enabled);
+        assert!(cfg.filter[0].settings.contains_key("bands"));
+        assert!(Config::default().filter.is_empty());
+        assert!(Config::default().audio.filters.is_empty());
     }
 }

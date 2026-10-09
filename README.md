@@ -267,6 +267,17 @@ A listen is submitted once a track of at least 30 s has been *actually played* f
 
 To get a Last.fm `session_key` (web auth flow): create an API account at <https://www.last.fm/api/account/create>; open `https://ws.audioscrobbler.com/2.0/?method=auth.getToken&api_key=KEY&format=json` to get a `TOKEN`; authorise it at `https://www.last.fm/api/auth/?api_key=KEY&token=TOKEN`; compute `SIG` with `echo -n 'api_keyKEYmethodauth.getSessiontokenTOKENSECRET' | md5sum` and open `https://ws.audioscrobbler.com/2.0/?method=auth.getSession&api_key=KEY&token=TOKEN&api_sig=SIG&format=json`. The returned `session.key` does not expire. Secrets are never logged.
 
+### HTTP / WebSocket API
+
+Opt-in integration (`--features http-api`, pure Rust on axum) exposing a Mopidy-compatible JSON-RPC 2.0 API so Mopidy web clients and scripts can drive rmpd. Settings: `bind` (default `127.0.0.1:6680`), `allowed_origins`, `static_dir` (serves a web client at `/`), `token` (optional bearer auth for the API).
+
+- `POST /rmpd/rpc` (alias `/mopidy/rpc`): `core.playback.{play,pause,resume,stop,next,previous,seek,get_state,get_time_position,get_current_track,get_current_tl_track}`, `core.mixer.{get_volume,set_volume}`, `core.tracklist.{get_length,get_tl_tracks,get_tracks,add,clear,index,get_/set_random,repeat,single}`, `core.library.{browse,search}`, `core.describe`.
+- `GET /rmpd/ws` (alias `/mopidy/ws`): the same JSON-RPC over WebSocket, plus pushed events: `track_playback_started/paused/resumed/ended`, `playback_state_changed`, `volume_changed`, `tracklist_changed`, `options_changed`, `seeked`, `stream_title_changed`.
+
+```sh
+curl -s localhost:6680/rmpd/rpc -d '{"jsonrpc":"2.0","id":1,"method":"core.playback.get_state"}'
+```
+
 ### systemd
 
 rmpd speaks systemd's protocols natively, without linking libsystemd:
@@ -356,18 +367,44 @@ See `rmpd.toml` for every setting.
 (ICY) "now playing" titles. Playlist URLs — `.pls`, `.m3u`/`.m3u8`, `.asx`,
 `.xspf`, or anything served with a matching `Content-Type` — are fetched (1 MiB
 cap), unwrapped, and their entries tried in order until one opens (nesting is
-limited to 3 levels). HLS (adaptive) playlists are detected and rejected with a
-clear error instead of being misparsed.
+limited to 3 levels). HLS (adaptive) playlists play natively: a master playlist
+is reduced to one variant (audio-only preferred, capped by `hls_max_bandwidth`
+when set), live playlists are reloaded at their target duration, and segments
+may be ADTS-AAC, MP3, fragmented MP4 or MPEG-TS (the audio stream is extracted
+in pure Rust); `AES-128` encrypted playlists are decrypted, `SAMPLE-AES` is
+rejected with a clear error.
 
 ```toml
 [stream]
 timeout_ms = 5000                                  # connect / per-read timeout
+hls_max_bandwidth = 128000                         # optional HLS ceiling, bits/s
 metadata_blacklist = ["*://ads.example.com/*"]     # fnmatch globs: ignore ICY titles
 
 [stream.proxy]                                     # optional HTTP proxy
 url = "http://proxy.example.com:3128"
 username = "alice"                                 # optional
 password = "s3cr3t"                                # optional
+```
+
+### Cover Art Providers (`[[artwork]]`)
+
+`albumart` serves a `cover.*` file next to the song and `readpicture` the
+embedded picture. When a song has neither, rmpd can ask online
+[artwork plugins](docs/PLUGIN_ARCHITECTURE.md) (pure Rust, off by default;
+enable with `cargo build --release --features coverart`). `coverartarchive`
+fetches `https://coverartarchive.org/release/<MUSICBRAINZ_ALBUMID>/front-500`;
+with `lookup = true` it also finds songs lacking that tag through a MusicBrainz
+search on album artist + album (limited to one request per second, with a
+descriptive `User-Agent`). Results are cached per album in the database — hits
+permanently, "no art" for 7 days, transient failures for 10 minutes.
+
+```toml
+[[artwork]]
+name = "caa"
+type = "coverartarchive"
+lookup = true                  # MusicBrainz search when MUSICBRAINZ_ALBUMID is missing
+size = "500"                   # 250, 500, 1200 or "original"
+contact = "you@example.org"    # added to the User-Agent
 ```
 
 
@@ -411,6 +448,36 @@ an unavailable mixer type logs a warning and falls back to `software`. With
 several outputs, `setvol` is applied to every mixer and `status` reports the
 average; the software gain is shared by all outputs, so mixing software and
 hardware outputs attenuates the hardware ones twice.
+
+### DSP Filters
+
+Mopidy/MPD-style [filter plugins](docs/PLUGIN_ARCHITECTURE.md), pure Rust and
+off by default. Define named `[[filter]]` blocks (`name`, `type`, settings) and
+pick the chain globally with `[audio].filters = ["a", "b"]` or per output with
+`filters = [...]` (an empty list disables filtering for that output). Filters
+run in order on the decoded stream, per output, before the software volume, and
+keep the channel count.
+
+| `type` | Purpose | Settings |
+|---|---|---|
+| `normalize` | AGC / volume normalization with smoothing and a limiter | `target_db` (-3), `max_gain_db` (30), `attack_ms` (10), `release_ms` (1500), `window_ms` (400), `ceiling_db` (-0.3) |
+| `equalizer` | N-band parametric EQ (peaking biquads, recomputed per sample rate) | `bands = [{ freq, gain_db, q }, ...]`, `preamp_db` |
+| `route` (alias `channels`) | stereo→mono downmix, L/R swap, channel remap | `mode` = `mono` \| `swap` \| `left` \| `right` \| `map`, `map = [...]` |
+
+```toml
+[audio]
+filters = ["eq"]
+
+[[filter]]
+name = "eq"
+type = "equalizer"
+preamp_db = -3.0
+bands = [{ freq = 60, gain_db = 4.0, q = 0.7 }, { freq = 8000, gain_db = 3.0 }]
+```
+
+Unknown filter types/settings and undefined filter names are reported at
+startup as warnings; a filter that cannot be built is skipped. This is separate
+from `audio.volume_normalization`, which only limits ReplayGain-boosted peaks.
 
 ## Status & Roadmap
 

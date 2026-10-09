@@ -19,6 +19,7 @@ fn enabled_features() -> Vec<&'static str> {
         ("listenbrainz", cfg!(feature = "listenbrainz")),
         ("lastfm", cfg!(feature = "lastfm")),
         ("webhook", cfg!(feature = "webhook")),
+        ("http-api", cfg!(feature = "http-api")),
     ];
     all.iter().filter(|(_, on)| *on).map(|(n, _)| *n).collect()
 }
@@ -100,6 +101,13 @@ pub fn print_deps() {
     line(
         "integrations",
         &rmpd_integrations::INTEGRATION_PLUGINS
+            .iter()
+            .map(|p| p.name.to_owned())
+            .collect::<Vec<_>>(),
+    );
+    line(
+        "artwork",
+        &rmpd_integrations::ARTWORK_PLUGINS
             .iter()
             .map(|p| p.name.to_owned())
             .collect::<Vec<_>>(),

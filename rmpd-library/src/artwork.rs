@@ -7,7 +7,7 @@ use sha2::{Digest, Sha256};
 use std::path::Path;
 use symphonia::core::meta::StandardVisualKey;
 
-use crate::database::Database;
+use crate::database::{Database, RemoteArtEntry};
 use crate::metadata::{Artwork, MetadataExtractor};
 
 const MAX_ARTWORK_SIZE: usize = 5 * 1024 * 1024; // 5MB
@@ -214,6 +214,123 @@ impl AlbumArtExtractor {
     }
 }
 
+/// How long a definitive "no art found" answer from the providers is
+/// remembered (7 days).
+pub const NEGATIVE_TTL_SECS: i64 = 7 * 24 * 3600;
+
+/// How long a transient provider failure (network down, rate limited, ...) is
+/// remembered (10 minutes), so a dead network is not hammered per request.
+pub const TRANSIENT_TTL_SECS: i64 = 10 * 60;
+
+/// What the remote-artwork cache knows about an album.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RemoteArtState {
+    /// Cached image bytes and MIME type.
+    Hit(Vec<u8>, String),
+    /// A still-valid negative entry: do not ask the providers again yet.
+    KnownMiss,
+    /// Nothing cached, or the negative entry has expired: ask the providers.
+    Unknown,
+}
+
+/// Interpret a cache row at time `now` (unix seconds). Positive entries never
+/// expire; negative entries are valid for `ttl_secs` after `fetched_at`. A
+/// clock that moved backwards (`now < fetched_at`) expires the entry.
+#[must_use]
+pub fn classify_remote_entry(entry: Option<RemoteArtEntry>, now: i64) -> RemoteArtState {
+    match entry {
+        None => RemoteArtState::Unknown,
+        Some(RemoteArtEntry {
+            image: Some((data, mime)),
+            ..
+        }) => RemoteArtState::Hit(data, mime),
+        Some(RemoteArtEntry {
+            image: None,
+            fetched_at,
+            ttl_secs,
+        }) => {
+            if now >= fetched_at && now - fetched_at < ttl_secs {
+                RemoteArtState::KnownMiss
+            } else {
+                RemoteArtState::Unknown
+            }
+        }
+    }
+}
+
+/// Current unix time in seconds.
+#[must_use]
+pub fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
+}
+
+/// Slice a whole image into the chunk at `offset` (MPD's `binarylimit`
+/// chunking), as [`AlbumArtExtractor::get_artwork`] does for embedded art.
+#[must_use]
+pub fn slice_artwork(
+    data: &[u8],
+    mime_type: &str,
+    offset: usize,
+    chunk_size: usize,
+) -> ArtLookup<ArtworkData> {
+    if offset > data.len() {
+        return ArtLookup::OffsetTooLarge;
+    }
+    let end = offset.saturating_add(chunk_size).min(data.len());
+    ArtLookup::Found(ArtworkData {
+        mime_type: mime_type.to_owned(),
+        total_size: data.len(),
+        data: data[offset..end].to_vec(),
+    })
+}
+
+impl AlbumArtExtractor {
+    /// Consult the remote-artwork cache for `cache_key` (an album key from
+    /// `rmpd_plugin::artwork_cache_key`).
+    pub fn remote_cached(&self, cache_key: &str, now: i64) -> Result<RemoteArtState> {
+        Ok(classify_remote_entry(
+            self.db.get_remote_artwork(cache_key)?,
+            now,
+        ))
+    }
+
+    /// Cache provider-fetched art. An empty `mime_type` is inferred from the
+    /// image magic bytes. Oversized or empty data is rejected.
+    pub fn store_remote_hit(&self, cache_key: &str, data: &[u8], mime_type: &str) -> Result<()> {
+        if data.is_empty() {
+            return Ok(());
+        }
+        if data.len() > MAX_ARTWORK_SIZE {
+            return Err(RmpdError::Library(format!(
+                "Artwork too large: {} bytes (max {})",
+                data.len(),
+                MAX_ARTWORK_SIZE
+            )));
+        }
+        let mime = if mime_type.trim().is_empty() {
+            infer_mime(data)
+        } else {
+            mime_type.trim()
+        };
+        self.db
+            .store_remote_artwork(cache_key, mime, data, &sha256_hex(data), unix_now())
+    }
+
+    /// Cache a negative result: a definitive miss lasts [`NEGATIVE_TTL_SECS`],
+    /// a transient failure ([`TRANSIENT_TTL_SECS`]).
+    pub fn store_remote_miss(&self, cache_key: &str, transient: bool) -> Result<()> {
+        let ttl = if transient {
+            TRANSIENT_TTL_SECS
+        } else {
+            NEGATIVE_TTL_SECS
+        };
+        self.db
+            .store_remote_artwork_miss(cache_key, unix_now(), ttl)
+    }
+}
+
 #[derive(Debug)]
 pub struct ArtworkData {
     pub mime_type: String,
@@ -246,4 +363,127 @@ pub(crate) fn picture_type_to_string(usage: Option<StandardVisualKey>) -> String
         _ => "other",
     }
     .to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn miss(fetched_at: i64, ttl_secs: i64) -> Option<RemoteArtEntry> {
+        Some(RemoteArtEntry {
+            image: None,
+            fetched_at,
+            ttl_secs,
+        })
+    }
+
+    #[test]
+    fn classify_empty_cache_is_unknown() {
+        assert_eq!(classify_remote_entry(None, 100), RemoteArtState::Unknown);
+    }
+
+    #[test]
+    fn classify_positive_entry_never_expires() {
+        let entry = Some(RemoteArtEntry {
+            image: Some((vec![1, 2, 3], "image/png".to_owned())),
+            fetched_at: 0,
+            ttl_secs: 0,
+        });
+        assert_eq!(
+            classify_remote_entry(entry, i64::MAX / 2),
+            RemoteArtState::Hit(vec![1, 2, 3], "image/png".to_owned())
+        );
+    }
+
+    #[test]
+    fn classify_negative_entry_expires() {
+        assert_eq!(
+            classify_remote_entry(miss(1000, NEGATIVE_TTL_SECS), 1000 + 5),
+            RemoteArtState::KnownMiss
+        );
+        assert_eq!(
+            classify_remote_entry(miss(1000, NEGATIVE_TTL_SECS), 1000 + NEGATIVE_TTL_SECS - 1),
+            RemoteArtState::KnownMiss
+        );
+        assert_eq!(
+            classify_remote_entry(miss(1000, NEGATIVE_TTL_SECS), 1000 + NEGATIVE_TTL_SECS),
+            RemoteArtState::Unknown
+        );
+        // Transient failures expire much sooner than definitive misses.
+        assert_eq!(
+            classify_remote_entry(miss(1000, TRANSIENT_TTL_SECS), 1000 + TRANSIENT_TTL_SECS),
+            RemoteArtState::Unknown
+        );
+        const { assert!(TRANSIENT_TTL_SECS < NEGATIVE_TTL_SECS) };
+    }
+
+    #[test]
+    fn classify_negative_entry_with_backwards_clock_is_unknown() {
+        assert_eq!(
+            classify_remote_entry(miss(5000, NEGATIVE_TTL_SECS), 100),
+            RemoteArtState::Unknown
+        );
+    }
+
+    #[test]
+    fn slice_artwork_chunks() {
+        let data = [0u8; 10];
+        match slice_artwork(&data, "image/png", 0, 4) {
+            ArtLookup::Found(a) => {
+                assert_eq!(a.total_size, 10);
+                assert_eq!(a.data.len(), 4);
+                assert_eq!(a.mime_type, "image/png");
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+        match slice_artwork(&data, "image/png", 8, 4) {
+            ArtLookup::Found(a) => assert_eq!(a.data.len(), 2),
+            other => panic!("unexpected {other:?}"),
+        }
+        assert!(matches!(
+            slice_artwork(&data, "image/png", 10, 4),
+            ArtLookup::Found(_)
+        ));
+        assert!(matches!(
+            slice_artwork(&data, "image/png", 11, 4),
+            ArtLookup::OffsetTooLarge
+        ));
+    }
+
+    #[test]
+    fn remote_cache_roundtrip_through_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.db");
+        let db = Database::open(path.to_str().unwrap()).unwrap();
+        let ex = AlbumArtExtractor::new(db);
+        // Slightly ahead of the wall clock so rows written during the test
+        // never appear to come from the future.
+        let now = unix_now() + 2;
+
+        assert_eq!(
+            ex.remote_cached("mbid:x", now).unwrap(),
+            RemoteArtState::Unknown
+        );
+
+        // Negative entry (no matching `songs` row needed).
+        ex.store_remote_miss("mbid:x", false).unwrap();
+        assert_eq!(
+            ex.remote_cached("mbid:x", now).unwrap(),
+            RemoteArtState::KnownMiss
+        );
+        assert_eq!(
+            ex.remote_cached("mbid:x", now + NEGATIVE_TTL_SECS + 1)
+                .unwrap(),
+            RemoteArtState::Unknown
+        );
+
+        // A later positive result replaces the negative entry.
+        let png = b"\x89PNG\r\n\x1a\n0000";
+        ex.store_remote_hit("mbid:x", png, "").unwrap();
+        assert_eq!(
+            ex.remote_cached("mbid:x", now + NEGATIVE_TTL_SECS * 10)
+                .unwrap(),
+            RemoteArtState::Hit(png.to_vec(), "image/png".to_owned())
+        );
+    }
 }

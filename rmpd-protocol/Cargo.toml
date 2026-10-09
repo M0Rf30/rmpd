@@ -32,6 +32,7 @@ rmpd-library.workspace = true
 rmpd-player.workspace = true
 rmpd-source.workspace = true
 rmpd-plugin.workspace = true
+rmpd-stream.workspace = true
 async-trait.workspace = true
 tokio.workspace = true
 winnow.workspace = true

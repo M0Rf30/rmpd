@@ -37,6 +37,10 @@ pub async fn run(
     // Build music-source registry from [[source]] config blocks.
     let source_registry = Arc::new(rmpd_source::SourceRegistry::from_config(&config.source));
     state.set_sources(source_registry);
+    // Cover-art providers from [[artwork]] blocks (albumart/readpicture fallback).
+    state.set_artwork(Arc::new(rmpd_integrations::build_artwork_resolver(
+        &config.artwork,
+    )));
     state.set_password(config.network.password.clone());
     state.set_passwords(config.network.passwords.clone());
     state.set_permission_rules(
@@ -106,6 +110,14 @@ pub async fn run(
         });
     }
     rmpd_player::set_output_device(config.output_device());
+    // DSP filter plugins ([[filter]] blocks, [audio].filters, per-output
+    // `filters`). Installed process-wide; outputs pick their chain up when
+    // they are (re)opened. Misconfiguration only warns.
+    let filter_warnings =
+        rmpd_player::filter::configure(&config.filter, &config.audio.filters, &config.output);
+    for msg in filter_warnings {
+        warn!("filter config: {msg}");
+    }
 
     // Build the protocol-visible output list from the [[output]] config blocks
     // so `outputs`/`enableoutput`/`disableoutput` report the real configuration.
@@ -327,6 +339,9 @@ pub async fn run(
             }
         }
     });
+
+    // Track volume moved outside rmpd (hardware mixers) for `idle mixer`.
+    state.spawn_mixer_watch();
 
     // macOS: pause when the device we were playing through DISAPPEARS from
     // the system's output-device list — headphone power-off reroutes to

@@ -12,8 +12,8 @@ use rmpd_core::config::StreamConfig;
 use crate::HttpSource;
 use crate::input::{InputPlugin, OpenContext, OpenedInput, open_with};
 use crate::radio_playlist::{
-    MAX_PLAYLIST_BYTES, MAX_PLAYLIST_DEPTH, hls_unsupported, is_hls_playlist, playlist_parser_for,
-    read_capped, try_entries, url_suffix,
+    MAX_PLAYLIST_BYTES, MAX_PLAYLIST_DEPTH, is_hls_playlist, playlist_parser_for, read_capped,
+    try_entries, url_suffix,
 };
 use crate::settings;
 use crate::{redact_url, to_io};
@@ -85,9 +85,11 @@ fn open_http(uri: &str, ctx: &OpenContext, cfg: &StreamConfig) -> io::Result<Ope
                 "playlists nested deeper than {MAX_PLAYLIST_DEPTH} levels"
             )));
         }
+        let final_url = resp.url().to_string();
         let body = read_capped(resp, MAX_PLAYLIST_BYTES)?;
         if is_hls_playlist(&body) {
-            return Err(hls_unsupported());
+            tracing::debug!(url = %redact_url(uri), "opening HLS playlist");
+            return crate::hls::open_hls(client, &final_url, &body, cfg, uri);
         }
         let entries = parser.parse(uri, &body);
         tracing::debug!(

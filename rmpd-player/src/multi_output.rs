@@ -33,7 +33,7 @@
 //! [`VolumeFilter`].
 
 use crate::audio_output::AudioOutput;
-use crate::filter::{AudioFilter, VolumeFilter};
+use crate::filter::{AudioFilter, FilterChain, VolumeFilter};
 use crate::output_control::OutputControl;
 use rmpd_core::error::{Result, RmpdError};
 use std::sync::Arc;
@@ -77,13 +77,43 @@ impl MultiOutput {
         volume: Arc<AtomicU8>,
         control: Arc<OutputControl>,
     ) -> Result<Self> {
+        let outputs = outputs
+            .into_iter()
+            .map(|out| (out, volume.clone()))
+            .collect();
+        Self::spawn_per_output(outputs, depth, control)
+    }
+
+    /// Like [`Self::spawn`], but every output carries its own write-time
+    /// volume atomic (used by non-self-managed backends). Software-mixer
+    /// outputs share the engine's software volume; hardware / `none` ones get
+    /// a private atomic fixed at 100 so they are never attenuated digitally.
+    pub fn spawn_per_output(
+        outputs: Vec<(Box<dyn AudioOutput>, Arc<AtomicU8>)>,
+        depth: usize,
+        control: Arc<OutputControl>,
+    ) -> Result<Self> {
+        Self::spawn_with_filters(outputs, Vec::new(), depth, control)
+    }
+
+    /// Like [`Self::spawn_per_output`], plus one DSP [`FilterChain`] per
+    /// output (same order; a missing entry means no filtering). The chain runs
+    /// in the output's worker thread on every chunk, before the write-time
+    /// volume and for self-managed backends as well.
+    pub fn spawn_with_filters(
+        outputs: Vec<(Box<dyn AudioOutput>, Arc<AtomicU8>)>,
+        chains: Vec<FilterChain>,
+        depth: usize,
+        control: Arc<OutputControl>,
+    ) -> Result<Self> {
+        let mut chains = chains.into_iter();
         let mut workers = Vec::with_capacity(outputs.len());
 
-        for (idx, mut out) in outputs.into_iter().enumerate() {
+        for (idx, (mut out, vol_arc)) in outputs.into_iter().enumerate() {
             let primary = idx == 0;
             let (tx, rx) = sync_channel::<OutputMsg>(depth);
-            let vol_arc = volume.clone();
             let worker_control = control.clone();
+            let mut chain = chains.next().unwrap_or_default();
 
             let handle = thread::Builder::new()
                 .name(if primary {
@@ -141,6 +171,9 @@ impl MultiOutput {
                                     continue;
                                 }
                                 let mut buf = arc.to_vec();
+                                if !chain.is_empty() {
+                                    chain.apply(&mut buf);
+                                }
                                 if !self_managed {
                                     vol.apply(&mut buf);
                                 }

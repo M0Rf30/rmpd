@@ -22,7 +22,10 @@ use std::path::Path;
 use std::sync::Arc;
 use tokio::task::JoinHandle;
 
+pub mod artwork;
 pub mod builtin;
+#[cfg(feature = "http-api")]
+pub mod http_api;
 #[cfg(feature = "lastfm")]
 pub mod lastfm;
 #[cfg(feature = "listenbrainz")]
@@ -36,6 +39,7 @@ pub mod scrobble;
 #[cfg(feature = "webhook")]
 pub mod webhook;
 
+pub use artwork::{ARTWORK_PLUGINS, build_resolver as build_artwork_resolver};
 pub use builtin::{mdns_config, synthesize_builtin};
 
 /// All compiled-in integrations.
@@ -50,6 +54,8 @@ pub static INTEGRATION_PLUGINS: &[IntegrationPlugin] = &[
     lastfm::PLUGIN,
     #[cfg(feature = "webhook")]
     webhook::PLUGIN,
+    #[cfg(feature = "http-api")]
+    http_api::PLUGIN,
 ];
 
 /// Look up a plugin by (case-insensitive) type name.

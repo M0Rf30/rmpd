@@ -7,12 +7,19 @@
 //! Controls go through the same command handlers MPD clients hit, so
 //! idle events, queue semantics and error handling are identical.
 
-use crate::commands::{options, playback};
+use crate::commands::utils::open_db;
+use crate::commands::{options, playback, queue};
+use crate::helpers;
+use crate::parser::InsertPosition;
 use crate::state::AppState;
 use async_trait::async_trait;
+use rmpd_core::song::Song;
 use rmpd_core::state::{PlayerState, SingleMode};
 use rmpd_plugin::PluginError;
-use rmpd_plugin::integration::{PlayerHandle, PlayerOptions, PlayerSnapshot};
+use rmpd_plugin::integration::{
+    BrowseEntry, BrowseKind, PlayerHandle, PlayerOptions, PlayerSnapshot, QueueEntry,
+};
+use std::collections::HashSet;
 use std::time::Duration;
 
 /// Server-backed [`PlayerHandle`].
@@ -37,6 +44,26 @@ fn check(response: &str) -> Result<(), PluginError> {
     }
 }
 
+/// Search results are capped so a one-letter query cannot flood a client.
+const MAX_SEARCH_RESULTS: usize = 500;
+
+/// Path relative to the music directory (database paths may be absolute).
+fn display_path(path: &str, music_dir: Option<&str>) -> String {
+    music_dir
+        .and_then(|dir| path.strip_prefix(dir))
+        .map_or(path, |rest| rest.trim_start_matches('/'))
+        .to_owned()
+}
+
+/// Last `/`-separated segment (the whole string when it has no `/`).
+fn last_segment(path: &str) -> String {
+    path.trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or(path)
+        .to_owned()
+}
+
 #[async_trait]
 impl PlayerHandle for ServerPlayerHandle {
     async fn status(&self) -> PlayerSnapshot {
@@ -51,11 +78,15 @@ impl PlayerHandle for ServerPlayerHandle {
                 .map(|item| item.song.clone()),
             None => None,
         };
+        // Effective mixer volume (hardware mixers can be moved externally).
+        let effective_volume = options::current_volume(&self.state)
+            .await
+            .unwrap_or(status.volume);
         PlayerSnapshot {
             state: status.state,
             elapsed: status.elapsed,
             duration: status.duration,
-            volume: status.volume,
+            volume: effective_volume,
             song,
         }
     }
@@ -146,5 +177,181 @@ impl PlayerHandle for ServerPlayerHandle {
         if let Some(tx) = &self.state.shutdown_tx {
             let _ = tx.send(());
         }
+    }
+
+    async fn queue_entries(&self) -> Vec<QueueEntry> {
+        self.state
+            .queue
+            .read()
+            .await
+            .items()
+            .iter()
+            .map(|item| QueueEntry {
+                id: item.id,
+                position: item.position,
+                song: item.song.clone(),
+            })
+            .collect()
+    }
+
+    async fn add_uris(
+        &self,
+        uris: &[String],
+        position: Option<u32>,
+    ) -> Result<Vec<QueueEntry>, PluginError> {
+        let before: HashSet<u32> = self.queue_entries().await.iter().map(|e| e.id).collect();
+        let mut at = position;
+        for uri in uris {
+            let insert = at.map(InsertPosition::Absolute);
+            let resp = queue::handle_addid_command(&self.state, uri, insert).await;
+            if resp.starts_with("ACK") {
+                // Not a single song (e.g. a directory): `add` resolves those.
+                check(&queue::handle_add_command(&self.state, uri, insert).await)?;
+            }
+            if let Some(start) = position {
+                let added = self
+                    .queue_entries()
+                    .await
+                    .iter()
+                    .filter(|e| !before.contains(&e.id))
+                    .count();
+                at = Some(start.saturating_add(u32::try_from(added).unwrap_or(u32::MAX)));
+            }
+        }
+        Ok(self
+            .queue_entries()
+            .await
+            .into_iter()
+            .filter(|e| !before.contains(&e.id))
+            .collect())
+    }
+
+    async fn clear_queue(&self) -> Result<(), PluginError> {
+        check(&queue::handle_clear_command(&self.state).await)
+    }
+
+    async fn play_id(&self, id: u32) -> Result<(), PluginError> {
+        check(&queue::handle_playid_command(&self.state, Some(id)).await)
+    }
+
+    async fn browse(&self, uri: Option<&str>) -> Result<Vec<BrowseEntry>, PluginError> {
+        let path = uri.unwrap_or("").trim_matches('/').to_owned();
+        let music_dir = self.state.music_dir.clone();
+
+        // Under an on-demand source mount the source itself answers.
+        if !path.is_empty()
+            && self
+                .state
+                .sources
+                .owning_source(&path)
+                .is_some_and(|s| s.sync_policy() == rmpd_source::SyncPolicy::OnDemand)
+        {
+            let sources = self.state.sources.clone();
+            let p = path.clone();
+            // Spawned so the (non-Sync) async_trait future of the source does
+            // not leak into this future's bounds.
+            let result = tokio::spawn(async move { sources.browse_on_demand(&p).await })
+                .await
+                .map_err(|e| PluginError::Runtime(e.to_string()))?;
+            return match result {
+                Some(Ok(entries)) => Ok(entries
+                    .into_iter()
+                    .map(|entry| match entry {
+                        rmpd_source::SourceEntry::Song(song) => BrowseEntry {
+                            kind: BrowseKind::Track,
+                            uri: song.path.to_string(),
+                            name: song.display_title().to_owned(),
+                        },
+                        rmpd_source::SourceEntry::Dir(dir) => BrowseEntry {
+                            kind: BrowseKind::Directory,
+                            name: last_segment(&dir),
+                            uri: dir,
+                        },
+                    })
+                    .collect()),
+                Some(Err(e)) => Err(PluginError::Runtime(e.to_string())),
+                None => Err(PluginError::Runtime("No such directory".to_owned())),
+            };
+        }
+
+        let state = self.state.clone();
+        tokio::task::spawn_blocking(move || -> Result<Vec<BrowseEntry>, PluginError> {
+            let db =
+                open_db(&state, "browse").map_err(|e| PluginError::Runtime(e.trim().to_owned()))?;
+            let listing = db
+                .list_directory(&path)
+                .map_err(|e| PluginError::Runtime(e.to_string()))?;
+            let mut out = Vec::new();
+            for (dir, _mtime) in &listing.directories {
+                let dir = display_path(dir, music_dir.as_deref());
+                out.push(BrowseEntry {
+                    kind: BrowseKind::Directory,
+                    name: last_segment(&dir),
+                    uri: dir,
+                });
+            }
+            for song in &listing.songs {
+                out.push(BrowseEntry {
+                    kind: BrowseKind::Track,
+                    uri: display_path(song.path.as_str(), music_dir.as_deref()),
+                    name: song.display_title().to_owned(),
+                });
+            }
+            // On-demand sources are never mirrored into the database, so
+            // surface their mount points at the root explicitly.
+            if path.is_empty() {
+                for source in state.sources.iter() {
+                    if source.sync_policy() == rmpd_source::SyncPolicy::OnDemand {
+                        out.push(BrowseEntry {
+                            kind: BrowseKind::Directory,
+                            name: source.name().to_owned(),
+                            uri: source.name().to_owned(),
+                        });
+                    }
+                }
+            }
+            Ok(out)
+        })
+        .await
+        .map_err(|e| PluginError::Runtime(e.to_string()))?
+    }
+
+    async fn search(&self, query: &str) -> Result<Vec<Song>, PluginError> {
+        let state = self.state.clone();
+        let filters = vec![("any".to_owned(), query.to_owned())];
+        tokio::task::spawn_blocking(move || -> Result<Vec<Song>, PluginError> {
+            let db =
+                open_db(&state, "search").map_err(|e| PluginError::Runtime(e.trim().to_owned()))?;
+            let mut songs = helpers::resolve_filters(&db, &filters, "search", false)
+                .map_err(|e| PluginError::Runtime(e.trim().to_owned()))?;
+            songs.truncate(MAX_SEARCH_RESULTS);
+            for song in &mut songs {
+                let shown = display_path(song.path.as_str(), state.music_dir.as_deref());
+                song.path = shown.into();
+            }
+            Ok(songs)
+        })
+        .await
+        .map_err(|e| PluginError::Runtime(e.to_string()))?
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn display_path_strips_music_dir() {
+        assert_eq!(display_path("/m/a/b.flac", Some("/m")), "a/b.flac");
+        assert_eq!(display_path("/m/a/b.flac", Some("/m/")), "a/b.flac");
+        assert_eq!(display_path("a/b.flac", Some("/m")), "a/b.flac");
+        assert_eq!(display_path("a/b.flac", None), "a/b.flac");
+    }
+
+    #[test]
+    fn last_segment_handles_trailing_slash() {
+        assert_eq!(last_segment("a/b/c"), "c");
+        assert_eq!(last_segment("a/b/"), "b");
+        assert_eq!(last_segment("root"), "root");
     }
 }

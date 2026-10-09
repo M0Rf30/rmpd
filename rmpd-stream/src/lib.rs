@@ -11,8 +11,9 @@
 //!
 //! Inputs are opened through the compile-time [`INPUT_PLUGINS`] registry,
 //! keyed by URI scheme ([`open`]). The `http`/`https` plugin also unwraps radio
-//! playlists (PLS, M3U, ASX, XSPF), rejects HLS with a clear error, and honours
-//! the `[stream]` settings installed with [`configure`].
+//! playlists (PLS, M3U, ASX, XSPF), plays HLS (HTTP Live Streaming) playlists
+//! (ADTS-AAC, MP3, fMP4 and MPEG-TS segments, AES-128), and honours the
+//! `[stream]` settings installed with [`configure`].
 #![allow(clippy::cargo_common_metadata)]
 
 use std::io::{self, Read, Seek, SeekFrom};
@@ -22,10 +23,13 @@ use parking_lot::Mutex;
 use symphonia::core::io::MediaSource;
 
 mod glob;
+mod hls;
+mod hls_playlist;
 mod http;
 mod input;
 mod radio_playlist;
 mod settings;
+mod ts;
 
 pub use glob::glob_match;
 pub use http::HttpInput;

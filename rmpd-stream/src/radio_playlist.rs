@@ -87,15 +87,6 @@ pub fn is_hls_playlist(text: &str) -> bool {
         .any(|l| HLS_TAGS.iter().any(|t| l.starts_with(t)))
 }
 
-/// Error returned for HLS playlists.
-#[must_use]
-pub fn hls_unsupported() -> io::Error {
-    io::Error::new(
-        io::ErrorKind::Unsupported,
-        "HLS (HTTP Live Streaming) playlists are not supported",
-    )
-}
-
 /// Read at most [`MAX_PLAYLIST_BYTES`] from `reader` as (lossy) UTF-8.
 ///
 /// # Errors
@@ -283,13 +274,6 @@ mod tests {
         ));
         assert!(!is_hls_playlist("http://h/stream\n"));
         assert!(!is_hls_playlist(""));
-    }
-
-    #[test]
-    fn hls_error_is_unsupported() {
-        let e = hls_unsupported();
-        assert_eq!(e.kind(), io::ErrorKind::Unsupported);
-        assert!(e.to_string().contains("HLS"));
     }
 
     #[test]

@@ -31,6 +31,8 @@ alsa-mixer = ["rmpd-player/alsa-mixer"]
 listenbrainz = ["rmpd-integrations/listenbrainz"]
 lastfm = ["rmpd-integrations/lastfm"]
 webhook = ["rmpd-integrations/webhook"]
+http-api = ["rmpd-integrations/http-api"]
+coverart = ["rmpd-integrations/coverart"]
 
 [dependencies]
 rmpd-core.workspace = true

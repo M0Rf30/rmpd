@@ -14,15 +14,21 @@
 //! Cross-cutting SPI definitions live here: music sources, playlist parsers,
 //! integrations. Subsystem-local SPIs (outputs, mixers, encoders) stay next
 //! to their subsystem in `rmpd-player`. See `docs/PLUGIN_ARCHITECTURE.md`.
+pub mod artwork;
 pub mod error;
 pub mod integration;
 pub mod playlist;
 pub mod source;
 
+pub use artwork::{
+    ArtworkFactory, ArtworkOutcome, ArtworkPlugin, ArtworkProvider, ArtworkResolver,
+    artwork_cache_key,
+};
 pub use error::PluginError;
 pub use integration::{
-    Integration, IntegrationContext, IntegrationFactory, IntegrationPlugin, PlayerHandle,
-    PlayerSnapshot, ShutdownSignal, ShutdownTrigger, shutdown_channel,
+    BrowseEntry, BrowseKind, Integration, IntegrationContext, IntegrationFactory,
+    IntegrationPlugin, PlayerHandle, PlayerOptions, PlayerSnapshot, QueueEntry, ShutdownSignal,
+    ShutdownTrigger, shutdown_channel,
 };
 pub use playlist::{PLAYLIST_PLUGINS, PlaylistEntry, PlaylistParser};
 pub use source::{MusicSource, SourceEntry, SourceError, SourceResult, SyncPolicy};

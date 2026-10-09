@@ -20,11 +20,12 @@
 //! `mixer_device` (default `default`, or the card of the output's `hw:` device),
 //! `mixer_control` (default: `PCM`, then `Master`) and `mixer_index` (default 0).
 //!
-//! The engine owns one [`MixerSet`] built from the enabled outputs. When no
-//! enabled output uses the software mixer the software gain stays at unity
-//! (100%), so a hardware mixer never stacks with an additional digital
-//! attenuation. Factories are synchronous and perform no I/O; hardware access
-//! happens when a volume is read or written.
+//! The engine owns one [`MixerSet`] built from the enabled outputs. Software
+//! gain is applied per output (see `output_control::OutputGains`): outputs on
+//! the software mixer follow the requested volume, hardware / `none` outputs
+//! stay at unity, so a hardware mixer never stacks with digital attenuation
+//! even next to software-mixer outputs. Factories are synchronous and perform
+//! no I/O; hardware access happens when a volume is read or written.
 
 use crate::filter::{Mixer, SoftwareMixer};
 use rmpd_core::config::OutputConfig;
@@ -262,6 +263,17 @@ pub fn build_output_mixer(
     (plugin.factory)(&params)
 }
 
+/// Whether `cfg`'s output applies the engine's software gain: its mixer is the
+/// software mixer (also the fallback when the configured one cannot be built).
+/// Hardware and `none` mixers keep the software gain at unity for that output.
+pub fn output_uses_software_gain(cfg: &OutputConfig) -> bool {
+    let scratch = Arc::new(AtomicU8::new(100));
+    match build_output_mixer(cfg, &scratch) {
+        Ok(m) => m.is_software(),
+        Err(_) => true,
+    }
+}
+
 // ── NullMixer ────────────────────────────────────────────────────────────────
 
 /// `mixer_type = none`: the output has no volume control.
@@ -316,14 +328,7 @@ impl MixerSet {
         if entries.is_empty() {
             entries.push(Arc::new(SoftwareMixer::new(software_volume.clone())));
         }
-        let set = Self { entries };
-        if set.has_software() && set.has_hardware() {
-            warn!(
-                "outputs mix software and hardware mixers: the software gain is shared by \
-                 all outputs, so hardware-mixer outputs are attenuated twice"
-            );
-        }
-        set
+        Self { entries }
     }
 
     #[cfg(test)]

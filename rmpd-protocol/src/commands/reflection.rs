@@ -413,10 +413,11 @@ pub async fn handle_urlhandlers_command(conn_state: &ConnectionState) -> String 
     if conn_state.is_local {
         resp.field("handler", "file://");
     }
-    // rmpd streams audio directly over HTTP(S) via rmpd_stream::HttpSource,
-    // regardless of client locality.
-    resp.field("handler", "http://");
-    resp.field("handler", "https://");
+    // Remote schemes come from the registered input plugins
+    // (`rmpd_stream::url_handlers`), regardless of client locality.
+    for handler in rmpd_stream::url_handlers() {
+        resp.field("handler", &handler);
+    }
 
     resp.ok()
 }

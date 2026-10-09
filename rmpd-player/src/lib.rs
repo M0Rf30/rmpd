@@ -9,6 +9,7 @@ pub mod crossfade;
 pub mod decoder;
 pub mod dop;
 pub mod dop_output;
+pub mod dsp;
 pub mod encoder;
 pub mod engine;
 pub mod fifo_output;
@@ -37,7 +38,10 @@ pub use decoder::{
 pub use dop::DopEncoder;
 pub use encoder::{Encoder, PcmEncoder, WavEncoder};
 pub use engine::PlaybackEngine;
-pub use filter::{AudioFilter, FilterChain, Mixer, SoftwareMixer, VolumeFilter};
+pub use filter::{
+    AudioFilter, FILTER_PLUGINS, FilterChain, FilterError, FilterFactory, FilterParams,
+    FilterPlugin, FilterSet, Mixer, SoftwareMixer, VolumeFilter,
+};
 pub use httpd_output::HttpdOutput;
 pub use mixer::{MIXER_PLUGINS, MixerError, MixerPlugin, MixerSet, MixerType};
 pub use multi_output::MultiOutput;

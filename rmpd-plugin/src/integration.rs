@@ -41,6 +41,32 @@ pub struct PlayerSnapshot {
     /// Currently loaded queue song, if any.
     pub song: Option<Arc<Song>>,
 }
+/// One queue entry.
+#[derive(Debug, Clone)]
+pub struct QueueEntry {
+    /// Stable queue id (survives reordering).
+    pub id: u32,
+    /// Current 0-based position.
+    pub position: u32,
+    pub song: Arc<Song>,
+}
+
+/// Kind of a [`BrowseEntry`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BrowseKind {
+    Directory,
+    Track,
+}
+
+/// One item of a library directory listing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BrowseEntry {
+    pub kind: BrowseKind,
+    /// Path usable with [`PlayerHandle::browse`] / [`PlayerHandle::add_uris`].
+    pub uri: String,
+    /// Display name (title for tracks, last path segment for directories).
+    pub name: String,
+}
 
 /// Narrow control/inspection surface handed to integrations. Implemented by
 /// `rmpd-protocol` over the live server state.
@@ -98,6 +124,39 @@ pub trait PlayerHandle: Send + Sync {
     }
     /// Ask the daemon to shut down.
     fn request_shutdown(&self) {}
+
+    // ── Queue and library access (used by the HTTP/JSON-RPC integration) ──
+
+    /// Snapshot of the queue in order.
+    async fn queue_entries(&self) -> Vec<QueueEntry> {
+        Vec::new()
+    }
+    /// Append (or insert at `position`) each URI to the queue and return the
+    /// newly created entries. URIs are library paths, directories or
+    /// `scheme://` streams.
+    async fn add_uris(
+        &self,
+        _uris: &[String],
+        _position: Option<u32>,
+    ) -> Result<Vec<QueueEntry>, PluginError> {
+        Err(PluginError::Unavailable("add_uris".to_owned()))
+    }
+    /// Remove every song from the queue and stop playback.
+    async fn clear_queue(&self) -> Result<(), PluginError> {
+        Err(PluginError::Unavailable("clear_queue".to_owned()))
+    }
+    /// Start playing the queue entry with the given id.
+    async fn play_id(&self, _id: u32) -> Result<(), PluginError> {
+        Err(PluginError::Unavailable("play_id".to_owned()))
+    }
+    /// List one library directory (`None` or `""` is the root).
+    async fn browse(&self, _uri: Option<&str>) -> Result<Vec<BrowseEntry>, PluginError> {
+        Err(PluginError::Unavailable("browse".to_owned()))
+    }
+    /// Case-insensitive substring search across all tags.
+    async fn search(&self, _query: &str) -> Result<Vec<Song>, PluginError> {
+        Err(PluginError::Unavailable("search".to_owned()))
+    }
 }
 
 // ─── Shutdown signalling ─────────────────────────────────────────────────────
