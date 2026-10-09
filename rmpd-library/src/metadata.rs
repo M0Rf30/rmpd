@@ -18,9 +18,7 @@ use symphonia::core::codecs::audio::well_known::{
 };
 use symphonia::core::codecs::audio::{AudioCodecId, AudioDecoder};
 use symphonia::core::formats::probe::Hint;
-use symphonia::core::formats::{
-    FormatId, FormatOptions, FormatReader, MediaInfo, Track, TrackType,
-};
+use symphonia::core::formats::{FormatId, FormatReader, MediaInfo, Track, TrackType};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::{
     Metadata, MetadataOptions, MetadataRevision, RawValue, StandardTag, Tag, Visual,
@@ -112,7 +110,10 @@ fn probe_file(path: &Utf8PathBuf, want_visuals: bool) -> Result<Probed> {
         .probe(
             &hint,
             mss,
-            FormatOptions::default(),
+            // Hybrid WavPack: attach the sibling `.wvc` so decoding is lossless.
+            rmpd_player::format_registry::local_file_format_options(std::path::Path::new(
+                path.as_str(),
+            )),
             MetadataOptions::default(),
         )
         .map_err(|e| RmpdError::Library(format!("Failed to probe format: {e}")))?;

@@ -111,12 +111,51 @@ pub static SUPPORTED_MIME_TYPES: LazyLock<Vec<&'static str>> = LazyLock::new(|| 
     mimes
 });
 
-/// Whether `ext` (without a leading dot, any case) names a format rmpd can scan/probe. The
-/// single source of truth for every extension filter in rmpd.
+/// Extensions Symphonia can demux but the library scanner/watcher must NOT pick up: they are
+/// overwhelmingly video (or unrelated, e.g. `.ts` TypeScript) files whose audio track is not
+/// "music". They stay in [`SUPPORTED_EXTENSIONS`] (the `decoders` reply, direct playback by
+/// path/URL, streams) -- only library scanning skips them. Covers the FLV, MPEG-TS and
+/// MPEG-PS containers plus Ogg/MP4 video aliases.
+pub const SCAN_EXCLUDED_EXTENSIONS: &[&str] = &[
+    "flv", "ts", "m2ts", "mts", "m2t", "tsv", "trp", "mpg", "mpeg", "mpe", "vob", "ps", "m2p",
+    "ogv", "m4v",
+];
+
+/// Whether `ext` (without a leading dot, any case) names a format Symphonia can probe/play,
+/// including video-ish containers excluded from library scanning.
+#[must_use]
+pub fn is_playable_extension(ext: &str) -> bool {
+    let ext = ext.to_ascii_lowercase();
+    SUPPORTED_EXTENSIONS.iter().any(|e| *e == ext)
+}
+
+/// Whether `ext` (without a leading dot, any case) names a format rmpd should scan into the
+/// library: playable and not in [`SCAN_EXCLUDED_EXTENSIONS`]. The single source of truth for
+/// every scan/watch extension filter in rmpd. WavPack `.wvc` correction files are not a
+/// registered extension and are therefore never listed as songs.
 #[must_use]
 pub fn is_supported_extension(ext: &str) -> bool {
     let ext = ext.to_ascii_lowercase();
-    SUPPORTED_EXTENSIONS.iter().any(|e| *e == ext)
+    !SCAN_EXCLUDED_EXTENSIONS.contains(&ext.as_str()) && is_playable_extension(&ext)
+}
+
+/// `FormatOptions` for probing the *local file* `path`: a WavPack `.wv` gets its sibling `.wvc`
+/// correction file attached (hybrid lossless); everything else gets the defaults. Never use
+/// for streams/remote sources.
+#[must_use]
+pub fn local_file_format_options(
+    path: &std::path::Path,
+) -> symphonia::core::formats::FormatOptions {
+    let opts = symphonia::core::formats::FormatOptions::default();
+    let is_wv = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("wv"));
+    if is_wv {
+        symphonia::default::formats::wavpack_with_sibling_correction(path, opts)
+    } else {
+        opts
+    }
 }
 
 #[cfg(test)]
@@ -183,5 +222,54 @@ mod tests {
             // Aliases are only for what Symphonia does not declare itself.
             assert!(!["w64", "bw64", "rf64", "latm", "loas"].contains(ext));
         }
+    }
+
+    #[test]
+    fn video_containers_are_playable_but_not_scanned() {
+        for ext in ["flv", "ts", "m2ts", "mpg", "mpeg", "vob"] {
+            assert!(is_playable_extension(ext), "{ext} playable");
+            assert!(!is_supported_extension(ext), "{ext} not scanned");
+            assert!(!is_supported_extension(&ext.to_uppercase()), "{ext} case");
+        }
+        // Audio-only transports stay scannable.
+        assert!(is_supported_extension("aac") && is_supported_extension("loas"));
+    }
+
+    #[test]
+    fn wvc_correction_files_are_not_songs() {
+        assert!(!is_supported_extension("wvc"));
+        assert!(!is_supported_extension("WVC"));
+    }
+
+    #[test]
+    fn wv_gets_sibling_correction_sidecar() {
+        let dir = std::env::temp_dir().join(format!("rmpd-wvc-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let wv = dir.join("a.wv");
+        std::fs::write(&wv, b"").unwrap();
+        assert!(
+            local_file_format_options(&wv)
+                .external_data
+                .sidecar
+                .is_none()
+        );
+        std::fs::write(dir.join("a.wvc"), b"").unwrap();
+        assert!(
+            local_file_format_options(&wv)
+                .external_data
+                .sidecar
+                .is_some()
+        );
+        // Non-WavPack files never get a sidecar.
+        let flac = dir.join("a.flac");
+        std::fs::write(&flac, b"").unwrap();
+        std::fs::write(dir.join("a.wvc"), b"").unwrap();
+        assert!(
+            local_file_format_options(&flac)
+                .external_data
+                .sidecar
+                .is_none()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

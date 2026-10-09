@@ -97,19 +97,22 @@ Library scanning/tagging and playback both go through `symphonia`, but they are 
 | `flac`                        | ✅ | ✅ |
 | `mp3`                          | ✅ | ✅ |
 | `ogg`, `oga`                   | ✅ | ✅ — chained streams (several links) are played through, and seeking works across links |
-| `opus`                         | ✅ | ✅ — pure-Rust Opus decoder (SILK/CELT/hybrid), channel mapping families 0, 1, 2 and 255 |
+| `opus`                         | ✅ | ✅ — pure-Rust Opus decoder (SILK/CELT/hybrid), channel mapping families 0, 1, 2, 3 (ambisonics with a demixing matrix) and 255 |
 | `wav`, `wave`                  | ✅ | ✅ — PCM, float, A-law/µ-law, ADPCM, and MPEG layer II/III in WAV |
 | `rf64`, `bw64`, `w64`          | ✅ | ✅ — RF64, BW64 (ITU-R BS.2088) and Sony Wave64, for files over 4 GiB |
 | `aiff`, `aif`                  | ✅ | ✅ |
-| `m4a`, `mp4`, `mov`, `alac`    | ✅ | ✅ — AAC (incl. HE-AAC v1/v2) and ALAC |
-| `aac`                          | ✅ | ✅ — ADTS; HE-AAC is reported at its decoded rate and channel count |
+| `m4a`, `mp4`, `mov`, `alac`    | ✅ | ✅ — AAC (LC, HE-AAC v1/v2, AAC-LD and AAC-ELD incl. ELD with low-delay SBR) and ALAC |
+| `aac`                          | ✅ | ✅ — ADTS and ADIF; HE-AAC (explicit or implicit SBR/PS) is reported at its decoded rate and channel count |
 | `latm`, `loas`                 | ✅ | ✅ — AAC in LATM/LOAS (also `.aac` files and `audio/mp4a-latm` radio streams in that framing) |
 | `caf`                          | ✅ | ✅ — PCM, ALAC, A-law and µ-law |
 | `ape` (Monkey's Audio)         | ✅ | ✅ — pure-Rust decoder |
-| `wv` (WavPack)                 | ✅ | ✅ — pure-Rust decoder |
+| `wv` (WavPack)                 | ✅ | ✅ — pure-Rust decoder; hybrid lossless is decoded losslessly when the sibling `.wvc` correction file is next to the `.wv` (local files; `.wvc` files are never listed as songs) |
 | `dsf`, `dff` (DSD)             | ✅ | ✅ — see [DSD](#dsd) |
 | `mka`, `webm`                  | ✅ | ✅ — seeking is sample-accurate (including the seek pre-roll of MP3/AAC/Vorbis tracks) |
 | `mpc` (Musepack SV7/SV8)       | ✅ | ✅ — pure-Rust decoder |
+| `flv`, `ts`/`m2ts`/`mts`, `mpg`/`mpeg`/`vob` | ❌ | ✅ — audio track of FLV, MPEG-TS and MPEG-PS (MP1/2/3, AAC, …) for direct playback and HTTP streams. These video-ish containers are deliberately **not** picked up by the library scanner (a `.ts` is as likely TypeScript as a transport stream) |
+
+Decode performance: the pure-Rust decoders for HE-AAC (SBR QMF banks via FFT, ~2× faster, bit-identical on the test corpus), Opus, FLAC, WavPack, APE, Musepack and DSD were substantially optimised in the Symphonia fork.
 
 ### DSD
 
