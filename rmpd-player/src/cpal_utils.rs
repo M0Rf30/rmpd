@@ -160,7 +160,10 @@ fn find_dop_device(host: &cpal::Host, rate: SampleRate, channels: u16) -> Option
         if !id.starts_with("hw:") {
             continue;
         }
-        let desc = device.to_string().to_lowercase();
+        let Ok(description) = device.description() else {
+            continue;
+        };
+        let desc = description.name().to_lowercase();
         // HDMI/SPDIF take high PCM rates but are not DoP DACs — never auto-pick.
         if desc.contains("hdmi") || desc.contains("s/pdif") || desc.contains("iec958") {
             continue;
@@ -436,4 +439,31 @@ impl CpalDeviceConfig {
         self.sample_format = format;
         Ok(format)
     }
+}
+
+/// Human-readable description of the current default output device.
+///
+/// Used by the macOS device-loss watcher to detect headphones or Bluetooth
+/// headsets powering off (macOS reroutes to the speakers without pausing).
+pub fn default_output_name() -> Option<String> {
+    let host = cpal::default_host();
+    let device = host.default_output_device()?;
+    // `Device`'s Display panics when the description cannot be read, which is
+    // what happens when a device disappears between enumeration and lookup.
+    device.description().ok().map(|d| d.name().to_owned())
+}
+
+/// Descriptions of every currently available output device.
+///
+/// Used by the macOS device-loss watcher: the device we were playing through
+/// vanishing from this list means it was disconnected rather than switched.
+pub fn output_device_names() -> Vec<String> {
+    let host = cpal::default_host();
+    host.output_devices()
+        .map(|devices| {
+            devices
+                .filter_map(|d| d.description().ok().map(|d| d.name().to_owned()))
+                .collect()
+        })
+        .unwrap_or_default()
 }

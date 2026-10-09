@@ -195,6 +195,13 @@ impl MacOSMountBackend {
 }
 
 #[cfg(target_os = "macos")]
+impl Default for MacOSMountBackend {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(target_os = "macos")]
 impl MountBackend for MacOSMountBackend {
     fn mount(&self, uri: &str, mountpoint: &Path, _options: &[String]) -> Result<()> {
         let (protocol, address) = parse_uri(uri)?;

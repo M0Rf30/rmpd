@@ -14,7 +14,16 @@ use tracing::{error, info, warn};
 /// (socket activation), they are served instead of binding `bind_address` and
 /// `network.unix_socket` — like MPD, which skips its own listeners whenever
 /// activation fds exist.
-pub async fn run(bind_address: String, config: Config, activated: Option<Activated>) -> Result<()> {
+///
+/// `state_tx` hands the fully-built [`AppState`] to the macOS Now Playing
+/// controller, which owns the process main thread; every other platform passes
+/// `None`.
+pub async fn run(
+    bind_address: String,
+    config: Config,
+    state_tx: Option<std::sync::mpsc::Sender<rmpd_protocol::state::AppState>>,
+    activated: Option<Activated>,
+) -> Result<()> {
     // Create application state with database and music directory paths
     let db_path = config.general.db_file.to_string();
     let music_dir = config.general.music_directory.to_string();
@@ -184,7 +193,11 @@ pub async fn run(bind_address: String, config: Config, activated: Option<Activat
     // `playerctl`, and media keys can discover and control it. Kept alive
     // (`_mpris`) for the lifetime of the server; dropping it releases the
     // D-Bus name. Failure (e.g. no session bus) is non-fatal.
-    let _mpris = if config.network.mpris {
+    // Linux desktop integration. macOS uses the native Now Playing stack,
+    // which has to run on the process main thread (see media_controls_macos),
+    // so it is started from main.rs instead.
+    #[cfg(not(target_os = "macos"))]
+    let _media_integration = if config.network.media_controls {
         match rmpd_protocol::mpris::spawn(state.clone()).await {
             Ok(handle) => {
                 info!("MPRIS interface enabled (org.mpris.MediaPlayer2.rmpd)");
@@ -298,7 +311,71 @@ pub async fn run(bind_address: String, config: Config, activated: Option<Activat
         }
     });
 
+    // macOS: pause when the device we were playing through DISAPPEARS from
+    // the system's output-device list — headphone power-off reroutes to
+    // speakers silently and macOS keeps playing. A short poll of cpal detects
+    // the vanish without unsafe CoreAudio FFI. Deliberate switching
+    // (speakers <-> headphones) never pauses: the old device stays listed.
+    // Only when rmpd follows the system default: with a pinned device, the
+    // watcher would pause on the loss of a device this daemon is not using.
+    #[cfg(target_os = "macos")]
+    if config.audio.pause_on_device_loss && config.audio.device.is_none() {
+        let device_watch_state = state.clone();
+        tokio::spawn(async move {
+            use rmpd_core::state::PlayerState;
+            use rmpd_player::cpal_utils;
+
+            // Cleared whenever playback stops: the device a pause resumes on is
+            // not necessarily the one it paused on.
+            let mut active_device: Option<String> = None;
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+
+                // Skip the CoreAudio queries entirely unless actively playing.
+                let playing = matches!(
+                    PlayerState::from_atomic(
+                        device_watch_state
+                            .atomic_state
+                            .load(std::sync::atomic::Ordering::Acquire)
+                    ),
+                    PlayerState::Play
+                );
+                if !playing {
+                    active_device = None;
+                    continue;
+                }
+
+                let previous = active_device.as_deref();
+                let current = cpal_utils::default_output_name();
+
+                // Ask for the device list only when the default moved away from
+                // the device that was playing.
+                if let Some(prev) = previous
+                    && Some(prev) != current.as_deref()
+                {
+                    let available = cpal_utils::output_device_names();
+                    if let Some(lost) = lost_device(previous, current.as_deref(), &available) {
+                        info!("output device {lost:?} disappeared; pausing");
+                        let _ = rmpd_protocol::commands::playback::handle_pause_command(
+                            &device_watch_state,
+                            Some(true),
+                        )
+                        .await;
+                    }
+                }
+
+                active_device = current;
+            }
+        });
+    }
+
     // Create and run server
+    // Hand the fully-built state to the macOS Now Playing controller, which
+    // owns the process main thread; a no-op elsewhere.
+    if let Some(tx) = &state_tx {
+        let _ = tx.send(state.clone());
+    }
+
     let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
     let server = MpdServer::with_state(bind_address.clone(), state.clone(), shutdown_rx)
         .with_ready_signal(ready_tx);
@@ -412,6 +489,22 @@ pub async fn run(bind_address: String, config: Config, activated: Option<Activat
 
     server_result?;
     Ok(())
+}
+
+/// Whether the device rmpd was playing through has disappeared from the device
+/// list, returning its name. A move between two listed devices (speakers and
+/// headphones) is not a loss.
+#[cfg(target_os = "macos")]
+fn lost_device(
+    previous: Option<&str>,
+    current: Option<&str>,
+    available: &[String],
+) -> Option<String> {
+    let previous = previous?;
+    if current == Some(previous) {
+        return None;
+    }
+    (!available.iter().any(|name| name == previous)).then(|| previous.to_owned())
 }
 
 /// Open a dedicated database handle and start watching the music directory for
@@ -767,5 +860,47 @@ mod tests {
             result.is_ok(),
             "a failed seek must not abort the restore: {result:?}"
         );
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod device_loss_tests {
+    use super::lost_device;
+
+    fn names(list: &[&str]) -> Vec<String> {
+        list.iter().map(|name| (*name).to_owned()).collect()
+    }
+
+    #[test]
+    fn a_device_still_in_the_list_is_not_lost() {
+        let listed = names(&["Headphones", "Speakers"]);
+        assert_eq!(
+            lost_device(Some("Headphones"), Some("Headphones"), &listed),
+            None
+        );
+    }
+
+    #[test]
+    fn a_move_to_another_listed_device_is_not_a_loss() {
+        let listed = names(&["Headphones", "Speakers"]);
+        assert_eq!(
+            lost_device(Some("Headphones"), Some("Speakers"), &listed),
+            None
+        );
+    }
+
+    #[test]
+    fn a_device_that_left_the_list_is_reported() {
+        let listed = names(&["Speakers"]);
+        assert_eq!(
+            lost_device(Some("Headphones"), Some("Speakers"), &listed).as_deref(),
+            Some("Headphones")
+        );
+    }
+
+    #[test]
+    fn nothing_is_reported_without_a_previous_device() {
+        let listed = names(&["Speakers"]);
+        assert_eq!(lost_device(None, Some("Speakers"), &listed), None);
     }
 }

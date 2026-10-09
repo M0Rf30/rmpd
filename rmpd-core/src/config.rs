@@ -125,11 +125,12 @@ pub struct NetworkConfig {
     /// with the machine hostname. Matches mpd.conf's `zeroconf_name`.
     #[serde(default = "default_zeroconf_name")]
     pub zeroconf_name: String,
-    /// Advertise the daemon on the session D-Bus via the MPRIS interface
-    /// (`org.mpris.MediaPlayer2.rmpd`) so desktop environments, `playerctl`,
-    /// and media keys can discover and control rmpd.
-    #[serde(default = "default_true")]
-    pub mpris: bool,
+    /// Desktop media integration: MPRIS over D-Bus on Linux, native Now
+    /// Playing + remote commands on macOS.
+    ///
+    /// The previous key name `mpris` is still accepted.
+    #[serde(default = "default_true", alias = "mpris")]
+    pub media_controls: bool,
     /// Advertise the daemon on the LAN via mDNS/Zeroconf (`_mpd._tcp`) so
     /// clients can auto-discover it. Matches MPD's `zeroconf_enabled`.
     #[serde(default = "default_true")]
@@ -165,6 +166,11 @@ pub struct AudioConfig {
     /// DSD over PCM mode: "no" (default), "yes", or "auto".
     #[serde(default)]
     pub dop: DopMode,
+    /// macOS only: pause playback when the system default output device
+    /// disappears while playing (e.g. Bluetooth headphones power off). Other
+    /// media players pause as well; Linux and Windows ignore this key.
+    #[serde(default = "default_true")]
+    pub pause_on_device_loss: bool,
     /// Output device id (ALSA PCM name, e.g. "hw:CARD=1,DEV=0"). Unset/empty =
     /// system default. Set a raw `hw:` device for bit-perfect DoP, bypassing
     /// PipeWire/PulseAudio resampling.
@@ -646,7 +652,8 @@ const NETWORK_KEYS: &[&str] = &[
     "max_command_list_size",
     "max_output_buffer_size",
     "zeroconf_name",
-    "mpris",
+    "media_controls",
+    "mpris", // still accepted through the serde alias
     "zeroconf_enabled",
 ];
 
@@ -664,6 +671,7 @@ const AUDIO_KEYS: &[&str] = &[
     "mixramp_db",
     "mixramp_delay",
     "restore_paused",
+    "pause_on_device_loss",
 ];
 
 const DATABASE_KEYS: &[&str] = &[
@@ -1320,7 +1328,7 @@ impl Default for NetworkConfig {
             max_command_list_size: default_max_command_list_size(),
             max_output_buffer_size: default_max_output_buffer_size(),
             zeroconf_name: default_zeroconf_name(),
-            mpris: true,
+            media_controls: true,
             zeroconf_enabled: true,
         }
     }
@@ -1333,6 +1341,7 @@ impl Default for AudioConfig {
             buffer_time: default_buffer_time(),
             resampler_quality: ResamplerQuality::default(),
             dop: DopMode::default(),
+            pause_on_device_loss: true,
             device: None,
             replay_gain: ReplayGainMode::default(),
             replay_gain_preamp: 0.0,
