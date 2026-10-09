@@ -351,11 +351,12 @@ impl AudioOutput for ShoutOutput {
         if self.is_paused() {
             return Ok(());
         }
-        if self.stream.is_none() && Instant::now() >= self.next_retry {
-            if let Err(e) = self.connect() {
-                warn!("shout: {e}; will retry");
-                self.next_retry = Instant::now() + RETRY_INTERVAL;
-            }
+        if self.stream.is_none()
+            && Instant::now() >= self.next_retry
+            && let Err(e) = self.connect()
+        {
+            warn!("shout: {e}; will retry");
+            self.next_retry = Instant::now() + RETRY_INTERVAL;
         }
         if self.stream.is_some() {
             let title = now_playing();

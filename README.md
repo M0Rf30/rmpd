@@ -224,6 +224,17 @@ warning naming each one:
 - `database.cache_size`
 - `database.fts_enabled`
 
+### Command line
+
+```bash
+rmpd -c base.toml -c ~/.config/rmpd/local.toml   # layered; later files win (also `a.toml:b.toml` or a directory)
+rmpd -o network.port=6601 -o audio.replay_gain=off   # override any key (Mopidy-style `section/key` also works)
+rmpd config          # print the effective config, secrets masked
+rmpd deps            # version, enabled features and compiled-in plugins
+rmpd --kill          # ask the running instance to shut down (MPD `--kill`)
+rmpd -q | -v | -vv   # warn / debug / trace logging; --stdout / --stderr override log_file
+```
+
 ## Integrations
 
 ### MPRIS & mDNS

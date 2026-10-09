@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Gianluca Boiano
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+// Last.fm's api_sig is computed over parameters sorted by name.
+#![allow(clippy::disallowed_types)]
+
 //! Last.fm scrobbler (also libre.fm / GNU FM via `api_url`).
 //!
 //! ```toml

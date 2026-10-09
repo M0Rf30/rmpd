@@ -89,8 +89,10 @@ mod tests {
 
     #[test]
     fn mpris_follows_media_controls() {
-        let mut net = NetworkConfig::default();
-        net.media_controls = false;
+        let mut net = NetworkConfig {
+            media_controls: false,
+            ..NetworkConfig::default()
+        };
         assert!(synthesize_builtin(&net, &[]).is_empty());
         net.media_controls = true;
         let out = synthesize_builtin(&net, &[]);

@@ -2,11 +2,13 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use anyhow::{Result, anyhow};
-use clap::Parser;
+use clap::{ArgAction, Parser, Subcommand};
 use rmpd_core::config::{Config, ConfigSource, DiagLevel, DiscoverOptions};
+use std::path::PathBuf;
 use tracing::{info, warn};
 
 mod app;
+mod cli;
 mod systemd;
 
 /// Daemonize the process using double-fork + setsid.
@@ -48,9 +50,14 @@ fn daemonize() -> Result<()> {
 #[derive(Parser, Debug)]
 #[command(author, version, about = "rmpd - Rust Music Player Daemon", long_about = None)]
 struct Args {
-    /// Path to configuration file
-    #[arg(short, long)]
-    config: Option<String>,
+    /// Configuration file(s). Repeatable or `a.toml:b.toml`; a directory
+    /// loads every `*.toml` inside. Later files override earlier ones.
+    #[arg(short, long, action = ArgAction::Append)]
+    config: Vec<PathBuf>,
+
+    /// Override a config value, e.g. `-o network.port=6601` (repeatable)
+    #[arg(short = 'o', long = "option", value_name = "SECTION.KEY=VALUE")]
+    option: Vec<String>,
 
     /// Bind address
     #[arg(short, long)]
@@ -60,9 +67,13 @@ struct Args {
     #[arg(short, long)]
     port: Option<u16>,
 
-    /// Enable verbose logging
+    /// More logging: -v debug, -vv trace
+    #[arg(short, long, action = ArgAction::Count, conflicts_with = "quiet")]
+    verbose: u8,
+
+    /// Only log warnings and errors
     #[arg(short, long)]
-    verbose: bool,
+    quiet: bool,
 
     /// Run as a background daemon
     #[arg(short = 'd', long)]
@@ -71,6 +82,18 @@ struct Args {
     /// Log to syslog/journald instead of stdout (useful when running as a daemon)
     #[arg(long)]
     syslog: bool,
+
+    /// Log to stdout, ignoring `log_file`
+    #[arg(long, conflicts_with_all = ["stderr", "syslog"])]
+    stdout: bool,
+
+    /// Log to stderr, ignoring `log_file`
+    #[arg(long, conflicts_with = "syslog")]
+    stderr: bool,
+
+    /// Ask the running rmpd instance to shut down, then exit
+    #[arg(long)]
+    kill: bool,
 
     /// Skip configuration file discovery entirely and use built-in defaults
     #[arg(long)]
@@ -83,6 +106,17 @@ struct Args {
     /// Print the configuration file path that would be used and exit
     #[arg(long)]
     print_config_path: bool,
+
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Subcommand, Debug)]
+enum Command {
+    /// Print the effective configuration (after files and -o), secrets masked
+    Config,
+    /// Print version, enabled features and compiled-in plugins
+    Deps,
 }
 
 /// Build the tracing filter. Honors `RUST_LOG` when set; otherwise applies
@@ -124,26 +158,48 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    if matches!(args.command, Some(Command::Deps)) {
+        cli::print_deps();
+        return Ok(());
+    }
+
+    // One-shot actions read the config but never write a starter file.
+    let one_shot = args.kill || args.command.is_some();
+
     // Load configuration before any logging is set up, so the effective log
     // level (from config or --verbose) can drive the tracing filter from the
     // very first line of output.
     let discover_opts = DiscoverOptions {
-        generate_if_missing: !args.no_config,
+        generate_if_missing: !args.no_config && !one_shot,
         no_config: args.no_config,
     };
     // anyhow prints the error to stderr on exit, which is the only channel
     // available here: the tracing subscriber is not up yet, by design.
-    let load = Config::discover(
-        args.config.as_ref().map(std::path::Path::new),
-        discover_opts,
-    )?;
+    let load = Config::discover_layered(&args.config, &args.option, discover_opts)?;
+
+    if matches!(args.command, Some(Command::Config)) {
+        for d in &load.diagnostics {
+            if d.level == DiagLevel::Warn {
+                eprintln!("warning: {}", d.message);
+            }
+        }
+        print!("{}", load.config.to_masked_toml()?);
+        return Ok(());
+    }
+    if args.kill {
+        return cli::kill_running(&load.config.network);
+    }
     let config = load.config;
 
     // Initialize logging
-    let log_level = if args.verbose {
-        "debug".to_owned()
+    let log_level = if args.quiet {
+        "warn".to_owned()
     } else {
-        config.general.log_level.clone()
+        match args.verbose {
+            0 => config.general.log_level.clone(),
+            1 => "debug".to_owned(),
+            _ => "trace".to_owned(),
+        }
     };
 
     // Open the configured log file up front, if any, so every branch below
@@ -153,19 +209,22 @@ fn main() -> Result<()> {
     // refusing to start the daemon over. Log rotation on SIGHUP is not
     // implemented here (mpd's LogInit.cxx reopens the log file on SIGHUP);
     // the file is opened once and kept for the process lifetime.
-    let log_file_writer = config.general.log_file.as_ref().and_then(|path| {
-        match std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path.as_std_path())
-        {
-            Ok(file) => Some(file),
-            Err(e) => {
-                eprintln!("warning: unable to open log file {path} ({e}), logging to stdout");
-                None
+    let log_file_writer = (!args.stdout && !args.stderr)
+        .then_some(config.general.log_file.as_ref())
+        .flatten()
+        .and_then(|path| {
+            match std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path.as_std_path())
+            {
+                Ok(file) => Some(file),
+                Err(e) => {
+                    eprintln!("warning: unable to open log file {path} ({e}), logging to stdout");
+                    None
+                }
             }
-        }
-    });
+        });
 
     if args.syslog || args.daemonize {
         #[cfg(target_os = "linux")]
@@ -217,6 +276,10 @@ fn main() -> Result<()> {
         match log_file_writer {
             Some(file) => tracing_subscriber::fmt()
                 .with_writer(std::sync::Mutex::new(file))
+                .with_env_filter(env_filter)
+                .init(),
+            None if args.stderr => tracing_subscriber::fmt()
+                .with_writer(std::io::stderr)
                 .with_env_filter(env_filter)
                 .init(),
             None => tracing_subscriber::fmt().with_env_filter(env_filter).init(),

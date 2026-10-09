@@ -6,6 +6,9 @@ use camino::Utf8PathBuf;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+mod layers;
+pub use layers::{apply_override, mask_secrets, merge_tables};
+
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct Config {
     #[serde(default)]
@@ -1127,10 +1130,15 @@ impl Config {
         let content = std::fs::read_to_string(path).map_err(|e| {
             RmpdError::Config(format!("failed to read config {}: {e}", path.display()))
         })?;
+        Self::load_content(&content, &path.display().to_string())
+    }
 
-        let mut config: Config = toml::from_str(&content).map_err(|e| {
-            RmpdError::Config(format!("failed to parse config {}: {e}", path.display()))
-        })?;
+    /// Same as [`Self::load_file`] for already-read TOML; `label` names the
+    /// origin in parse errors.
+    pub(crate) fn load_content(content: &str, label: &str) -> Result<(Self, Vec<Diagnostic>)> {
+        let content = content.to_owned();
+        let mut config: Config = toml::from_str(&content)
+            .map_err(|e| RmpdError::Config(format!("failed to parse config {label}: {e}")))?;
 
         let mut diagnostics = Self::lint(&content);
         apply_follow_symlinks_alias(&content, &mut config, &mut diagnostics);
