@@ -97,7 +97,7 @@ Library scanning/tagging and playback both go through `symphonia`, but they are 
 | `flac`                        | ✅ | ✅ |
 | `mp3`                          | ✅ | ✅ |
 | `ogg`, `oga`                   | ✅ | ✅ |
-| `opus`                         | ✅ | ❌ — demuxed, no Opus decoder |
+| `opus`                         | ✅ | ✅ — pure-Rust Opus decoder (SILK/CELT/hybrid) |
 | `wav`                          | ✅ | ✅ |
 | `aiff`, `aif`                  | ✅ | ✅ |
 | `m4a`                          | ✅ | ✅ |
@@ -106,9 +106,8 @@ Library scanning/tagging and playback both go through `symphonia`, but they are 
 | `wv` (WavPack)                 | ✅ | ✅ — pure-Rust decoder |
 | `dsf`, `dff` (DSD)             | ✅ | ✅ — see [DSD](#dsd) |
 | `mka`, `webm`                  | ✅ | ✅ |
+| `mpc` (Musepack SV7/SV8)       | ✅ | ✅ — pure-Rust decoder |
 | `wave`, `mp4`, `alac`, `caf`    | ❌ (not scanned into the library) | ✅ — playable if referenced directly |
-
-Musepack (`.mpc`) is not supported at all: no scan, no tag, no playback.
 
 ### DSD
 
