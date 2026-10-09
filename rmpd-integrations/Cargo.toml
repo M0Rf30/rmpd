@@ -1,5 +1,5 @@
 [package]
-name = "rmpd-plugin"
+name = "rmpd-integrations"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -12,8 +12,14 @@ categories.workspace = true
 [lints]
 workspace = true
 
+[features]
+default = []
+
 [dependencies]
-async-trait = { workspace = true }
-rmpd-core = { workspace = true }
-tokio = { workspace = true }
-tracing = { workspace = true }
+rmpd-core.workspace = true
+rmpd-plugin.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+toml.workspace = true

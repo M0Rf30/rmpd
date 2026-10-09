@@ -11,9 +11,18 @@
 //! features. There is intentionally **no** dynamic `.so` loading — Rust has no
 //! stable ABI, and MPD itself links all plugins at build time.
 //!
-//! Concrete plugin traits and registries currently live next to their
-//! subsystems (e.g. the audio-output registry in `rmpd-player`). This crate is
-//! the future home for the cross-cutting SPI definitions; see
-//! `docs/PLUGIN_ARCHITECTURE.md`.
+//! Cross-cutting SPI definitions live here: music sources, playlist parsers,
+//! integrations. Subsystem-local SPIs (outputs, mixers, encoders) stay next
+//! to their subsystem in `rmpd-player`. See `docs/PLUGIN_ARCHITECTURE.md`.
+pub mod error;
+pub mod integration;
+pub mod playlist;
 pub mod source;
-pub use source::{MusicSource, SourceEntry, SourceError, SourceResult};
+
+pub use error::PluginError;
+pub use integration::{
+    Integration, IntegrationContext, IntegrationFactory, IntegrationPlugin, PlayerHandle,
+    PlayerSnapshot, ShutdownSignal, ShutdownTrigger, shutdown_channel,
+};
+pub use playlist::{PLAYLIST_PLUGINS, PlaylistEntry, PlaylistParser};
+pub use source::{MusicSource, SourceEntry, SourceError, SourceResult, SyncPolicy};

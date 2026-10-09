@@ -8,37 +8,54 @@
 //! `source_type`. No I/O happens at selection time.
 
 use crate::filesystem::filesystem_source_factory;
-use rmpd_core::config::SourceConfig;
+use rmpd_core::config::{SourceConfig, unknown_setting_messages};
 use rmpd_plugin::source::{MusicSource, SourceError};
 
 /// A sync, no-I/O factory: constructs a boxed source from config or returns a
 /// `SourceError::Config` if the config is invalid.
 pub type SourceFactory = fn(&SourceConfig) -> Result<Box<dyn MusicSource>, SourceError>;
 
+/// One registry entry for a source backend.
+#[derive(Clone, Copy)]
+pub struct SourcePlugin {
+    /// Matches `[[source]] type =` (lowercase).
+    pub name: &'static str,
+    /// Setting keys the backend accepts (besides `name`/`type`/`enabled`);
+    /// any other key in the block produces a warning at startup.
+    pub settings: &'static [&'static str],
+    pub factory: SourceFactory,
+}
+
 /// All compiled-in source backends, in priority order.
-///
-/// PR2 adds:
-/// ```ignore
-/// #[cfg(feature = "subsonic")]
-/// ("subsonic", subsonic_source_factory),
-/// ```
-pub static SOURCE_PLUGINS: &[(&str, SourceFactory)] = &[
-    ("filesystem", filesystem_source_factory),
+pub static SOURCE_PLUGINS: &[SourcePlugin] = &[
+    SourcePlugin {
+        name: "filesystem",
+        settings: crate::filesystem::SETTINGS,
+        factory: filesystem_source_factory,
+    },
     #[cfg(feature = "subsonic")]
-    ("subsonic", crate::subsonic::subsonic_source_factory),
+    SourcePlugin {
+        name: "subsonic",
+        settings: crate::subsonic::SETTINGS,
+        factory: crate::subsonic::subsonic_source_factory,
+    },
 ];
 
 /// Select and construct a `MusicSource` from a `[[source]]` config block.
 ///
-/// Looks up `cfg.source_type` (lowercased) in `SOURCE_PLUGINS` and calls the
-/// matching factory. Returns `SourceError::Config` for unknown types.
+/// Looks up `cfg.source_type` (lowercased) in `SOURCE_PLUGINS`, warns about
+/// unknown setting keys, and calls the matching factory. Returns
+/// `SourceError::Config` for unknown types.
 pub fn create_source(cfg: &SourceConfig) -> Result<Box<dyn MusicSource>, SourceError> {
     let ty = cfg.source_type.to_lowercase();
-    SOURCE_PLUGINS
+    let plugin = SOURCE_PLUGINS
         .iter()
-        .find(|(name, _)| *name == ty)
-        .map(|(_, factory)| factory(cfg))
-        .unwrap_or_else(|| Err(SourceError::Config(format!("unknown source type: {ty}"))))
+        .find(|p| p.name == ty)
+        .ok_or_else(|| SourceError::Config(format!("unknown source type: {ty}")))?;
+    for msg in unknown_setting_messages("source", &cfg.name, &cfg.settings, plugin.settings) {
+        tracing::warn!("{msg}");
+    }
+    (plugin.factory)(cfg)
 }
 
 #[cfg(test)]

@@ -31,6 +31,8 @@ rmpd-protocol.workspace = true
 rmpd-player.workspace = true
 rmpd-library.workspace = true
 rmpd-source.workspace = true
+rmpd-plugin.workspace = true
+rmpd-integrations.workspace = true
 
 tokio.workspace = true
 anyhow.workspace = true

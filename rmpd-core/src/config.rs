@@ -19,6 +19,8 @@ pub struct Config {
     #[serde(default)]
     pub source: Vec<SourceConfig>,
     #[serde(default)]
+    pub integration: Vec<IntegrationConfig>,
+    #[serde(default)]
     pub database: DatabaseConfig,
     #[serde(default)]
     pub playlist: PlaylistConfig,
@@ -274,6 +276,63 @@ impl SourceConfig {
     pub fn setting_str(&self, key: &str) -> Option<String> {
         setting_str(&self.settings, key)
     }
+}
+
+/// `[[integration]]` block: a compile-time-registered integration plugin
+/// (scrobbler, notifier, ...). Same shape as [`SourceConfig`].
+#[derive(Clone, Deserialize, Serialize)]
+pub struct IntegrationConfig {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub integration_type: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(flatten)]
+    pub settings: toml::Table,
+}
+
+impl std::fmt::Debug for IntegrationConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IntegrationConfig")
+            .field("name", &self.name)
+            .field("integration_type", &self.integration_type)
+            .field("enabled", &self.enabled)
+            .field("settings", &"<redacted>")
+            .finish()
+    }
+}
+
+impl IntegrationConfig {
+    /// Look up a string-valued setting (trimmed, non-empty; scalars are
+    /// stringified). Returns `None` when absent or empty.
+    #[must_use]
+    pub fn setting_str(&self, key: &str) -> Option<String> {
+        setting_str(&self.settings, key)
+    }
+}
+
+/// Check a plugin settings table against the keys the plugin accepts.
+///
+/// Returns one human-readable message per unknown key (with a "did you
+/// mean" hint when a close match exists). Never fatal: callers log these as
+/// warnings. Values are never included in messages.
+#[must_use]
+pub fn unknown_setting_messages(
+    kind: &str,
+    name: &str,
+    settings: &toml::Table,
+    accepted: &[&'static str],
+) -> Vec<String> {
+    settings
+        .keys()
+        .filter(|k| !accepted.contains(&k.as_str()))
+        .map(|key| match suggest(key, accepted) {
+            Some(s) => {
+                format!("unknown setting `{key}` in [[{kind}]] `{name}` (did you mean `{s}`?)")
+            }
+            None => format!("unknown setting `{key}` in [[{kind}]] `{name}`"),
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
@@ -618,7 +677,14 @@ fn default_true() -> bool {
 // settings and are intentionally not covered here beyond `name`/`type`.
 
 const KNOWN_SECTIONS: &[&str] = &[
-    "general", "network", "audio", "output", "source", "database", "playlist",
+    "general",
+    "network",
+    "audio",
+    "output",
+    "source",
+    "integration",
+    "database",
+    "playlist",
 ];
 
 const GENERAL_KEYS: &[&str] = &[
@@ -1031,6 +1097,7 @@ impl Config {
                 "playlist" => lint_section("playlist", value, PLAYLIST_KEYS, &mut diagnostics),
                 "output" => lint_tables("output", value, &mut diagnostics),
                 "source" => lint_tables("source", value, &mut diagnostics),
+                "integration" => lint_tables("integration", value, &mut diagnostics),
                 "decoder" => diagnostics.push(Diagnostic::warn(
                     "config section `[decoder]` was removed: decoders are selected at build time",
                 )),

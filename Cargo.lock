@@ -2908,8 +2908,10 @@ dependencies = [
  "clap",
  "nix",
  "rmpd-core",
+ "rmpd-integrations",
  "rmpd-library",
  "rmpd-player",
+ "rmpd-plugin",
  "rmpd-protocol",
  "rmpd-source",
  "tokio",
@@ -2932,6 +2934,17 @@ dependencies = [
  "serde",
  "symphonia",
  "thiserror 2.0.21",
+ "tokio",
+ "toml",
+ "tracing",
+]
+
+[[package]]
+name = "rmpd-integrations"
+version = "0.14.0"
+dependencies = [
+ "rmpd-core",
+ "rmpd-plugin",
  "tokio",
  "toml",
  "tracing",
@@ -2993,6 +3006,8 @@ version = "0.14.0"
 dependencies = [
  "async-trait",
  "rmpd-core",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -3013,6 +3028,7 @@ dependencies = [
  "rmpd-library",
  "rmpd-macros",
  "rmpd-player",
+ "rmpd-plugin",
  "rmpd-source",
  "souvlaki",
  "tempfile",

@@ -434,6 +434,14 @@ impl AppState {
             for source in sources.iter() {
                 let scheme = source.scheme().to_owned();
                 let name = source.name().to_owned();
+                if source.sync_policy() == rmpd_source::SyncPolicy::OnDemand {
+                    tracing::debug!(
+                        "music source '{}://{}' is on-demand, not syncing",
+                        scheme,
+                        name
+                    );
+                    continue;
+                }
                 match source.ping().await {
                     Ok(()) => {
                         tracing::info!("syncing music source '{}://{}'", scheme, name);

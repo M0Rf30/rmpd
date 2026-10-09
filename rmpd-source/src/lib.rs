@@ -16,8 +16,8 @@ pub mod registry;
 pub mod subsonic;
 
 // Re-export the SPI types so callers only need to depend on `rmpd-source`.
-pub use registry::{SOURCE_PLUGINS, SourceFactory, create_source};
-pub use rmpd_plugin::source::{MusicSource, SourceEntry, SourceError, SourceResult};
+pub use registry::{SOURCE_PLUGINS, SourceFactory, SourcePlugin, create_source};
+pub use rmpd_plugin::source::{MusicSource, SourceEntry, SourceError, SourceResult, SyncPolicy};
 
 use rmpd_core::config::SourceConfig;
 use tracing::warn;
@@ -108,6 +108,22 @@ impl SourceRegistry {
         };
         source.cover_art(extract_remote_id(path)).await
     }
+
+    /// Browse a mount-style path under an [`SyncPolicy::OnDemand`] source by
+    /// delegating to [`MusicSource::browse`] (the path after the mount
+    /// segment is the source-relative directory; `""` is the source root).
+    ///
+    /// Returns `None` when no live source owns `path` or the owner is
+    /// `Full`-synced (its entries live in the database instead).
+    pub async fn browse_on_demand(&self, path: &str) -> Option<SourceResult<Vec<SourceEntry>>> {
+        let source = self.owning_source(path)?;
+        if source.sync_policy() != SyncPolicy::OnDemand {
+            return None;
+        }
+        let dir = path.split_once('/').map_or("", |(_, rest)| rest);
+        Some(source.browse(dir).await)
+    }
+
     /// Number of live sources.
     pub fn len(&self) -> usize {
         self.sources.len()
@@ -131,6 +147,10 @@ impl SourceRegistry {
 /// This function is `async` because `list_all` does network I/O; the DB work
 /// runs on a blocking thread so libsqlite does not stall the Tokio runtime.
 pub async fn sync_source(source: &dyn MusicSource, db_path: &str) -> Result<usize, SourceError> {
+    if source.sync_policy() == SyncPolicy::OnDemand {
+        // Never mirrored: browsing is delegated to `MusicSource::browse`.
+        return Ok(0);
+    }
     let songs = source.list_all().await?;
     let count = songs.len();
     let token = format!("{}:{}", source.scheme(), source.name());

@@ -841,8 +841,46 @@ pub async fn handle_currentsong_command(state: &AppState) -> String {
     ResponseBuilder::new().ok()
 }
 
+/// `lsinfo` under an [`rmpd_source::SyncPolicy::OnDemand`] mount: delegate to
+/// `MusicSource::browse` instead of the database.
+async fn lsinfo_on_demand(state: &AppState, path: &str) -> String {
+    let sources = state.sources.clone();
+    let path = path.to_owned();
+    // Spawned so the (non-Sync) async_trait future does not leak into the
+    // caller's future bounds.
+    let result = tokio::spawn(async move { sources.browse_on_demand(&path).await }).await;
+    match result {
+        Ok(Some(Ok(entries))) => {
+            let mut resp = ResponseBuilder::new();
+            for entry in &entries {
+                match entry {
+                    rmpd_source::SourceEntry::Song(song) => {
+                        resp.song(song, None, None, None);
+                    }
+                    rmpd_source::SourceEntry::Dir(dir) => {
+                        resp.field("directory", dir);
+                    }
+                }
+            }
+            resp.ok()
+        }
+        Ok(Some(Err(e))) => ResponseBuilder::error(ACK_ERROR_SYS, 0, "lsinfo", &e.to_string()),
+        Ok(None) => ResponseBuilder::error(ACK_ERROR_NO_EXIST, 0, "lsinfo", "No such directory"),
+        Err(_) => internal_error("lsinfo"),
+    }
+}
+
 // Browsing commands
 pub async fn handle_lsinfo_command(state: &AppState, path: Option<&str>) -> String {
+    // A path under an on-demand source mount is answered by the source itself.
+    if let Some(p) = path
+        && state
+            .sources
+            .owning_source(p)
+            .is_some_and(|s| s.sync_policy() == rmpd_source::SyncPolicy::OnDemand)
+    {
+        return lsinfo_on_demand(state, p).await;
+    }
     let state = state.clone();
     let path = path.map(|s| s.to_string());
     match tokio::task::spawn_blocking(move || {
@@ -878,6 +916,16 @@ pub async fn handle_lsinfo_command(state: &AppState, path: Option<&str>) -> Stri
                     if *mtime > 0 {
                         let ts = format_iso8601_timestamp(*mtime);
                         resp.field("Last-Modified", &ts);
+                    }
+                }
+
+                // On-demand sources are never mirrored into the database, so
+                // surface their mount points at the root explicitly.
+                if path_str.is_empty() || path_str == "/" {
+                    for source in state.sources.iter() {
+                        if source.sync_policy() == rmpd_source::SyncPolicy::OnDemand {
+                            resp.field("directory", source.name());
+                        }
                     }
                 }
 

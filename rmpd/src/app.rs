@@ -234,6 +234,26 @@ pub async fn run(
         state.spawn_source_sync();
     }
 
+    // Start enabled `[[integration]]` plugins (scrobblers, notifiers, ...).
+    let (integration_shutdown, integration_signal) = rmpd_plugin::shutdown_channel();
+    let integration_handles = if config.integration.iter().any(|c| c.enabled) {
+        let player: Arc<dyn rmpd_plugin::PlayerHandle> =
+            Arc::new(rmpd_protocol::ServerPlayerHandle::new(state.clone()));
+        let integration_dir = std::path::Path::new(&state_file_path)
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .join("integrations");
+        rmpd_integrations::spawn_integrations(
+            &config.integration,
+            &state.event_bus,
+            &player,
+            &integration_dir,
+            &integration_signal,
+        )
+    } else {
+        Vec::new()
+    };
+
     // Start the filesystem watcher so the database stays in sync with on-disk
     // changes. Kept alive (`_watcher`) for the lifetime of the server; dropping
     // it would stop watching.
@@ -481,6 +501,13 @@ pub async fn run(
     let _ = final_shutdown_tx.send(());
     if let Some(ticker) = state_save_ticker {
         let _ = ticker.await;
+    }
+
+    // Integrations were signalled via `integration_shutdown`; give them a
+    // moment to wind down so they can flush their own state.
+    integration_shutdown.trigger();
+    for handle in integration_handles {
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await;
     }
 
     // Save state on clean shutdown

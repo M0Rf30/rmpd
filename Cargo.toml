@@ -8,6 +8,7 @@ members = [
     "rmpd-player",
     "rmpd-library",
     "rmpd-plugin",
+    "rmpd-integrations",
     "rmpd-source",
     "rmpd-stream",
 ]
@@ -82,6 +83,7 @@ rmpd-player = { path = "rmpd-player" }
 # Cargo.toml), not inherited automatically by every dependent.
 rmpd-library = { path = "rmpd-library", default-features = false }
 rmpd-plugin = { path = "rmpd-plugin" }
+rmpd-integrations = { path = "rmpd-integrations" }
 rmpd-stream = { path = "rmpd-stream" }
 rmpd-source = { path = "rmpd-source" }
 

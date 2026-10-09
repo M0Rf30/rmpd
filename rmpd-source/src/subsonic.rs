@@ -187,6 +187,17 @@ pub struct SubsonicSource {
 
 // ─── Factory ─────────────────────────────────────────────────────────────────
 
+/// Setting keys accepted in a `[[source]] type = "subsonic"` block.
+pub const SETTINGS: &[&str] = &[
+    "url",
+    "username",
+    "password",
+    "api_key",
+    "max_bitrate",
+    "format",
+    "accept_invalid_certs",
+];
+
 /// Sync, no-I/O factory registered in `SOURCE_PLUGINS` under `feature = "subsonic"`.
 pub fn subsonic_source_factory(cfg: &SourceConfig) -> Result<Box<dyn MusicSource>, SourceError> {
     let sc = SubsonicConfig::from_source_config(cfg)?;

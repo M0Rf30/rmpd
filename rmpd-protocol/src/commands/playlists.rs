@@ -14,18 +14,6 @@ use super::utils::{
 use crate::parser::InsertPosition;
 use std::path::Path;
 
-fn strip_file_uri_prefix(value: &str) -> String {
-    if let Some(rest) = value.strip_prefix("file://localhost") {
-        rest.to_string()
-    } else if let Some(rest) = value.strip_prefix("file:///") {
-        format!("/{rest}")
-    } else if let Some(rest) = value.strip_prefix("file://") {
-        rest.to_string()
-    } else {
-        value.to_string()
-    }
-}
-
 /// Notify idle clients that the set or contents of stored playlists changed,
 /// mirroring MPD's `idle_add(IDLE_STORED_PLAYLIST)` after a successful mutation.
 fn notify_stored_playlist(state: &AppState) {
@@ -47,19 +35,6 @@ pub(crate) fn validate_playlist_name(name: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Parse an .m3u playlist file and return the list of relative paths.
-/// Lines starting with '#' are comments and are skipped.
-fn read_m3u_playlist(playlist_dir: &str, name: &str) -> Result<Vec<String>, String> {
-    let path = std::path::Path::new(playlist_dir).join(format!("{name}.m3u"));
-    let content = std::fs::read_to_string(&path).map_err(|_| "No such playlist".to_string())?;
-    let paths: Vec<String> = content
-        .lines()
-        .filter(|l| !l.trim_start().starts_with('#') && !l.trim().is_empty())
-        .map(|l| l.to_string())
-        .collect();
-    Ok(paths)
-}
-
 /// Per-entry metadata parsed from an extended M3U's `#EXTINF` lines.
 /// Mirrors the `Tag` MPD attaches in `ExtM3uPlaylistPlugin.cxx`. Only used
 /// as a fallback for entries the database has no record of (typically
@@ -69,41 +44,12 @@ struct ExtM3uMeta {
     duration_secs: Option<u32>,
 }
 
-/// Parse the payload of an `#EXTINF:` line (everything after the prefix),
-/// mirroring MPD's `extm3u_parse_tag()`: `<duration>,<title>` split on the
-/// first comma. No comma, or a non-numeric duration, means the line is
-/// malformed and carries no metadata. A duration <= 0 means "unknown"
-/// (ExtM3uPlaylistPlugin.cxx keeps the title, if any, but drops it).
-fn extm3u_parse_tag(line: &str) -> Option<ExtM3uMeta> {
-    let comma = line.find(',')?;
-    let duration: i64 = line[..comma].trim().parse().ok()?;
-    let duration_secs = if duration > 0 {
-        Some(duration as u32)
-    } else {
-        None
-    };
-    let title = line[comma + 1..].trim_start();
-    let title = if title.is_empty() {
-        None
-    } else {
-        Some(title.to_string())
-    };
-    if title.is_none() && duration_secs.is_none() {
-        // No information available at all — don't allocate a tag.
-        return None;
-    }
-    Some(ExtM3uMeta {
-        title,
-        duration_secs,
-    })
-}
-
 /// Parse `#EXTINF` metadata out of an extended M3U playlist, mirroring
 /// MPD's `ExtM3uPlaylist::NextSong()`. Returns `None` when the file's very
 /// first line isn't exactly `#EXTM3U` — MPD then falls back to the plain
 /// `M3uPlaylistPlugin`, which carries no metadata at all.
 ///
-/// The returned vec is index-aligned with `read_m3u_playlist`'s output:
+/// The returned vec is index-aligned with the `m3u` parser's entries:
 /// element `i` is the metadata (if any) for the `i`th returned path. An
 /// `#EXTINF` with no following URI (e.g. at end of file) contributes no
 /// element, matching `NextSong()` returning end-of-stream without ever
@@ -111,104 +57,57 @@ fn extm3u_parse_tag(line: &str) -> Option<ExtM3uMeta> {
 fn parse_extm3u_metadata(playlist_dir: &str, name: &str) -> Option<Vec<Option<ExtM3uMeta>>> {
     let path = std::path::Path::new(playlist_dir).join(format!("{name}.m3u"));
     let content = std::fs::read_to_string(&path).ok()?;
-    let mut lines = content.lines();
-    if lines.next()?.trim_end() != "#EXTM3U" {
+    if content.lines().next()?.trim_end() != "#EXTM3U" {
         return None;
     }
-
-    let mut result = Vec::new();
-    let mut pending: Option<ExtM3uMeta> = None;
-    for line in lines {
-        if let Some(rest) = line.strip_prefix("#EXTINF:") {
-            pending = extm3u_parse_tag(rest);
-            continue;
-        }
-        if line.trim_start().starts_with('#') || line.trim().is_empty() {
-            continue;
-        }
-        result.push(pending.take());
-    }
-    Some(result)
+    let entries = read_parsed_entries(playlist_dir, name, "m3u").ok()?;
+    Some(
+        entries
+            .into_iter()
+            .map(|e| {
+                if e.title.is_none() && e.duration.is_none() {
+                    None
+                } else {
+                    Some(ExtM3uMeta {
+                        title: e.title,
+                        duration_secs: e.duration.map(|d| d.as_secs() as u32),
+                    })
+                }
+            })
+            .collect(),
+    )
 }
 
-fn read_pls_playlist(playlist_dir: &str, name: &str) -> Result<Vec<String>, String> {
-    let path = std::path::Path::new(playlist_dir).join(format!("{name}.pls"));
+/// Read `<playlist_dir>/<name>.<suffix>` and parse it with the playlist
+/// parser registered for `suffix` (see `rmpd_plugin::playlist`).
+fn read_parsed_entries(
+    playlist_dir: &str,
+    name: &str,
+    suffix: &str,
+) -> Result<Vec<rmpd_plugin::playlist::PlaylistEntry>, String> {
+    let path = std::path::Path::new(playlist_dir).join(format!("{name}.{suffix}"));
     let content = std::fs::read_to_string(&path).map_err(|_| "No such playlist".to_string())?;
-    let mut paths = Vec::new();
-
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if let Some((key, value)) = trimmed.split_once('=')
-            && key.trim().len() >= 4
-            && key.trim()[..4].eq_ignore_ascii_case("file")
-        {
-            paths.push(strip_file_uri_prefix(value.trim()));
-        }
-    }
-
-    Ok(paths)
+    let parser = rmpd_plugin::playlist::parser_for_suffix(suffix)
+        .ok_or_else(|| "No such playlist".to_string())?;
+    Ok(parser.parse(&path.to_string_lossy(), &content))
 }
 
-fn extract_xml_tag_content(xml: &str, tag: &str) -> Vec<String> {
-    let open = format!("<{tag}>");
-    let close = format!("</{tag}>");
-    let mut results = Vec::new();
-    let mut remaining = xml;
-    while let Some(start) = remaining.find(&open) {
-        let after_open = &remaining[start + open.len()..];
-        if let Some(end) = after_open.find(&close) {
-            let content = after_open[..end].trim().to_string();
-            results.push(content);
-            remaining = &after_open[end + close.len()..];
-        } else {
-            break;
-        }
-    }
-    results
-}
-
-fn read_xspf_playlist(playlist_dir: &str, name: &str) -> Result<Vec<String>, String> {
-    let path = std::path::Path::new(playlist_dir).join(format!("{name}.xspf"));
-    let content = std::fs::read_to_string(&path).map_err(|_| "No such playlist".to_string())?;
-
-    let mut paths = extract_xml_tag_content(&content, "location");
-    if paths.is_empty() {
-        paths = extract_xml_tag_content(&content, "file");
-    }
-
-    Ok(paths
+/// Like [`read_parsed_entries`], keeping only the entry URIs.
+fn read_parsed_playlist(
+    playlist_dir: &str,
+    name: &str,
+    suffix: &str,
+) -> Result<Vec<String>, String> {
+    Ok(read_parsed_entries(playlist_dir, name, suffix)?
         .into_iter()
-        .map(|p| strip_file_uri_prefix(p.trim()))
+        .map(|e| e.uri)
         .collect())
 }
 
-fn read_asx_playlist(playlist_dir: &str, name: &str) -> Result<Vec<String>, String> {
-    let path = std::path::Path::new(playlist_dir).join(format!("{name}.asx"));
-    let content = std::fs::read_to_string(&path).map_err(|_| "No such playlist".to_string())?;
-
-    // ASX: <REF HREF="..."/> or <ref href="..."/>
-    let mut paths = Vec::new();
-    let mut remaining = content.as_str();
-    while let Some(pos) = remaining.to_ascii_lowercase().find("<ref ") {
-        let chunk = &remaining[pos..];
-        if let Some(href_pos) = chunk.to_ascii_lowercase().find("href=") {
-            let after_href = &chunk[href_pos + 5..];
-            let trimmed = after_href.trim_start_matches(|c: char| c.is_ascii_whitespace());
-            let (quote, rest) = if let Some(s) = trimmed.strip_prefix('"') {
-                ('"', s)
-            } else if let Some(s) = trimmed.strip_prefix('\'') {
-                ('\'', s)
-            } else {
-                remaining = &remaining[pos + 5..];
-                continue;
-            };
-            if let Some(end) = rest.find(quote) {
-                paths.push(strip_file_uri_prefix(&rest[..end]));
-            }
-        }
-        remaining = &remaining[pos + 5..];
-    }
-    Ok(paths)
+/// Parse an .m3u playlist file and return the list of relative paths.
+/// Comment lines (`#...`) are skipped.
+fn read_m3u_playlist(playlist_dir: &str, name: &str) -> Result<Vec<String>, String> {
+    read_parsed_playlist(playlist_dir, name, "m3u")
 }
 
 fn read_cue_playlist(playlist_dir: &str, name: &str) -> Result<Vec<String>, String> {
@@ -303,23 +202,22 @@ fn read_cue_tracks(
 }
 
 fn read_playlist(playlist_dir: &str, name: &str) -> Result<Vec<String>, String> {
-    let path_m3u = std::path::Path::new(playlist_dir).join(format!("{name}.m3u"));
-    let path_pls = std::path::Path::new(playlist_dir).join(format!("{name}.pls"));
-    let path_xspf = std::path::Path::new(playlist_dir).join(format!("{name}.xspf"));
-    let path_cue = std::path::Path::new(playlist_dir).join(format!("{name}.cue"));
+    let exists = |suffix: &str| {
+        std::path::Path::new(playlist_dir)
+            .join(format!("{name}.{suffix}"))
+            .exists()
+    };
 
-    let path_asx = std::path::Path::new(playlist_dir).join(format!("{name}.asx"));
-
-    if path_m3u.exists() {
-        read_m3u_playlist(playlist_dir, name)
-    } else if path_pls.exists() {
-        read_pls_playlist(playlist_dir, name)
-    } else if path_xspf.exists() {
-        read_xspf_playlist(playlist_dir, name)
-    } else if path_cue.exists() {
+    if exists("m3u") {
+        read_parsed_playlist(playlist_dir, name, "m3u")
+    } else if exists("pls") {
+        read_parsed_playlist(playlist_dir, name, "pls")
+    } else if exists("xspf") {
+        read_parsed_playlist(playlist_dir, name, "xspf")
+    } else if exists("cue") {
         read_cue_playlist(playlist_dir, name)
-    } else if path_asx.exists() {
-        read_asx_playlist(playlist_dir, name)
+    } else if exists("asx") {
+        read_parsed_playlist(playlist_dir, name, "asx")
     } else {
         Err(format!("No such playlist: {name}"))
     }
