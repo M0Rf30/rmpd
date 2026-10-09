@@ -23,8 +23,9 @@ use rmpd_core::config::SourceConfig;
 use rmpd_core::song::Song;
 use rmpd_plugin::source::{MusicSource, SourceEntry, SourceError, SourceResult};
 use serde::Deserialize;
+use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::OnceCell;
+use tokio::sync::Mutex;
 
 /// Setting keys accepted in a `[[source]] type = "jellyfin"` block.
 pub const SETTINGS: &[&str] = &[
@@ -322,7 +323,7 @@ pub struct JellyfinSource {
     max_bitrate: Option<u32>,
     format: Option<String>,
     device_id: String,
-    session: OnceCell<Session>,
+    session: Mutex<Option<Arc<Session>>>,
 }
 
 /// Sync, no-I/O factory registered in `SOURCE_PLUGINS` under `feature = "jellyfin"`.
@@ -350,14 +351,29 @@ pub fn jellyfin_source_factory(cfg: &SourceConfig) -> Result<Box<dyn MusicSource
         configured_user_id: jc.user_id,
         max_bitrate: jc.max_bitrate,
         format: jc.format,
-        session: OnceCell::new(),
+        session: Mutex::new(None),
     }))
 }
 
 impl JellyfinSource {
-    /// Authenticate (once) and return the cached session.
-    async fn session(&self) -> SourceResult<&Session> {
-        self.session.get_or_try_init(|| self.login()).await
+    /// Return the cached session, logging in if there is none. The lock is
+    /// held across the login so concurrent callers share a single attempt.
+    async fn session(&self) -> SourceResult<Arc<Session>> {
+        let mut slot = self.session.lock().await;
+        if let Some(s) = slot.as_ref() {
+            return Ok(Arc::clone(s));
+        }
+        let s = Arc::new(self.login().await?);
+        *slot = Some(Arc::clone(&s));
+        Ok(s)
+    }
+
+    /// Drop `stale` from the cache unless another task already replaced it.
+    async fn invalidate(&self, stale: &Arc<Session>) {
+        let mut slot = self.session.lock().await;
+        if slot.as_ref().is_some_and(|s| Arc::ptr_eq(s, stale)) {
+            *slot = None;
+        }
     }
 
     async fn login(&self) -> SourceResult<Session> {
@@ -440,8 +456,25 @@ impl JellyfinSource {
     }
 
     /// Authenticated GET of `path_and_query` (relative to the base URL).
+    ///
+    /// With password credentials a 401 means the token expired or was revoked:
+    /// the cached session is discarded, one fresh login is made and the
+    /// request retried once.
     async fn get(&self, path_and_query: &str) -> SourceResult<Vec<u8>> {
         let session = self.session().await?;
+        match self.get_with(&session, path_and_query).await {
+            Err(SourceError::Auth(_))
+                if matches!(self.credentials, Credentials::Password { .. }) =>
+            {
+                self.invalidate(&session).await;
+                let fresh = self.session().await?;
+                self.get_with(&fresh, path_and_query).await
+            }
+            other => other,
+        }
+    }
+
+    async fn get_with(&self, session: &Session, path_and_query: &str) -> SourceResult<Vec<u8>> {
         let header = auth_header(&self.device_id, Some(&session.token));
         let req = self
             .http
@@ -803,5 +836,104 @@ mod tests {
         let src = src.ok().unwrap();
         assert_eq!(src.scheme(), "jellyfin");
         assert_eq!(src.name(), "jf");
+    }
+
+    /// Minimal HTTP server: logins hand out `t1`, `t2`, ...; only `t2` is
+    /// accepted on GET. Returns the request lines it saw.
+    fn spawn_server(connections: usize) -> (String, std::thread::JoinHandle<Vec<String>>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let handle = std::thread::spawn(move || {
+            let mut seen = Vec::new();
+            let mut logins = 0;
+            for _ in 0..connections {
+                let (mut conn, _) = listener.accept().unwrap();
+                let mut buf = Vec::new();
+                let mut chunk = [0u8; 1024];
+                let head_end = loop {
+                    let n = conn.read(&mut chunk).unwrap();
+                    buf.extend_from_slice(&chunk[..n]);
+                    if let Some(p) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                        break p + 4;
+                    }
+                    assert!(n > 0, "connection closed early");
+                };
+                let head = String::from_utf8_lossy(&buf[..head_end]).to_lowercase();
+                let len = head
+                    .lines()
+                    .find_map(|l| l.strip_prefix("content-length:"))
+                    .and_then(|v| v.trim().parse::<usize>().ok())
+                    .unwrap_or(0);
+                while buf.len() < head_end + len {
+                    let n = conn.read(&mut chunk).unwrap();
+                    buf.extend_from_slice(&chunk[..n]);
+                }
+                let line = head.lines().next().unwrap_or_default().to_owned();
+                let (status, body) = if line.starts_with("post ") {
+                    logins += 1;
+                    (
+                        "200 OK",
+                        format!(r#"{{"AccessToken":"t{logins}","User":{{"Id":"u1"}}}}"#),
+                    )
+                } else if head.contains("x-emby-token: t2") {
+                    ("200 OK", r#"{"Items":[]}"#.to_owned())
+                } else {
+                    ("401 Unauthorized", String::new())
+                };
+                seen.push(format!("{line} -> {status}"));
+                let resp = format!(
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                conn.write_all(resp.as_bytes()).unwrap();
+            }
+            seen
+        });
+        (base, handle)
+    }
+
+    fn password_source(base: String) -> JellyfinSource {
+        JellyfinSource {
+            name: "jf".to_owned(),
+            base,
+            http: http_client(Duration::from_secs(5), false).unwrap(),
+            credentials: Credentials::Password {
+                username: "u".to_owned(),
+                password: "p".to_owned(),
+            },
+            configured_user_id: None,
+            max_bitrate: None,
+            format: None,
+            device_id: "rmpd-jf".to_owned(),
+            session: Mutex::new(None),
+        }
+    }
+
+    #[tokio::test]
+    async fn relogs_in_once_on_401_with_password() {
+        // login, GET (401), re-login, GET (200)
+        let (base, server) = spawn_server(4);
+        let src = password_source(base);
+        let body = src.get("/Items").await.unwrap();
+        assert_eq!(body, br#"{"Items":[]}"#);
+        // The refreshed session is cached: no further login.
+        assert_eq!(src.session().await.unwrap().token, "t2");
+        let seen = server.join().unwrap();
+        assert_eq!(seen.iter().filter(|l| l.starts_with("post ")).count(), 2);
+    }
+
+    #[tokio::test]
+    async fn persistent_401_is_retried_only_once() {
+        // stale GET (401), login (t1), GET (401) -> error, no third attempt.
+        let (base, server) = spawn_server(3);
+        let src = password_source(base);
+        *src.session.lock().await = Some(Arc::new(Session {
+            token: "stale".to_owned(),
+            user_id: "u1".to_owned(),
+        }));
+        let err = src.get("/Items").await.unwrap_err();
+        assert!(matches!(err, SourceError::Auth(_)));
+        assert_eq!(server.join().unwrap().len(), 3);
     }
 }

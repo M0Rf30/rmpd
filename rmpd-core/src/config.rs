@@ -80,6 +80,12 @@ pub struct GeneralConfig {
     /// `max_playlist_length`.
     #[serde(default = "default_max_playlist_length")]
     pub max_playlist_length: usize,
+    /// Number of played songs remembered for the play history exposed by the
+    /// HTTP API's `core.history.get_history`. The history is kept in memory
+    /// (and saved in the state file); the oldest entries are dropped once the
+    /// limit is reached. `0` disables history recording.
+    #[serde(default = "default_history_length")]
+    pub history_length: usize,
     /// Store absolute filesystem paths (instead of paths relative to
     /// `music_directory`) when saving `.m3u` playlists. Matches mpd.conf's
     /// `save_absolute_paths_in_playlists`.
@@ -775,6 +781,10 @@ const fn default_max_playlist_length() -> usize {
     16384
 }
 
+const fn default_history_length() -> usize {
+    1000
+}
+
 fn default_bind_address() -> String {
     "127.0.0.1".to_owned()
 }
@@ -850,6 +860,7 @@ const GENERAL_KEYS: &[&str] = &[
     "follow_symlinks",
     "filesystem_charset",
     "max_playlist_length",
+    "history_length",
     "save_absolute_paths_in_playlists",
     "metadata_to_use",
 ];
@@ -900,7 +911,12 @@ const DATABASE_KEYS: &[&str] = &[
 
 const PLAYLIST_KEYS: &[&str] = &["embedded_cue_as_directory"];
 
-const STREAM_KEYS: &[&str] = &["timeout_ms", "metadata_blacklist", "proxy"];
+const STREAM_KEYS: &[&str] = &[
+    "timeout_ms",
+    "metadata_blacklist",
+    "proxy",
+    "hls_max_bandwidth",
+];
 
 const PROXY_KEYS: &[&str] = &["url", "username", "password"];
 
@@ -1562,6 +1578,7 @@ impl Default for GeneralConfig {
             follow_outside_symlinks: true,
             filesystem_charset: default_charset(),
             max_playlist_length: default_max_playlist_length(),
+            history_length: default_history_length(),
             save_absolute_paths_in_playlists: false,
             metadata_to_use: None,
         }
@@ -1968,6 +1985,11 @@ max_bitrate = 320
             parsed.general.max_playlist_length,
             default.general.max_playlist_length
         );
+        assert_eq!(
+            parsed.general.history_length,
+            default.general.history_length
+        );
+        assert_eq!(default.general.history_length, 1000);
         assert_eq!(
             parsed.general.save_absolute_paths_in_playlists,
             default.general.save_absolute_paths_in_playlists

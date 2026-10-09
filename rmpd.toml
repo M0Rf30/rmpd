@@ -37,8 +37,12 @@ filesystem_charset = "UTF-8"
 state_file_interval = 120
 # Write logs to this file instead of stdout. Matches mpd.conf's log_file.
 # log_file = "~/.config/rmpd/rmpd.log"
+# When logging to a file, SIGHUP closes and re-opens it (for logrotate).
 # Maximum number of songs allowed in the queue. Matches mpd.conf's max_playlist_length.
 max_playlist_length = 16384
+# Number of recently played songs remembered (exposed by the HTTP API's
+# core.history.get_history, saved in the state file). 0 disables the history.
+history_length = 1000
 # Store absolute paths (instead of paths relative to music_directory) when
 # saving .m3u playlists. Matches mpd.conf's save_absolute_paths_in_playlists.
 save_absolute_paths_in_playlists = false
@@ -289,8 +293,11 @@ enabled = true
 # mixer_index = 0                # default 0
 #
 # # Network/file outputs with pluggable encoders. `encoder` is one of
-# # "wav" (default), "pcm", "flac" (pure Rust). `compression` (0-8, default 5)
-# # tunes flac. `bitrate` / `quality` are reserved for lossy encoders.
+# # "wav" (default), "pcm", "flac" (pure Rust) or "opus" (pure Rust Ogg Opus,
+# # recommended for Icecast bandwidth). `compression` (0-8, default 5) tunes
+# # flac; for opus `bitrate` (kbps, default 128), `complexity` (0-10, default 9;
+# # `quality` is accepted as an alias) and `vbr` ("vbr" default, "cvbr", "cbr")
+# # apply. Opus is always coded at 48 kHz (other rates are resampled).
 # [[output]]
 # name = "HTTP stream"
 # type = "httpd"
@@ -302,7 +309,7 @@ enabled = true
 # name = "Recording"
 # type = "recorder"
 # path = "/tmp/rmpd-recording.flac"
-# encoder = "flac"               # omit for the default WAV writer
+# encoder = "flac"               # omit for the default WAV writer; "opus" -> .opus file
 #
 # # Icecast2 source client (plain HTTP PUT; no TLS). Streams the encoded audio
 # # to <host>:<port><mount> and sends /admin/metadata on song change.
@@ -314,7 +321,8 @@ enabled = true
 # mount = "/rmpd"
 # user = "source"                # default "source"
 # password = "hackme"            # required; never logged
-# encoder = "flac"               # default "flac"
+# encoder = "flac"               # default "flac"; "opus" saves bandwidth (audio/ogg)
+# # bitrate = 96                 # opus only: kbps (default 128)
 # genre = "Various"
 # description = "rmpd stream"
 # public = false

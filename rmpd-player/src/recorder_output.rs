@@ -6,7 +6,7 @@
 //! By default (no `encoder` setting, or `encoder = "wav"`) it writes a
 //! canonical WAV file whose RIFF/data sizes are patched when recording stops.
 //! Any other encoder from [`crate::encoder::ENCODER_PLUGINS`] (`flac`, `pcm`,
-//! and `opus`/`vorbis` when compiled in) is streamed to the file as-is.
+//! `opus` — write a `.opus` file) is streamed to the file as-is.
 
 use crate::audio_output::{AudioOutput, PauseState};
 use crate::conversion;
@@ -111,10 +111,12 @@ impl AudioOutput for RecorderOutput {
         let file = File::create(&self.path)
             .map_err(|e| RmpdError::Player(format!("cannot create {}: {e}", self.path)))?;
         let mut w = BufWriter::new(file);
-        match &self.encoder {
-            Some(enc) => w
-                .write_all(&enc.header())
-                .map_err(|e| RmpdError::Player(format!("recorder write: {e}")))?,
+        match &mut self.encoder {
+            Some(enc) => {
+                enc.reset();
+                w.write_all(&enc.header())
+                    .map_err(|e| RmpdError::Player(format!("recorder write: {e}")))?;
+            }
             None => Self::write_wav_header(&mut w, self.format.sample_rate, self.format.channels)?,
         }
         self.writer = Some(w);
@@ -144,6 +146,12 @@ impl AudioOutput for RecorderOutput {
 
     fn stop(&mut self) -> Result<()> {
         if let Some(mut w) = self.writer.take() {
+            if let Some(enc) = &mut self.encoder {
+                let tail = enc.finish();
+                if let Err(e) = w.write_all(&tail) {
+                    tracing::warn!("recorder: failed to write encoder tail: {e}");
+                }
+            }
             let _ = w.flush();
         }
         // Only the built-in WAV writer needs its header sizes patched.
@@ -202,6 +210,51 @@ mod tests {
         let bytes = std::fs::read(&path).unwrap();
         assert_eq!(&bytes[..4], b"fLaC");
         assert!(bytes.len() > 42, "header plus one frame");
+    }
+
+    #[test]
+    fn flac_recorder_finish_and_restart_are_clean() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("restart.flac");
+        let enc = Box::new(FlacEncoder::new(fmt(), 5).unwrap());
+        let mut rec = RecorderOutput::with_encoder(path.to_string_lossy().into_owned(), fmt(), enc);
+        // 4096 + 10 frames: the 10-frame tail is only written by finish().
+        rec.start().unwrap();
+        rec.write(&vec![0.25f32; (4096 + 10) * 2]).unwrap();
+        rec.stop().unwrap();
+        let first = std::fs::read(&path).unwrap();
+        // Restart with a short recording: no leftovers from the first run.
+        rec.start().unwrap();
+        rec.write(&[0.25f32; 6]).unwrap();
+        rec.stop().unwrap();
+        let second = std::fs::read(&path).unwrap();
+        assert_eq!(&second[..4], b"fLaC");
+        assert_eq!(second[42 + 4], 0, "frame numbering restarts");
+        assert!(second.len() < first.len(), "no stale samples carried over");
+        // 3 frames only: one short final frame after the 42-byte header.
+        assert_eq!(second[42 + 2] >> 4, 7, "explicit block size code");
+        assert_eq!(&second[42 + 5..42 + 7], &[0, 2], "block size - 1");
+    }
+
+    #[test]
+    fn opus_recorder_writes_complete_ogg_stream() {
+        use crate::encoder::{OpusEncoder, OpusSettings};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("out.opus");
+        let enc = Box::new(OpusEncoder::new(fmt(), OpusSettings::default()).unwrap());
+        let mut rec = RecorderOutput::with_encoder(path.to_string_lossy().into_owned(), fmt(), enc);
+        rec.start().unwrap();
+        rec.write(&vec![0.1f32; 44100 * 2]).unwrap();
+        rec.stop().unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        assert_eq!(&bytes[..4], b"OggS");
+        assert!(bytes.windows(8).any(|w| w == b"OpusHead"));
+        // The last Ogg page carries the end-of-stream flag.
+        let last = bytes
+            .windows(4)
+            .rposition(|w| w == b"OggS")
+            .expect("at least one page");
+        assert_ne!(bytes[last + 5] & 0x04, 0, "EOS flag on final page");
     }
 
     #[test]

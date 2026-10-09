@@ -12,6 +12,7 @@ use crate::error::PluginError;
 use async_trait::async_trait;
 use rmpd_core::config::IntegrationConfig;
 use rmpd_core::event::Event;
+use rmpd_core::history::HistoryEntry;
 use rmpd_core::song::Song;
 use rmpd_core::state::PlayerState;
 use std::path::PathBuf;
@@ -156,6 +157,18 @@ pub trait PlayerHandle: Send + Sync {
     /// Case-insensitive substring search across all tags.
     async fn search(&self, _query: &str) -> Result<Vec<Song>, PluginError> {
         Err(PluginError::Unavailable("search".to_owned()))
+    }
+
+    // ── Play history (used by the HTTP/JSON-RPC integration) ──
+
+    /// Songs that recently started playing, newest first. Empty when history
+    /// recording is disabled or unsupported by the handle.
+    async fn history(&self) -> Vec<HistoryEntry> {
+        Vec::new()
+    }
+    /// Number of entries [`history`](Self::history) would return.
+    async fn history_length(&self) -> usize {
+        self.history().await.len()
     }
 }
 

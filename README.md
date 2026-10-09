@@ -183,6 +183,7 @@ Additional `[general]`/`[network]` keys (see [rmpd.toml](rmpd.toml) for full exa
 - `state_file_interval` — seconds between periodic state-file saves; `0` disables periodic saving (default 120)
 - `log_file` — write logs to this file instead of stdout (default: stdout)
 - `max_playlist_length` — maximum number of songs in the queue (default 16384)
+- `history_length` — number of recently played songs remembered for the HTTP API's `core.history.get_history`, kept across restarts in the state file; `0` disables it (default 1000)
 - `save_absolute_paths_in_playlists` — store absolute paths in saved `.m3u` playlists (default false)
 - `metadata_to_use` — restrict which tags are read/stored during scans (default: all tags)
 - `network.passwords` — array of `password`/`permissions` pairs granting scoped access (default: none)
@@ -234,6 +235,24 @@ rmpd --kill          # ask the running instance to shut down (MPD `--kill`)
 rmpd -q | -v | -vv   # warn / debug / trace logging; --stdout / --stderr override log_file
 ```
 
+Logging to `log_file` follows MPD's log-rotation convention: send `SIGHUP`
+and rmpd closes and re-opens the file, so `logrotate` can rename it first. A
+failed re-open keeps the previous file open and logs a warning. The `SIGHUP`
+handler is only installed when rmpd actually logs to a file (not for
+stdout/stderr/journald) and is a no-op on non-Unix platforms.
+
+```
+/var/log/rmpd/rmpd.log {
+    weekly
+    rotate 4
+    compress
+    missingok
+    postrotate
+        systemctl kill -s HUP rmpd.service   # or: kill -HUP "$(pidof rmpd)"
+    endscript
+}
+```
+
 ## Integrations
 
 ### MPRIS & mDNS
@@ -270,7 +289,7 @@ To get a Last.fm `session_key` (web auth flow): create an API account at <https:
 
 Opt-in integration (`--features http-api`, pure Rust on axum) exposing a Mopidy-compatible JSON-RPC 2.0 API so Mopidy web clients and scripts can drive rmpd. Settings: `bind` (default `127.0.0.1:6680`), `allowed_origins`, `static_dir` (serves a web client at `/`), `token` (optional bearer auth for the API).
 
-- `POST /rmpd/rpc` (alias `/mopidy/rpc`): `core.playback.{play,pause,resume,stop,next,previous,seek,get_state,get_time_position,get_current_track,get_current_tl_track}`, `core.mixer.{get_volume,set_volume}`, `core.tracklist.{get_length,get_tl_tracks,get_tracks,add,clear,index,get_/set_random,repeat,single}`, `core.library.{browse,search}`, `core.describe`.
+- `POST /rmpd/rpc` (alias `/mopidy/rpc`): `core.playback.{play,pause,resume,stop,next,previous,seek,get_state,get_time_position,get_current_track,get_current_tl_track}`, `core.mixer.{get_volume,set_volume}`, `core.tracklist.{get_length,get_tl_tracks,get_tracks,add,clear,index,get_/set_random,repeat,single}`, `core.library.{browse,search}`, `core.history.{get_history,get_length}`, `core.describe`. `core.history.get_history` returns `[[timestamp_ms, Ref], ...]` for the most recently started songs, newest first (see `history_length`).
 - `GET /rmpd/ws` (alias `/mopidy/ws`): the same JSON-RPC over WebSocket, plus pushed events: `track_playback_started/paused/resumed/ended`, `playback_state_changed`, `volume_changed`, `tracklist_changed`, `options_changed`, `seeked`, `stream_title_changed`.
 
 ```sh
@@ -421,14 +440,20 @@ network stream can run at once. Two routes to networked/multi-room playback:
   `/tmp/snapfifo` and run an external [Snapcast](https://github.com/badaix/snapcast)
   `snapserver` reading that FIFO for sample-accurate multi-room sync.
 - **Encoders** — `httpd`, `recorder` and `shout` outputs take an `encoder`
-  setting from the compile-time encoder registry: `wav` (default), `pcm`, or
-  `flac` (pure Rust, streamable native FLAC; tune with `compression = 0..8`).
+  setting from the compile-time encoder registry: `wav` (default), `pcm`,
+  `flac` (pure Rust, streamable native FLAC; tune with `compression = 0..8`),
+  or `opus` (pure Rust Ogg Opus, `audio/ogg`; `bitrate` in kbps, default 128,
+  `complexity` 0..10, default 9, `vbr = "vbr" | "cvbr" | "cbr"`). Opus runs at
+  48 kHz: other rates are resampled and multichannel input is folded to
+  stereo. Use `opus` for Icecast/`shout` when bandwidth matters.
 - **Icecast source (`shout`)** — a `type = "shout"` output pushes the encoded
   stream to an Icecast2 server over an HTTP `PUT` source connection
   (`host`, `port`, `mount`, `user` = `source`, `password`, `name`, `genre`,
   `description`, `public`, `encoder`) and updates the title via
   `/admin/metadata` on every song change. Plain HTTP only (no TLS); the
-  default `flac` encoder needs a server/mount that accepts `audio/flac`.
+  default `flac` encoder needs a server/mount that accepts `audio/flac`;
+  `encoder = "opus"` publishes an Ogg Opus mount (`audio/ogg`) at a fraction of
+  the bandwidth.
 
 ### Volume & Mixers
 
@@ -490,9 +515,9 @@ from `audio.volume_normalization`, which only limits ReplayGain-boosted peaks.
 
 ### In Progress
 
-- Lossy stream encoders (Opus / Vorbis) for `httpd`/`shout`/`recorder`: no
-  production-ready pure-Rust encoder exists yet, and rmpd avoids C bindings.
-  `wav`, `pcm` and a native pure-Rust `flac` encoder are available today.
+- Ogg Vorbis stream encoder for `httpd`/`shout`/`recorder`: no production-ready
+  pure-Rust encoder exists yet, and rmpd avoids C bindings. `wav`, `pcm`,
+  native pure-Rust `flac` and `opus` encoders are available today.
 
 ## Compatibility
 

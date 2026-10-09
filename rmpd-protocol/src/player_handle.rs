@@ -13,6 +13,7 @@ use crate::helpers;
 use crate::parser::InsertPosition;
 use crate::state::AppState;
 use async_trait::async_trait;
+use rmpd_core::history::HistoryEntry;
 use rmpd_core::song::Song;
 use rmpd_core::state::{PlayerState, SingleMode};
 use rmpd_plugin::PluginError;
@@ -334,6 +335,14 @@ impl PlayerHandle for ServerPlayerHandle {
         .await
         .map_err(|e| PluginError::Runtime(e.to_string()))?
     }
+
+    async fn history(&self) -> Vec<HistoryEntry> {
+        self.state.history.newest_first()
+    }
+
+    async fn history_length(&self) -> usize {
+        self.state.history.len()
+    }
 }
 
 #[cfg(test)]
@@ -353,5 +362,23 @@ mod tests {
         assert_eq!(last_segment("a/b/c"), "c");
         assert_eq!(last_segment("a/b/"), "b");
         assert_eq!(last_segment("root"), "root");
+    }
+
+    #[tokio::test]
+    async fn history_is_served_newest_first() {
+        let state = AppState::new();
+        for (n, uri) in ["a.flac", "b.flac", "c.flac"].into_iter().enumerate() {
+            state.history.push(HistoryEntry {
+                timestamp_ms: n as u64,
+                uri: uri.to_owned(),
+                title: None,
+                artist: None,
+                album: None,
+            });
+        }
+        let handle = ServerPlayerHandle::new(state);
+        let uris: Vec<String> = handle.history().await.into_iter().map(|e| e.uri).collect();
+        assert_eq!(uris, ["c.flac", "b.flac", "a.flac"]);
+        assert_eq!(handle.history_length().await, 3);
     }
 }

@@ -7,6 +7,7 @@ pub mod commands;
 pub mod connection;
 pub mod discovery;
 pub(crate) mod helpers;
+pub mod history;
 #[cfg(target_os = "macos")]
 pub mod media_controls_macos;
 pub mod now_playing_art;

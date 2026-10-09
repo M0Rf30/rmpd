@@ -204,9 +204,9 @@ impl HttpdOutput {
     ///   explicitly to `"0.0.0.0"` to expose the stream off-host)
     /// - `port`            — TCP port (default `8000`; `0` = OS-assigned)
     /// - `encoder`         — any name from [`crate::encoder::ENCODER_PLUGINS`]
-    ///   (`wav` default, `pcm`, `flac`, plus `opus`/`vorbis` when built with
-    ///   the matching feature); `bitrate`, `quality` and `compression` tune
-    ///   the encoder
+    ///   (`wav` default, `pcm`, `flac`, `opus` — Ogg Opus, `audio/ogg`);
+    ///   `bitrate`, `quality`/`complexity`, `vbr` and `compression` tune the
+    ///   encoder
     /// - `max_clients`     — simultaneous client cap (default `32`)
     ///
     /// An unknown/unavailable encoder falls back to `wav` with a warning; use
@@ -314,6 +314,8 @@ impl AudioOutput for HttpdOutput {
         let running = Arc::clone(&self.running);
         let clients = Arc::clone(&self.clients);
         let max_clients = self.max_clients;
+        // New stream session: drop any state left from a previous run.
+        self.encoder.reset();
         let content_type = self.encoder.content_type().to_owned();
         let header_bytes = self.encoder.header();
         let icy_name = self.name.clone();

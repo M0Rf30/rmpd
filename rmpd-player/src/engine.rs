@@ -1012,14 +1012,13 @@ impl PlaybackEngine {
                 // volume, hardware / `none` ones stay at unity so the device
                 // mixer is never stacked with digital attenuation.
                 output_gains.clear();
-                let master_gain = control.gain();
                 let mut boxes: Vec<(Box<dyn AudioOutput>, Arc<AtomicU8>)> =
                     Vec::with_capacity(effective_outputs.len());
                 let mut chains: Vec<crate::filter::FilterChain> =
                     Vec::with_capacity(effective_outputs.len());
                 for (i, cfg) in effective_outputs.iter().enumerate() {
                     let software = crate::mixer::output_uses_software_gain(cfg);
-                    let out_control = output_gains.register(&control, software, master_gain);
+                    let out_control = output_gains.register(&control, software);
                     match Self::create_output(
                         format,
                         cfg,

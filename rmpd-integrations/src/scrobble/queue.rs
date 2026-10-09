@@ -40,12 +40,25 @@ impl Backoff {
     }
 }
 
+#[derive(serde::Deserialize)]
+struct DropMarker {
+    drop: usize,
+}
+
+/// Minimum number of dead listen lines before the file is compacted.
+const COMPACT_MIN_DEAD: usize = 256;
+
 /// FIFO of pending listens with optional on-disk persistence.
+///
+/// The file is an append-only log: one JSON listen per line plus
+/// `{"drop":n}` markers that remove the `n` oldest entries.
 #[derive(Debug)]
 pub struct ListenQueue {
     path: Option<PathBuf>,
     items: VecDeque<Listen>,
     cap: usize,
+    /// Listen lines currently in the file (live + dead).
+    file_listens: usize,
 }
 
 impl ListenQueue {
@@ -56,26 +69,34 @@ impl ListenQueue {
             path: None,
             items: VecDeque::new(),
             cap: cap.max(1),
+            file_listens: 0,
         }
     }
 
     /// Load (or create) the queue file. Corrupt lines are skipped; if more
-    /// than `cap` entries are present the oldest are discarded.
+    /// than `cap` entries are present the oldest are discarded. Drop markers
+    /// (`{"drop":n}`) written by [`Self::drop_front`] are replayed.
     #[must_use]
     pub fn load(path: PathBuf, cap: usize) -> Self {
         let mut q = Self {
             path: Some(path),
             items: VecDeque::new(),
             cap: cap.max(1),
+            file_listens: 0,
         };
         let mut dirty = false;
         if let Some(p) = &q.path
             && let Ok(text) = std::fs::read_to_string(p)
         {
             for line in text.lines().filter(|l| !l.trim().is_empty()) {
-                match serde_json::from_str::<Listen>(line) {
-                    Ok(l) => q.items.push_back(l),
-                    Err(_) => dirty = true,
+                if let Ok(l) = serde_json::from_str::<Listen>(line) {
+                    q.items.push_back(l);
+                    q.file_listens += 1;
+                } else if let Ok(m) = serde_json::from_str::<DropMarker>(line) {
+                    let n = m.drop.min(q.items.len());
+                    q.items.drain(..n);
+                } else {
+                    dirty = true;
                 }
             }
         }
@@ -85,6 +106,8 @@ impl ListenQueue {
         }
         if dirty {
             q.rewrite();
+        } else {
+            q.maybe_compact();
         }
         q
     }
@@ -102,16 +125,18 @@ impl ListenQueue {
     /// Append a listen, evicting the oldest entries beyond the cap.
     pub fn push(&mut self, listen: Listen) {
         self.items.push_back(listen);
-        let mut evicted = false;
+        let mut evicted = 0;
         while self.items.len() > self.cap {
             self.items.pop_front();
-            evicted = true;
+            evicted += 1;
         }
-        if evicted {
+        if let Some(last) = self.items.back().cloned() {
+            self.append(&last);
+        }
+        if evicted > 0 {
             tracing::warn!("scrobble queue full, dropping oldest listens");
-            self.rewrite();
-        } else if let Some(last) = self.items.back() {
-            self.append(last);
+            self.append_drop(evicted);
+            self.maybe_compact();
         }
     }
 
@@ -122,30 +147,58 @@ impl ListenQueue {
     }
 
     /// Remove the `n` oldest listens (after they were submitted or rejected).
+    ///
+    /// Persisted as a single appended drop marker; the file is compacted only
+    /// once dead entries dominate, so draining a long queue is amortised O(n).
     pub fn drop_front(&mut self, n: usize) {
-        for _ in 0..n {
-            self.items.pop_front();
+        let n = n.min(self.items.len());
+        if n == 0 {
+            return;
         }
-        self.rewrite();
+        self.items.drain(..n);
+        if self.items.is_empty() {
+            self.rewrite();
+        } else {
+            self.append_drop(n);
+            self.maybe_compact();
+        }
     }
 
-    fn append(&self, listen: &Listen) {
-        let Some(path) = &self.path else { return };
+    fn append_drop(&mut self, n: usize) {
+        self.append_raw(&format!("{{\"drop\":{n}}}\n"));
+    }
+
+    fn append(&mut self, listen: &Listen) {
         let Ok(mut line) = serde_json::to_string(listen) else {
             return;
         };
         line.push('\n');
+        self.append_raw(&line);
+        self.file_listens += 1;
+    }
+
+    fn append_raw(&self, text: &str) {
+        let Some(path) = &self.path else { return };
         let res = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(path)
-            .and_then(|mut f| f.write_all(line.as_bytes()));
+            .and_then(|mut f| f.write_all(text.as_bytes()));
         if let Err(e) = res {
             tracing::warn!("cannot persist scrobble queue: {e}");
         }
     }
 
-    fn rewrite(&self) {
+    /// Rewrite the file when more than half of its listen lines are dead.
+    fn maybe_compact(&mut self) {
+        let dead = self.file_listens.saturating_sub(self.items.len());
+        if dead > COMPACT_MIN_DEAD && dead > self.items.len() {
+            self.rewrite();
+        }
+    }
+
+    fn rewrite(&mut self) {
+        self.file_listens = self.items.len();
         let Some(path) = &self.path else { return };
         if self.items.is_empty() {
             if let Err(e) = std::fs::remove_file(path)
@@ -264,5 +317,51 @@ mod tests {
         let mut q = q;
         q.drop_front(1);
         assert!(!path.exists(), "empty queue removes its file");
+    }
+
+    #[test]
+    fn drops_are_appended_not_rewritten_and_replayed() {
+        let path = temp_path("markers");
+        let _ = std::fs::remove_file(&path);
+        let mut q = ListenQueue::load(path.clone(), 4);
+        for n in 1..=6 {
+            q.push(listen(n)); // 5 and 6 evict 1 and 2
+        }
+        q.drop_front(1);
+        let text = std::fs::read_to_string(&path).expect("read");
+        assert_eq!(text.matches("\"drop\"").count(), 3, "markers appended");
+        assert_eq!(text.lines().count(), 9, "no rewrite happened");
+        let q = ListenQueue::load(path.clone(), 4);
+        assert_eq!(
+            q.peek_batch(10)
+                .iter()
+                .map(|l| l.listened_at)
+                .collect::<Vec<_>>(),
+            [4, 5, 6]
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn compacts_once_dead_entries_dominate() {
+        let path = temp_path("compact");
+        let _ = std::fs::remove_file(&path);
+        let total = i64::try_from(COMPACT_MIN_DEAD).expect("fits") * 2 + 10;
+        let mut q = ListenQueue::load(path.clone(), 100_000);
+        for n in 0..total {
+            q.push(listen(n));
+        }
+        for _ in 0..(total - 5) {
+            q.drop_front(1);
+        }
+        let lines = std::fs::read_to_string(&path)
+            .expect("read")
+            .lines()
+            .count();
+        assert!(lines < usize::try_from(total).expect("fits"), "compacted");
+        let q = ListenQueue::load(path.clone(), 100_000);
+        assert_eq!(q.len(), 5);
+        assert_eq!(q.peek_batch(1)[0].listened_at, total - 5);
+        let _ = std::fs::remove_file(&path);
     }
 }

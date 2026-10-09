@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use rmpd_core::error::{Result, RmpdError};
+use rmpd_core::history::HistoryLog;
 use rmpd_core::queue::Queue;
 use rmpd_core::state::{PlayerState, PlayerStatus, ReplayGainMode};
 use std::fs;
@@ -20,6 +21,8 @@ pub struct StateFile {
     /// periodic ticker and a shutdown save, guarantees the shutdown save can
     /// never be clobbered by a tick that was already in flight.
     last_saved: Mutex<Option<String>>,
+    /// Play history persisted alongside the queue, when enabled.
+    history: Option<HistoryLog>,
 }
 
 impl StateFile {
@@ -27,7 +30,16 @@ impl StateFile {
         Self {
             path,
             last_saved: Mutex::new(None),
+            history: None,
         }
+    }
+
+    /// Persist `history` (oldest first, as `history:` lines) on every save,
+    /// and treat a change of it as a reason to rewrite the file.
+    #[must_use]
+    pub fn with_history(mut self, history: HistoryLog) -> Self {
+        self.history = Some(history);
+        self
     }
 
     /// Save current state to file. Returns `Ok(true)` if the file was
@@ -111,6 +123,14 @@ impl StateFile {
             content.push_str(&format!("{}:{}\n", item.position, item.song.path));
         }
         content.push_str("playlist_end\n");
+
+        // Play history, oldest first (a key MPD itself does not know about;
+        // only written when history is enabled and non-empty).
+        if let Some(history) = &self.history {
+            for entry in history.oldest_first() {
+                content.push_str(&format!("history: {}\n", entry.to_line()));
+            }
+        }
 
         // Hold the lock across the whole check-and-write so saves are
         // serialized end-to-end: a periodic tick and a shutdown save
@@ -264,6 +284,14 @@ impl StateFile {
                             }
                             // malformed or state "1" (enabled) → skip
                         }
+                        "history" => {
+                            if let Some(entry) = rmpd_core::history::HistoryEntry::from_line(value)
+                            {
+                                state.history.push(entry);
+                            } else {
+                                warn!("ignoring malformed history line in state file");
+                            }
+                        }
                         _ => {} // Ignore unknown keys
                     }
                 }
@@ -296,6 +324,8 @@ pub struct SavedState {
     /// Last stored playlist loaded via `load` before the state was saved
     /// (MPD's `lastloadedplaylist`); empty when none had been loaded.
     pub last_loaded_playlist: String,
+    /// Play history saved in the state file (oldest first).
+    pub history: Vec<rmpd_core::history::HistoryEntry>,
 }
 
 #[cfg(test)]
@@ -890,5 +920,82 @@ mod tests {
         statefile.save(&status, &queue, &[]).await.unwrap();
         let loaded = statefile.load().unwrap().unwrap();
         assert!(loaded.disabled_outputs.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod history_tests {
+    use super::*;
+    use rmpd_core::history::{HistoryEntry, HistoryLog};
+    use tempfile::TempDir;
+
+    fn entry(n: u64) -> HistoryEntry {
+        HistoryEntry {
+            timestamp_ms: 1_700_000_000_000 + n,
+            uri: format!("Artist: X/track{n}.flac"),
+            title: Some(format!("Title {n}")),
+            artist: Some("Artist: X".into()),
+            album: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn history_round_trips_through_the_state_file() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("state").to_str().unwrap().to_string();
+        let log = HistoryLog::new(10);
+        for n in 1..=3 {
+            log.push(entry(n));
+        }
+        let statefile = StateFile::new(path.clone()).with_history(log.clone());
+        statefile
+            .save(&PlayerStatus::default(), &Queue::new(), &[])
+            .await
+            .unwrap();
+
+        let loaded = StateFile::new(path).load().unwrap().unwrap();
+        assert_eq!(loaded.history, log.oldest_first());
+    }
+
+    #[tokio::test]
+    async fn history_change_triggers_a_rewrite() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("state").to_str().unwrap().to_string();
+        let log = HistoryLog::new(10);
+        let statefile = StateFile::new(path).with_history(log.clone());
+        let (status, queue) = (PlayerStatus::default(), Queue::new());
+        assert!(statefile.save(&status, &queue, &[]).await.unwrap());
+        assert!(!statefile.save(&status, &queue, &[]).await.unwrap());
+        log.push(entry(1));
+        assert!(statefile.save(&status, &queue, &[]).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn state_file_without_history_loads_empty() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("state").to_str().unwrap().to_string();
+        let statefile = StateFile::new(path);
+        statefile
+            .save(&PlayerStatus::default(), &Queue::new(), &[])
+            .await
+            .unwrap();
+        assert!(statefile.load().unwrap().unwrap().history.is_empty());
+    }
+
+    #[test]
+    fn malformed_history_lines_are_skipped() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("state");
+        std::fs::write(
+            &path,
+            "sw_volume: 50\nhistory: garbage\nhistory: 5\tok.mp3\nhistory: \n",
+        )
+        .unwrap();
+        let loaded = StateFile::new(path.to_str().unwrap().to_string())
+            .load()
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded.history.len(), 1);
+        assert_eq!(loaded.history[0].uri, "ok.mp3");
     }
 }

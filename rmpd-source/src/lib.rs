@@ -30,7 +30,13 @@ pub use registry::{SOURCE_PLUGINS, SourceFactory, SourcePlugin, create_source};
 pub use rmpd_plugin::source::{MusicSource, SourceEntry, SourceError, SourceResult, SyncPolicy};
 
 use rmpd_core::config::SourceConfig;
+use rmpd_core::song::Song;
 use tracing::warn;
+
+/// Upper bound on songs collected by [`SourceRegistry::expand_on_demand`].
+pub const ON_DEMAND_MAX_SONGS: usize = 1000;
+/// Upper bound on directories browsed by [`SourceRegistry::expand_on_demand`].
+pub const ON_DEMAND_MAX_DIRS: usize = 200;
 
 // ─── SourceRegistry ──────────────────────────────────────────────────────────
 
@@ -134,6 +140,47 @@ impl SourceRegistry {
         Some(source.browse(dir).await)
     }
 
+    /// Resolve a single song under an [`SyncPolicy::OnDemand`] mount via
+    /// [`MusicSource::lookup`], so it can be queued without a catalog row.
+    ///
+    /// The returned song's `path` is forced to `uri` (the mount-style path the
+    /// client used) so [`resolve_stream_uri`](Self::resolve_stream_uri) finds
+    /// the owning source again at playback time.
+    ///
+    /// Returns `None` when no live source owns `uri` or the owner is
+    /// `Full`-synced; `Some(Ok(None))` when the source does not know the song.
+    pub async fn lookup_on_demand(&self, uri: &str) -> Option<SourceResult<Option<Song>>> {
+        let source = self.owning_source(uri)?;
+        if source.sync_policy() != SyncPolicy::OnDemand {
+            return None;
+        }
+        Some(source.lookup(uri).await.map(|opt| {
+            opt.map(|mut song| {
+                song.path = camino::Utf8PathBuf::from(uri);
+                song
+            })
+        }))
+    }
+
+    /// Expand an [`SyncPolicy::OnDemand`] directory into its songs by walking
+    /// [`MusicSource::browse`] depth-first (sub-directories are descended).
+    ///
+    /// The walk is bounded so a huge remote tree cannot hang or flood the
+    /// queue: at most [`ON_DEMAND_MAX_SONGS`] songs are collected and at most
+    /// [`ON_DEMAND_MAX_DIRS`] directories are browsed; anything beyond is
+    /// silently dropped (a warning is logged). Browse errors on the starting
+    /// directory are returned; errors on nested directories are skipped.
+    ///
+    /// Returns `None` when no live source owns `path` or the owner is
+    /// `Full`-synced.
+    pub async fn expand_on_demand(&self, path: &str) -> Option<SourceResult<Vec<Song>>> {
+        let source = self.owning_source(path)?;
+        if source.sync_policy() != SyncPolicy::OnDemand {
+            return None;
+        }
+        Some(expand_dir(source, path).await)
+    }
+
     /// Number of live sources.
     pub fn len(&self) -> usize {
         self.sources.len()
@@ -179,6 +226,57 @@ pub async fn sync_source(source: &dyn MusicSource, db_path: &str) -> Result<usiz
     })
     .await
     .map_err(|e| SourceError::Protocol(format!("sync task panicked: {e}")))?
+}
+
+/// Depth-first walk of `start` (a mount-style path) through `source.browse`,
+/// bounded by [`ON_DEMAND_MAX_SONGS`] / [`ON_DEMAND_MAX_DIRS`].
+async fn expand_dir(source: &dyn MusicSource, start: &str) -> SourceResult<Vec<Song>> {
+    let rel = |p: &str| {
+        p.split_once('/')
+            .map_or(String::new(), |(_, r)| r.to_owned())
+    };
+    let mut songs: Vec<Song> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    // Stack of mount-style directory paths still to browse (LIFO; children are
+    // pushed reversed so they are visited in listing order).
+    let mut stack = vec![start.to_owned()];
+    let mut browsed = 0usize;
+    seen.insert(start.to_owned());
+    while let Some(dir) = stack.pop() {
+        if browsed >= ON_DEMAND_MAX_DIRS || songs.len() >= ON_DEMAND_MAX_SONGS {
+            warn!(
+                "on-demand expansion of {start} truncated ({} songs, {browsed} dirs)",
+                songs.len()
+            );
+            break;
+        }
+        browsed += 1;
+        let entries = match source.browse(&rel(&dir)).await {
+            Ok(e) => e,
+            Err(e) if dir == start => return Err(e),
+            Err(e) => {
+                warn!("skipping unbrowsable on-demand directory {dir}: {e}");
+                continue;
+            }
+        };
+        let mut subdirs = Vec::new();
+        for entry in entries {
+            match entry {
+                SourceEntry::Song(song) => {
+                    if songs.len() < ON_DEMAND_MAX_SONGS {
+                        songs.push(song);
+                    }
+                }
+                SourceEntry::Dir(d) => {
+                    if seen.insert(d.clone()) {
+                        subdirs.push(d);
+                    }
+                }
+            }
+        }
+        stack.extend(subdirs.into_iter().rev());
+    }
+    Ok(songs)
 }
 
 // ─── Path helpers ──────────────────────────────────────────────────────────────
@@ -356,5 +454,95 @@ mod tests {
         assert_eq!(extract_remote_id("home/A/B/id.42"), "id.42");
         // Bare leaf with no separators.
         assert_eq!(extract_remote_id("song-123.mp3"), "song-123");
+    }
+
+    /// On-demand mock named `od`: root has a dir `od/a` and song `od/root`;
+    /// `od/a` has song `od/a/one`. `lookup` knows only ids `root` / `one`
+    /// and returns songs with a *different* path to prove the override.
+    struct OnDemandMock;
+
+    #[async_trait]
+    impl MusicSource for OnDemandMock {
+        fn scheme(&self) -> &str {
+            "od"
+        }
+        fn name(&self) -> &str {
+            "od"
+        }
+        fn sync_policy(&self) -> SyncPolicy {
+            SyncPolicy::OnDemand
+        }
+        async fn ping(&self) -> SourceResult<()> {
+            Ok(())
+        }
+        async fn browse(&self, dir: &str) -> SourceResult<Vec<SourceEntry>> {
+            match dir {
+                "" => Ok(vec![
+                    SourceEntry::Dir("od/a".to_owned()),
+                    SourceEntry::Song(make_song("od/root")),
+                ]),
+                "a" => Ok(vec![SourceEntry::Song(make_song("od/a/one"))]),
+                _ => Err(SourceError::NotFound(dir.to_owned())),
+            }
+        }
+        async fn list_all(&self) -> SourceResult<Vec<Song>> {
+            Ok(Vec::new())
+        }
+        async fn search(&self, _query: &str) -> SourceResult<Vec<Song>> {
+            Ok(Vec::new())
+        }
+        async fn resolve_stream_uri(&self, _song_id: &str) -> SourceResult<String> {
+            Ok("http://x".to_owned())
+        }
+        async fn lookup(&self, uri: &str) -> SourceResult<Option<Song>> {
+            match uri.rsplit('/').next() {
+                Some("root" | "one") => Ok(Some(make_song("elsewhere"))),
+                _ => Ok(None),
+            }
+        }
+    }
+
+    fn on_demand_registry() -> SourceRegistry {
+        SourceRegistry {
+            sources: vec![Box::new(OnDemandMock) as Box<dyn MusicSource>],
+        }
+    }
+
+    #[tokio::test]
+    async fn lookup_on_demand_forces_requested_path() {
+        let reg = on_demand_registry();
+        let song = reg
+            .lookup_on_demand("od/a/one")
+            .await
+            .expect("owned on-demand")
+            .expect("lookup ok")
+            .expect("song found");
+        assert_eq!(song.path.as_str(), "od/a/one");
+        // Unknown id: source answers None; unowned / Full-synced: registry None.
+        assert!(matches!(reg.lookup_on_demand("od/a").await, Some(Ok(None))));
+        assert!(reg.lookup_on_demand("zzz/x").await.is_none());
+        assert!(
+            make_registry_with_home()
+                .lookup_on_demand("home/x")
+                .await
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn expand_on_demand_walks_subdirectories() {
+        let reg = on_demand_registry();
+        let songs = reg
+            .expand_on_demand("od")
+            .await
+            .expect("owned")
+            .expect("browse ok");
+        let paths: Vec<&str> = songs.iter().map(|s| s.path.as_str()).collect();
+        // Like MPD's Directory::Walk: a directory's songs, then its children.
+        assert_eq!(paths, ["od/root", "od/a/one"]);
+        assert!(matches!(
+            reg.expand_on_demand("od/missing").await,
+            Some(Err(SourceError::NotFound(_)))
+        ));
     }
 }

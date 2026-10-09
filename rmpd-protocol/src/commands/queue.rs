@@ -166,9 +166,80 @@ fn move_range_in_queue(queue: &mut rmpd_core::queue::Queue, start: u32, end: u32
 /// Result of resolving `add`'s URI: a single song, or every song under a
 /// directory (including the database root), added recursively in path
 /// order — mirrors MPD's `LocateUri` + `AddFromDatabase`.
-enum AddOutcome {
+pub(super) enum AddOutcome {
     Song(rmpd_core::song::Song),
     Directory(Vec<rmpd_core::song::Song>),
+}
+
+/// Resolve `uri` under an [`rmpd_source::SyncPolicy::OnDemand`] source mount.
+///
+/// Returns `None` when no on-demand source owns the URI (caller falls back
+/// to the database). Otherwise a single song is resolved through
+/// `MusicSource::lookup` (its path set to `uri`, so playback can resolve the
+/// stream through the owning source). When `allow_dir` is set and `uri` is
+/// not a song (a mount root or `lookup` found nothing), it is expanded as a
+/// directory via `browse`, bounded by `rmpd_source::ON_DEMAND_MAX_*`.
+pub(super) async fn resolve_on_demand(
+    state: &AppState,
+    uri: &str,
+    cmd: &str,
+    allow_dir: bool,
+) -> Option<Result<AddOutcome, String>> {
+    let is_on_demand = state
+        .sources
+        .owning_source(uri)
+        .is_some_and(|s| s.sync_policy() == rmpd_source::SyncPolicy::OnDemand);
+    if !is_on_demand {
+        return None;
+    }
+    // Spawned so the (non-Sync) async_trait futures do not leak into this
+    // future's bounds.
+    let sources = state.sources.clone();
+    let u = uri.to_owned();
+    let looked = if uri.contains('/') {
+        match tokio::spawn(async move { sources.lookup_on_demand(&u).await }).await {
+            Ok(r) => r,
+            Err(_) => return Some(Err(internal_error(cmd))),
+        }
+    } else {
+        // A bare mount name is a directory, never a song.
+        Some(Ok(None))
+    };
+    match looked {
+        Some(Ok(Some(song))) => return Some(Ok(AddOutcome::Song(song))),
+        Some(Ok(None)) | Some(Err(rmpd_source::SourceError::NotFound(_))) | None => {}
+        Some(Err(e)) => {
+            return Some(Err(ResponseBuilder::error(
+                ACK_ERROR_SYS,
+                0,
+                cmd,
+                &e.to_string(),
+            )));
+        }
+    }
+    if !allow_dir {
+        return Some(Err(ResponseBuilder::error(
+            ACK_ERROR_NO_EXIST,
+            0,
+            cmd,
+            "No such song",
+        )));
+    }
+    let sources = state.sources.clone();
+    let u = uri.to_owned();
+    match tokio::spawn(async move { sources.expand_on_demand(&u).await }).await {
+        Ok(Some(Ok(songs))) => Some(Ok(AddOutcome::Directory(songs))),
+        Ok(Some(Err(rmpd_source::SourceError::NotFound(_)))) | Ok(None) => Some(Err(
+            ResponseBuilder::error(ACK_ERROR_NO_EXIST, 0, cmd, "No such directory"),
+        )),
+        Ok(Some(Err(e))) => Some(Err(ResponseBuilder::error(
+            ACK_ERROR_SYS,
+            0,
+            cmd,
+            &e.to_string(),
+        ))),
+        Err(_) => Some(Err(internal_error(cmd))),
+    }
 }
 
 pub async fn handle_add_command(
@@ -207,46 +278,55 @@ pub async fn handle_add_command(
             };
         }
     }
+    // Under an on-demand source mount (radio, somafm, podcast, ...) nothing is
+    // in the database: the source resolves a single song, or — for a
+    // directory — expands it via `browse` (bounded, see
+    // `SourceRegistry::expand_on_demand`).
+    let on_demand = resolve_on_demand(state, uri, "add", true).await;
     // Resolve the URI on a blocking-pool thread (SQLite is sync): a single
     // song by exact path, or — if that fails — a directory (including the
     // root) added recursively. The closure returns either the outcome or
     // the fully formatted error response.
     let state_clone = state.clone();
     let uri_owned = uri.to_string();
-    let outcome_result: Result<AddOutcome, String> = match tokio::task::spawn_blocking(move || {
-        let db = open_db(&state_clone, "add")?;
-        match db.get_song_by_path(&uri_owned) {
-            Ok(Some(s)) => Ok(AddOutcome::Song(s)),
-            Ok(None) => match db.list_directory(&uri_owned) {
-                Ok(_) => match db.list_directory_recursive(&uri_owned) {
-                    Ok(songs) => Ok(AddOutcome::Directory(songs)),
-                    Err(e) => Err(ResponseBuilder::error(
-                        ACK_ERROR_SYS,
+    let outcome_result: Result<AddOutcome, String> = if let Some(res) = on_demand {
+        res
+    } else {
+        match tokio::task::spawn_blocking(move || {
+            let db = open_db(&state_clone, "add")?;
+            match db.get_song_by_path(&uri_owned) {
+                Ok(Some(s)) => Ok(AddOutcome::Song(s)),
+                Ok(None) => match db.list_directory(&uri_owned) {
+                    Ok(_) => match db.list_directory_recursive(&uri_owned) {
+                        Ok(songs) => Ok(AddOutcome::Directory(songs)),
+                        Err(e) => Err(ResponseBuilder::error(
+                            ACK_ERROR_SYS,
+                            0,
+                            "add",
+                            &format!("query error: {e}"),
+                        )),
+                    },
+                    Err(_) => Err(ResponseBuilder::error(
+                        ACK_ERROR_NO_EXIST,
                         0,
                         "add",
-                        &format!("query error: {e}"),
+                        "No such directory",
                     )),
                 },
-                Err(_) => Err(ResponseBuilder::error(
-                    ACK_ERROR_NO_EXIST,
+                Err(e) => Err(ResponseBuilder::error(
+                    ACK_ERROR_SYS,
                     0,
                     "add",
-                    "No such directory",
+                    &format!("query error: {e}"),
                 )),
-            },
-            Err(e) => Err(ResponseBuilder::error(
-                ACK_ERROR_SYS,
-                0,
-                "add",
-                &format!("query error: {e}"),
-            )),
-        }
-    })
-    .await
-    {
-        Ok(res) => res,
-        Err(_) => {
-            return internal_error("add");
+            }
+        })
+        .await
+        {
+            Ok(res) => res,
+            Err(_) => {
+                return internal_error("add");
+            }
         }
     };
 
@@ -376,6 +456,25 @@ pub async fn handle_addid_command(
                 Err(resp) => resp,
             };
         }
+    }
+    // Songs under an on-demand source mount (radio, somafm, podcast, ...) are
+    // never in the database: ask the source itself.
+    let song = match resolve_on_demand(state, uri, "addid", false).await {
+        Some(Ok(AddOutcome::Song(song))) => Some(song),
+        Some(Ok(AddOutcome::Directory(_))) => unreachable!("directories are not requested"),
+        Some(Err(resp)) => return resp,
+        None => None,
+    };
+    if let Some(song) = song {
+        return match add_at_checked(state, song, position, "addid").await {
+            Ok(id) => {
+                helpers::update_playlist_version(state).await;
+                let mut resp = ResponseBuilder::new();
+                resp.field("Id", id);
+                resp.ok()
+            }
+            Err(resp) => resp,
+        };
     }
     // Get song from database (file:// or relative path) — run the blocking
     // DB open + query on a blocking-pool thread so it never stalls the async

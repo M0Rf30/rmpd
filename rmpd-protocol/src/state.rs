@@ -3,6 +3,7 @@
 
 use crate::discovery::DiscoveryService;
 use rmpd_core::event::EventBus;
+use rmpd_core::history::HistoryLog;
 use rmpd_core::messaging::MessageBroker;
 use rmpd_core::partition::PartitionManager;
 use rmpd_core::queue::Queue;
@@ -86,6 +87,10 @@ pub struct AppState {
     /// Latest ICY "now playing" title for a remote stream (None when not
     /// streaming or no metadata has arrived). Injected into `currentsong`.
     pub stream_title: Arc<RwLock<Option<String>>>,
+    /// Songs that recently started playing (newest last internally), fed by
+    /// [`crate::history::spawn_recorder`] and served through the HTTP API's
+    /// `core.history.*`. Capacity is `general.history_length`.
+    pub history: HistoryLog,
     /// Follow a symlink resolving inside `music_directory` when scanning.
     /// Mirrors `general.follow_inside_symlinks` from the config file.
     pub follow_inside_symlinks: bool,
@@ -209,6 +214,7 @@ impl AppState {
             max_playlist_length: crate::commands::utils::DEFAULT_MAX_QUEUE_LEN,
             zeroconf_name: "rmpd@%h".to_string(),
             stream_title: Arc::new(RwLock::new(None)),
+            history: HistoryLog::default(),
             sources: std::sync::Arc::new(rmpd_source::SourceRegistry::from_config(&[])),
             artwork: std::sync::Arc::new(rmpd_plugin::ArtworkResolver::default()),
             follow_inside_symlinks: true,
@@ -290,6 +296,12 @@ impl AppState {
     /// Set the `general.max_playlist_length` queue cap (songs).
     pub fn set_max_playlist_length(&mut self, n: u32) {
         self.max_playlist_length = n;
+    }
+
+    /// Set the play-history capacity (`general.history_length`); `0`
+    /// disables recording and drops what was recorded.
+    pub fn set_history_length(&mut self, n: usize) {
+        self.history.set_capacity(n);
     }
 
     /// Set the mDNS/Zeroconf instance-name template (`network.zeroconf_name`).

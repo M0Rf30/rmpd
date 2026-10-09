@@ -317,9 +317,12 @@ impl SymphoniaDecoder {
                 continue;
             }
 
-            // Calculate instantaneous bitrate from the packet.
+            // Calculate instantaneous bitrate from the packet. Use the full block
+            // duration (not the trimmed `dur`): a packet whose head/tail was trimmed
+            // after a seek or at stream edges still carries all its bytes, so dividing
+            // by the shortened duration would produce transient spikes.
             if let Some(tb) = self.time_base
-                && let Some(time) = tb.calc_time(Timestamp::new(packet.dur.get() as i64))
+                && let Some(time) = tb.calc_time(Timestamp::new(packet.block_dur().get() as i64))
             {
                 let duration_secs = time.as_secs_f64();
                 if duration_secs > 0.0 {

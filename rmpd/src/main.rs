@@ -9,6 +9,7 @@ use tracing::{info, warn};
 
 mod app;
 mod cli;
+mod logfile;
 mod systemd;
 
 /// Daemonize the process using double-fork + setsid.
@@ -175,7 +176,14 @@ fn main() -> Result<()> {
     };
     // anyhow prints the error to stderr on exit, which is the only channel
     // available here: the tracing subscriber is not up yet, by design.
-    let load = Config::discover_layered(&args.config, &args.option, discover_opts)?;
+    let mut load = Config::discover_layered(&args.config, &args.option, discover_opts)?;
+    // -b/-p win over the config for every path, including `config` and --kill.
+    if let Some(bind) = &args.bind {
+        load.config.network.bind_address.clone_from(bind);
+    }
+    if let Some(port) = args.port {
+        load.config.network.port = port;
+    }
 
     if matches!(args.command, Some(Command::Config)) {
         for d in &load.diagnostics {
@@ -206,27 +214,24 @@ fn main() -> Result<()> {
     // that doesn't use journald can write to it instead of stdout/stderr.
     // Opening failure falls back to the default destination rather than
     // aborting startup — losing the preferred log destination is not worth
-    // refusing to start the daemon over. Log rotation on SIGHUP is not
-    // implemented here (mpd's LogInit.cxx reopens the log file on SIGHUP);
-    // the file is opened once and kept for the process lifetime.
+    // refusing to start the daemon over. The handle is re-openable: like
+    // mpd's LogInit.cxx, SIGHUP reopens the file so logrotate can rename it.
     let log_file_writer = (!args.stdout && !args.stderr)
         .then_some(config.general.log_file.as_ref())
         .flatten()
-        .and_then(|path| {
-            match std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(path.as_std_path())
-            {
+        .and_then(
+            |path| match logfile::ReopenableFile::open(path.as_std_path()) {
                 Ok(file) => Some(file),
                 Err(e) => {
                     eprintln!("warning: unable to open log file {path} ({e}), logging to stdout");
                     None
                 }
-            }
-        });
+            },
+        );
 
-    if args.syslog || args.daemonize {
+    // The log file handle that is actually in use (None for journald, stdout
+    // and stderr), so the SIGHUP handler is only installed when it matters.
+    let reopenable_log: Option<logfile::ReopenableFile> = if args.syslog || args.daemonize {
         #[cfg(target_os = "linux")]
         {
             use tracing_subscriber::prelude::*;
@@ -237,20 +242,27 @@ fn main() -> Result<()> {
                         .with(env_filter)
                         .with(journald)
                         .init();
+                    None
                 }
                 Err(e) => {
                     eprintln!("warning: journald unavailable ({e}), logging to stderr");
                     match log_file_writer {
-                        Some(file) => tracing_subscriber::fmt()
-                            .with_ansi(false)
-                            .with_writer(std::sync::Mutex::new(file))
-                            .with_env_filter(env_filter)
-                            .init(),
-                        None => tracing_subscriber::fmt()
-                            .with_ansi(false)
-                            .with_writer(std::io::stderr)
-                            .with_env_filter(env_filter)
-                            .init(),
+                        Some(file) => {
+                            tracing_subscriber::fmt()
+                                .with_ansi(false)
+                                .with_writer(file.clone())
+                                .with_env_filter(env_filter)
+                                .init();
+                            Some(file)
+                        }
+                        None => {
+                            tracing_subscriber::fmt()
+                                .with_ansi(false)
+                                .with_writer(std::io::stderr)
+                                .with_env_filter(env_filter)
+                                .init();
+                            None
+                        }
                     }
                 }
             }
@@ -259,32 +271,47 @@ fn main() -> Result<()> {
         {
             let env_filter = default_env_filter(&log_level);
             match log_file_writer {
-                Some(file) => tracing_subscriber::fmt()
-                    .with_ansi(false)
-                    .with_writer(std::sync::Mutex::new(file))
-                    .with_env_filter(env_filter)
-                    .init(),
-                None => tracing_subscriber::fmt()
-                    .with_ansi(false)
-                    .with_writer(std::io::stderr)
-                    .with_env_filter(env_filter)
-                    .init(),
+                Some(file) => {
+                    tracing_subscriber::fmt()
+                        .with_ansi(false)
+                        .with_writer(file.clone())
+                        .with_env_filter(env_filter)
+                        .init();
+                    Some(file)
+                }
+                None => {
+                    tracing_subscriber::fmt()
+                        .with_ansi(false)
+                        .with_writer(std::io::stderr)
+                        .with_env_filter(env_filter)
+                        .init();
+                    None
+                }
             }
         }
     } else {
         let env_filter = default_env_filter(&log_level);
         match log_file_writer {
-            Some(file) => tracing_subscriber::fmt()
-                .with_writer(std::sync::Mutex::new(file))
-                .with_env_filter(env_filter)
-                .init(),
-            None if args.stderr => tracing_subscriber::fmt()
-                .with_writer(std::io::stderr)
-                .with_env_filter(env_filter)
-                .init(),
-            None => tracing_subscriber::fmt().with_env_filter(env_filter).init(),
+            Some(file) => {
+                tracing_subscriber::fmt()
+                    .with_writer(file.clone())
+                    .with_env_filter(env_filter)
+                    .init();
+                Some(file)
+            }
+            None if args.stderr => {
+                tracing_subscriber::fmt()
+                    .with_writer(std::io::stderr)
+                    .with_env_filter(env_filter)
+                    .init();
+                None
+            }
+            None => {
+                tracing_subscriber::fmt().with_env_filter(env_filter).init();
+                None
+            }
         }
-    }
+    };
 
     info!("starting rmpd v{}", env!("CARGO_PKG_VERSION"));
 
@@ -372,6 +399,16 @@ fn main() -> Result<()> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
+
+    // SIGHUP reopens the log file (logrotate). Registered inside the runtime
+    // context, before the server starts, so a rotation signal can never hit
+    // the default terminate-on-SIGHUP disposition. Failure only warns.
+    if let Some(log) = reopenable_log {
+        let _guard = runtime.enter();
+        if let Err(e) = logfile::reopen_on_sighup(log) {
+            warn!("unable to register SIGHUP log-reopen handler: {e}");
+        }
+    }
 
     #[cfg(target_os = "macos")]
     if want_media_controls {
