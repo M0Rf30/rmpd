@@ -79,7 +79,7 @@ impl SymphoniaDecoder {
         };
 
         // Probe the media source
-        let reader = symphonia::default::get_probe()
+        let reader = crate::format_registry::probe()
             .probe(&hint, mss, format_opts, MetadataOptions::default())
             .map_err(|e| RmpdError::Player(format!("Failed to probe format: {e}")))?;
 

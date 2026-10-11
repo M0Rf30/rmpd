@@ -158,9 +158,86 @@ pub fn local_file_format_options(
     }
 }
 
+/// Default `general.max_probe_depth`: bytes the probe scans for a container marker before
+/// giving up. Symphonia's own default (1 MiB) rejects files with more than 1 MiB of junk,
+/// padding, or miscounted tag data before the first audio frame; MPD's decoders tolerate those.
+pub const DEFAULT_MAX_PROBE_DEPTH: u32 = 16 * 1024 * 1024;
+
+/// Lower bound for `general.max_probe_depth` (Symphonia's own default).
+pub const MIN_MAX_PROBE_DEPTH: u32 = 1024 * 1024;
+
+static PROBE: std::sync::OnceLock<symphonia::core::formats::probe::Probe> =
+    std::sync::OnceLock::new();
+
+fn build_probe(max_probe_depth: u32) -> symphonia::core::formats::probe::Probe {
+    use symphonia::core::formats::probe::{Probe, ProbeOptions};
+    let mut probe = Probe::new_with_options(&ProbeOptions {
+        max_probe_depth: max_probe_depth.max(MIN_MAX_PROBE_DEPTH),
+        ..ProbeOptions::default()
+    });
+    symphonia::default::register_enabled_formats(&mut probe);
+    probe
+}
+
+/// Set the probe scan limit (`general.max_probe_depth`, bytes; raised to
+/// [`MIN_MAX_PROBE_DEPTH`] if lower). Call once at startup, before anything probes; a later
+/// call is ignored (logged) because the shared probe is immutable once built.
+pub fn configure_probe(max_probe_depth: u32) {
+    if PROBE.set(build_probe(max_probe_depth)).is_err() {
+        tracing::warn!("probe already initialised; ignoring max_probe_depth = {max_probe_depth}");
+    }
+}
+
+/// The probe every local-file and stream open must use instead of
+/// `symphonia::default::get_probe()`, so the scanner, cue reader and decoder agree on which
+/// files are readable. Built with [`DEFAULT_MAX_PROBE_DEPTH`] unless [`configure_probe`] ran first.
+pub fn probe() -> &'static symphonia::core::formats::probe::Probe {
+    PROBE.get_or_init(|| build_probe(DEFAULT_MAX_PROBE_DEPTH))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 2 MiB of non-audio bytes followed by MPEG-1 Layer III frames (128 kbps, 44.1 kHz):
+    /// what a file with oversized junk/padding before the first frame looks like.
+    fn mp3_after_junk() -> Vec<u8> {
+        let mut data = vec![0x55u8; 2 * 1024 * 1024];
+        for _ in 0..32 {
+            data.extend_from_slice(&[0xff, 0xfb, 0x90, 0x64]);
+            data.extend_from_slice(&[0u8; 413]);
+        }
+        data
+    }
+
+    fn probes(probe: &symphonia::core::formats::probe::Probe, data: Vec<u8>) -> bool {
+        use symphonia::core::formats::probe::Hint;
+        use symphonia::core::io::MediaSourceStream;
+        let mss = MediaSourceStream::new(Box::new(std::io::Cursor::new(data)), Default::default());
+        let mut hint = Hint::new();
+        hint.with_extension("mp3");
+        probe
+            .probe(&hint, mss, Default::default(), Default::default())
+            .is_ok()
+    }
+
+    #[test]
+    fn default_probe_depth_finds_audio_past_one_mib_of_junk() {
+        assert!(probes(
+            &build_probe(DEFAULT_MAX_PROBE_DEPTH),
+            mp3_after_junk()
+        ));
+    }
+
+    #[test]
+    fn probe_depth_is_clamped_and_bounds_the_scan() {
+        // 0 is raised to the 1 MiB floor, which still stops before the frames.
+        assert!(!probes(&build_probe(0), mp3_after_junk()));
+        assert!(probes(
+            &build_probe(0),
+            mp3_after_junk()[2 * 1024 * 1024..].to_vec()
+        ));
+    }
 
     #[test]
     fn covers_expected_extensions() {

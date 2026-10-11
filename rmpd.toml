@@ -50,6 +50,10 @@ save_absolute_paths_in_playlists = false
 # ["artist", "album", "title"]. Unset = keep every supported tag. Matches
 # mpd.conf's metadata_to_use.
 # metadata_to_use = ["artist", "album", "title", "track", "genre", "date"]
+# Bytes scanned for an audio marker before a file is rejected as unreadable.
+# Raise it if updates log "reached probe limit of N bytes" (junk, padding or
+# mis-sized tags before the first audio frame). Minimum 1 MiB.
+max_probe_depth = 16777216
 
 [network]
 # Address to listen on for TCP clients. As with MPD's `bind_to_address`, this

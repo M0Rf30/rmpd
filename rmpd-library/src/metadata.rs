@@ -106,7 +106,7 @@ fn probe_file(path: &Utf8PathBuf, want_visuals: bool) -> Result<Probed> {
 
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
 
-    let mut reader = symphonia::default::get_probe()
+    let mut reader = rmpd_player::format_registry::probe()
         .probe(
             &hint,
             mss,
@@ -279,12 +279,12 @@ fn track_duration(
 
 /// Drain the metadata log into `(tags, visuals, visual_byte_total)`.
 ///
-/// `tags` comes from exactly one revision: the newest one that actually has tags (checking the
-/// default audio track's per-track tags too, since Matroska routes track-targeted tag elements
-/// there instead of to the media-level tag list). Symphonia probes standalone leading/trailing
-/// tag readers (e.g. ID3v1) before the container's own reader runs, so merging every revision
-/// would let a stale/truncated tag block (ID3v1's 30-char fields) shadow, or duplicate, the
-/// real one.
+/// `tags` merges every revision, newest first (checking the default audio track's per-track
+/// tags too, since Matroska routes track-targeted tag elements there instead of to the
+/// media-level tag list). A field (standard tag kind, or raw key when unparsed) is taken only
+/// from the newest revision that has it, so a stale/truncated older block (ID3v1's 30-char
+/// fields) never shadows or duplicates the real one, while a sparse newer block (e.g. an
+/// encoder-only leading ID3v2 before an appended tag) no longer hides the older block's fields.
 ///
 /// `visual_byte_total` is summed from every revision regardless of `want_visuals`, since it
 /// only reads picture lengths (no copying); `visuals` itself is only populated -- cloning
@@ -304,15 +304,19 @@ fn drain_metadata(
         visual_bytes += revision_visual_bytes(rev);
     }
 
-    let tags = match log.current() {
-        Some(rev) if revision_has_tags(rev, track_id) => revision_tags(rev, track_id),
-        _ => older
-            .iter()
-            .rev()
-            .find(|r| revision_has_tags(r, track_id))
-            .map(|r| revision_tags(r, track_id))
-            .unwrap_or_default(),
-    };
+    let mut tags: Vec<Tag> = Vec::new();
+    let mut seen: std::collections::HashSet<TagField> = std::collections::HashSet::new();
+    for rev in log.current().into_iter().chain(older.iter().rev()) {
+        let rev_tags = revision_tags(rev, track_id);
+        let fields: std::collections::HashSet<TagField> =
+            rev_tags.iter().map(TagField::of).collect();
+        tags.extend(
+            rev_tags
+                .into_iter()
+                .filter(|t| !seen.contains(&TagField::of(t))),
+        );
+        seen.extend(fields);
+    }
 
     let mut visuals = Vec::new();
     if want_visuals {
@@ -327,17 +331,25 @@ fn drain_metadata(
     (tags, visuals, visual_bytes)
 }
 
-fn revision_visual_bytes(rev: &MetadataRevision) -> u64 {
-    rev.media.visuals.iter().map(|v| v.data.len() as u64).sum()
+/// Identity of a tag field for merging revisions: the standard tag kind, or the lowercase raw
+/// key of an unparsed tag.
+#[derive(PartialEq, Eq, Hash)]
+enum TagField {
+    Std(std::mem::Discriminant<StandardTag>),
+    Raw(String),
 }
 
-fn revision_has_tags(rev: &MetadataRevision, track_id: Option<u64>) -> bool {
-    !rev.media.tags.is_empty()
-        || track_id.is_some_and(|id| {
-            rev.per_track
-                .iter()
-                .any(|pt| pt.track_id == id && !pt.metadata.tags.is_empty())
-        })
+impl TagField {
+    fn of(tag: &Tag) -> Self {
+        match &tag.std {
+            Some(std) => Self::Std(std::mem::discriminant(std)),
+            None => Self::Raw(tag.raw.key.to_lowercase()),
+        }
+    }
+}
+
+fn revision_visual_bytes(rev: &MetadataRevision) -> u64 {
+    rev.media.visuals.iter().map(|v| v.data.len() as u64).sum()
 }
 
 fn revision_tags(rev: &MetadataRevision, track_id: Option<u64>) -> Vec<Tag> {
@@ -658,7 +670,15 @@ impl MetadataExtractor {
             tags.push((intern_tag_key("date"), date));
         }
 
-        if let Some(od) = best_original_date {
+        // Original date: the most precise OriginalReleaseDate, else a year-only value
+        // (ID3v2.3 TORY, Vorbis ORIGINALYEAR).
+        let original_date = best_original_date.or_else(|| {
+            probed.tags.iter().find_map(|t| match &t.std {
+                Some(StandardTag::OriginalReleaseYear(y)) => Some(y.to_string()),
+                _ => None,
+            })
+        });
+        if let Some(od) = original_date {
             tags.push((intern_tag_key("originaldate"), od));
         }
         cap_tag_items(&mut tags);
@@ -966,5 +986,68 @@ mod dsd_metadata_tests {
         let got = p.duration.expect("duration").as_secs_f64();
         assert!((got - expected / 2.0).abs() < 1e-6, "{got}");
         assert_eq!(p.sample_rate, Some(5_644_800));
+    }
+}
+
+#[cfg(test)]
+mod tag_merge_tests {
+    use super::*;
+
+    /// MPEG-1 layer 3 frames between a leading ID3v2.4 tag with only `TIT2`, and an ID3v1 tag
+    /// with a (30-char truncated) title and an artist.
+    fn mp3_with_id3v2_and_id3v1() -> Vec<u8> {
+        let title = "Leading ID3v2 title longer than thirty characters";
+        let mut frame = b"TIT2".to_vec();
+        frame.extend_from_slice(&(title.len() as u32 + 1).to_be_bytes()); // < 128: syncsafe
+        frame.extend_from_slice(&[0, 0, 3]);
+        frame.extend_from_slice(title.as_bytes());
+
+        let mut v = b"ID3\x04\x00\x00".to_vec();
+        v.extend_from_slice(&(frame.len() as u32).to_be_bytes());
+        v.extend_from_slice(&frame);
+        for _ in 0..32 {
+            v.extend_from_slice(&[0xff, 0xfb, 0x90, 0x64]);
+            v.extend_from_slice(&[0u8; 413]);
+        }
+
+        let mut v1 = [0u8; 128];
+        v1[..3].copy_from_slice(b"TAG");
+        v1[3..33].copy_from_slice(&title.as_bytes()[..30]);
+        v1[33..44].copy_from_slice(b"ID3v1 Artst");
+        v1[127] = 255;
+        v.extend_from_slice(&v1);
+        v
+    }
+
+    fn values(probed: &Probed, f: fn(&StandardTag) -> Option<String>) -> Vec<String> {
+        probed
+            .tags
+            .iter()
+            .filter_map(|t| t.std.as_ref().and_then(f))
+            .collect()
+    }
+
+    #[test]
+    fn newer_tag_wins_per_field_and_older_fills_the_rest() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.mp3");
+        fs::write(&path, mp3_with_id3v2_and_id3v1()).unwrap();
+        let path = Utf8PathBuf::from_path_buf(path).unwrap();
+        let probed = probe_file(&path, false).expect("probe mp3");
+
+        let titles = values(&probed, |s| match s {
+            StandardTag::TrackTitle(v) => Some(v.to_string()),
+            _ => None,
+        });
+        assert_eq!(
+            titles,
+            ["Leading ID3v2 title longer than thirty characters"]
+        );
+
+        let artists = values(&probed, |s| match s {
+            StandardTag::Artist(v) => Some(v.to_string()),
+            _ => None,
+        });
+        assert_eq!(artists, ["ID3v1 Artst"]);
     }
 }

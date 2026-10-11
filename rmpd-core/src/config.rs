@@ -96,6 +96,13 @@ pub struct GeneralConfig {
     /// every supported tag.
     #[serde(default)]
     pub metadata_to_use: Option<Vec<String>>,
+    /// Bytes the audio probe scans for a container/stream marker before
+    /// giving up on a file, during library scans and playback. Raise it if
+    /// scans log `reached probe limit of N bytes` (files with large junk,
+    /// padding or mis-sized tags before the first audio frame). Values below
+    /// 1 MiB are raised to 1 MiB. Default 16 MiB.
+    #[serde(default = "default_max_probe_depth")]
+    pub max_probe_depth: u32,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -785,6 +792,10 @@ const fn default_history_length() -> usize {
     1000
 }
 
+const fn default_max_probe_depth() -> u32 {
+    16 * 1024 * 1024
+}
+
 fn default_bind_address() -> String {
     "127.0.0.1".to_owned()
 }
@@ -863,6 +874,7 @@ const GENERAL_KEYS: &[&str] = &[
     "history_length",
     "save_absolute_paths_in_playlists",
     "metadata_to_use",
+    "max_probe_depth",
 ];
 
 const NETWORK_KEYS: &[&str] = &[
@@ -1581,6 +1593,7 @@ impl Default for GeneralConfig {
             history_length: default_history_length(),
             save_absolute_paths_in_playlists: false,
             metadata_to_use: None,
+            max_probe_depth: default_max_probe_depth(),
         }
     }
 }

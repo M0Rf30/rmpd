@@ -191,6 +191,7 @@ Additional `[general]`/`[network]` keys (see [rmpd.toml](rmpd.toml) for full exa
 - `history_length` — number of recently played songs remembered for the HTTP API's `core.history.get_history`, kept across restarts in the state file; `0` disables it (default 1000)
 - `save_absolute_paths_in_playlists` — store absolute paths in saved `.m3u` playlists (default false)
 - `metadata_to_use` — restrict which tags are read/stored during scans (default: all tags)
+- `max_probe_depth` — bytes scanned for an audio marker before a file is rejected (scans and playback); raise it if updates log `reached probe limit of N bytes`; minimum 1 MiB (default 16 MiB)
 - `network.passwords` — array of `password`/`permissions` pairs granting scoped access (default: none)
 - `network.default_permissions` / `network.local_permissions` / `network.host_permissions` — permission sets for unauthenticated, local-socket, and per-host clients, mirroring MPD's access control (default: unrestricted)
 - `network.max_command_list_size` / `network.max_output_buffer_size` — per-client buffer caps in bytes (defaults 16 MiB / 8 MiB)

@@ -61,6 +61,8 @@ pub async fn run(
         config.playlist.embedded_cue_as_directory,
         config.database.hide_playlist_targets,
     );
+    // Before the first scan/playback: every probe shares this scan limit.
+    rmpd_player::format_registry::configure_probe(config.general.max_probe_depth);
     // HTTP(S) radio input: timeout, proxy and ICY metadata blacklist.
     rmpd_stream::configure(&config.stream);
     if !config
