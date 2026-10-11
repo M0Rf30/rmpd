@@ -14,7 +14,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.17.0"
+version = "0.17.1"
 edition = "2024"
 authors = ["rmpd contributors"]
 license = "MIT OR Apache-2.0"
@@ -41,9 +41,9 @@ rayon = "1.12"
 # selected upstream fix PRs)
 # `aac-sbr-fft-qmf`: complex SBR QMF banks via FFT -- ~2x faster HE-AAC; measured 0
 # differing samples vs. the direct implementation on the test corpus.
-symphonia = { git = "https://github.com/M0Rf30/Symphonia", rev = "d0cc56133530111b85de8a454ea8ed2774173653", features = ["all", "dsd", "aac-sbr-fft-qmf"] }
+symphonia = { git = "https://github.com/M0Rf30/Symphonia", rev = "1c2f6673688c197bffeaad47a8c4b77b8764309f", features = ["all", "dsd", "aac-sbr-fft-qmf"] }
 # Pure-Rust Opus encoder + Ogg Opus muxer (used by the `opus` stream encoder)
-symphonia-codec-opus = { git = "https://github.com/M0Rf30/Symphonia", rev = "d0cc56133530111b85de8a454ea8ed2774173653", features = ["encoder", "ogg"] }
+symphonia-codec-opus = { git = "https://github.com/M0Rf30/Symphonia", rev = "1c2f6673688c197bffeaad47a8c4b77b8764309f", features = ["encoder", "ogg"] }
 cpal = { git = "https://github.com/RustAudio/cpal", rev = "79275c2313da30e9f8b1ad8168385d091a2c9ada", default-features = false }
 rubato = "5.0"                   # High-quality (anti-aliased) sample-rate conversion
 audioadapter-buffers = "5.2"     # Buffer wrappers (InterleavedSlice) for rubato 5.x
