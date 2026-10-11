@@ -8,19 +8,19 @@
   <a href="LICENSE-MIT"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg" alt="License"></a>
 </p>
 
-**rmpd** is a modern, high-performance, memory-safe music server written in pure Rust. It aims for 100% compatibility with the Music Player Daemon (MPD) protocol while providing first-class extensibility through a plugin architecture.
+**rmpd** is a memory-safe music server in pure Rust, speaking the Music Player Daemon (MPD) protocol, with a compile-time plugin architecture.
 
 ## Features
 
-- 🎵 **MPD Protocol Compatible** — works with existing MPD clients (ncmpcpp, mpc, Cantata, rmpc)
+- 🎵 **MPD protocol** — works with any MPD client
 - 🦀 **Pure Rust** — memory-safe; even APE and WavPack decode without C bindings
-- 🔌 **Extensible** — compile-time plugin registries for outputs, decoders, and music sources
-- 🎧 **High-Quality Audio** — DSD (DoP + PCM fallback), ReplayGain, gapless playback, crossfade
-- 🎼 **Format Support** — FLAC, MP3, Ogg Vorbis, WAV, AAC, ALAC, APE, WavPack, DSD and more; see [Format Support](#format-support)
-- 🏠 **Multi-Room** — HTTP streaming and Snapcast; see [Integrations](#integrations)
-- 🖥️ **Desktop Integration** — MPRIS D-Bus and mDNS auto-discovery; see [Integrations](#integrations)
-- ⚙️ **systemd Native** — `Type=notify` readiness and socket activation, like MPD; see [systemd](#systemd)
-- 🌐 **Remote Libraries** — OpenSubsonic servers as a music source; see [Integrations](#integrations)
+- 🔌 **Extensible** — compile-time registries for outputs, decoders, music sources
+- 🎧 **Audio** — DSD (DoP + PCM fallback), ReplayGain, gapless playback, crossfade
+- 🎼 **Formats** — FLAC, MP3, Vorbis, Opus, WAV, AAC, ALAC, APE, WavPack, DSD and more; see [Format Support](#format-support)
+- 🏠 **Multi-room** — HTTP streaming, Icecast, Snapcast; see [Integrations](#integrations)
+- 🖥️ **Desktop** — MPRIS and mDNS; see [Integrations](#integrations)
+- ⚙️ **systemd** — `Type=notify` and socket activation; see [systemd](#systemd)
+- 🌐 **Remote libraries** — OpenSubsonic, Jellyfin, podcasts, radio; see [Integrations](#integrations)
 
 ## Architecture
 
@@ -33,7 +33,8 @@ rmpd/
 ├── rmpd-player/     # Audio engine: symphonia decoding, DSD/DoP, outputs, resampling
 ├── rmpd-library/    # Filesystem scanner, SQLite database, tag/artwork extraction, search
 ├── rmpd-plugin/     # Cross-cutting plugin SPI (currently the MusicSource trait)
-├── rmpd-source/     # Music-source registry + backends (filesystem, OpenSubsonic)
+├── rmpd-integrations/ # MPRIS, mDNS, scrobblers, webhook, HTTP/WebSocket API, cover-art providers
+├── rmpd-source/     # Music-source registry + backends (filesystem, OpenSubsonic, Jellyfin, podcast, radio)
 └── rmpd-stream/     # HTTP(S) streaming input source for internet radio (ICY metadata)
 ```
 
@@ -41,7 +42,7 @@ rmpd/
 
 ### Prerequisites
 
-Requires Rust 1.85+ (the workspace uses edition 2024).
+Rust 1.85+ (edition 2024).
 
 **System dependencies:**
 
@@ -53,9 +54,7 @@ sudo apt-get install libasound2-dev pkg-config
 brew install pkg-config
 ```
 
-Audio fingerprinting (`getfingerprint`) uses
-[chromaprint-next](https://github.com/attilagyorffy/chromaprint-next), a pure-Rust
-Chromaprint port, so no C library or `cmake` is needed.
+Fingerprinting (`getfingerprint`) uses the pure-Rust [chromaprint-next](https://github.com/attilagyorffy/chromaprint-next); no C library or `cmake`.
 
 ### Build
 
@@ -66,10 +65,10 @@ cargo build --release
 ### Run
 
 ```bash
-./target/release/rmpd --bind 127.0.0.1 --port 6600 --music-dir ~/Music
+./target/release/rmpd -b 127.0.0.1 -p 6600 -o general.music_directory=~/Music
 ```
 
-### Test with mpc
+### Try it
 
 ```bash
 # Check status
@@ -90,7 +89,7 @@ mpc current   # shows the live ICY "now playing" title for streams
 
 ## Format Support
 
-Library scanning/tagging and playback both go through `symphonia`, but they are not the same list: a file can scan and tag without a decoder to play it.
+Scanning and playback both use `symphonia`, but the lists differ.
 
 | Extension(s)                 | Scan / tag / browse | Playback |
 | ----------------------------- | :---: | :---: |
@@ -275,7 +274,7 @@ playerctl -p rmpd metadata
 busctl --user introspect org.mpris.MediaPlayer2.rmpd /org/mpris/MediaPlayer2
 ```
 
-rmpd also advertises itself over **mDNS/Zeroconf** so MPD clients on the local network can auto-discover the server.
+rmpd also advertises itself over **mDNS/Zeroconf** for client auto-discovery.
 
 Both are implemented as built-in [integration plugins](docs/PLUGIN_ARCHITECTURE.md) (`mpris`, `mdns`; Cargo features of `rmpd-integrations`, on by default). The `[network]` switches `media_controls`, `zeroconf_enabled` and `zeroconf_name` keep working and implicitly enable them; you can also configure them explicitly with `[[integration]] type = "mpris"` / `type = "mdns"` (explicit blocks replace the implicit ones).
 
@@ -431,7 +430,6 @@ size = "500"                   # 250, 500, 1200 or "original"
 contact = "you@example.org"    # added to the User-Agent
 ```
 
-
 ### Multi-Room, HTTP Streaming & Snapcast
 
 rmpd plays to **all enabled outputs simultaneously**, so local audio and a
@@ -439,7 +437,7 @@ network stream can run at once. Two routes to networked/multi-room playback:
 
 - **HTTP streaming** — enable a `type = "httpd"` output (default port 8000) and
   point any browser, phone, or another MPD/VLC client at `http://<host>:8000`.
-  Works today, no extra daemon required (`encoder = "wav"` or `"pcm"`). The same
+  No extra daemon (`encoder = "wav"` or `"pcm"`). The same
   output also serves Shoutcast/Icecast clients (`ICY 200 OK` greeting plus
   interleaved `StreamTitle` metadata).
 - **Snapcast (synchronized)** — enable a `type = "fifo"` output writing to
@@ -509,7 +507,7 @@ Unknown filter types/settings and undefined filter names are reported at
 startup as warnings; a filter that cannot be built is skipped. This is separate
 from `audio.volume_normalization`, which only limits ReplayGain-boosted peaks.
 
-## Status & Roadmap
+## Status
 
 ### Implemented
 
@@ -525,16 +523,20 @@ from `audio.volume_normalization`, which only limits ReplayGain-boosted peaks.
   pure-Rust encoder exists yet, and rmpd avoids C bindings. `wav`, `pcm`,
   native pure-Rust `flac` and `opus` encoders are available today.
 
-## Compatibility
+## Cargo Features
 
-### Tested MPD Clients
+All off by default; on by default: `mpris` and `mdns` (`rmpd-integrations`) and `fingerprint` (`rmpd-library`/`rmpd-protocol`: `getfingerprint` via pure-Rust chromaprint-next; drop with `--no-default-features`).
 
-- ✅ **mpc** — command-line client
-- ✅ **ncmpcpp** — TUI client
-- ✅ **Cantata** — Qt GUI client
-- ✅ **rmpc** — modern TUI client
-- 🚧 **MPDroid** — Android client (testing in progress)
-- 🚧 **MPDluxe** — iOS client (testing in progress)
+| Feature | Enables |
+|---|---|
+| `pipewire` | native PipeWire backend (needs clang/bindgen) |
+| `alsa-mixer` | hardware volume (`mixer_type = "hardware"`) |
+| `subsonic`, `jellyfin`, `podcast`, `radio` | music sources |
+| `listenbrainz`, `lastfm`, `webhook` | scrobbling / webhooks |
+| `http-api` | Mopidy-compatible JSON-RPC/WebSocket API |
+| `coverart` | online cover-art providers |
+
+`rmpd-player` additionally has `asio` and `jack` (cpal backends). `rmpd deps` lists what a build contains.
 
 ## Development
 
@@ -547,35 +549,17 @@ cargo test --workspace --all-features
 ### Linting
 
 ```bash
-# Format code
 cargo fmt
-
-# Run clippy
 cargo clippy --workspace --all-targets --all-features
 ```
 
 ### CI/CD
 
-GitHub Actions runs formatting/clippy/`cargo doc` checks, a cross-platform test
-matrix (Ubuntu + macOS, stable + nightly), a compatibility suite (state
-persistence, database compatibility, decoder validation), a dependency-pruning
-lint (`cargo-machete`), coverage reporting (Codecov), and release builds for 3
-targets (x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu,
-aarch64-apple-darwin — no x86_64 macOS build). A separate workflow runs
-`cargo-audit`/`cargo-deny` security audits, and Renovate keeps dependencies
-current. See [CI.md](CI.md) for details.
+GitHub Actions runs fmt/clippy/doc, an Ubuntu + macOS test matrix, a compatibility suite, `cargo-machete`, coverage, release builds (x86_64/aarch64 Linux, aarch64 macOS) and a separate `cargo-audit`/`cargo-deny` workflow. See [CI.md](CI.md).
 
 ## Contributing
 
-Contributions are welcome! Please:
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes with tests
-4. Run `cargo fmt` and `cargo clippy`
-5. Submit a pull request
-
-See [CI.md](CI.md) for development guidelines and CI/CD information.
+Fork, branch, make your change with tests, run `cargo fmt` and `cargo clippy`, open a pull request. See [CI.md](CI.md).
 
 ## License
 
@@ -586,15 +570,11 @@ Licensed under either of:
 
 at your option.
 
-## Acknowledgments
-
-- Inspired by the original [Music Player Daemon](https://www.musicpd.org/)
-- Built with modern Rust audio libraries: [Symphonia](https://github.com/pdeljanov/Symphonia), [cpal](https://github.com/RustAudio/cpal)
-- Special thanks to the Rust audio community
-
 ## Links
 
-- **Documentation**: [CI.md](CI.md) - CI/CD and development guide
-- **MPD Protocol**: [MPD Protocol Documentation](https://mpd.readthedocs.io/en/latest/protocol.html)
-- **Issue Tracker**: [GitHub Issues](https://github.com/M0Rf30/rmpd/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/M0Rf30/rmpd/discussions)
+- [CI.md](CI.md) — CI/CD and development guide
+- [Plugin architecture](docs/PLUGIN_ARCHITECTURE.md)
+- [MPD protocol](https://mpd.readthedocs.io/en/latest/protocol.html)
+- [Issues](https://github.com/M0Rf30/rmpd/issues) · [Discussions](https://github.com/M0Rf30/rmpd/discussions)
+
+Inspired by [MPD](https://www.musicpd.org/); built on [Symphonia](https://github.com/pdeljanov/Symphonia) and [cpal](https://github.com/RustAudio/cpal).
