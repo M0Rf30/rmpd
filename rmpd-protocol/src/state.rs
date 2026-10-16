@@ -158,12 +158,6 @@ impl AppState {
             attributes: std::collections::HashMap::new(),
         };
 
-        // Initialize discovery service (may fail if mDNS not available)
-        let discovery = DiscoveryService::new().ok();
-        if discovery.is_none() {
-            tracing::warn!("failed to initialize network discovery service");
-        }
-
         // Initialize mount registry
         let mount_registry = MountRegistry::new();
 
@@ -197,7 +191,7 @@ impl AppState {
             outputs: Arc::new(RwLock::new(vec![default_output])),
             start_time: Instant::now(),
             message_broker: MessageBroker::new(),
-            discovery,
+            discovery: None,
             mount_registry,
             partition_manager: Some(partition_manager),
             shutdown_tx: None,
@@ -302,6 +296,21 @@ impl AppState {
     /// disables recording and drops what was recorded.
     pub fn set_history_length(&mut self, n: usize) {
         self.history.set_capacity(n);
+    }
+
+    /// Apply `network.zeroconf_enabled`: start the mDNS neighbor-discovery
+    /// browser (`listneighbors`) when enabled; otherwise leave it off so no
+    /// mDNS socket is opened. Call once at startup.
+    pub fn set_zeroconf_enabled(&mut self, enabled: bool) {
+        self.discovery = if enabled {
+            let discovery = DiscoveryService::new().ok();
+            if discovery.is_none() {
+                tracing::warn!("failed to initialize network discovery service");
+            }
+            discovery
+        } else {
+            None
+        };
     }
 
     /// Set the mDNS/Zeroconf instance-name template (`network.zeroconf_name`).

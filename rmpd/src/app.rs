@@ -53,6 +53,7 @@ pub async fn run(
     state.set_max_playlist_length(config.general.max_playlist_length as u32);
     state.set_history_length(config.general.history_length);
     state.set_zeroconf_name(config.network.zeroconf_name.clone());
+    state.set_zeroconf_enabled(config.network.zeroconf_enabled);
     state.set_symlink_policy(
         config.general.follow_inside_symlinks,
         config.general.follow_outside_symlinks,

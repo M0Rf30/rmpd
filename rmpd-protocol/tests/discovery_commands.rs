@@ -41,3 +41,18 @@ async fn test_listneighbors_response_format() {
         assert!(response.contains("neighbor: "));
     }
 }
+
+#[tokio::test]
+async fn zeroconf_disabled_opens_no_discovery_service() {
+    // Regression: the mDNS browser used to be created unconditionally, binding
+    // UDP 5353 even with `zeroconf_enabled = false`.
+    let mut state = AppState::new();
+    assert!(
+        state.discovery.is_none(),
+        "AppState::new must not open mDNS"
+    );
+
+    state.set_zeroconf_enabled(false);
+    assert!(state.discovery.is_none());
+    assert_eq!(storage::handle_listneighbors_command(&state).await, "OK\n");
+}
