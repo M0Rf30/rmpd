@@ -575,6 +575,6 @@ at your option.
 - [CI.md](CI.md) — CI/CD and development guide
 - [Plugin architecture](docs/PLUGIN_ARCHITECTURE.md)
 - [MPD protocol](https://mpd.readthedocs.io/en/latest/protocol.html)
-- [Issues](https://github.com/M0Rf30/rmpd/issues) · [Discussions](https://github.com/M0Rf30/rmpd/discussions)
+- [Issues](https://github.com/M0Rf30/rmpd/issues)
 
 Inspired by [MPD](https://www.musicpd.org/); built on [Symphonia](https://github.com/pdeljanov/Symphonia) and [cpal](https://github.com/RustAudio/cpal).
