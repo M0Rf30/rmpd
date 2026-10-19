@@ -347,8 +347,12 @@ fn seek_error(command: &str, e: &RmpdError) -> String {
     match e {
         // The decode thread is gone: nothing is playing any more.
         RmpdError::InvalidState(_) => not_playing(command),
-        RmpdError::Player(msg) => ResponseBuilder::error(ACK_ERROR_UNKNOWN, 0, command, msg),
-        other => ResponseBuilder::error(ACK_ERROR_UNKNOWN, 0, command, &other.to_string()),
+        other => {
+            let text = other
+                .player_message()
+                .map_or_else(|| other.to_string(), str::to_owned);
+            ResponseBuilder::error(ACK_ERROR_UNKNOWN, 0, command, &text)
+        }
     }
 }
 
@@ -515,5 +519,29 @@ pub(crate) async fn current_song_removed(state: &AppState, at: u32) {
         (_, None) => {
             let _ = stop_playback(state, true).await;
         }
+    }
+}
+
+#[cfg(test)]
+mod seek_error_tests {
+    use super::*;
+    use rmpd_core::error::MediaErrorKind;
+
+    #[test]
+    fn seek_error_acks_media_errors_with_the_bare_message() {
+        let media = RmpdError::Media {
+            kind: MediaErrorKind::Seek,
+            message: "Seek failed: seek error: invalid track id".to_owned(),
+            source: None,
+        };
+        let legacy = RmpdError::Player("Seek failed: seek error: invalid track id".to_owned());
+        assert_eq!(
+            seek_error("seekcur", &media),
+            seek_error("seekcur", &legacy)
+        );
+        assert_eq!(
+            seek_error("seekcur", &media),
+            "ACK [5@0] {seekcur} Seek failed: seek error: invalid track id\n"
+        );
     }
 }

@@ -54,7 +54,7 @@ impl Fingerprinter {
         while total_samples < max_samples {
             let samples_read = match decoder.read(&mut f32_buffer) {
                 Ok(n) => n,
-                Err(RmpdError::Player(ref msg)) if msg.contains("end of stream") => break,
+                Err(ref e) if e.is_unexpected_eof() => break,
                 Err(e) => return Err(e),
             };
             if samples_read == 0 {

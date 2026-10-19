@@ -24,6 +24,17 @@ use symphonia::core::units::{Time, TimeBase, Timestamp};
 // DSD codec type (from Symphonia with DSD support)
 use symphonia::default::formats::CODEC_TYPE_DSD;
 
+/// Options for every decoder rmpd creates.
+///
+/// Gapless is always on (the `audio.gapless` config key was removed for that reason): the
+/// decoder trims the encoder delay / padding frames the demuxer flags on each packet
+/// (`trim_start` / `trim_end`), so the decoded buffers contain exactly the track's frames.
+/// `SymphoniaDecoder::seek_skip_frames` relies on this: it treats `pts + trim_start` as the
+/// first frame of the decoded buffer.
+fn decoder_options() -> AudioDecoderOptions {
+    AudioDecoderOptions::default().gapless(true)
+}
+
 /// Symphonia-based audio decoder
 pub struct SymphoniaDecoder {
     reader: Box<dyn FormatReader>,
@@ -81,7 +92,7 @@ impl SymphoniaDecoder {
         // Probe the media source
         let reader = crate::format_registry::probe()
             .probe(&hint, mss, format_opts, MetadataOptions::default())
-            .map_err(|e| RmpdError::Player(format!("Failed to probe format: {e}")))?;
+            .map_err(|e| RmpdError::from_symphonia_context("Failed to probe format", e))?;
 
         // Find the default audio track
         let track = reader
@@ -125,8 +136,8 @@ impl SymphoniaDecoder {
         // Create decoder in pass-through mode (no PCM conversion).
         // PCM conversion can be enabled later if needed.
         let decoder = symphonia::default::get_codecs()
-            .make_audio_decoder(audio, &AudioDecoderOptions::default())
-            .map_err(|e| RmpdError::Player(format!("Failed to create decoder: {e}")))?;
+            .make_audio_decoder(audio, &decoder_options())
+            .map_err(|e| RmpdError::from_symphonia_context("Failed to create decoder", e))?;
 
         // The decoder may report a different output rate than the container (e.g. explicitly
         // signalled HE-AAC decodes at twice the AAC core rate the container declares).
@@ -178,9 +189,10 @@ impl SymphoniaDecoder {
                 Ok(None) => return Ok(()), // EOS with no decodable audio.
                 Err(SymphoniaError::ResetRequired) => {
                     self.reinit_after_reset().map_err(|e| {
-                        RmpdError::Player(format!(
-                            "Failed to reinitialise after stream change: {e}"
-                        ))
+                        RmpdError::from_symphonia_context(
+                            "Failed to reinitialise after stream change",
+                            e,
+                        )
                     })?;
                     continue;
                 }
@@ -190,7 +202,10 @@ impl SymphoniaDecoder {
                     return Ok(());
                 }
                 Err(e) => {
-                    return Err(RmpdError::Player(format!("Failed to read packet: {e}")));
+                    return Err(RmpdError::from_symphonia_context(
+                        "Failed to read packet",
+                        e,
+                    ));
                 }
             };
 
@@ -202,7 +217,10 @@ impl SymphoniaDecoder {
                 Ok(decoded) => decoded,
                 Err(SymphoniaError::DecodeError(_)) => continue,
                 Err(e) => {
-                    return Err(RmpdError::Player(format!("Failed to decode packet: {e}")));
+                    return Err(RmpdError::from_symphonia_context(
+                        "Failed to decode packet",
+                        e,
+                    ));
                 }
             };
 
@@ -274,8 +292,8 @@ impl SymphoniaDecoder {
 
         // Create new decoder with PCM conversion
         let decoder = symphonia::default::get_codecs()
-            .make_audio_decoder(&params_with_pcm, &AudioDecoderOptions::default())
-            .map_err(|e| RmpdError::Player(format!("Failed to create PCM decoder: {e}")))?;
+            .make_audio_decoder(&params_with_pcm, &decoder_options())
+            .map_err(|e| RmpdError::from_symphonia_context("Failed to create PCM decoder", e))?;
 
         // Get actual output sample rate from decoder
         let actual_sample_rate = decoder
@@ -319,9 +337,10 @@ impl SymphoniaDecoder {
                     // A new link of a chained stream (or a changed stream): the track list
                     // must be re-read and the decoder re-created.
                     self.reinit_after_reset().map_err(|e| {
-                        RmpdError::Player(format!(
-                            "Failed to reinitialise after stream change: {e}"
-                        ))
+                        RmpdError::from_symphonia_context(
+                            "Failed to reinitialise after stream change",
+                            e,
+                        )
                     })?;
                     continue;
                 }
@@ -332,7 +351,10 @@ impl SymphoniaDecoder {
                 }
                 Err(e) => {
                     tracing::error!("failed to read packet: {}", e);
-                    return Err(RmpdError::Player(format!("Failed to read packet: {e}")));
+                    return Err(RmpdError::from_symphonia_context(
+                        "Failed to read packet",
+                        e,
+                    ));
                 }
             };
 
@@ -360,7 +382,10 @@ impl SymphoniaDecoder {
                 Ok(decoded) => decoded,
                 Err(SymphoniaError::DecodeError(_)) => continue,
                 Err(e) => {
-                    return Err(RmpdError::Player(format!("Failed to decode packet: {e}")));
+                    return Err(RmpdError::from_symphonia_context(
+                        "Failed to decode packet",
+                        e,
+                    ));
                 }
             };
 
@@ -432,7 +457,7 @@ impl SymphoniaDecoder {
             Err(SymphoniaError::SeekError(SeekErrorKind::Unseekable)) => {
                 return Err(RmpdError::Player("Not seekable".to_owned()));
             }
-            Err(e) => return Err(RmpdError::Player(format!("Seek failed: {e}"))),
+            Err(e) => return Err(RmpdError::from_symphonia_context("Seek failed", e)),
         };
 
         self.decoder.reset();
@@ -495,8 +520,8 @@ impl SymphoniaDecoder {
             // `sample_rate` is the PCM output rate while DSD-to-PCM conversion is active.
             params.extra_data = Some(self.sample_rate.to_le_bytes().to_vec().into_boxed_slice());
         }
-        let decoder = symphonia::default::get_codecs()
-            .make_audio_decoder(&params, &AudioDecoderOptions::default())?;
+        let decoder =
+            symphonia::default::get_codecs().make_audio_decoder(&params, &decoder_options())?;
 
         let new_rate = if keep_pcm {
             self.sample_rate
@@ -588,12 +613,18 @@ impl SymphoniaDecoder {
             }
             Err(SymphoniaError::ResetRequired) => {
                 self.reinit_after_reset().map_err(|e| {
-                    RmpdError::Player(format!("Failed to reinitialise after stream change: {e}"))
+                    RmpdError::from_symphonia_context(
+                        "Failed to reinitialise after stream change",
+                        e,
+                    )
                 })?;
                 return self.read_dsd_raw(buffer);
             }
             Err(e) => {
-                return Err(RmpdError::Player(format!("Failed to read DSD packet: {e}")));
+                return Err(RmpdError::from_symphonia_context(
+                    "Failed to read DSD packet",
+                    e,
+                ));
             }
         };
 

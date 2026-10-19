@@ -544,3 +544,114 @@ fn test_seek_rejects_negative_positions() {
     let mut decoder = SymphoniaDecoder::open(&path).expect("Failed to open");
     assert!(decoder.seek(-1.0).is_err());
 }
+
+/// Frames decoded straight from symphonia with the given gapless option (bypassing rmpd's
+/// decoder), as the reference for what `SymphoniaDecoder` must trim.
+fn raw_symphonia_frames(path: &Path, gapless: bool) -> usize {
+    use symphonia::core::codecs::CodecParameters;
+    use symphonia::core::codecs::audio::AudioDecoderOptions;
+    use symphonia::core::formats::probe::Hint;
+    use symphonia::core::formats::{FormatOptions, TrackType};
+    use symphonia::core::io::MediaSourceStream;
+    use symphonia::core::meta::MetadataOptions;
+
+    let mut hint = Hint::new();
+    hint.with_extension(path.extension().and_then(|e| e.to_str()).unwrap());
+    let mss = MediaSourceStream::new(
+        Box::new(std::fs::File::open(path).unwrap()),
+        Default::default(),
+    );
+    let mut reader = rmpd_player::format_registry::probe()
+        .probe(
+            &hint,
+            mss,
+            FormatOptions::default(),
+            MetadataOptions::default(),
+        )
+        .unwrap();
+    let track = reader.default_track(TrackType::Audio).unwrap();
+    let track_id = track.id;
+    let Some(CodecParameters::Audio(params)) = track.codec_params.clone() else {
+        panic!("no audio params");
+    };
+    let mut decoder = symphonia::default::get_codecs()
+        .make_audio_decoder(&params, &AudioDecoderOptions::default().gapless(gapless))
+        .unwrap();
+    let mut frames = 0;
+    while let Ok(Some(packet)) = reader.next_packet() {
+        if packet.track_id == track_id
+            && let Ok(buf) = decoder.decode(&packet)
+        {
+            frames += buf.frames();
+        }
+    }
+    frames
+}
+
+/// Both fixtures are exactly 1 s at 44.1 kHz of encoder output with a LAME/AAC priming delay.
+/// rmpd's decoder must hand out only the track's own frames.
+fn assert_gapless_frame_count(path: &Path) {
+    let (samples, rate, channels) = decode_entire_file(path).expect("decode");
+    let frames = samples.len() / usize::from(channels);
+    assert_eq!(rate, 44100);
+    assert_eq!(
+        frames,
+        44100,
+        "{}: delay/padding must be trimmed",
+        path.display()
+    );
+    let untrimmed = raw_symphonia_frames(path, false);
+    assert!(
+        untrimmed > frames,
+        "{}: the fixture must carry delay/padding for this test to mean anything \
+         (untrimmed {untrimmed}, trimmed {frames})",
+        path.display()
+    );
+    assert_eq!(raw_symphonia_frames(path, true), frames);
+}
+
+#[test]
+fn test_mp3_gapless_trims_encoder_delay_and_padding() {
+    let path = pregenerated::sine_1khz_mp3();
+    if !path.exists() {
+        eprintln!("Skipping test: fixture not found");
+        return;
+    }
+    assert_gapless_frame_count(&path);
+}
+
+#[test]
+fn test_m4a_gapless_trims_encoder_delay_and_padding() {
+    let path = pregenerated::sine_1khz_m4a();
+    if !path.exists() {
+        eprintln!("Skipping test: fixture not found");
+        return;
+    }
+    assert_gapless_frame_count(&path);
+}
+
+/// Seeking a gapless-trimmed file lands exactly on the requested frame: the frames left after
+/// a seek to 0.5 s are the trimmed total minus 22050 (seek skipping and decoder trimming must
+/// not double-count the encoder delay).
+#[test]
+fn test_gapless_seek_is_frame_accurate() {
+    for path in [pregenerated::sine_1khz_mp3(), pregenerated::sine_1khz_m4a()] {
+        if !path.exists() {
+            eprintln!("Skipping test: fixture not found");
+            return;
+        }
+        let mut decoder = SymphoniaDecoder::open(&path).expect("open");
+        decoder.seek(0.5).expect("seek");
+        let mut buffer = vec![0.0f32; 4096];
+        let mut total = 0;
+        loop {
+            let n = decoder.read(&mut buffer).expect("read");
+            if n == 0 {
+                break;
+            }
+            total += n;
+        }
+        let frames = total / usize::from(decoder.channels());
+        assert_eq!(frames, 22050, "{}", path.display());
+    }
+}

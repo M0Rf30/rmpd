@@ -184,10 +184,8 @@ impl PlaybackFailure {
 /// The bare message of an [`RmpdError`], without the `"Player error: "`-style
 /// category prefix its `Display` adds (MPD error text carries no such prefix).
 fn error_text(e: &RmpdError) -> String {
-    match e {
-        RmpdError::Player(msg) => msg.clone(),
-        other => other.to_string(),
-    }
+    e.player_message()
+        .map_or_else(|| e.to_string(), str::to_owned)
 }
 
 /// Remove the `user:password@` part of a URL so credentials never reach a
@@ -2205,6 +2203,20 @@ mod tests {
     }
 
     #[test]
+    fn decoder_failure_from_symphonia_has_no_player_error_prefix() {
+        let failure = PlaybackFailure::Decoder(RmpdError::from_symphonia_context(
+            "Failed to decode packet",
+            symphonia::core::errors::Error::DecodeError("bad frame"),
+        ));
+        let (message, output) = failure.message("Artist/01.mp3");
+        assert_eq!(
+            message,
+            "Failed to decode \"Artist/01.mp3\": Failed to decode packet: malformed stream: bad frame"
+        );
+        assert!(!output);
+    }
+
+    #[test]
     fn output_failure_message_is_the_bare_cause_and_flagged_as_output() {
         let failure = PlaybackFailure::Output(RmpdError::Player(
             "Failed to open \"Default Output\" (cpal): no device".to_owned(),
@@ -2384,12 +2396,8 @@ mod tests {
             matches!(e, Event::PlaybackError { .. }).then_some(())
         })
         .await;
-        match err {
-            RmpdError::Player(msg) => {
-                assert!(msg.starts_with("Failed to decode \"bad.wav\": "), "{msg}")
-            }
-            other => panic!("expected the decode failure, got {other:?}"),
-        }
+        let msg = err.player_message().expect("the decode failure");
+        assert!(msg.starts_with("Failed to decode \"bad.wav\": "), "{msg}");
     }
 
     #[tokio::test]
