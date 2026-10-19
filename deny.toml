@@ -18,6 +18,11 @@ yanked = "warn"
 ignore = [
     # paste is a proc-macro that is feature-complete and stable
     "RUSTSEC-2024-0436",
+    # zbus 5 family is unmaintained (merged into zbus 6); pulled in by
+    # mpris-server 0.10, which has no zbus 6 release yet
+    "RUSTSEC-2026-0370", # zvariant
+    "RUSTSEC-2026-0371", # zbus_names
+    "RUSTSEC-2026-0372", # zvariant_derive
 ]
 
 [licenses]

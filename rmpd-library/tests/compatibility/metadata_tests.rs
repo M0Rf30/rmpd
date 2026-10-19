@@ -212,10 +212,12 @@ fn test_metadata_extraction_performance() {
         let song = harness.extract_metadata(path.to_str().unwrap()).unwrap();
         let elapsed = start.elapsed();
 
-        // Extraction should be fast (< 100ms)
+        // Catches pathological regressions (e.g. decoding the whole file). Typical cost is a
+        // few milliseconds in a debug build; the bound leaves room for coverage-instrumented
+        // builds on shared CI runners, which took over 100ms here.
         assert!(
-            elapsed < Duration::from_millis(100),
-            "Metadata extraction for {:?} took {:?} (> 100ms)",
+            elapsed < Duration::from_secs(1),
+            "Metadata extraction for {:?} took {:?} (> 1s)",
             path.file_name().unwrap(),
             elapsed
         );
