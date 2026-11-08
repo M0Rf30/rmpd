@@ -1473,6 +1473,41 @@ impl Database {
         Ok(())
     }
 
+    /// Delete every empty directory row strictly below `mount` (a source's
+    /// top-level directory), collapsing emptied subtrees bottom-up. Returns the
+    /// number of rows deleted.
+    ///
+    /// `clear_source` removes a source's *songs* only; the synthetic directory
+    /// chain `add_source_song` built for them stays behind. When a resync
+    /// changes the virtual paths (a server-side rename, or a different Subsonic
+    /// `layout`), the previous chain would otherwise linger as empty folders in
+    /// `lsinfo`. A directory still holding a song (of any origin) or a child
+    /// directory is kept, and the `mount` row itself is never touched.
+    pub fn prune_empty_source_directories(&self, mount: &str) -> Result<usize> {
+        if mount.is_empty() {
+            return Ok(0);
+        }
+        // Every path below the mount sorts in ["<mount>/", "<mount>0"): '0' is
+        // the byte after '/'. A range scan over the UNIQUE(path) index needs
+        // no LIKE escaping (mount names may contain `%` or `_`).
+        let lower = format!("{mount}/");
+        let upper = format!("{mount}0");
+        let mut total = 0usize;
+        loop {
+            let deleted = self.conn.execute(
+                "DELETE FROM directories WHERE path >= ?1 AND path < ?2
+                   AND parent_id IS NOT NULL
+                   AND NOT EXISTS (SELECT 1 FROM songs s WHERE s.directory_id = directories.id)
+                   AND NOT EXISTS (SELECT 1 FROM directories c WHERE c.parent_id = directories.id)",
+                params![lower, upper],
+            )?;
+            if deleted == 0 {
+                return Ok(total);
+            }
+            total += deleted;
+        }
+    }
+
     /// Ensure the root directory (path="", parent_id=NULL) exists and return its id.
     /// Local scans create this automatically via `get_or_create_directory`; this
     /// method creates it on first use in a remote-only deployment.

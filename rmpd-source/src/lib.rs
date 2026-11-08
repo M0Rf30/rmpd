@@ -196,10 +196,12 @@ impl SourceRegistry {
 ///
 /// Calls `source.list_all()`, then atomically replaces every cached row for
 /// that source via `Database::with_transaction`: `clear_source` followed by
-/// `add_source_song` for each song, all inside one BEGIN/COMMIT. A failure
-/// partway through rolls back the whole batch, so the catalog never ends up
-/// with the old rows gone and only some new rows inserted. Returns the
-/// number of songs inserted.
+/// `add_source_song` for each song, then `prune_empty_source_directories` so
+/// directory rows only the previous catalog referenced (renamed folders, a
+/// changed Subsonic `layout`, …) do not linger as empty folders under the
+/// mount — all inside one BEGIN/COMMIT. A failure partway through rolls back
+/// the whole batch, so the catalog never ends up with the old rows gone and
+/// only some new rows inserted. Returns the number of songs inserted.
 ///
 /// This function is `async` because `list_all` does network I/O; the DB work
 /// runs on a blocking thread so libsqlite does not stall the Tokio runtime.
@@ -211,6 +213,7 @@ pub async fn sync_source(source: &dyn MusicSource, db_path: &str) -> Result<usiz
     let songs = source.list_all().await?;
     let count = songs.len();
     let token = format!("{}:{}", source.scheme(), source.name());
+    let mount = source.name().to_owned();
     let db_path = db_path.to_owned();
     tokio::task::spawn_blocking(move || -> Result<usize, SourceError> {
         let db = rmpd_library::Database::open(&db_path)
@@ -219,6 +222,10 @@ pub async fn sync_source(source: &dyn MusicSource, db_path: &str) -> Result<usiz
             db.clear_source(&token)?;
             for song in &songs {
                 db.add_source_song(song, &token)?;
+            }
+            let pruned = db.prune_empty_source_directories(&mount)?;
+            if pruned > 0 {
+                tracing::debug!("source '{mount}': pruned {pruned} stale directory rows");
             }
             Ok(count)
         })
@@ -405,6 +412,48 @@ mod tests {
             remaining, 1,
             "resync must remove rows dropped from the source"
         );
+    }
+
+    /// A resync whose virtual paths moved (e.g. a Subsonic `layout` change
+    /// from tags to folders, or a folder renamed on the server) must not leave
+    /// the previous directory chain behind as empty folders: `lsinfo mock`
+    /// afterwards lists only directories the new catalog uses.
+    #[tokio::test]
+    async fn sync_source_prunes_directories_of_previous_layout() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("test.db");
+        let db_path = db_path.to_str().expect("utf8 path").to_owned();
+
+        let tags = MockSource {
+            songs: vec![
+                make_song("mock/Artist/Album/s1.flac"),
+                make_song("mock/Artist/Album/s2.flac"),
+            ],
+        };
+        sync_source(&tags, &db_path).await.expect("tags sync");
+
+        let folders = MockSource {
+            songs: vec![
+                make_song("mock/Rock/Live/s1.flac"),
+                make_song("mock/Rock/Live/s2.flac"),
+            ],
+        };
+        sync_source(&folders, &db_path).await.expect("folders sync");
+
+        let db = rmpd_library::Database::open(&db_path).expect("reopen db");
+        let top: Vec<String> = db
+            .list_directory("mock")
+            .expect("list mount")
+            .directories
+            .into_iter()
+            .map(|(p, _)| p)
+            .collect();
+        assert_eq!(top, vec!["mock/Rock"], "old Artist chain must be pruned");
+        assert!(
+            db.list_directory("mock/Artist").is_err(),
+            "stale directory row must be gone"
+        );
+        assert_eq!(db.list_directory("mock/Rock/Live").unwrap().songs.len(), 2);
     }
 
     fn make_registry_with_home() -> SourceRegistry {

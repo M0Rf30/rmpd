@@ -656,6 +656,68 @@ fn test_clear_source_leaves_local_songs() {
     assert!(local_check.is_some(), "local song was incorrectly deleted");
 }
 
+/// `prune_empty_source_directories` collapses the emptied chain of a previous
+/// layout bottom-up, but keeps the mount row, directories that still hold
+/// songs, siblings sharing the mount prefix (`srv2`) and local directories.
+#[test]
+fn test_prune_empty_source_directories_scoped_to_mount() {
+    let temp_dir = tempfile::TempDir::new().unwrap();
+    let db_path = temp_dir
+        .path()
+        .join("prune.db")
+        .to_string_lossy()
+        .to_string();
+    let db = rmpd_library::database::Database::open(&db_path).unwrap();
+
+    db.add_song(&make_local_song("music/artist/album/local.flac"))
+        .unwrap();
+    // A different mount whose name merely starts with "srv".
+    let other = make_virtual_song("srv2/Old/Chain/o1.flac", "Other");
+    db.add_source_song(&other, "subsonic:srv2").unwrap();
+
+    let old = make_virtual_song("srv/Artist/Album/id1.flac", "Old");
+    db.add_source_song(&old, "subsonic:srv").unwrap();
+    db.clear_source("subsonic:srv").unwrap();
+    let new = make_virtual_song("srv/Folder/Sub/id1.flac", "New");
+    db.add_source_song(&new, "subsonic:srv").unwrap();
+
+    // Artist/Album from the old layout are empty; Folder/Sub is in use.
+    let pruned = db.prune_empty_source_directories("srv").unwrap();
+    assert_eq!(pruned, 2, "srv/Artist/Album and srv/Artist");
+
+    let mount: Vec<String> = db
+        .list_directory("srv")
+        .unwrap()
+        .directories
+        .into_iter()
+        .map(|(p, _)| p)
+        .collect();
+    assert_eq!(mount, vec!["srv/Folder"]);
+    assert_eq!(db.list_directory("srv/Folder/Sub").unwrap().songs.len(), 1);
+
+    // Sibling mount and local tree untouched; pruning twice is a no-op.
+    assert_eq!(db.list_directory("srv2/Old/Chain").unwrap().songs.len(), 1);
+    assert_eq!(
+        db.list_directory("music/artist/album").unwrap().songs.len(),
+        1
+    );
+    assert_eq!(db.prune_empty_source_directories("srv").unwrap(), 0);
+    assert_eq!(db.prune_empty_source_directories("").unwrap(), 0);
+
+    // A fully emptied source keeps its (now empty) mount row.
+    db.clear_source("subsonic:srv").unwrap();
+    assert_eq!(db.prune_empty_source_directories("srv").unwrap(), 2);
+    let root: Vec<String> = db
+        .list_directory("")
+        .unwrap()
+        .directories
+        .into_iter()
+        .map(|(p, _)| p)
+        .collect();
+    assert!(root.contains(&"srv".to_owned()), "mount row kept: {root:?}");
+    assert!(db.list_directory("srv").unwrap().directories.is_empty());
+}
+
 /// Regression: deleting song rows fires the `songs_fts_delete` trigger, which
 /// must NOT corrupt the contentless FTS index. Before the `contentless_delete=1`
 /// fix, every `add_*` wrote an empty-string 'delete' tombstone and the trigger
