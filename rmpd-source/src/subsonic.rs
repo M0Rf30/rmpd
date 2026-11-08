@@ -767,8 +767,7 @@ impl MusicSource for SubsonicSource {
     /// whole sync.
     ///
     /// With `layout = "folders"` the catalog is instead the server's directory
-    /// tree, walked through `getIndexes` + `getMusicDirectory` (see
-    /// [`list_folders`](SubsonicSource::list_folders)).
+    /// tree, walked through `getIndexes` + `getMusicDirectory`.
     async fn list_all(&self) -> SourceResult<Vec<Song>> {
         use opensubsonic::AlbumListType;
 
