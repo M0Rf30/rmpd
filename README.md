@@ -348,7 +348,32 @@ username = "alice"
 password = "secret"                # or use `api_key = "..."` instead
 # max_bitrate = 320                 # optional server-side transcode cap (kbps)
 # format = "mp3"                    # optional transcode target ("raw" = no transcode)
+# layout = "folders"                # "tags" (default) or "folders", see below
 ```
+
+**Browse layout.** `layout` picks how the source's tree under its mount point
+is built:
+
+- `"tags"` (default) — a virtual `home/<Artist>/<Album>/<id>.<ext>` tree built
+  from the server's ID3 tags (`getAlbumList2` / `getAlbum`).
+- `"folders"` — mirrors the server's own directory hierarchy, like a
+  filesystem (e.g. `home/Electronic/Bill Laswell/Deuce Avenue/<id>.flac`), and
+  the Artist/Album tree is *not* created. It uses the Subsonic folder API
+  (`getIndexes` + `getMusicDirectory`, one request per directory), so it works
+  with servers that organise music by folder, such as gonic, and does not
+  depend on the optional per-track `path` field. Servers that only emulate
+  folders from tags (Navidrome currently answers these calls with its
+  artist/album tree) just show that tree.
+
+In both layouts the leaf is `<id>.<ext>`, never the real file name: the id
+must round-trip through the path for streaming and cover art. Tracks keep
+their full tags, so tag queries (`find`, `search`, `list artist`, …) work the
+same whichever layout you pick. Only one tree is exposed per source (each
+track is one database row with one path); to get both, declare the server
+twice with different `name` and `layout`. Changing `layout` (or renaming
+folders on the server) takes effect on the next `update`, which replaces the
+source's rows and drops the directories the old tree left behind. Per-path
+data such as stickers does not carry over to the new paths.
 
 Credentials are never written to logs. An unreachable server is skipped at
 startup without aborting (previously-synced tracks remain browsable).

@@ -97,6 +97,47 @@ pub fn map_err(e: SubsonicError) -> SourceError {
     }
 }
 
+// ─── Layout ──────────────────────────────────────────────────────────────────
+
+/// How a Subsonic source's catalog is laid out under its mount point.
+///
+/// Either way a song's leaf stays `<id>[.<ext>]`: the id must round-trip
+/// through the path for streaming and cover art.
+///
+/// The ad-hoc results of [`lookup`](MusicSource::lookup),
+/// [`search`](MusicSource::search) and
+/// [`playlist_items`](MusicSource::playlist_items) always use the `Tags`
+/// grammar: the server cannot map a song id back to its folder chain without
+/// walking `getMusicDirectory` upwards, and only the leaf id matters for
+/// playback. The synced database (and [`browse`](MusicSource::browse)) follow
+/// the configured layout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Layout {
+    /// Virtual `<name>/<Artist>/<Album>/<id>.<ext>` tree from the ID3 tags
+    /// (`getAlbumList2` + `getAlbum`).
+    #[default]
+    Tags,
+    /// The server's own directory hierarchy
+    /// `<name>/<folder>/.../<id>.<ext>` (`getIndexes` + `getMusicDirectory`).
+    Folders,
+}
+
+impl Layout {
+    /// Parse the `layout` setting (case-insensitive).
+    ///
+    /// # Errors
+    /// Any value other than `tags` / `folders` → `SourceError::Config`.
+    fn parse(value: &str) -> Result<Self, SourceError> {
+        match value.to_ascii_lowercase().as_str() {
+            "tags" => Ok(Self::Tags),
+            "folders" => Ok(Self::Folders),
+            other => Err(SourceError::Config(format!(
+                "subsonic source `layout` must be \"tags\" or \"folders\", got \"{other}\""
+            ))),
+        }
+    }
+}
+
 // ─── Config ──────────────────────────────────────────────────────────────────
 
 /// Validated, desugared view of a `[[source]]` config block for a Subsonic backend.
@@ -109,6 +150,7 @@ pub struct SubsonicConfig {
     pub max_bitrate: Option<u32>,
     pub format: Option<String>,
     pub accept_invalid_certs: bool,
+    pub layout: Layout,
 }
 
 /// Hand-written `Debug` that redacts credentials (`password`, `api_key`) so a
@@ -125,6 +167,7 @@ impl std::fmt::Debug for SubsonicConfig {
             .field("max_bitrate", &self.max_bitrate)
             .field("format", &self.format)
             .field("accept_invalid_certs", &self.accept_invalid_certs)
+            .field("layout", &self.layout)
             .finish()
     }
 }
@@ -135,6 +178,7 @@ impl SubsonicConfig {
     /// # Errors
     /// - `url` is absent → `SourceError::Config`
     /// - Neither `api_key` nor (`username` + `password`) is present → `SourceError::Config`
+    /// - `layout` is set to anything but `tags` / `folders` → `SourceError::Config`
     pub fn from_source_config(cfg: &SourceConfig) -> Result<Self, SourceError> {
         let url = cfg.setting_str("url").ok_or_else(|| {
             SourceError::Config("subsonic source requires a `url` setting".to_owned())
@@ -162,6 +206,10 @@ impl SubsonicConfig {
             .map(|s| s.to_lowercase() == "true")
             .unwrap_or(false);
 
+        let layout = cfg
+            .setting_str("layout")
+            .map_or(Ok(Layout::default()), |v| Layout::parse(&v))?;
+
         Ok(Self {
             name: cfg.name.clone(),
             url,
@@ -171,6 +219,7 @@ impl SubsonicConfig {
             max_bitrate,
             format,
             accept_invalid_certs,
+            layout,
         })
     }
 }
@@ -183,6 +232,7 @@ pub struct SubsonicSource {
     client: Client,
     max_bitrate: Option<u32>,
     format: Option<String>,
+    layout: Layout,
 }
 
 // ─── Factory ─────────────────────────────────────────────────────────────────
@@ -196,6 +246,7 @@ pub const SETTINGS: &[&str] = &[
     "max_bitrate",
     "format",
     "accept_invalid_certs",
+    "layout",
 ];
 
 /// Sync, no-I/O factory registered in `SOURCE_PLUGINS` under `feature = "subsonic"`.
@@ -239,6 +290,7 @@ pub fn subsonic_source_factory(cfg: &SourceConfig) -> Result<Box<dyn MusicSource
         client,
         max_bitrate: sc.max_bitrate,
         format: sc.format,
+        layout: sc.layout,
     }))
 }
 
@@ -278,67 +330,84 @@ impl SubsonicSource {
         let artist = artist_ref.unwrap_or("Unknown Artist");
         let album = album_ref.unwrap_or("Unknown Album");
 
-        // Leaf = raw id, plus a file extension (from the server `suffix`, or
-        // derived from the MIME `content_type`) so clients can infer the codec.
-        let leaf = match file_ext_for(c) {
-            Some(ext) => format!("{}.{}", c.id, ext),
-            None => c.id.clone(),
-        };
-        let path = Utf8PathBuf::from(format!(
-            "{}/{}/{}/{}",
-            self.name,
-            enc(artist),
-            enc(album),
-            leaf,
-        ));
-
-        let mut tags: Vec<(std::borrow::Cow<'static, str>, String)> = Vec::new();
-
-        // title is always present on Child
-        tags.push((intern_tag_key("title"), c.title.clone()));
-
-        if let Some(a) = artist_ref {
-            tags.push((intern_tag_key("artist"), a.to_owned()));
-            // albumartist defaults to artist when no dedicated field is available
-            tags.push((intern_tag_key("albumartist"), a.to_owned()));
-        }
-        if let Some(alb) = album_ref {
-            tags.push((intern_tag_key("album"), alb.to_owned()));
-        }
-        if let Some(t) = c.track {
-            tags.push((intern_tag_key("track"), t.to_string()));
-        }
-        if let Some(y) = c.year {
-            tags.push((intern_tag_key("date"), y.to_string()));
-        }
-        if let Some(g) = &c.genre {
-            tags.push((intern_tag_key("genre"), g.clone()));
-        }
-        if let Some(d) = c.disc_number {
-            tags.push((intern_tag_key("disc"), d.to_string()));
-        }
-
-        Song {
-            id: 0,
-            path,
-            duration: c
-                .duration
-                .map(|secs| std::time::Duration::from_secs(secs as u64)),
-            sample_rate: c.sampling_rate.map(|r| r as u32),
-            channels: c.channel_count.map(|ch| ch as u8),
-            bits_per_sample: c.bit_depth.map(|d| d as u16),
-            bitrate: c.bit_rate.map(|b| b as u32),
-            replay_gain_track_gain: None,
-            replay_gain_track_peak: None,
-            replay_gain_album_gain: None,
-            replay_gain_album_peak: None,
-            added_at: 0,
-            last_modified: 0,
-            range: None,
-            tags,
-        }
+        let dir = format!("{}/{}/{}", self.name, enc(artist), enc(album));
+        build_song(c, &dir, artist_ref, album_ref)
     }
 
+    /// Map a track found while walking the server's directory tree.
+    /// `dir_path` is the already-encoded virtual path of its directory
+    /// (`<name>/<folder>/...`); the tags are the server's, without the
+    /// "Unknown Artist/Album" placeholders the tag layout needs for its path.
+    fn map_folder_song(&self, c: &opensubsonic::data::Child, dir_path: &str) -> Song {
+        build_song(c, dir_path, c.artist.as_deref(), c.album.as_deref())
+    }
+}
+
+/// Build a `Song` whose virtual path is `<dir>/<id>[.<ext>]`.
+///
+/// The leaf is the raw id plus a file extension (from the server `suffix`, or
+/// derived from the MIME `content_type`) so clients can infer the codec and
+/// `resolve_stream_uri` can recover the id.
+fn build_song(
+    c: &opensubsonic::data::Child,
+    dir: &str,
+    artist_ref: Option<&str>,
+    album_ref: Option<&str>,
+) -> Song {
+    let leaf = match file_ext_for(c) {
+        Some(ext) => format!("{}.{}", c.id, ext),
+        None => c.id.clone(),
+    };
+    let path = Utf8PathBuf::from(format!("{dir}/{leaf}"));
+
+    let mut tags: Vec<(std::borrow::Cow<'static, str>, String)> = Vec::new();
+
+    // title is always present on Child
+    tags.push((intern_tag_key("title"), c.title.clone()));
+
+    if let Some(a) = artist_ref {
+        tags.push((intern_tag_key("artist"), a.to_owned()));
+        // albumartist defaults to artist when no dedicated field is available
+        tags.push((intern_tag_key("albumartist"), a.to_owned()));
+    }
+    if let Some(alb) = album_ref {
+        tags.push((intern_tag_key("album"), alb.to_owned()));
+    }
+    if let Some(t) = c.track {
+        tags.push((intern_tag_key("track"), t.to_string()));
+    }
+    if let Some(y) = c.year {
+        tags.push((intern_tag_key("date"), y.to_string()));
+    }
+    if let Some(g) = &c.genre {
+        tags.push((intern_tag_key("genre"), g.clone()));
+    }
+    if let Some(d) = c.disc_number {
+        tags.push((intern_tag_key("disc"), d.to_string()));
+    }
+
+    Song {
+        id: 0,
+        path,
+        duration: c
+            .duration
+            .map(|secs| std::time::Duration::from_secs(secs as u64)),
+        sample_rate: c.sampling_rate.map(|r| r as u32),
+        channels: c.channel_count.map(|ch| ch as u8),
+        bits_per_sample: c.bit_depth.map(|d| d as u16),
+        bitrate: c.bit_rate.map(|b| b as u32),
+        replay_gain_track_gain: None,
+        replay_gain_track_peak: None,
+        replay_gain_album_gain: None,
+        replay_gain_album_peak: None,
+        added_at: 0,
+        last_modified: 0,
+        range: None,
+        tags,
+    }
+}
+
+impl SubsonicSource {
     /// Like [`map_song`](Self::map_song), but fills in artist/album from the
     /// containing album when a `getAlbum` child omits them (some servers only
     /// populate those on `getSong`/`search3`).
@@ -438,6 +507,161 @@ impl SubsonicSource {
     }
 }
 
+// ─── Folder layout (getIndexes / getMusicDirectory) ──────────────────────────
+
+/// Encode a server directory name as one virtual path segment: [`enc`], plus
+/// the segments the library cannot store verbatim — an empty name becomes
+/// `_`, and `.` / `..` are percent-escaped so they never act as path steps
+/// (`dec` restores the dots).
+fn folder_seg(name: &str) -> String {
+    match name {
+        "" => "_".to_owned(),
+        "." => "%2E".to_owned(),
+        ".." => "%2E%2E".to_owned(),
+        _ => enc(name),
+    }
+}
+
+/// One server directory listing, split into its tracks (already mapped to
+/// virtual paths) and its sub-directories as `(virtual path, server id)`.
+#[derive(Default)]
+struct FolderLevel {
+    songs: Vec<Song>,
+    dirs: Vec<(String, String)>,
+}
+
+impl FolderLevel {
+    fn into_entries(self) -> Vec<SourceEntry> {
+        self.dirs
+            .into_iter()
+            .map(|(path, _)| SourceEntry::Dir(path))
+            .chain(self.songs.into_iter().map(SourceEntry::Song))
+            .collect()
+    }
+}
+
+impl SubsonicSource {
+    /// Split `children` of the directory at virtual path `dir_path` into
+    /// tracks and sub-directories. Videos are skipped (the tag layout only
+    /// ever lists music); a sub-directory is named by its `title`.
+    fn split_children(
+        &self,
+        dir_path: &str,
+        children: &[opensubsonic::data::Child],
+    ) -> FolderLevel {
+        let mut level = FolderLevel::default();
+        for c in children {
+            if c.is_dir {
+                level
+                    .dirs
+                    .push((format!("{dir_path}/{}", folder_seg(&c.title)), c.id.clone()));
+            } else if c.is_video != Some(true) {
+                level.songs.push(self.map_folder_song(c, dir_path));
+            }
+        }
+        level
+    }
+
+    /// The top level of the folder tree from `getIndexes`: every indexed
+    /// artist entry is a root directory, and `child` entries are loose files
+    /// (or directories) directly under the music folder. `shortcut` entries
+    /// only repeat indexed directories and are ignored.
+    fn split_indexes(&self, indexes: &opensubsonic::data::Indexes) -> FolderLevel {
+        let mut level = self.split_children(&self.name, &indexes.child);
+        level.dirs.extend(
+            indexes
+                .index
+                .iter()
+                .flat_map(|idx| idx.artist.iter())
+                .map(|a| {
+                    (
+                        format!("{}/{}", self.name, folder_seg(&a.name)),
+                        a.id.clone(),
+                    )
+                }),
+        );
+        level
+    }
+
+    /// Walk the whole server hierarchy breadth-first, one level of
+    /// `getMusicDirectory` requests at a time with bounded concurrency. A
+    /// directory that fails to load is logged and skipped (like a failing
+    /// album in the tag layout); each directory id is visited once, so a
+    /// server that links a directory under two parents cannot loop.
+    async fn list_folders(&self) -> SourceResult<Vec<Song>> {
+        /// Concurrent in-flight `getMusicDirectory` requests.
+        const CONCURRENCY: usize = 8;
+
+        let indexes = self.client.get_indexes(None, None).await.map_err(map_err)?;
+        let FolderLevel {
+            mut songs,
+            dirs: mut frontier,
+        } = self.split_indexes(&indexes);
+        let mut seen: std::collections::HashSet<String> =
+            frontier.iter().map(|(_, id)| id.clone()).collect();
+
+        while !frontier.is_empty() {
+            let listed: Vec<_> = futures::stream::iter(frontier)
+                .map(|(path, id)| async move {
+                    let dir = self.client.get_music_directory(&id).await;
+                    (path, id, dir)
+                })
+                .buffer_unordered(CONCURRENCY)
+                .collect()
+                .await;
+
+            let mut next = Vec::new();
+            for (path, id, dir) in listed {
+                match dir {
+                    Ok(dir) => {
+                        let level = self.split_children(&path, &dir.child);
+                        songs.extend(level.songs);
+                        next.extend(
+                            level
+                                .dirs
+                                .into_iter()
+                                .filter(|(_, id)| seen.insert(id.clone())),
+                        );
+                    }
+                    Err(e) => tracing::warn!(
+                        "subsonic source '{}': skipping directory {id} ({})",
+                        self.name,
+                        map_err(e)
+                    ),
+                }
+            }
+            frontier = next;
+        }
+        Ok(songs)
+    }
+
+    /// One level of the folder tree, for source-relative `dir`. The path is
+    /// resolved top-down by name (same-named siblings are merged, as in the
+    /// synced tree), one `getMusicDirectory` per component.
+    async fn browse_folders(&self, dir: &str) -> SourceResult<Vec<SourceEntry>> {
+        let indexes = self.client.get_indexes(None, None).await.map_err(map_err)?;
+        let mut level = self.split_indexes(&indexes);
+        let mut path = self.name.clone();
+        for seg in dir_segments(dir) {
+            path = format!("{path}/{}", folder_seg(&seg));
+            let matched: Vec<&(String, String)> =
+                level.dirs.iter().filter(|(p, _)| *p == path).collect();
+            if matched.is_empty() {
+                return Err(SourceError::NotFound(format!("subsonic directory: {dir}")));
+            }
+            let mut next = FolderLevel::default();
+            for (p, id) in matched {
+                let listing = self.client.get_music_directory(id).await.map_err(map_err)?;
+                let sub = self.split_children(p, &listing.child);
+                next.songs.extend(sub.songs);
+                next.dirs.extend(sub.dirs);
+            }
+            level = next;
+        }
+        Ok(level.into_entries())
+    }
+}
+
 // ─── MusicSource impl ────────────────────────────────────────────────────────
 
 #[async_trait]
@@ -463,7 +687,13 @@ impl MusicSource for SubsonicSource {
     ///   `list_all` so browsed songs carry the same virtual paths as synced ones
     ///
     /// Directory entries are full virtual paths (`<source>/<enc(artist)>[/<enc(album)>]`).
+    ///
+    /// With `layout = "folders"` this instead lists the server's own
+    /// directories and tracks (`getIndexes` / `getMusicDirectory`).
     async fn browse(&self, dir: &str) -> SourceResult<Vec<SourceEntry>> {
+        if self.layout == Layout::Folders {
+            return self.browse_folders(dir).await;
+        }
         let segs = dir_segments(dir);
         match segs.as_slice() {
             [] => {
@@ -535,8 +765,16 @@ impl MusicSource for SubsonicSource {
     /// then each album's songs are fetched with bounded concurrency. A single
     /// album that fails to load is logged and skipped rather than aborting the
     /// whole sync.
+    ///
+    /// With `layout = "folders"` the catalog is instead the server's directory
+    /// tree, walked through `getIndexes` + `getMusicDirectory` (see
+    /// [`list_folders`](SubsonicSource::list_folders)).
     async fn list_all(&self) -> SourceResult<Vec<Song>> {
         use opensubsonic::AlbumListType;
+
+        if self.layout == Layout::Folders {
+            return self.list_folders().await;
+        }
 
         /// Albums requested per `getAlbumList2` page (Subsonic caps `size` at 500).
         const PAGE: i32 = 500;
@@ -666,6 +904,7 @@ mod tests {
             client,
             max_bitrate: None,
             format: None,
+            layout: Layout::Tags,
         }
     }
 
@@ -1045,5 +1284,378 @@ mod tests {
             paths,
             vec!["home/Portishead/Dummy/s1.flac", "home/Portishead/Dummy/s2"]
         );
+    }
+
+    // ── Layout setting ────────────────────────────────────────────────────
+
+    fn layout_cfg(layout: Option<&str>) -> Result<SubsonicConfig, SourceError> {
+        let mut settings = toml::Table::new();
+        settings.insert("url".to_owned(), "http://music.example.com".into());
+        settings.insert("api_key".to_owned(), "k".into());
+        if let Some(l) = layout {
+            settings.insert("layout".to_owned(), l.into());
+        }
+        SubsonicConfig::from_source_config(&make_cfg_with(settings))
+    }
+
+    #[test]
+    fn layout_defaults_to_tags_and_parses_case_insensitively() {
+        assert_eq!(layout_cfg(None).unwrap().layout, Layout::Tags);
+        assert_eq!(layout_cfg(Some("tags")).unwrap().layout, Layout::Tags);
+        assert_eq!(layout_cfg(Some("folders")).unwrap().layout, Layout::Folders);
+        assert_eq!(
+            layout_cfg(Some(" Folders ")).unwrap().layout,
+            Layout::Folders
+        );
+    }
+
+    #[test]
+    fn unknown_layout_is_a_config_error() {
+        for bad in ["path", "folder", "both"] {
+            assert!(
+                matches!(layout_cfg(Some(bad)), Err(SourceError::Config(_))),
+                "layout = {bad:?} must be rejected"
+            );
+        }
+        assert!(SETTINGS.contains(&"layout"));
+    }
+
+    // ── Folder layout mapping ─────────────────────────────────────────────
+
+    fn folder_source() -> SubsonicSource {
+        let mut s = make_source("home");
+        s.layout = Layout::Folders;
+        s
+    }
+
+    fn listing(children: serde_json::Value) -> Vec<opensubsonic::data::Child> {
+        serde_json::from_value(children).expect("valid children JSON")
+    }
+
+    #[test]
+    fn folder_seg_escapes_what_a_path_cannot_hold() {
+        assert_eq!(folder_seg("Rock"), "Rock");
+        assert_eq!(folder_seg("AC/DC"), "AC%2FDC");
+        assert_eq!(folder_seg(""), "_");
+        assert_eq!(folder_seg("."), "%2E");
+        assert_eq!(folder_seg(".."), "%2E%2E");
+        assert_eq!(dir_segments("%2E%2E/a"), vec!["..", "a"]);
+    }
+
+    #[test]
+    fn split_children_maps_dirs_and_songs_below_the_directory_path() {
+        let src = folder_source();
+        let kids = listing(serde_json::json!([
+            {"id": "d1", "isDir": true, "title": "CD1/Bonus"},
+            {"id": "d2", "isDir": true, "title": ".."},
+            {"id": "s1", "isDir": false, "title": "Roads", "suffix": "FLAC",
+             "artist": "Portishead", "album": "Dummy"},
+            {"id": "s2", "isDir": false, "title": "No Suffix"},
+            {"id": "v1", "isDir": false, "title": "Clip", "isVideo": true}
+        ]));
+        let level = src.split_children("home/Trip-Hop/Dummy", &kids);
+
+        assert_eq!(
+            level.dirs,
+            vec![
+                (
+                    "home/Trip-Hop/Dummy/CD1%2FBonus".to_owned(),
+                    "d1".to_owned()
+                ),
+                ("home/Trip-Hop/Dummy/%2E%2E".to_owned(), "d2".to_owned()),
+            ]
+        );
+        let paths: Vec<&str> = level.songs.iter().map(|s| s.path.as_str()).collect();
+        assert_eq!(
+            paths,
+            vec!["home/Trip-Hop/Dummy/s1.flac", "home/Trip-Hop/Dummy/s2"],
+            "video skipped, leaf is <id>[.<ext>]"
+        );
+    }
+
+    /// The stream/cover-art id must survive the folder path exactly as in the
+    /// tag layout, whatever the directory names contain.
+    #[test]
+    fn folder_song_leaf_round_trips_the_id() {
+        let src = folder_source();
+        let kids = listing(serde_json::json!([
+            {"id": "tr-0.9", "isDir": false, "title": "T", "suffix": "mp3"},
+            {"id": "al.flac", "isDir": false, "title": "U"}
+        ]));
+        let level = src.split_children("home/100%25 Hits/a.flac", &kids);
+        let ids: Vec<&str> = level
+            .songs
+            .iter()
+            .map(|s| crate::extract_remote_id(s.path.as_str()))
+            .collect();
+        // `tr-0.9` keeps its dot (unknown extension); `al.flac` is an id that
+        // happens to look like a file name, exactly as in the tag layout.
+        assert_eq!(ids, vec!["tr-0.9", "al"]);
+        assert!(
+            level.songs[0]
+                .path
+                .as_str()
+                .starts_with("home/100%25 Hits/")
+        );
+    }
+
+    #[test]
+    fn folder_songs_keep_server_tags_without_placeholders() {
+        let src = folder_source();
+        let kids = listing(serde_json::json!([
+            {"id": "s1", "isDir": false, "title": "Bare", "track": 2, "year": 1994}
+        ]));
+        let song = &src.split_children("home/x", &kids).songs[0];
+        let keys: Vec<&str> = song.tags.iter().map(|(k, _)| k.as_ref()).collect();
+        assert_eq!(keys, vec!["title", "track", "date"]);
+    }
+
+    #[test]
+    fn split_indexes_yields_root_dirs_and_loose_children() {
+        let src = folder_source();
+        let indexes: opensubsonic::data::Indexes = serde_json::from_value(serde_json::json!({
+            "index": [
+                {"name": "A", "artist": [{"id": "f1", "name": "Ambient"}]},
+                {"name": "R", "artist": [{"id": "f2", "name": "Rock/Pop"}]}
+            ],
+            "shortcut": [{"id": "f1", "name": "Ambient"}],
+            "child": [
+                {"id": "s0", "isDir": false, "title": "Loose", "suffix": "mp3"},
+                {"id": "f3", "isDir": true, "title": "Misc"}
+            ]
+        }))
+        .expect("valid indexes JSON");
+        let level = src.split_indexes(&indexes);
+
+        let dirs: Vec<(&str, &str)> = level
+            .dirs
+            .iter()
+            .map(|(p, id)| (p.as_str(), id.as_str()))
+            .collect();
+        assert_eq!(
+            dirs,
+            vec![
+                ("home/Misc", "f3"),
+                ("home/Ambient", "f1"),
+                ("home/Rock%2FPop", "f2")
+            ],
+            "shortcuts must not duplicate indexed dirs"
+        );
+        assert_eq!(level.songs.len(), 1);
+        assert_eq!(level.songs[0].path.as_str(), "home/s0.mp3");
+    }
+
+    #[test]
+    fn folder_level_entries_list_dirs_then_songs() {
+        let src = folder_source();
+        let kids = listing(serde_json::json!([
+            {"id": "s1", "isDir": false, "title": "One"},
+            {"id": "d1", "isDir": true, "title": "Sub"}
+        ]));
+        let entries = src.split_children("home/x", &kids).into_entries();
+        assert!(matches!(&entries[0], SourceEntry::Dir(d) if d == "home/x/Sub"));
+        assert!(matches!(&entries[1], SourceEntry::Song(s) if s.path.as_str() == "home/x/s1"));
+    }
+
+    /// Switching `layout` and resyncing leaves only the new tree behind: the
+    /// mapped paths of both layouts go through the real database path.
+    #[test]
+    fn layout_switch_resync_leaves_no_stale_directories() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("t.db");
+        let db = rmpd_library::Database::open(db_path.to_str().expect("utf8")).expect("open");
+        let token = "subsonic:home";
+
+        let child: opensubsonic::data::Child = serde_json::from_value(serde_json::json!({
+            "id": "s1", "isDir": false, "title": "Roads", "suffix": "flac",
+            "artist": "AC/DC", "album": "Back In Black"
+        }))
+        .expect("valid child");
+
+        let tags = make_source("home").map_song(&child);
+        assert_eq!(tags.path.as_str(), "home/AC%2FDC/Back In Black/s1.flac");
+        db.add_source_song(&tags, token).expect("insert tags song");
+
+        // Resync as folders: same song, now under its server directory.
+        db.with_transaction(|db| {
+            db.clear_source(token)?;
+            let folders = folder_source().map_folder_song(&child, "home/Rock/90s");
+            db.add_source_song(&folders, token)?;
+            db.prune_empty_source_directories("home")?;
+            Ok(())
+        })
+        .expect("resync");
+
+        let mount = db.list_directory("home").expect("mount");
+        let subdirs: Vec<&str> = mount.directories.iter().map(|(p, _)| p.as_str()).collect();
+        assert_eq!(subdirs, vec!["home/Rock"]);
+        assert!(db.list_directory("home/AC%2FDC").is_err());
+        let leaf = db.list_directory("home/Rock/90s").expect("folder dir");
+        assert_eq!(leaf.songs[0].path.as_str(), "home/Rock/90s/s1.flac");
+
+        // And back to tags: the folder chain disappears again.
+        db.with_transaction(|db| {
+            db.clear_source(token)?;
+            db.add_source_song(&tags, token)?;
+            db.prune_empty_source_directories("home")?;
+            Ok(())
+        })
+        .expect("resync back");
+        assert!(db.list_directory("home/Rock").is_err());
+        assert_eq!(
+            db.list_directory("home/AC%2FDC/Back In Black")
+                .expect("tag dir")
+                .songs
+                .len(),
+            1
+        );
+    }
+
+    // ── Folder walk against a mock server ─────────────────────────────────
+
+    /// Minimal HTTP/1.1 server answering the three folder endpoints from a
+    /// fixed tree. Returns the base URL and the number of
+    /// `getMusicDirectory` requests served per id.
+    async fn spawn_folder_server() -> (
+        String,
+        std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, usize>>>,
+    ) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let url = format!("http://{}", listener.local_addr().expect("addr"));
+        let hits = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+        let served = std::sync::Arc::clone(&hits);
+
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut sock, _)) = listener.accept().await else {
+                    return;
+                };
+                let served = std::sync::Arc::clone(&served);
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 8192];
+                    let n = sock.read(&mut buf).await.unwrap_or(0);
+                    let req = String::from_utf8_lossy(&buf[..n]).into_owned();
+                    let target = req.split_whitespace().nth(1).unwrap_or("").to_owned();
+                    let id = target
+                        .split(['?', '&'])
+                        .find_map(|kv| kv.strip_prefix("id="))
+                        .unwrap_or("")
+                        .to_owned();
+                    let body = if target.contains("getIndexes") {
+                        serde_json::json!({"indexes": {
+                            "index": [{"name": "A", "artist": [{"id": "f1", "name": "Albums"}]}],
+                            "child": [{"id": "s0", "isDir": false, "title": "Loose", "suffix": "mp3"}]
+                        }})
+                    } else if target.contains("getMusicDirectory") {
+                        *served.lock().expect("lock").entry(id.clone()).or_insert(0) += 1;
+                        match id.as_str() {
+                            "f1" => serde_json::json!({"directory": {
+                            "id": "f1", "name": "Albums", "child": [
+                                {"id": "f2", "isDir": true, "title": "Dummy"},
+                                {"id": "f3", "isDir": true, "title": "Broken"},
+                                // Same directory linked a second time.
+                                {"id": "f2", "isDir": true, "title": "Dummy again"},
+                                {"id": "s1", "isDir": false, "title": "One", "suffix": "flac"}
+                            ]}}),
+                            "f2" => serde_json::json!({"directory": {
+                            "id": "f2", "name": "Dummy", "child": [
+                                {"id": "s2", "isDir": false, "title": "Two", "suffix": "ogg"},
+                                {"id": "s3", "isDir": false, "title": "Three"}
+                            ]}}),
+                            _ => serde_json::json!({
+                                "status": "failed",
+                                "error": {"code": 70, "message": "not found"}
+                            }),
+                        }
+                    } else {
+                        serde_json::json!({})
+                    };
+                    let mut resp = serde_json::json!({"status": "ok", "version": "1.16.1"});
+                    for (k, v) in body.as_object().expect("object") {
+                        resp[k] = v.clone();
+                    }
+                    let payload = serde_json::json!({ "subsonic-response": resp }).to_string();
+                    let http = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+                        payload.len()
+                    );
+                    let _ = sock.write_all(http.as_bytes()).await;
+                    let _ = sock.shutdown().await;
+                });
+            }
+        });
+        (url, hits)
+    }
+
+    fn folder_source_at(url: &str) -> SubsonicSource {
+        SubsonicSource {
+            name: "home".to_owned(),
+            client: Client::new(url, Auth::api_key("k")).expect("url"),
+            max_bitrate: None,
+            format: None,
+            layout: Layout::Folders,
+        }
+    }
+
+    #[tokio::test]
+    async fn list_all_in_folder_layout_walks_the_server_tree() {
+        let (url, hits) = spawn_folder_server().await;
+        let src = folder_source_at(&url);
+
+        let mut paths: Vec<String> = src
+            .list_all()
+            .await
+            .expect("walk")
+            .into_iter()
+            .map(|s| s.path.to_string())
+            .collect();
+        paths.sort();
+        // `Broken` fails (skipped, not fatal); the doubly linked `f2` is
+        // fetched once, so its tracks appear once.
+        assert_eq!(
+            paths,
+            vec![
+                "home/Albums/Dummy/s2.ogg",
+                "home/Albums/Dummy/s3",
+                "home/Albums/s1.flac",
+                "home/s0.mp3",
+            ]
+        );
+        let hits = hits.lock().expect("lock");
+        assert_eq!(hits.get("f2"), Some(&1), "directory ids are visited once");
+        assert_eq!(hits.get("f3"), Some(&1));
+    }
+
+    #[tokio::test]
+    async fn browse_in_folder_layout_lists_one_server_level() {
+        let (url, _) = spawn_folder_server().await;
+        let src = folder_source_at(&url);
+
+        let names = |entries: Vec<SourceEntry>| -> Vec<String> {
+            entries
+                .into_iter()
+                .map(|e| match e {
+                    SourceEntry::Dir(d) => format!("dir:{d}"),
+                    SourceEntry::Song(s) => format!("song:{}", s.path),
+                })
+                .collect()
+        };
+
+        assert_eq!(
+            names(src.browse("").await.expect("root")),
+            vec!["dir:home/Albums", "song:home/s0.mp3"]
+        );
+        assert_eq!(
+            names(src.browse("Albums/Dummy").await.expect("leaf")),
+            vec!["song:home/Albums/Dummy/s2.ogg", "song:home/Albums/Dummy/s3"]
+        );
+        assert!(matches!(
+            src.browse("Albums/Nope").await,
+            Err(SourceError::NotFound(_))
+        ));
     }
 }

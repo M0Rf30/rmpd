@@ -395,6 +395,11 @@ timeout_ms = 5000
 # # max_bitrate = 320
 # # Optional: preferred transcoding format ("raw" = original, "mp3", "opus", …).
 # # format = "raw"
+# # Browse layout under the mount: "tags" (default) builds a virtual
+# # <name>/<Artist>/<Album>/<id>.<ext> tree from ID3 tags; "folders" mirrors the
+# # server's own directory hierarchy (getIndexes/getMusicDirectory, e.g. gonic)
+# # and omits the Artist/Album tree. Applied on the next `update`.
+# # layout = "folders"
 #
 # Example: Jellyfin server (requires the `jellyfin` feature). Catalog is synced
 # like Subsonic; streams use /Audio/<id>/stream (or /universal when
