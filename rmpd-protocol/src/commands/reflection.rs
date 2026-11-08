@@ -426,11 +426,11 @@ pub async fn handle_decoders_command() -> String {
     let mut resp = ResponseBuilder::new();
 
     // Derived at runtime from every container/format reader Symphonia's probe has registered
-    // (`rmpd_player::format_registry`), so this can never drift from what the scanner and
+    // (`playcore::format`), so this can never drift from what the scanner and
     // decoder actually accept. One `plugin:` block per registered reader, keyed by its
     // Symphonia `FormatInfo::short_name`.
     // Note: Unlike outputs, decoders are NOT separate entities - no blank lines between them
-    for format in rmpd_player::format_registry::FORMAT_PLUGINS.iter() {
+    for format in playcore::format::FORMAT_PLUGINS.iter() {
         resp.field("plugin", format.plugin);
         for suffix in &format.extensions {
             resp.field("suffix", suffix);

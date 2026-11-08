@@ -38,6 +38,7 @@ coverart = ["rmpd-integrations/coverart"]
 rmpd-core.workspace = true
 rmpd-protocol.workspace = true
 rmpd-player.workspace = true
+playcore.workspace = true
 rmpd-library.workspace = true
 rmpd-source.workspace = true
 rmpd-plugin.workspace = true

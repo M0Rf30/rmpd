@@ -70,7 +70,7 @@ pub fn print_deps() {
     );
     line(
         "decoders",
-        &rmpd_player::format_registry::FORMAT_PLUGINS
+        &playcore::format::FORMAT_PLUGINS
             .iter()
             .map(|f| f.plugin.to_owned())
             .collect::<Vec<_>>(),

@@ -3,7 +3,19 @@
 
 //! Trait shared by all audio output backends.
 
+use rmpd_core::config::ResamplerQuality;
 use rmpd_core::error::Result;
+
+/// The playcore resampler quality for a configured one.
+pub(crate) fn resampler_quality(quality: ResamplerQuality) -> playcore::resample::ResamplerQuality {
+    use playcore::resample::ResamplerQuality as Q;
+    match quality {
+        ResamplerQuality::SincBest => Q::SincBest,
+        ResamplerQuality::SincMedium => Q::SincMedium,
+        ResamplerQuality::SincFast => Q::SincFast,
+        ResamplerQuality::Linear => Q::Linear,
+    }
+}
 
 /// Tracks pause state for output backends with simple flag-based pausing.
 ///
@@ -50,14 +62,14 @@ pub trait AudioOutput: Send {
 
     /// Whether this backend owns a real-time callback that itself applies
     /// pause-hold, flush-generation dropping, and gain (e.g. [`crate::output::CpalOutput`]
-    /// via [`crate::conversion::SampleBuffer`]).
+    /// via [`playcore::convert::SampleBuffer`]).
     ///
     /// `MultiOutput`'s worker uses this to decide how to treat a dequeued
     /// chunk: a self-managed backend gets every chunk forwarded unconditionally
     /// (its own callback decides what to do with pause/stale generations), while
     /// a non-self-managed backend (no real-time callback of its own — e.g. null,
     /// fifo, pipe, recorder, httpd) has pause-hold and flush-drop applied by the
-    /// worker itself, and still gets the legacy write-time [`crate::filter::VolumeFilter`].
+    /// worker itself, and still gets the legacy write-time [`playcore::filter::VolumeFilter`].
     fn self_managed(&self) -> bool {
         false
     }

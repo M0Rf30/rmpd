@@ -9,8 +9,8 @@
 //! `opus` — write a `.opus` file) is streamed to the file as-is.
 
 use crate::audio_output::{AudioOutput, PauseState};
-use crate::conversion;
 use crate::encoder::Encoder;
+use playcore::convert;
 use rmpd_core::error::{Result, RmpdError};
 use rmpd_core::song::AudioFormat;
 use std::fs::File;
@@ -135,7 +135,7 @@ impl AudioOutput for RecorderOutput {
                 w.write_all(&enc.encode(samples))
                     .map_err(|e| RmpdError::Player(format!("recorder write: {e}")))?;
             } else {
-                conversion::samples_to_s16le_into(samples, &mut self.conversion_buf);
+                convert::samples_to_s16le_into(samples, &mut self.conversion_buf);
                 w.write_all(&self.conversion_buf)
                     .map_err(|e| RmpdError::Player(format!("recorder write: {e}")))?;
             }

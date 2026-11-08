@@ -3,18 +3,14 @@
 
 // Audio player engine
 pub mod audio_output;
-pub mod conversion;
 pub mod cpal_utils;
-pub mod crossfade;
 pub mod decoder;
-pub mod dop;
 pub mod dop_output;
 pub mod dsp;
 pub mod encoder;
 pub mod engine;
 pub mod fifo_output;
 pub mod filter;
-pub mod format_registry;
 pub mod httpd_output;
 pub mod mixer;
 pub mod multi_output;
@@ -27,27 +23,21 @@ pub mod pipe_output;
 #[cfg(all(feature = "pipewire", target_os = "linux"))]
 pub mod pipewire_output;
 pub mod recorder_output;
-pub mod resampler;
 pub mod shout_output;
 
 pub use cpal_utils::set_output_device;
-pub use decoder::{
-    DECODER_PLUGINS, Decoder, DecoderPlugin, SymphoniaDecoder, decoder_for_suffix,
-    is_supported_suffix,
-};
-pub use dop::DopEncoder;
+pub use decoder::{DECODER_PLUGINS, DecoderPlugin, decoder_for_suffix, is_supported_suffix};
 pub use encoder::{Encoder, PcmEncoder, WavEncoder};
 pub use engine::PlaybackEngine;
 pub use filter::{
-    AudioFilter, FILTER_PLUGINS, FilterChain, FilterError, FilterFactory, FilterParams,
-    FilterPlugin, FilterSet, Mixer, SoftwareMixer, VolumeFilter,
+    FILTER_PLUGINS, FilterError, FilterFactory, FilterParams, FilterPlugin, FilterSet, Mixer,
+    SoftwareMixer,
 };
 pub use httpd_output::HttpdOutput;
 pub use mixer::{MIXER_PLUGINS, MixerError, MixerPlugin, MixerSet, MixerType};
 pub use multi_output::MultiOutput;
 pub use null_output::NullOutput;
 pub use output::CpalOutput;
-pub use output_control::OutputControl;
 pub use output_registry::{OUTPUT_PLUGINS, create_output};
 pub use output_slot::{OutputKey, OutputSlot};
 #[cfg(all(feature = "pipewire", target_os = "linux"))]

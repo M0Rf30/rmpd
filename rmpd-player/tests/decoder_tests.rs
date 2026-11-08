@@ -14,13 +14,12 @@ mod fixtures;
 use approx::assert_relative_eq;
 use fixtures::pregenerated;
 use fixtures::reference::{calculate_rms, verify_sine_wave};
-use rmpd_player::decoder::SymphoniaDecoder;
+use rmpd_player::decoder::open as open_decoder;
 use std::path::Path;
 
 /// Helper to decode entire file to buffer
 fn decode_entire_file(path: &Path) -> Result<(Vec<f32>, u32, u8), String> {
-    let mut decoder =
-        SymphoniaDecoder::open(path).map_err(|e| format!("Failed to open decoder: {e}"))?;
+    let mut decoder = open_decoder(path).map_err(|e| format!("Failed to open decoder: {e}"))?;
 
     let sample_rate = decoder.sample_rate();
     let channels = decoder.channels();
@@ -51,7 +50,7 @@ fn test_flac_format_detection() {
         return;
     }
 
-    let decoder = SymphoniaDecoder::open(&path).expect("Failed to open FLAC file");
+    let decoder = open_decoder(&path).expect("Failed to open FLAC file");
 
     let format = decoder.format();
     assert_eq!(format.sample_rate, 44100, "Expected 44.1kHz sample rate");
@@ -66,7 +65,7 @@ fn test_mp3_format_detection() {
         return;
     }
 
-    let mut decoder = SymphoniaDecoder::open(&path).expect("Failed to open MP3 file");
+    let mut decoder = open_decoder(&path).expect("Failed to open MP3 file");
 
     let format = decoder.format();
     assert_eq!(format.sample_rate, 44100);
@@ -86,7 +85,7 @@ fn test_ogg_format_detection() {
         return;
     }
 
-    let decoder = SymphoniaDecoder::open(&path).expect("Failed to open OGG file");
+    let decoder = open_decoder(&path).expect("Failed to open OGG file");
 
     let format = decoder.format();
     assert_eq!(format.sample_rate, 44100);
@@ -101,7 +100,7 @@ fn test_opus_format_detection() {
         return;
     }
 
-    let decoder = SymphoniaDecoder::open(&path).expect("Failed to open Opus file");
+    let decoder = open_decoder(&path).expect("Failed to open Opus file");
 
     let format = decoder.format();
     assert_eq!(format.sample_rate, 48000, "Opus uses 48kHz");
@@ -138,7 +137,7 @@ fn test_m4a_format_detection() {
         return;
     }
 
-    let decoder = SymphoniaDecoder::open(&path).expect("Failed to open M4A file");
+    let decoder = open_decoder(&path).expect("Failed to open M4A file");
 
     let format = decoder.format();
     assert_eq!(format.sample_rate, 44100);
@@ -153,7 +152,7 @@ fn test_wav_format_detection() {
         return;
     }
 
-    let decoder = SymphoniaDecoder::open(&path).expect("Failed to open WAV file");
+    let decoder = open_decoder(&path).expect("Failed to open WAV file");
 
     let format = decoder.format();
     assert_eq!(format.sample_rate, 44100);
@@ -245,7 +244,7 @@ fn test_duration_accuracy() {
         return;
     }
 
-    let decoder = SymphoniaDecoder::open(&path).expect("Failed to open file");
+    let decoder = open_decoder(&path).expect("Failed to open file");
 
     let duration = decoder.duration();
     assert!(duration.is_some(), "Duration should be available");
@@ -267,7 +266,7 @@ fn test_seek_to_beginning() {
         return;
     }
 
-    let mut decoder = SymphoniaDecoder::open(&path).expect("Failed to open file");
+    let mut decoder = open_decoder(&path).expect("Failed to open file");
 
     // Read some samples
     let mut buffer = vec![0.0f32; 1000];
@@ -292,7 +291,7 @@ fn test_seek_to_middle() {
         return;
     }
 
-    let mut decoder = SymphoniaDecoder::open(&path).expect("Failed to open file");
+    let mut decoder = open_decoder(&path).expect("Failed to open file");
 
     // Seek to 0.5 seconds
     decoder.seek(0.5).expect("Failed to seek");
@@ -318,7 +317,7 @@ fn test_seek_accuracy() {
         return;
     }
 
-    let mut decoder = SymphoniaDecoder::open(&path).expect("Failed to open file");
+    let mut decoder = open_decoder(&path).expect("Failed to open file");
 
     // Seek to 0.25 seconds
     decoder.seek(0.25).expect("Failed to seek");
@@ -379,7 +378,7 @@ fn test_multiple_reads() {
         return;
     }
 
-    let mut decoder = SymphoniaDecoder::open(&path).expect("Failed to open file");
+    let mut decoder = open_decoder(&path).expect("Failed to open file");
 
     // Read multiple small buffers
     let mut total_samples = 0;
@@ -413,7 +412,7 @@ fn test_high_resolution_audio() {
         return;
     }
 
-    let decoder = SymphoniaDecoder::open(&path).expect("Failed to open high-res file");
+    let decoder = open_decoder(&path).expect("Failed to open high-res file");
 
     let format = decoder.format();
     assert_eq!(format.sample_rate, 96000, "Expected 96kHz sample rate");
@@ -428,7 +427,7 @@ fn test_mono_audio() {
         return;
     }
 
-    let decoder = SymphoniaDecoder::open(&path).expect("Failed to open mono file");
+    let decoder = open_decoder(&path).expect("Failed to open mono file");
 
     let format = decoder.format();
     assert_eq!(format.channels, 1, "Expected mono (1 channel)");
@@ -510,7 +509,7 @@ fn test_seek_to_the_end_ends_the_stream() {
             eprintln!("Skipping {name}: fixture not found");
             continue;
         }
-        let mut decoder = SymphoniaDecoder::open(&path).expect("Failed to open");
+        let mut decoder = open_decoder(&path).expect("Failed to open");
         let duration = decoder.duration().expect("fixture has a known duration");
         let mut buffer = vec![0.0f32; 4096];
 
@@ -541,7 +540,7 @@ fn test_seek_rejects_negative_positions() {
         eprintln!("Skipping test: fixture not found");
         return;
     }
-    let mut decoder = SymphoniaDecoder::open(&path).expect("Failed to open");
+    let mut decoder = open_decoder(&path).expect("Failed to open");
     assert!(decoder.seek(-1.0).is_err());
 }
 
@@ -561,7 +560,7 @@ fn raw_symphonia_frames(path: &Path, gapless: bool) -> usize {
         Box::new(std::fs::File::open(path).unwrap()),
         Default::default(),
     );
-    let mut reader = rmpd_player::format_registry::probe()
+    let mut reader = playcore::format::probe()
         .probe(
             &hint,
             mss,
@@ -640,7 +639,7 @@ fn test_gapless_seek_is_frame_accurate() {
             eprintln!("Skipping test: fixture not found");
             return;
         }
-        let mut decoder = SymphoniaDecoder::open(&path).expect("open");
+        let mut decoder = open_decoder(&path).expect("open");
         decoder.seek(0.5).expect("seek");
         let mut buffer = vec![0.0f32; 4096];
         let mut total = 0;

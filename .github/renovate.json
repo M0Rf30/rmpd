@@ -63,8 +63,7 @@
       "description": "Audio stack - group together",
       "matchPackageNames": [
         "symphonia",
-        "cpal",
-        "rubato"
+        "cpal"
       ],
       "groupName": "audio stack",
       "automerge": false

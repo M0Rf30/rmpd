@@ -91,7 +91,7 @@ impl OutputSlot {
 mod tests {
     use super::*;
     use crate::null_output::NullOutput;
-    use crate::output_control::OutputControl;
+    use playcore::control::OutputControl;
     use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 
     fn build_null() -> Result<Arc<MultiOutput>> {

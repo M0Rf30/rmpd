@@ -33,8 +33,8 @@
 //! [`VolumeFilter`].
 
 use crate::audio_output::AudioOutput;
-use crate::filter::{AudioFilter, FilterChain, VolumeFilter};
-use crate::output_control::OutputControl;
+use playcore::control::OutputControl;
+use playcore::filter::{AudioFilter, FilterChain, VolumeFilter};
 use rmpd_core::error::{Result, RmpdError};
 use std::sync::Arc;
 use std::sync::atomic::AtomicU8;

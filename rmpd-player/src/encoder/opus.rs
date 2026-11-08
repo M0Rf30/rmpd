@@ -19,14 +19,13 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, LazyLock};
 
 use parking_lot::Mutex;
-use rmpd_core::config::ResamplerQuality;
 use rmpd_core::error::{Result, RmpdError};
 use rmpd_core::song::AudioFormat;
 use symphonia_codec_opus::encoder::ogg::OggOpusWriter;
 use symphonia_codec_opus::encoder::{BitrateMode, EncoderConfig, MAX_BITRATE, MIN_BITRATE};
 
 use super::Encoder;
-use crate::resampler::StreamResampler;
+use playcore::resample::{ResamplerQuality, StreamResampler};
 
 /// The only sample rate Opus encodes at.
 pub const OPUS_RATE: u32 = 48_000;
@@ -344,7 +343,7 @@ impl Encoder for OpusEncoder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::decoder::SymphoniaDecoder;
+    use playcore::SymphoniaDecoder;
 
     fn fmt(rate: u32, channels: u8) -> AudioFormat {
         AudioFormat {
@@ -402,7 +401,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("out.opus");
         std::fs::write(&path, bytes).unwrap();
-        let mut dec = SymphoniaDecoder::open(&path).expect("open ogg opus");
+        let mut dec = crate::decoder::open(&path).expect("open ogg opus");
         let mut all = Vec::new();
         let mut buf = vec![0.0f32; 4096];
         loop {

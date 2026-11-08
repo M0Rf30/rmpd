@@ -2,13 +2,18 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use crate::audio_output::AudioOutput;
-use crate::decoder::SymphoniaDecoder;
-use crate::dop::DopEncoder;
 use crate::dop_output::DopOutput;
 use crate::mixer::{MixerError, MixerSet};
 use crate::output::CpalOutput;
-use crate::output_control::OutputControl;
+use crate::output_control::OutputGains;
 use parking_lot::Mutex;
+use playcore::SymphoniaDecoder;
+use playcore::control::OutputControl;
+use playcore::crossfade::{self, can_cross_fade_song};
+use playcore::dsd::{DopEncoder, dsd_output_target_rate, select_dsd_pcm_rate};
+use playcore::replaygain::{
+    ReplayGainMode as PcReplayGainMode, ReplayGainTags, compute_gain_scale,
+};
 use rmpd_core::config::{DopMode, OutputConfig, ReplayGainMode, ResamplerQuality};
 use rmpd_core::error::{Result, RmpdError};
 use rmpd_core::event::{Event, EventBus};
@@ -23,65 +28,6 @@ use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 
 const BUFFER_SIZE: usize = 4096;
-
-/// Songs shorter than this never cross-fade, regardless of the configured
-/// crossfade duration. Mirrors mpd `CrossFadeSettings::MIN_TOTAL_TIME`
-/// (`src/player/CrossFade.hxx`).
-const CROSSFADE_MIN_TOTAL_SECS: u64 = 20;
-
-/// Valid DSD-to-PCM decode rates, ascending. DSD decimates cleanly only by an
-/// integer power of two, so every target is 44.1 kHz-family.
-const DSD_PCM_RATES: [u32; 4] = [44100, 88200, 176400, 352800];
-
-/// Choose the DSD-to-PCM decode rate for a device running at `device_rate`.
-///
-/// Returns the SMALLEST DSD-family rate that both covers `device_rate` and is
-/// reported as supported, falling back to the largest supported family rate and
-/// finally to 88.2 kHz.
-///
-/// Decoding to the highest rate a device merely *advertises* is harmful:
-/// systems like PipeWire advertise enormous ranges (up to ~768 kHz) but
-/// resample internally, so an over-high PCM rate (a) gives a punishingly short
-/// real-time callback period that underruns on scheduling jitter (audible
-/// crackle), and (b) leaves DSD's ultrasonic shaped noise in the PCM, muddying
-/// the sound. A moderate rate lets the decimation filter remove that noise and
-/// keeps the buffer period comfortable.
-fn select_dsd_pcm_rate(device_rate: u32, supports_rate: impl Fn(u32) -> bool) -> u32 {
-    DSD_PCM_RATES
-        .iter()
-        .copied()
-        .find(|&r| r >= device_rate && supports_rate(r))
-        .or_else(|| {
-            DSD_PCM_RATES
-                .iter()
-                .rev()
-                .copied()
-                .find(|&r| supports_rate(r))
-        })
-        .unwrap_or(88200)
-}
-
-/// The device rate the cpal output should open at for a DSD-to-PCM stream
-/// decoded at `decode_rate` on a device whose native rate is `device_rate`.
-///
-/// Returns `None` (open the stream at `decode_rate`, no resampling) when the
-/// rates already match, or when `native_decode_ok` — the resolved output is an
-/// explicitly-configured device that natively supports `decode_rate`, so it is
-/// safe to play bit-perfect. Otherwise returns `Some(device_rate)` so rmpd
-/// resamples to the device's native rate itself, rather than letting a sound
-/// server (e.g. PipeWire) resample a rate it merely advertises — which underruns
-/// and leaves DSD ultrasonic noise in-band.
-fn dsd_output_target_rate(
-    decode_rate: u32,
-    device_rate: u32,
-    native_decode_ok: bool,
-) -> Option<u32> {
-    if native_decode_ok || decode_rate == device_rate {
-        None
-    } else {
-        Some(device_rate)
-    }
-}
 
 /// Commands that can be sent to the playback thread
 enum PlaybackCommand {
@@ -157,6 +103,12 @@ impl From<RmpdError> for PlaybackFailure {
     /// output call sites opt in with `map_err(PlaybackFailure::Output)`.
     fn from(e: RmpdError) -> Self {
         Self::Decoder(e)
+    }
+}
+
+impl From<playcore::Error> for PlaybackFailure {
+    fn from(e: playcore::Error) -> Self {
+        Self::Decoder(e.into())
     }
 }
 
@@ -256,8 +208,8 @@ pub struct PlaybackEngine {
     /// next/previous) cached output's callback is already reading.
     control: Arc<OutputControl>,
     /// Per-output control blocks (own software gain each); see
-    /// [`crate::output_control::OutputGains`].
-    output_gains: Arc<crate::output_control::OutputGains>,
+    /// [`OutputGains`].
+    output_gains: Arc<OutputGains>,
     /// Audible-position base (seconds, f64 bits) for [`Self::get_elapsed_live`]:
     /// the decode thread updates this on every seek and at every natural
     /// song-boundary reset, in lockstep with `control`'s played-frame
@@ -321,7 +273,7 @@ impl PlaybackEngine {
             next_song: Arc::new(Mutex::new(None)),
             buffer_time_ms: 500, // matches AudioConfig::default_buffer_time()
             control: Arc::new(OutputControl::new()),
-            output_gains: Arc::new(crate::output_control::OutputGains::default()),
+            output_gains: Arc::new(OutputGains::default()),
             live_position_base_bits: Arc::new(AtomicU64::new(0.0f64.to_bits())),
             live_sample_rate: Arc::new(AtomicU32::new(0)),
             play_time_ns: Arc::new(AtomicU64::new(0)),
@@ -822,7 +774,7 @@ impl PlaybackEngine {
         })?;
         self.last_volume = vol;
         // Instant: every self-managed backend's real-time callback ramps
-        // toward this over a few ms (see `conversion::GainRamp`), instead of
+        // toward this over a few ms (see `playcore::convert::GainRamp`), instead of
         // the old write-time `VolumeFilter` which could lag by the full
         // queue depth (up to ~1s) before a change reached the device.
         // With only hardware mixers the software gain stays at unity.
@@ -850,7 +802,7 @@ impl PlaybackEngine {
         event_bus: EventBus,
         stop_flag: Arc<AtomicBool>,
         volume: Arc<AtomicU8>,
-        output_gains: Arc<crate::output_control::OutputGains>,
+        output_gains: Arc<OutputGains>,
         command_rx: &mpsc::Receiver<PlaybackCommand>,
         outputs: Vec<rmpd_core::config::OutputConfig>,
         resampler_quality: ResamplerQuality,
@@ -877,7 +829,7 @@ impl PlaybackEngine {
         // Shadow as mutable so per-song gain can be updated on in-thread advance.
         let mut gain_scale = gain_scale;
         // Open decoder (pass-through mode by default)
-        let mut decoder = SymphoniaDecoder::open(path)?;
+        let mut decoder = crate::decoder::open(path)?;
 
         // Overrides the cpal stream rate for DSD-to-PCM: drives the device at
         // its native rate and lets rmpd's own StreamResampler bridge the gap,
@@ -963,7 +915,7 @@ impl PlaybackEngine {
         }
 
         // Standard PCM playback (works for all formats including DSD with PCM conversion)
-        let format = decoder.format();
+        let format = rmpd_core::song::AudioFormat::from(decoder.format());
 
         debug!(
             "decoder opened: {}Hz, {} channels",
@@ -1012,7 +964,7 @@ impl PlaybackEngine {
                 output_gains.clear();
                 let mut boxes: Vec<(Box<dyn AudioOutput>, Arc<AtomicU8>)> =
                     Vec::with_capacity(effective_outputs.len());
-                let mut chains: Vec<crate::filter::FilterChain> =
+                let mut chains: Vec<playcore::filter::FilterChain> =
                     Vec::with_capacity(effective_outputs.len());
                 for (i, cfg) in effective_outputs.iter().enumerate() {
                     let software = crate::mixer::output_uses_software_gain(cfg);
@@ -1208,7 +1160,7 @@ impl PlaybackEngine {
                     // src/player/CrossFade.cxx): otherwise the fade would
                     // cover the whole song starting at sample 0.
                     let cf_eligible =
-                        Self::can_cross_fade_song(end_samples, cf_window, samples_per_second);
+                        can_cross_fade_song(end_samples, cf_window, samples_per_second);
 
                     if cf_eligible && total_samples_played >= cf_start {
                         // Claim the pre-fetched next song (destructive take —
@@ -1226,17 +1178,13 @@ impl PlaybackEngine {
                                 .map(|d| {
                                     let next_samples =
                                         (d.as_secs_f64() * samples_per_second as f64) as u64;
-                                    Self::can_cross_fade_song(
-                                        next_samples,
-                                        cf_window,
-                                        samples_per_second,
-                                    )
+                                    can_cross_fade_song(next_samples, cf_window, samples_per_second)
                                 })
                                 .unwrap_or(false);
                             if !next_ok {
                                 return None;
                             }
-                            SymphoniaDecoder::open(ps.resolved_path.as_std_path())
+                            crate::decoder::open(ps.resolved_path.as_std_path())
                                 .ok()
                                 .filter(|dec| {
                                     !dec.is_dsd()
@@ -1268,7 +1216,7 @@ impl PlaybackEngine {
                                 ps.song.tag("mixramp_start").map(str::to_owned);
                             let cur_rg_db = 20.0_f32 * gain_scale.max(1e-9_f32).log10();
                             let next_rg_db = 20.0_f32 * next_gain_scale.max(1e-9_f32).log10();
-                            let window_secs: f32 = crate::crossfade::mixramp_overlap_seconds(
+                            let window_secs: f32 = crossfade::mixramp_overlap_seconds(
                                 next_start_tag.as_deref(),
                                 cur_end_tag.as_deref(),
                                 mixramp_db,
@@ -1278,7 +1226,7 @@ impl PlaybackEngine {
                             )
                             .filter(|&s| s > 0.0)
                             .unwrap_or(crossfade_secs as f32);
-                            let window = crate::crossfade::window_samples_secs(
+                            let window = crossfade::window_samples_secs(
                                 format.sample_rate,
                                 format.channels,
                                 window_secs,
@@ -1410,13 +1358,13 @@ impl PlaybackEngine {
                                 let n_mix = n_nxt;
                                 let progress =
                                     (overlap_done as f32 / window as f32).clamp(0.0, 1.0);
-                                let (g_out, g_in) = crate::crossfade::equal_power_gains(progress);
+                                let (g_out, g_in) = crossfade::equal_power_gains(progress);
 
                                 // In-place: cf_cur = cur*gain*g_out + nxt*gain*g_in
                                 for s in cf_cur[..n_mix].iter_mut() {
                                     *s *= gain_scale * g_out;
                                 }
-                                crate::crossfade::mix_into(
+                                crossfade::mix_into(
                                     &mut cf_cur[..n_mix],
                                     &cf_nxt[..n_mix],
                                     1.0,
@@ -1508,7 +1456,7 @@ impl PlaybackEngine {
                     // pre-fed a format-compatible next song does the gapless path
                     // activate.
                     let gapless_next = next_song.lock().take().and_then(|ps| {
-                        SymphoniaDecoder::open(ps.resolved_path.as_std_path())
+                        crate::decoder::open(ps.resolved_path.as_std_path())
                             .ok()
                             .filter(|dec| {
                                 !dec.is_dsd()
@@ -1642,7 +1590,7 @@ impl PlaybackEngine {
             Some(duration) if position > duration => duration,
             _ => position,
         };
-        (decoder.seek(position), position)
+        (decoder.seek(position).map_err(Into::into), position)
     }
 
     /// The failure reported when the output stopped accepting audio while the
@@ -1727,6 +1675,7 @@ impl PlaybackEngine {
         )
     }
 
+    /// ReplayGain scale of `song` (see [`playcore::replaygain::compute_gain_scale`]).
     fn compute_gain_scale(
         song: &Song,
         mode: ReplayGainMode,
@@ -1735,52 +1684,19 @@ impl PlaybackEngine {
         normalization: bool,
         random: bool,
     ) -> f32 {
-        if mode == ReplayGainMode::Off {
-            return 1.0;
-        }
-        let (gain_opt, peak_opt) = match mode {
-            ReplayGainMode::Off => unreachable!(),
-            ReplayGainMode::Track => (song.replay_gain_track_gain, song.replay_gain_track_peak),
-            ReplayGainMode::Album => (song.replay_gain_album_gain, song.replay_gain_album_peak),
-            // MPD `ReplayGainMode::AUTO`: random mode breaks album context (the
-            // songs no longer play in album order), so use track gain while
-            // shuffled and album gain otherwise. See mpd `src/ReplayGainMode.hxx`
-            // and `doc/user.rst` ("replaygain auto"). No cross-fallback to the
-            // other gain when the selected one is missing — that's MPD's
-            // behaviour too, it just falls through to `missing_preamp` below.
-            ReplayGainMode::Auto => {
-                if random {
-                    (song.replay_gain_track_gain, song.replay_gain_track_peak)
-                } else {
-                    (song.replay_gain_album_gain, song.replay_gain_album_peak)
-                }
-            }
+        let mode = match mode {
+            ReplayGainMode::Off => PcReplayGainMode::Off,
+            ReplayGainMode::Track => PcReplayGainMode::Track,
+            ReplayGainMode::Album => PcReplayGainMode::Album,
+            ReplayGainMode::Auto => PcReplayGainMode::Auto,
         };
-        let (db, peak) = if let Some(gain) = gain_opt {
-            (gain + preamp, peak_opt)
-        } else {
-            (missing_preamp, None)
+        let tags = ReplayGainTags {
+            track_gain: song.replay_gain_track_gain,
+            track_peak: song.replay_gain_track_peak,
+            album_gain: song.replay_gain_album_gain,
+            album_peak: song.replay_gain_album_peak,
         };
-        let mut scale = 10f32.powf(db / 20.0);
-        if normalization
-            && let Some(pk) = peak
-            && pk > 0.0
-            && scale * pk > 1.0
-        {
-            scale = 1.0 / pk;
-        }
-        scale
-    }
-
-    /// Whether a song of `total_samples` length is eligible to cross-fade
-    /// with a `cf_window`-sample overlap. Mirrors mpd
-    /// `CrossFadeSettings::CanCrossFadeSong` (`src/player/CrossFade.cxx`):
-    /// the song must be at least `CROSSFADE_MIN_TOTAL_SECS` long, and the
-    /// crossfade window must fit strictly within it. `total_samples` and
-    /// `cf_window` are both interleaved sample counts at `samples_per_second`.
-    fn can_cross_fade_song(total_samples: u64, cf_window: u64, samples_per_second: u64) -> bool {
-        let min_total_samples = CROSSFADE_MIN_TOTAL_SECS * samples_per_second;
-        total_samples >= min_total_samples && cf_window < total_samples
+        compute_gain_scale(&tags, mode, preamp, missing_preamp, normalization, random)
     }
 
     /// Build the DoP encoder and start the DoP output for `decoder`. Building and
@@ -1991,174 +1907,6 @@ impl Drop for PlaybackEngine {
 mod tests {
     use super::*;
 
-    #[test]
-    fn pipewire_like_device_picks_moderate_rate_not_advertised_max() {
-        // PipeWire advertises everything (huge range) and defaults to 48 kHz.
-        // We must NOT pick 352.8 kHz; the smallest family rate covering 48 kHz
-        // is 88.2 kHz.
-        let rate = select_dsd_pcm_rate(48000, |_| true);
-        assert_eq!(rate, 88200);
-    }
-
-    #[test]
-    fn device_at_44100_picks_44100() {
-        let rate = select_dsd_pcm_rate(44100, |_| true);
-        assert_eq!(rate, 44100);
-    }
-
-    #[test]
-    fn device_at_96000_picks_176400() {
-        // 88.2 kHz does not cover 96 kHz; the smallest family rate >= 96 kHz is
-        // 176.4 kHz.
-        let rate = select_dsd_pcm_rate(96000, |_| true);
-        assert_eq!(rate, 176400);
-    }
-
-    #[test]
-    fn device_at_192000_picks_352800() {
-        let rate = select_dsd_pcm_rate(192000, |_| true);
-        assert_eq!(rate, 352800);
-    }
-
-    #[test]
-    fn strict_48k_device_falls_back_to_largest_supported_family_rate() {
-        // A device that only natively supports 44.1 kHz (e.g. some hw-locked
-        // ALSA devices) while running at 48 kHz: no family rate >= 48 kHz is
-        // supported, so fall back to the largest supported one (44.1 kHz). The
-        // output layer then resamples 44.1 -> 48 kHz.
-        let rate = select_dsd_pcm_rate(48000, |r| r == 44100);
-        assert_eq!(rate, 44100);
-    }
-
-    #[test]
-    fn no_support_info_falls_back_to_default() {
-        let rate = select_dsd_pcm_rate(48000, |_| false);
-        assert_eq!(rate, 88200);
-    }
-
-    // ── dsd_output_target_rate tests ─────────────────────────────────────────
-
-    #[test]
-    fn dsd_output_target_rate_default_device_resamples() {
-        // System default (PipeWire, not bit-perfect): DSD decoded at 88200 Hz,
-        // device natively 48000 Hz. rmpd must open cpal at 48000 and resample
-        // internally, not let PipeWire resample the advertised-but-non-native
-        // 88200 Hz stream.
-        assert_eq!(dsd_output_target_rate(88200, 48000, false), Some(48000));
-    }
-
-    #[test]
-    fn dsd_output_target_rate_configured_dac_is_bit_perfect() {
-        // Explicit DAC that natively supports 88200 Hz: open at the decode rate
-        // (no override) so playback is bit-perfect, even though the device's
-        // default rate is 48000 Hz.
-        assert_eq!(dsd_output_target_rate(88200, 48000, true), None);
-    }
-
-    #[test]
-    fn dsd_output_target_rate_same_returns_none() {
-        // Device natively 44100 Hz, decode rate 44100 Hz: no extra resample needed.
-        assert_eq!(dsd_output_target_rate(44100, 44100, false), None);
-    }
-
-    #[test]
-    fn select_dsd_pcm_rate_unchanged_by_output_fix() {
-        // Decode-rate selection is not affected by the output-rate fix.
-        // A PipeWire-like device at 48000 Hz that advertises 88200 Hz support
-        // should still decode to 88200 Hz; only the cpal stream opens at 48000.
-        let rate = select_dsd_pcm_rate(48000, |r| r == 88200);
-        assert_eq!(rate, 88200);
-    }
-
-    // ── compute_gain_scale tests (Finding C1: ReplayGain `auto` mode) ───────
-
-    #[test]
-    fn compute_gain_scale_auto_random_uses_track_gain() {
-        let mut song = rmpd_core::test_utils::create_test_song(1, "auto-random");
-        song.replay_gain_track_gain = Some(-3.0);
-        song.replay_gain_album_gain = Some(-6.0);
-        // Random mode: `auto` must select track gain, not album gain, even
-        // though both are present (mpd `ReplayGainMode::AUTO`, random on).
-        let scale =
-            PlaybackEngine::compute_gain_scale(&song, ReplayGainMode::Auto, 0.0, 0.0, false, true);
-        let expected = 10f32.powf(-3.0 / 20.0);
-        assert!((scale - expected).abs() < 1e-6);
-    }
-
-    #[test]
-    fn compute_gain_scale_auto_not_random_uses_album_gain() {
-        let mut song = rmpd_core::test_utils::create_test_song(2, "auto-sequential");
-        song.replay_gain_track_gain = Some(-3.0);
-        song.replay_gain_album_gain = Some(-6.0);
-        // Sequential (non-random) mode: `auto` must select album gain.
-        let scale =
-            PlaybackEngine::compute_gain_scale(&song, ReplayGainMode::Auto, 0.0, 0.0, false, false);
-        let expected = 10f32.powf(-6.0 / 20.0);
-        assert!((scale - expected).abs() < 1e-6);
-    }
-
-    #[test]
-    fn compute_gain_scale_auto_not_random_missing_album_gain_falls_back_to_missing_preamp() {
-        let mut song = rmpd_core::test_utils::create_test_song(3, "auto-no-album-gain");
-        song.replay_gain_track_gain = Some(-3.0);
-        song.replay_gain_album_gain = None;
-        // No cross-fallback to track gain: a missing album gain in
-        // non-random `auto` mode uses `missing_preamp`, matching MPD.
-        let scale = PlaybackEngine::compute_gain_scale(
-            &song,
-            ReplayGainMode::Auto,
-            0.0,
-            -9.0,
-            false,
-            false,
-        );
-        let expected = 10f32.powf(-9.0 / 20.0);
-        assert!((scale - expected).abs() < 1e-6);
-    }
-
-    #[test]
-    fn crossfade_normal_length_track_is_eligible() {
-        // 3 minute track at 44.1kHz stereo, 5s crossfade window: comfortably
-        // longer than both `CROSSFADE_MIN_TOTAL_SECS` and the fade window.
-        let samples_per_second = 44100u64 * 2;
-        let total_samples = 180 * samples_per_second;
-        let cf_window = 5 * samples_per_second;
-        assert!(PlaybackEngine::can_cross_fade_song(
-            total_samples,
-            cf_window,
-            samples_per_second
-        ));
-    }
-
-    #[test]
-    fn crossfade_too_short_track_is_not_eligible() {
-        // A 3s track can't fit a 5s crossfade window, and is also below
-        // mpd's 20s `MIN_TOTAL_TIME` floor either way — mirrors
-        // `CrossFadeSettings::CanCrossFadeSong` (src/player/CrossFade.cxx).
-        let samples_per_second = 44100u64 * 2;
-        let total_samples = 3 * samples_per_second;
-        let cf_window = 5 * samples_per_second;
-        assert!(!PlaybackEngine::can_cross_fade_song(
-            total_samples,
-            cf_window,
-            samples_per_second
-        ));
-    }
-
-    #[test]
-    fn crossfade_track_above_min_time_but_shorter_than_window_is_not_eligible() {
-        // 15s track (over no minimum by itself) with a 20s crossfade window:
-        // the window would cover the entire song, which mpd also refuses
-        // (`duration < total_time` must hold strictly).
-        let samples_per_second = 44100u64 * 2;
-        let total_samples = 25 * samples_per_second;
-        let cf_window = 25 * samples_per_second;
-        assert!(!PlaybackEngine::can_cross_fade_song(
-            total_samples,
-            cf_window,
-            samples_per_second
-        ));
-    }
     // ── playback failure reporting / play-time accounting ────────────────────
 
     #[test]

@@ -63,7 +63,12 @@ pub async fn run(
         config.database.hide_playlist_targets,
     );
     // Before the first scan/playback: every probe shares this scan limit.
-    rmpd_player::format_registry::configure_probe(config.general.max_probe_depth);
+    if !playcore::format::configure_probe(config.general.max_probe_depth) {
+        tracing::warn!(
+            "probe already initialised; ignoring max_probe_depth = {}",
+            config.general.max_probe_depth
+        );
+    }
     // HTTP(S) radio input: timeout, proxy and ICY metadata blacklist.
     rmpd_stream::configure(&config.stream);
     if !config

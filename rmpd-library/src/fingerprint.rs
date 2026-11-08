@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use rmpd_core::error::{Result, RmpdError};
-use rmpd_player::SymphoniaDecoder;
 use std::path::Path;
 
 /// Maximum duration to fingerprint (120 seconds recommended by Chromaprint)
@@ -30,7 +29,7 @@ impl Fingerprinter {
         let lib_err =
             |what: &str, e: chromaprint::Error| RmpdError::Library(format!("{what}: {e}"));
 
-        let mut decoder = SymphoniaDecoder::open(path)?;
+        let mut decoder = rmpd_player::decoder::open(path)?;
         // A pass-through DSD decoder yields raw 1-bit bytes (its buffers have a rate of
         // `dsd_rate / 8`), not audio: decode DSD to 44.1 kHz PCM like playback does.
         if decoder.is_dsd() {
@@ -55,7 +54,7 @@ impl Fingerprinter {
             let samples_read = match decoder.read(&mut f32_buffer) {
                 Ok(n) => n,
                 Err(ref e) if e.is_unexpected_eof() => break,
-                Err(e) => return Err(e),
+                Err(e) => return Err(e.into()),
             };
             if samples_read == 0 {
                 break;

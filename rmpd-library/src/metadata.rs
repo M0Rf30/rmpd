@@ -3,11 +3,11 @@
 
 use crate::artwork::{infer_mime, picture_type_to_string};
 use camino::Utf8PathBuf;
+use playcore::decoder::chain_duration_secs;
 use rmpd_core::error::{Result, RmpdError};
 use rmpd_core::song::{Song, intern_tag_key};
 use rmpd_core::tag::{normalize_decimal, vorbis_tag_map_get};
 use rmpd_core::time::system_time_to_unix_secs;
-use rmpd_player::decoder::chain_duration_secs;
 use std::borrow::Cow;
 use std::fs;
 use std::time::{Duration, SystemTime};
@@ -106,14 +106,12 @@ fn probe_file(path: &Utf8PathBuf, want_visuals: bool) -> Result<Probed> {
 
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
 
-    let mut reader = rmpd_player::format_registry::probe()
+    let mut reader = playcore::format::probe()
         .probe(
             &hint,
             mss,
             // Hybrid WavPack: attach the sibling `.wvc` so decoding is lossless.
-            rmpd_player::format_registry::local_file_format_options(std::path::Path::new(
-                path.as_str(),
-            )),
+            playcore::format::local_file_format_options(std::path::Path::new(path.as_str())),
             MetadataOptions::default(),
         )
         .map_err(|e| RmpdError::Library(format!("Failed to probe format: {e}")))?;
@@ -723,7 +721,7 @@ impl MetadataExtractor {
     /// scan. The single source of truth for every extension filter in rmpd --
     /// the filesystem watcher shares it so it cannot drift from the scanner.
     pub fn is_supported_extension(ext: &str) -> bool {
-        rmpd_player::format_registry::is_supported_extension(ext)
+        playcore::format::is_supported_extension(ext)
     }
 
     /// Read raw key-value pairs directly from the audio file.

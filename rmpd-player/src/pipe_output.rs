@@ -4,7 +4,7 @@
 //! Pipe (external-command) audio output — writes raw s16le PCM to stdin.
 
 use crate::audio_output::{AudioOutput, PauseState};
-use crate::conversion;
+use playcore::convert;
 use rmpd_core::error::{Result, RmpdError};
 use std::io::{BufWriter, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
@@ -59,7 +59,7 @@ impl AudioOutput for PipeOutput {
             return Ok(());
         }
         if let Some(w) = &mut self.stdin {
-            conversion::samples_to_s16le_into(samples, &mut self.conversion_buf);
+            convert::samples_to_s16le_into(samples, &mut self.conversion_buf);
             w.write_all(&self.conversion_buf)
                 .map_err(|e| RmpdError::Player(format!("pipe write error: {e}")))?;
         }

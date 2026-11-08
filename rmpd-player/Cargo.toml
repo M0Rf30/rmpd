@@ -28,8 +28,7 @@ rmpd-core = { workspace = true, features = ["player-errors"] }
 symphonia.workspace = true
 symphonia-codec-opus.workspace = true
 cpal.workspace = true
-rubato.workspace = true
-audioadapter-buffers.workspace = true
+playcore = { workspace = true, features = ["resample"] }
 tokio.workspace = true
 thiserror.workspace = true
 tracing.workspace = true

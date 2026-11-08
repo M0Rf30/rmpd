@@ -125,7 +125,7 @@ fn read_binary_cuesheet_block(
         hint.with_extension(ext);
     }
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
-    let reader = rmpd_player::format_registry::probe()
+    let reader = playcore::format::probe()
         .probe(
             &hint,
             mss,

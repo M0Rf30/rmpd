@@ -2,12 +2,12 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use crate::audio_output::{AudioOutput, PauseState};
-use crate::conversion::{self, Chunk, GainRamp, SampleBuffer};
 use crate::cpal_utils::CpalDeviceConfig;
-use crate::output_control::OutputControl;
-use crate::resampler::StreamResampler;
 use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{Device, SampleFormat, Stream, StreamConfig};
+use playcore::control::OutputControl;
+use playcore::convert::{self, Chunk, GainRamp, SampleBuffer};
+use playcore::resample::StreamResampler;
 use rmpd_core::config::ResamplerQuality;
 use rmpd_core::error::{Result, RmpdError};
 use rmpd_core::song::AudioFormat;
@@ -24,7 +24,7 @@ pub struct CpalOutput {
     /// Output buffer time in milliseconds; sizes the sync-channel depth.
     buffer_time_ms: u32,
     /// Shared, lock-free pause/flush/gain state. The real-time callback
-    /// reads this directly — see module docs on [`crate::conversion::SampleBuffer`].
+    /// reads this directly — see module docs on [`playcore::convert::SampleBuffer`].
     control: Arc<OutputControl>,
 }
 
@@ -78,7 +78,7 @@ impl CpalOutput {
                 format.sample_rate,
                 device_rate,
                 format.channels as usize,
-                quality,
+                crate::audio_output::resampler_quality(quality),
             );
             if rs.is_none() {
                 tracing::error!(
@@ -213,7 +213,7 @@ impl CpalOutput {
                         move |data: &mut [i16], _: &cpal::CallbackInfo| {
                             for sample in data.iter_mut() {
                                 let raw = buf.next_sample();
-                                *sample = conversion::f32_to_i16(ramp.apply(raw, control.gain()));
+                                *sample = convert::f32_to_i16(ramp.apply(raw, control.gain()));
                             }
                         },
                         |err| {
@@ -232,7 +232,7 @@ impl CpalOutput {
                         move |data: &mut [i32], _: &cpal::CallbackInfo| {
                             for sample in data.iter_mut() {
                                 let raw = buf.next_sample();
-                                *sample = conversion::f32_to_i32(ramp.apply(raw, control.gain()));
+                                *sample = convert::f32_to_i32(ramp.apply(raw, control.gain()));
                             }
                         },
                         |err| {

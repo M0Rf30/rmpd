@@ -3,11 +3,11 @@
 
 /// DoP-specific audio output using integer samples
 /// DoP requires exact bit patterns, so we use I32 format instead of F32
-use crate::conversion::{Chunk, SampleBuffer};
 use crate::cpal_utils::CpalDeviceConfig;
-use crate::output_control::OutputControl;
 use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{Device, SampleFormat, Stream, StreamConfig};
+use playcore::control::OutputControl;
+use playcore::convert::{Chunk, SampleBuffer};
 use rmpd_core::error::{Result, RmpdError};
 use std::sync::Arc;
 use std::sync::mpsc::{SyncSender, TrySendError, sync_channel};
@@ -52,7 +52,7 @@ pub struct DopOutput {
     config: StreamConfig,
     is_paused: bool,
     /// Shared, lock-free pause/flush state read directly by the real-time
-    /// callback — see [`crate::conversion::SampleBuffer`]. DoP is a bit-exact
+    /// callback — see [`playcore::convert::SampleBuffer`]. DoP is a bit-exact
     /// passthrough so `control.gain()` is intentionally NOT applied here
     /// (matches the pre-existing behaviour of not attenuating DoP streams).
     control: Arc<OutputControl>,

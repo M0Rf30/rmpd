@@ -28,6 +28,7 @@ fingerprint = ["dep:chromaprint-next"]
 [dependencies]
 rmpd-core = { workspace = true, features = ["database-errors", "library-errors"] }
 rmpd-player.workspace = true
+playcore.workspace = true
 rusqlite = { workspace = true, features = ["functions"] }
 symphonia.workspace = true
 notify.workspace = true

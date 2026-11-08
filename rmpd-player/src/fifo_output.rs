@@ -6,7 +6,7 @@
 //! Primarily used for Snapcast multi-room audio.
 
 use crate::audio_output::{AudioOutput, PauseState};
-use crate::conversion;
+use playcore::convert;
 use rmpd_core::error::{Result, RmpdError};
 use std::fs::OpenOptions;
 use std::io::{BufWriter, Write};
@@ -57,7 +57,7 @@ impl AudioOutput for FifoOutput {
             return Ok(());
         }
         if let Some(w) = &mut self.writer {
-            conversion::samples_to_s16le_into(samples, &mut self.conversion_buf);
+            convert::samples_to_s16le_into(samples, &mut self.conversion_buf);
             w.write_all(&self.conversion_buf)
                 .map_err(|e| RmpdError::Player(format!("FIFO write error: {e}")))?;
             w.flush()

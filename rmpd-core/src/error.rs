@@ -110,8 +110,44 @@ impl From<rusqlite::Error> for RmpdError {
 #[cfg(feature = "player-errors")]
 impl From<symphonia::core::errors::Error> for RmpdError {
     fn from(err: symphonia::core::errors::Error) -> Self {
-        let message = err.to_string();
-        Self::from_symphonia_message(err, message)
+        playcore::Error::from(err).into()
+    }
+}
+
+#[cfg(feature = "player-errors")]
+impl From<playcore::MediaErrorKind> for MediaErrorKind {
+    fn from(kind: playcore::MediaErrorKind) -> Self {
+        use playcore::MediaErrorKind as K;
+        match kind {
+            K::Io(kind) => Self::Io(kind),
+            K::Decode => Self::Decode,
+            K::Seek => Self::Seek,
+            K::Unsupported => Self::Unsupported,
+            K::Limit => Self::Limit,
+            K::ResetRequired => Self::ResetRequired,
+            _ => Self::Other,
+        }
+    }
+}
+
+/// A plain playcore message becomes [`RmpdError::Player`]; a demuxer/decoder failure becomes
+/// [`RmpdError::Media`] with its kind and cause preserved.
+#[cfg(feature = "player-errors")]
+impl From<playcore::Error> for RmpdError {
+    fn from(err: playcore::Error) -> Self {
+        match err {
+            playcore::Error::Other(message) => Self::Player(message),
+            playcore::Error::Media {
+                kind,
+                message,
+                source,
+            } => Self::Media {
+                kind: kind.into(),
+                message,
+                source,
+            },
+            other => Self::Player(other.to_string()),
+        }
     }
 }
 
@@ -121,26 +157,7 @@ impl RmpdError {
     /// (`"<context>: <error>"`) while keeping its kind and cause.
     #[must_use]
     pub fn from_symphonia_context(context: &str, err: symphonia::core::errors::Error) -> Self {
-        let message = format!("{context}: {err}");
-        Self::from_symphonia_message(err, message)
-    }
-
-    fn from_symphonia_message(err: symphonia::core::errors::Error, message: String) -> Self {
-        use symphonia::core::errors::Error as E;
-        let kind = match &err {
-            E::IoError(e) => MediaErrorKind::Io(e.kind()),
-            E::DecodeError(_) => MediaErrorKind::Decode,
-            E::SeekError(_) => MediaErrorKind::Seek,
-            E::Unsupported(_) => MediaErrorKind::Unsupported,
-            E::LimitError(_) => MediaErrorKind::Limit,
-            E::ResetRequired => MediaErrorKind::ResetRequired,
-            _ => MediaErrorKind::Other,
-        };
-        Self::Media {
-            kind,
-            message,
-            source: Some(Box::new(err)),
-        }
+        playcore::Error::from_symphonia_context(context, err).into()
     }
 }
 

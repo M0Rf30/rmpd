@@ -21,7 +21,7 @@
 //! cross-thread handles:
 //!
 //! * PCM frames flow over a bounded [`SyncSender<Chunk<f32>>`]; the matching
-//!   `Receiver` is wrapped in [`crate::conversion::SampleBuffer`] on the loop
+//!   `Receiver` is wrapped in [`playcore::convert::SampleBuffer`] on the loop
 //!   thread. It shares the SAME `Arc<OutputControl>` as the engine, so it
 //!   holds position on pause and drops stale-generation audio exactly like
 //!   the cpal path, and applies gain (with a short ramp) at playback time.
@@ -31,9 +31,9 @@
 //!   [`std::sync::mpsc`] channel so `start()` can surface connection errors.
 
 use crate::audio_output::{AudioOutput, PauseState};
-use crate::conversion::{Chunk, GainRamp, SampleBuffer};
-use crate::output_control::OutputControl;
 use pipewire as pw;
+use playcore::control::OutputControl;
+use playcore::convert::{Chunk, GainRamp, SampleBuffer};
 use pw::properties::properties;
 use rmpd_core::config::OutputConfig;
 use rmpd_core::error::{Result, RmpdError};

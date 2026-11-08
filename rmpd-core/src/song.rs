@@ -245,6 +245,13 @@ pub struct AudioFormat {
     pub bits_per_sample: u8,
 }
 
+#[cfg(feature = "player-errors")]
+impl From<playcore::AudioFormat> for AudioFormat {
+    fn from(format: playcore::AudioFormat) -> Self {
+        Self::new(format.sample_rate, format.channels, format.bits_per_sample)
+    }
+}
+
 impl AudioFormat {
     pub fn new(sample_rate: u32, channels: u8, bits_per_sample: u8) -> Self {
         Self {

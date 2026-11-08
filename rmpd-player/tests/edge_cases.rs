@@ -13,14 +13,14 @@ mod common;
 mod fixtures;
 
 use fixtures::pregenerated;
-use rmpd_player::decoder::SymphoniaDecoder;
+use rmpd_player::decoder::open as open_decoder;
 use std::fs;
 use std::io::Write;
 use tempfile::TempDir;
 
 #[test]
 fn test_nonexistent_file() {
-    let result = SymphoniaDecoder::open(&std::path::PathBuf::from("/nonexistent/file.flac"));
+    let result = open_decoder(&std::path::PathBuf::from("/nonexistent/file.flac"));
     assert!(result.is_err(), "Should fail to open nonexistent file");
 }
 
@@ -32,7 +32,7 @@ fn test_empty_file() {
     // Create empty file
     fs::File::create(&empty_file).expect("Failed to create empty file");
 
-    let result = SymphoniaDecoder::open(&empty_file);
+    let result = open_decoder(&empty_file);
     assert!(result.is_err(), "Should fail to open empty file");
 }
 
@@ -55,8 +55,8 @@ fn test_truncated_file() {
     drop(file);
 
     // Should open successfully (header is intact)
-    let mut decoder = SymphoniaDecoder::open(&truncated_file)
-        .expect("Should open truncated file (header intact)");
+    let mut decoder =
+        open_decoder(&truncated_file).expect("Should open truncated file (header intact)");
 
     // But reading might fail or return fewer samples
     let mut buffer = vec![0.0f32; 100000]; // Request more than available
@@ -86,7 +86,7 @@ fn test_corrupted_header() {
         .expect("Failed to write data");
     drop(file);
 
-    let result = SymphoniaDecoder::open(&corrupted_file);
+    let result = open_decoder(&corrupted_file);
     assert!(
         result.is_err(),
         "Should fail to open file with corrupted header"
@@ -108,7 +108,7 @@ fn test_wrong_extension() {
     fs::copy(&path, &wrong_ext).expect("Failed to copy file");
 
     // Symphonia should still detect it as FLAC (based on content, not extension)
-    let result = SymphoniaDecoder::open(&wrong_ext);
+    let result = open_decoder(&wrong_ext);
     assert!(
         result.is_ok(),
         "Symphonia should detect format from content"
@@ -123,7 +123,7 @@ fn test_read_after_eof() {
         return;
     }
 
-    let mut decoder = SymphoniaDecoder::open(&path).expect("Failed to open file");
+    let mut decoder = open_decoder(&path).expect("Failed to open file");
 
     // Read entire file
     let mut buffer = vec![0.0f32; 100000]; // Large buffer
@@ -154,7 +154,7 @@ fn test_seek_beyond_duration() {
         return;
     }
 
-    let mut decoder = SymphoniaDecoder::open(&path).expect("Failed to open file");
+    let mut decoder = open_decoder(&path).expect("Failed to open file");
 
     // Try to seek beyond file duration (file is ~1 second)
     let result = decoder.seek(10.0);
@@ -184,7 +184,7 @@ fn test_seek_negative() {
         return;
     }
 
-    let mut decoder = SymphoniaDecoder::open(&path).expect("Failed to open file");
+    let mut decoder = open_decoder(&path).expect("Failed to open file");
 
     // Try to seek to negative position
     let result = decoder.seek(-1.0);
@@ -199,7 +199,7 @@ fn test_zero_length_read() {
         return;
     }
 
-    let mut decoder = SymphoniaDecoder::open(&path).expect("Failed to open file");
+    let mut decoder = open_decoder(&path).expect("Failed to open file");
 
     // Try to read 0 samples
     let mut buffer = vec![];
@@ -217,7 +217,7 @@ fn test_very_small_buffer() {
         return;
     }
 
-    let mut decoder = SymphoniaDecoder::open(&path).expect("Failed to open file");
+    let mut decoder = open_decoder(&path).expect("Failed to open file");
 
     // Read with very small buffer (1 sample)
     let mut buffer = vec![0.0f32; 1];
@@ -235,7 +235,7 @@ fn test_sample_value_range() {
         return;
     }
 
-    let mut decoder = SymphoniaDecoder::open(&path).expect("Failed to open file");
+    let mut decoder = open_decoder(&path).expect("Failed to open file");
 
     // Read entire file and verify all samples are in valid range
     let mut buffer = vec![0.0f32; 4096];
@@ -281,8 +281,8 @@ fn test_multiple_decoders_same_file() {
     }
 
     // Open multiple decoders on the same file
-    let mut decoder1 = SymphoniaDecoder::open(&path).expect("Failed to open decoder 1");
-    let mut decoder2 = SymphoniaDecoder::open(&path).expect("Failed to open decoder 2");
+    let mut decoder1 = open_decoder(&path).expect("Failed to open decoder 1");
+    let mut decoder2 = open_decoder(&path).expect("Failed to open decoder 2");
 
     // Both should work independently
     let mut buffer1 = vec![0.0f32; 1000];
@@ -317,12 +317,12 @@ fn test_seek_then_decode_consistency() {
     }
 
     // Decode from start
-    let mut decoder1 = SymphoniaDecoder::open(&path).expect("Failed to open decoder");
+    let mut decoder1 = open_decoder(&path).expect("Failed to open decoder");
     let mut buffer1 = vec![0.0f32; 10000];
     let read1 = decoder1.read(&mut buffer1).expect("Failed to read");
 
     // Seek to 0.0 then decode
-    let mut decoder2 = SymphoniaDecoder::open(&path).expect("Failed to open decoder");
+    let mut decoder2 = open_decoder(&path).expect("Failed to open decoder");
     decoder2.seek(0.0).expect("Failed to seek");
     let mut buffer2 = vec![0.0f32; 10000];
     let read2 = decoder2
@@ -359,7 +359,7 @@ fn test_decoder_format_info_before_read() {
         return;
     }
 
-    let decoder = SymphoniaDecoder::open(&path).expect("Failed to open file");
+    let decoder = open_decoder(&path).expect("Failed to open file");
 
     // Should be able to get format info before reading any samples
     let format = decoder.format();

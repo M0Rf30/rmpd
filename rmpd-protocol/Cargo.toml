@@ -30,6 +30,7 @@ rmpd-macros.workspace = true
 camino.workspace = true
 rmpd-library.workspace = true
 rmpd-player.workspace = true
+playcore.workspace = true
 rmpd-source.workspace = true
 rmpd-plugin.workspace = true
 rmpd-stream.workspace = true
